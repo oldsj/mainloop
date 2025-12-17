@@ -1,4 +1,4 @@
-# Main Thread
+# mainloop
 
 A central AI agent orchestrator - one place to manage all AI work, accessible from any device.
 
