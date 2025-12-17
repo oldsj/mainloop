@@ -1,0 +1,17 @@
+{
+  "name": "mainloop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "docker compose up --watch",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write .",
+    "check": "pnpm -r check"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "prettier-plugin-svelte": "^3.4.0",
+    "prettier-plugin-tailwindcss": "^0.7.2"
+  }
+}

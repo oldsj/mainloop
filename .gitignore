@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-debug.log
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.python-version
+uv.lock
+*.egg-info/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Secrets
+secrets.yaml
+1password-credentials.json
+gcp-credentials.json
+
+# Build outputs
+/frontend/.svelte-kit/
+/frontend/build/
+/frontend/.cloudflare/
+/frontend/dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Testing
+/coverage
+/.nyc_output
+
+# Misc
+.cache/

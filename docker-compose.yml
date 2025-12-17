@@ -1,0 +1,67 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: mainloop-backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+    volumes:
+      - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
+    depends_on:
+      - claude-agent
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend
+          ignore:
+            - .venv
+            - __pycache__
+        - action: rebuild
+          path: ./models
+          ignore:
+            - .venv
+            - __pycache__
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: mainloop-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    develop:
+      watch:
+        - action: rebuild
+          path: ./frontend
+          ignore:
+            - node_modules
+            - build
+            - .svelte-kit
+        - action: rebuild
+          path: ./packages/ui
+          ignore:
+            - node_modules
+
+  claude-agent:
+    build:
+      context: ./claude-agent
+      dockerfile: Dockerfile
+    container_name: mainloop-claude-agent
+    environment:
+      - CLAUDE_MAX_SUBSCRIPTION=true
+    volumes:
+      - claude-workdir:/workspace
+      - ${CLAUDE_CONFIG_PATH:-~/.claude}:/home/claude/.claude:ro
+
+volumes:
+  claude-workdir:

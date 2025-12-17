@@ -1,0 +1,41 @@
+# Build stage
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+# Copy root package files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# Copy workspace packages
+COPY packages ./packages
+COPY frontend ./frontend
+
+# Install pnpm and dependencies
+RUN npm install -g pnpm && pnpm install --frozen-lockfile
+
+# Build frontend
+WORKDIR /app/frontend
+RUN pnpm run build
+
+# Runtime stage
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Copy root package files
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+
+# Copy workspace packages
+COPY --from=builder /app/packages ./packages
+
+# Copy frontend
+COPY --from=builder /app/frontend ./frontend
+
+# Install pnpm and production dependencies
+RUN npm install -g pnpm && pnpm install --frozen-lockfile --prod
+
+WORKDIR /app/frontend
+
+EXPOSE 3000
+
+CMD ["node", "build"]

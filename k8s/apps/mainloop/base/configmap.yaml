@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  BIGQUERY_DATASET: "mainloop"
+  HOST: "0.0.0.0"
+  PORT: "8000"

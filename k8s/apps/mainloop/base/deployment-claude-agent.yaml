@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-claude-agent
+  namespace: mainloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mainloop-claude-agent
+  template:
+    metadata:
+      labels:
+        app: mainloop-claude-agent
+    spec:
+      containers:
+        - name: claude-agent
+          image: ghcr.io/oldsj/mainloop-claude-agent:latest
+          env:
+            - name: CLAUDE_MAX_SUBSCRIPTION
+              value: "true"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      volumes:
+        - name: workspace
+          emptyDir: {}

@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - mainloop.yourdomain.com
+      secretName: mainloop-tls
+  rules:
+    - host: mainloop.yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mainloop-backend
+                port:
+                  number: 8000

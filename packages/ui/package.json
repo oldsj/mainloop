@@ -1,0 +1,16 @@
+{
+  "name": "@mainloop/ui",
+  "version": "0.1.0",
+  "description": "Shared design system for mainloop",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme": "./src/theme.ts",
+    "./tailwind.preset": "./src/tailwind.preset.ts"
+  },
+  "files": ["src"],
+  "peerDependencies": {
+    "svelte": "^5.0.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

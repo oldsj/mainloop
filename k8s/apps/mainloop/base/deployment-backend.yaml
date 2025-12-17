@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mainloop-backend
+  template:
+    metadata:
+      labels:
+        app: mainloop-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/oldsj/mainloop-backend:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: mainloop-config
+            - secretRef:
+                name: mainloop-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
