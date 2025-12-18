@@ -10,3 +10,4 @@ resources:
   - service-backend.yaml
   - configmap.yaml
   - cloudflared.yaml
+  - database.yaml

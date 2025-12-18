@@ -1,0 +1,14 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mainloop-db
+spec:
+  # Reference 1Password-managed secret for app credentials
+  bootstrap:
+    initdb:
+      secret:
+        name: mainloop-db-credentials
+
+  # Use local-path (node NVMe) for storage
+  storage:
+    storageClass: local-path

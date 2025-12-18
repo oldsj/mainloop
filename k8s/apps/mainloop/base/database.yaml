@@ -1,0 +1,54 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mainloop-db
+spec:
+  instances: 1
+
+  storage:
+    size: 10Gi
+
+  # Bootstrap: create initial database and owner
+  bootstrap:
+    initdb:
+      database: mainloop
+      owner: mainloop
+
+  # Resource limits for home lab
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mainloop-db-database
+spec:
+  name: mainloop
+  owner: mainloop
+  cluster:
+    name: mainloop-db
+  extensions:
+    - name: vector
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: mainloop-db-pooler
+spec:
+  cluster:
+    name: mainloop-db
+  instances: 1
+  type: rw
+
+  pgbouncer:
+    poolMode: session
+    parameters:
+      max_client_conn: "100"
+      default_pool_size: "10"

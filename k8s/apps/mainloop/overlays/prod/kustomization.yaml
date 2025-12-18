@@ -5,3 +5,9 @@ resources:
   - ../../base
   - 1password.yaml
   - ingress.yaml
+
+patches:
+  - path: database-patch.yaml
+    target:
+      kind: Cluster
+      name: mainloop-db
