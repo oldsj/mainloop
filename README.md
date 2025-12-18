@@ -55,14 +55,18 @@ Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-th
 6. Claude response flows back: Agent → Backend → Frontend
 7. All messages persisted to BigQuery for conversation history
 
-### Memory Management
-To avoid overwhelming the context window, mainloop uses **temporal pyramid compression**:
-- **Last 24 hours**: Full message detail
-- **Last 7 days**: Daily summaries (500 tokens each)
-- **Last 30 days**: Weekly summaries (1K tokens each)
-- **Older**: Monthly summaries (2K tokens each)
+### Memory & Threading
 
-This keeps context bounded (~20-50K tokens) while preserving the ability to "zoom in" to any time period for full detail. See [MEMORY_STRATEGY.md](./MEMORY_STRATEGY.md) for the complete design.
+**Conversation Threading** - Core architecture for multi-context work:
+- **Main thread**: Daily life, high-level decisions (parent of all threads)
+- **Project threads**: Deep work per project → sync daily summaries to main
+- **Task threads**: Scoped features → short-lived, archived when done
+- **Cross-thread queries**: "What's mainloop status?" pulls from relevant thread
+- Each conversation has `parent_id` + `thread_type` + `thread_context`
+
+**Temporal Pyramid** - Memory compression per thread:
+- Last 24h: full detail | Last 7d: daily summaries | Last 30d: weekly | Older: monthly
+- "Zoom in" to any period for full detail | See [MEMORY_STRATEGY.md](./MEMORY_STRATEGY.md)
 
 ## Tech Stack
 
@@ -96,11 +100,12 @@ make dev
 - [x] Tailwind v4 design system package
 
 ### 🚧 In Progress
-- [ ] **BigQuery integration** - Schema creation + actual persistence (currently stubbed)
-- [ ] **MCP client setup** - Backend connects to claude-code-mcp server
-- [ ] **Agent container** - Run claude-code-mcp server with permissions bypassed
-- [ ] **Chat endpoint** - Wire up /chat to send prompts via MCP and return responses
-- [ ] **Conversation UI** - Frontend sidebar to list/switch between conversations
+- [ ] **Conversation threading** - Core multi-context architecture
+  - Add parent_id, thread_type, thread_context to schema
+  - Thread creation/switching UI
+  - Daily summary sync from child → parent threads
+- [ ] **Conversation sidebar** - UI to list/switch between threads
+- [ ] **Cross-thread queries** - "What's the status of X?" searches relevant threads
 
 ### 🔮 Future
 - [ ] **Temporal memory compression** - Pyramid summaries to avoid context bloat (see [MEMORY_STRATEGY.md](./MEMORY_STRATEGY.md))

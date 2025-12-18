@@ -17,6 +17,9 @@ RUN npm install -g @anthropic-ai/claude-code
 # Create non-root user
 RUN useradd -m -s /bin/bash claude
 
+# Create .claude directory with proper permissions
+RUN mkdir -p /home/claude/.claude && chown -R claude:claude /home/claude/.claude
+
 # Install Python dependencies
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --break-system-packages -r /tmp/requirements.txt

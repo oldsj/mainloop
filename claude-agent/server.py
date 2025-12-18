@@ -54,9 +54,9 @@ async def execute_claude(request: ExecuteRequest):
                 [
                     'claude',
                     '--dangerously-skip-permissions',
-                    '--cwd', request.workspace,
                     prompt_file
                 ],
+                cwd=request.workspace,
                 capture_output=True,
                 text=True,
                 timeout=300  # 5 minute timeout

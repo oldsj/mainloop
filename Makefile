@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-frontend build-backend push-backend install clean
+.PHONY: help dev build deploy deploy-frontend build-backend push-backend install clean setup-claude-creds
 
 # Configuration
 GHCR_REGISTRY := ghcr.io
@@ -24,6 +24,25 @@ clean: ## Clean build artifacts
 	rm -rf frontend/.svelte-kit frontend/build
 	rm -rf backend/.venv models/.venv
 	find . -type d -name "__pycache__" -exec rm -rf {} +
+
+setup-claude-creds: ## Extract Claude credentials from macOS Keychain and update .env
+	@echo "Extracting Claude credentials from macOS Keychain..."
+	@CREDS=$$(security find-generic-password -s "Claude Code-credentials" -a "$(USER)" -w 2>/dev/null); \
+	if [ -z "$$CREDS" ]; then \
+		echo "Error: Claude credentials not found in Keychain."; \
+		echo "Make sure you're logged in to Claude Code on this Mac."; \
+		exit 1; \
+	fi; \
+	if [ -f .env ]; then \
+		echo "Updating CLAUDE_CREDENTIALS in .env (preserving other variables)..."; \
+		grep -v "^CLAUDE_CREDENTIALS=" .env > .env.tmp || true; \
+		mv .env.tmp .env; \
+	else \
+		echo "Creating .env file..."; \
+		touch .env; \
+	fi; \
+	echo "CLAUDE_CREDENTIALS=$$CREDS" >> .env; \
+	echo "✓ Claude credentials updated in .env"
 
 # Backend commands
 backend-dev: ## Run backend in development mode

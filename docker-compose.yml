@@ -37,6 +37,7 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:
       - VITE_API_URL=http://localhost:8000
+      - USE_NODE_ADAPTER=true
     depends_on:
       - backend
     develop:
@@ -61,9 +62,11 @@ services:
       - "8001:8001"  # Expose for debugging
     environment:
       - CLAUDE_MAX_SUBSCRIPTION=true
+      - CLAUDE_CREDENTIALS=${CLAUDE_CREDENTIALS}
     volumes:
       - claude-workdir:/workspace
-      - ${CLAUDE_CONFIG_PATH:-~/.claude}:/home/claude/.claude:ro
+      - claude-config:/home/claude/.claude
 
 volumes:
   claude-workdir:
+  claude-config:

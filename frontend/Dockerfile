@@ -15,6 +15,7 @@ RUN npm install -g pnpm && pnpm install --frozen-lockfile
 
 # Build frontend
 WORKDIR /app/frontend
+ENV USE_NODE_ADAPTER=true
 RUN pnpm run build
 
 # Runtime stage

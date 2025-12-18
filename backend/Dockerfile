@@ -7,7 +7,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 
 # Copy backend files for building
-COPY backend/pyproject.toml backend/.python-version backend/README.md ./
+COPY backend/pyproject.toml backend/.python-version backend/uv.lock backend/README.md ./
 COPY backend/src ./src
 
 # Copy shared models package

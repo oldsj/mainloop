@@ -32,6 +32,19 @@ mainloop/
 
 ## Development Commands
 
+### Initial Setup (macOS)
+```bash
+# Extract Claude credentials from Keychain and setup .env
+make setup-claude-creds
+
+# This will:
+# 1. Extract your Claude Code credentials from macOS Keychain
+# 2. Create/update .env file with CLAUDE_CREDENTIALS
+# 3. Ensure .env is in .gitignore (credentials never committed)
+```
+
+**Note**: Run `make setup-claude-creds` again if your Claude credentials expire or you re-authenticate.
+
 ### Local Development
 ```bash
 # Start all services with hot reload
@@ -82,6 +95,7 @@ make deploy              # Full deploy (build images + push + restart K8s)
 
 ### Claude Agent Container
 - Claude Code CLI runs with Max subscription
+- Credentials loaded from `.env` file (use `make setup-claude-creds` to extract from macOS Keychain)
 - Backend communicates with container via internal Docker network
 - Workspace mounted at `/workspace` for file operations
 
