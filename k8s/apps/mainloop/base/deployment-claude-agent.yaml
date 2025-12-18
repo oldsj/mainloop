@@ -19,6 +19,11 @@ spec:
           env:
             - name: CLAUDE_MAX_SUBSCRIPTION
               value: "true"
+            - name: CLAUDE_CREDENTIALS
+              valueFrom:
+                secretKeyRef:
+                  name: claude-credentials
+                  key: document
           volumeMounts:
             - name: workspace
               mountPath: /workspace

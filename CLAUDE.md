@@ -75,9 +75,15 @@ pnpm check               # Type check
 
 ### Deployment
 ```bash
+# Push Claude credentials to 1Password vault (for k8s)
+make setup-claude-creds-k8s
+
+# Deploy services
 make deploy-frontend     # Deploy to Cloudflare Pages
 make deploy              # Full deploy (build images + push + restart K8s)
 ```
+
+**Note**: Run `make setup-claude-creds-k8s` when credentials change to update the 1Password vault. The k8s deployment will automatically use the credentials from the vault.
 
 ## Key Patterns & Conventions
 
