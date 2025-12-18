@@ -1,12 +1,10 @@
 #!/bin/bash
 set -e
 
-# This script keeps the container running and ready to accept commands
-# In the future, this will be replaced with an HTTP server or similar
-# that the backend can communicate with to execute Claude Code CLI commands
+echo "Starting Claude Code HTTP API server..."
+echo "Claude CLI config mounted from host: /home/claude/.claude"
+echo "Workspace: /workspace"
+echo "Listening on port 8001"
 
-echo "Claude agent container started"
-echo "Waiting for commands..."
-
-# Keep container running
-tail -f /dev/null
+# Run the HTTP API server
+exec python3 /home/claude/server.py

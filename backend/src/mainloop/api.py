@@ -1,5 +1,6 @@
 """FastAPI application."""
 
+import uuid
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from mainloop.config import settings
@@ -11,6 +12,7 @@ from mainloop.models import (
     ChatRequest,
     ChatResponse,
 )
+from models import AgentTask
 
 app = FastAPI(
     title="Mainloop API",
@@ -26,6 +28,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize BigQuery tables on startup."""
+    await bq_client.ensure_tables_exist()
 
 
 def get_user_id_from_cf_header(cf_access_jwt_assertion: str | None = Header(None)) -> str:
@@ -104,12 +112,21 @@ async def chat(
         content=request.message
     )
 
-    # TODO: Send to Claude agent and get response
-    # For now, return mock response
+    # Create task for Claude agent
+    task = AgentTask(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation.id,
+        prompt=request.message
+    )
+
+    # Execute task via Claude Code CLI
+    agent_response = await claude_agent.execute_task(task)
+
+    # Save assistant response
     assistant_message = await bq_client.create_message(
         conversation_id=conversation.id,
         role="assistant",
-        content="This is a placeholder response. Claude agent integration coming soon."
+        content=agent_response.content
     )
 
     return ChatResponse(

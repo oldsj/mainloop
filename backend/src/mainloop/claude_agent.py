@@ -7,19 +7,40 @@ from models import AgentTask, AgentResponse
 class ClaudeAgent:
     """Client for interacting with Claude Code CLI container."""
 
-    def __init__(self, base_url: str = "http://claude-agent:8080"):
+    def __init__(self, base_url: str = "http://claude-agent:8001"):
         """Initialize Claude agent client."""
         self.base_url = base_url
-        self.client = httpx.AsyncClient()
+        self.client = httpx.AsyncClient(timeout=300.0)  # 5 minute timeout
 
     async def execute_task(self, task: AgentTask) -> AgentResponse:
         """Execute a task via Claude Code CLI container."""
-        # TODO: Implement actual communication with Claude agent container
-        # For now, return a mock response
-        return AgentResponse(
-            task_id=task.id,
-            content="Mock response from Claude agent"
-        )
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/execute",
+                json={
+                    "prompt": task.prompt,
+                    "workspace": "/workspace"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Check for errors from Claude execution
+            if data.get("error"):
+                return AgentResponse(
+                    task_id=task.id,
+                    content=f"Claude execution error: {data['error']}"
+                )
+
+            return AgentResponse(
+                task_id=task.id,
+                content=data.get("output", "")
+            )
+        except httpx.HTTPError as e:
+            return AgentResponse(
+                task_id=task.id,
+                content=f"Failed to communicate with Claude agent: {str(e)}"
+            )
 
     async def stream_task(self, task: AgentTask):
         """Stream task execution results."""
