@@ -19,13 +19,11 @@ spec:
         - name: claude-agent
           image: ghcr.io/oldsj/mainloop-claude-agent:latest
           env:
-            - name: CLAUDE_MAX_SUBSCRIPTION
-              value: "true"
             - name: CLAUDE_CREDENTIALS
               valueFrom:
                 secretKeyRef:
                   name: claude-credentials
-                  key: document
+                  key: claude-creds.json
           volumeMounts:
             - name: workspace
               mountPath: /workspace

@@ -7,10 +7,11 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     env_file:
-      - ./backend/.env
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+      - CLAUDE_CREDENTIALS=${CLAUDE_CREDENTIALS}
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
     depends_on:
@@ -60,12 +61,9 @@ services:
     container_name: mainloop-claude-agent
     ports:
       - "8001:8001"  # Expose for debugging
-    environment:
-      - CLAUDE_MAX_SUBSCRIPTION=true
-      - CLAUDE_CREDENTIALS=${CLAUDE_CREDENTIALS}
     volumes:
       - claude-workdir:/workspace
-      - claude-config:/home/claude/.claude
+      - claude-config:/home/claude/.claude  # Credentials from: make setup-claude-creds
 
 volumes:
   claude-workdir:
