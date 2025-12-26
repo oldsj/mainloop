@@ -13,6 +13,8 @@ spec:
       labels:
         app: mainloop-backend
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: backend
           image: ghcr.io/oldsj/mainloop-backend:latest

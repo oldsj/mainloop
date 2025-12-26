@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mainloop-frontend
+  template:
+    metadata:
+      labels:
+        app: mainloop-frontend
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: frontend
+          image: ghcr.io/oldsj/mainloop-frontend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: ORIGIN
+              value: "https://mainloop.olds.network"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

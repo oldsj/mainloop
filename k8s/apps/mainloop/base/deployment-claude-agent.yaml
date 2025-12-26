@@ -13,6 +13,8 @@ spec:
       labels:
         app: mainloop-claude-agent
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: claude-agent
           image: ghcr.io/oldsj/mainloop-claude-agent:latest

@@ -7,7 +7,9 @@ resources:
   - namespace.yaml
   - deployment-backend.yaml
   - deployment-claude-agent.yaml
+  - deployment-frontend.yaml
   - service-backend.yaml
+  - service-frontend.yaml
   - configmap.yaml
-  - cloudflared.yaml
+  - httproute.yaml
   - database.yaml

@@ -16,6 +16,8 @@ RUN npm install -g pnpm && pnpm install --frozen-lockfile
 # Build frontend
 WORKDIR /app/frontend
 ENV USE_NODE_ADAPTER=true
+ARG VITE_API_URL=https://mainloop-api.olds.network
+ENV VITE_API_URL=$VITE_API_URL
 RUN pnpm run build
 
 # Runtime stage

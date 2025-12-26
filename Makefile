@@ -78,7 +78,7 @@ build-backend: ## Build backend Docker image
 	docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
 
 build-frontend: ## Build frontend Docker image
-	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) ./frontend
+	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
 
 build-claude-agent: ## Build Claude agent Docker image
 	docker build -f claude-agent/Dockerfile -t $(CLAUDE_IMAGE) ./claude-agent
@@ -100,10 +100,13 @@ push-all: push-backend push-frontend push-claude-agent ## Push all images to GHC
 deploy-frontend: ## Deploy frontend to Cloudflare Pages
 	cd frontend && pnpm build && npx wrangler deploy --env production
 
-deploy: push-all deploy-frontend ## Full deployment
+deploy: push-all ## Full deployment to k8s
+	@echo "Applying Kubernetes manifests..."
+	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side
 	@echo "Restarting Kubernetes deployments..."
 	kubectl rollout restart deployment/mainloop-backend -n mainloop
 	kubectl rollout restart deployment/mainloop-claude-agent -n mainloop
+	kubectl rollout restart deployment/mainloop-frontend -n mainloop
 
 # K8s commands (for local testing before moving to infrastructure repo)
 k8s-apply: ## Apply K8s manifests locally

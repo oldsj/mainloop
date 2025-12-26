@@ -1,0 +1,31 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  parentRefs:
+    - name: tailscale-gateway
+      namespace: tailscale
+  hostnames:
+    - "mainloop.olds.network"
+  rules:
+    - backendRefs:
+        - name: mainloop-frontend
+          port: 3000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mainloop-api
+  namespace: mainloop
+spec:
+  parentRefs:
+    - name: tailscale-gateway
+      namespace: tailscale
+  hostnames:
+    - "mainloop-api.olds.network"
+  rules:
+    - backendRefs:
+        - name: mainloop-backend
+          port: 8000
