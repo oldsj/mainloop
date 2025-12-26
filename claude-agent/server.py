@@ -3,11 +3,7 @@
 Simple HTTP API wrapper for Claude Code CLI.
 Exposes Claude Code functionality over HTTP for Docker networking.
 """
-import asyncio
-import json
 import subprocess
-import tempfile
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -43,33 +39,24 @@ async def execute_claude(request: ExecuteRequest):
     Runs claude in one-shot mode with permissions bypassed.
     """
     try:
-        # Create temp file for prompt
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-            f.write(request.prompt)
-            prompt_file = f.name
+        # Run claude with -p flag for non-interactive output
+        result = subprocess.run(
+            [
+                'claude',
+                '-p',
+                '--dangerously-skip-permissions',
+                request.prompt
+            ],
+            cwd=request.workspace,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
 
-        try:
-            # Run claude with permissions bypassed
-            result = subprocess.run(
-                [
-                    'claude',
-                    '--dangerously-skip-permissions',
-                    prompt_file
-                ],
-                cwd=request.workspace,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
-
-            return ExecuteResponse(
-                output=result.stdout,
-                error=result.stderr if result.returncode != 0 else None
-            )
-
-        finally:
-            # Clean up temp file
-            Path(prompt_file).unlink(missing_ok=True)
+        return ExecuteResponse(
+            output=result.stdout,
+            error=result.stderr if result.returncode != 0 else None
+        )
 
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Claude execution timed out")
