@@ -2,14 +2,15 @@
 
 import httpx
 from models import AgentTask, AgentResponse
+from mainloop.config import settings
 
 
 class ClaudeAgent:
     """Client for interacting with Claude Code CLI container."""
 
-    def __init__(self, base_url: str = "http://claude-agent:8001"):
+    def __init__(self, base_url: str | None = None):
         """Initialize Claude agent client."""
-        self.base_url = base_url
+        self.base_url = base_url or settings.agent_controller_url
         self.client = httpx.AsyncClient(timeout=300.0)  # 5 minute timeout
 
     async def execute_task(self, task: AgentTask) -> AgentResponse:

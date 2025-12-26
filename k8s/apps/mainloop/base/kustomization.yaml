@@ -6,10 +6,11 @@ namespace: mainloop
 resources:
   - namespace.yaml
   - deployment-backend.yaml
-  - deployment-claude-agent.yaml
+  - deployment-agent-controller.yaml
   - deployment-frontend.yaml
   - service-backend.yaml
   - service-frontend.yaml
+  - service-agent-controller.yaml
   - configmap.yaml
   - httproute.yaml
   - database.yaml

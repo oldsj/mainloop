@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     google_cloud_project: str = ""
     bigquery_dataset: str = "mainloop"
 
-    # Claude Agent
-    anthropic_api_key: str = ""
+    # Agent Controller
+    agent_controller_url: str = "http://mainloop-agent-controller:8001"
 
     # Server
     host: str = "0.0.0.0"

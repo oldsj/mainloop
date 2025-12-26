@@ -6,7 +6,7 @@ GHCR_USER := oldsj
 IMAGE_TAG ?= latest
 BACKEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-backend:$(IMAGE_TAG)
 FRONTEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-frontend:$(IMAGE_TAG)
-CLAUDE_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-claude-agent:$(IMAGE_TAG)
+AGENT_CONTROLLER_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-agent-controller:$(IMAGE_TAG)
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -106,10 +106,10 @@ build-backend: ## Build backend Docker image
 build-frontend: ## Build frontend Docker image
 	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
 
-build-claude-agent: ## Build Claude agent Docker image
-	docker build -f claude-agent/Dockerfile -t $(CLAUDE_IMAGE) ./claude-agent
+build-agent-controller: ## Build agent controller Docker image
+	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent
 
-build-all: build-backend build-frontend build-claude-agent ## Build all Docker images
+build-all: build-backend build-frontend build-agent-controller ## Build all Docker images
 
 push-backend: build-backend ## Push backend to GHCR
 	docker push $(BACKEND_IMAGE)
@@ -117,10 +117,10 @@ push-backend: build-backend ## Push backend to GHCR
 push-frontend: build-frontend ## Push frontend to GHCR
 	docker push $(FRONTEND_IMAGE)
 
-push-claude-agent: build-claude-agent ## Push Claude agent to GHCR
-	docker push $(CLAUDE_IMAGE)
+push-agent-controller: build-agent-controller ## Push agent controller to GHCR
+	docker push $(AGENT_CONTROLLER_IMAGE)
 
-push-all: push-backend push-frontend push-claude-agent ## Push all images to GHCR
+push-all: push-backend push-frontend push-agent-controller ## Push all images to GHCR
 
 # Deployment
 deploy-frontend: ## Deploy frontend to Cloudflare Pages
@@ -131,7 +131,7 @@ deploy: push-all ## Full deployment to k8s
 	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side
 	@echo "Restarting Kubernetes deployments..."
 	kubectl rollout restart deployment/mainloop-backend -n mainloop
-	kubectl rollout restart deployment/mainloop-claude-agent -n mainloop
+	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop
 	kubectl rollout restart deployment/mainloop-frontend -n mainloop
 
 # K8s commands (for local testing before moving to infrastructure repo)

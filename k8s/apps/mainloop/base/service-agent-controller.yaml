@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-agent-controller
+  namespace: mainloop
+spec:
+  selector:
+    app: mainloop-agent-controller
+  ports:
+    - port: 8001
+      targetPort: 8001

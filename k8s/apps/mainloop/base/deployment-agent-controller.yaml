@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mainloop-claude-agent
+  name: mainloop-agent-controller
   namespace: mainloop
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: mainloop-claude-agent
+      app: mainloop-agent-controller
   template:
     metadata:
       labels:
-        app: mainloop-claude-agent
+        app: mainloop-agent-controller
     spec:
       imagePullSecrets:
         - name: ghcr-secret
       containers:
-        - name: claude-agent
-          image: ghcr.io/oldsj/mainloop-claude-agent:latest
+        - name: agent-controller
+          image: ghcr.io/oldsj/mainloop-agent-controller:latest
           env:
             - name: CLAUDE_CREDENTIALS
               valueFrom:
