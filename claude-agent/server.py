@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Persistent Claude Code CLI wrapper with streaming JSON.
-Keeps Claude process alive for fast responses and session memory.
+Claude Agent API with OAuth authentication support.
+Uses subprocess to call Claude CLI for reliability.
 """
 import asyncio
 import json
+import os
 import subprocess
-import threading
-from collections.abc import AsyncGenerator
-from queue import Queue, Empty
+import re
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 
-app = FastAPI(title="Claude Code API")
+app = FastAPI(title="Claude Agent API")
+
+CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 
 
 class ExecuteRequest(BaseModel):
@@ -32,176 +34,157 @@ class ExecuteResponse(BaseModel):
     error: str | None = None
 
 
-class ClaudeSession:
-    """Persistent Claude CLI session using stream-json mode."""
+class AuthStatus(BaseModel):
+    """Authentication status."""
+    authenticated: bool
+    expires_at: int | None = None
+    subscription_type: str | None = None
+    error: str | None = None
 
-    def __init__(self, model: str = "haiku", workspace: str = "/workspace"):
-        self.model = model
-        self.workspace = workspace
-        self.process: subprocess.Popen | None = None
-        self.session_id: str | None = None
-        self.response_queue: Queue = Queue()
-        self.reader_thread: threading.Thread | None = None
-        self.lock = threading.Lock()
-        self._start_process()
 
-    def _start_process(self):
-        """Start the Claude CLI process."""
-        self.process = subprocess.Popen(
-            [
-                'claude', '-p', '--verbose',
-                '--input-format', 'stream-json',
-                '--output-format', 'stream-json',
-                '--dangerously-skip-permissions',
-                '--model', self.model,
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=self.workspace,
-            bufsize=1,  # Line buffered
-        )
-
-        # Start reader thread
-        self.reader_thread = threading.Thread(target=self._read_output, daemon=True)
-        self.reader_thread.start()
-
-    def _read_output(self):
-        """Read output from Claude process in background thread."""
+def get_credentials() -> dict | None:
+    """Read credentials from file."""
+    if CREDENTIALS_PATH.exists():
         try:
-            for line in self.process.stdout:
-                line = line.strip()
-                if line:
-                    try:
-                        msg = json.loads(line)
-                        self.response_queue.put(msg)
-                    except json.JSONDecodeError:
-                        pass
+            return json.loads(CREDENTIALS_PATH.read_text())
         except Exception:
-            pass
-
-    def is_alive(self) -> bool:
-        """Check if the Claude process is still running."""
-        return self.process is not None and self.process.poll() is None
-
-    def restart(self):
-        """Restart the Claude process if it died."""
-        with self.lock:
-            if self.process:
-                self.process.kill()
-                self.process.wait()
-            self._start_process()
-            self.session_id = None
-
-    def send_message(self, prompt: str) -> str:
-        """Send a message and wait for the result."""
-        with self.lock:
-            if not self.is_alive():
-                self.restart()
-
-            # Clear any pending messages
-            while not self.response_queue.empty():
-                try:
-                    self.response_queue.get_nowait()
-                except Empty:
-                    break
-
-            # Send the message
-            msg = {
-                "type": "user",
-                "message": {"role": "user", "content": prompt}
-            }
-            self.process.stdin.write(json.dumps(msg) + "\n")
-            self.process.stdin.flush()
-
-            # Wait for result
-            result_text = ""
-            timeout = 300  # 5 minutes
-
-            while True:
-                try:
-                    response = self.response_queue.get(timeout=timeout)
-
-                    # Capture session ID from init message
-                    if response.get("type") == "system" and response.get("subtype") == "init":
-                        self.session_id = response.get("session_id")
-
-                    # Check for result (final message)
-                    elif response.get("type") == "result":
-                        result_text = response.get("result", "")
-                        if response.get("is_error"):
-                            raise Exception(result_text)
-                        break
-
-                except Empty:
-                    raise TimeoutError("Claude response timed out")
-
-            return result_text
+            return None
+    return None
 
 
-# Global session instance
-_session: ClaudeSession | None = None
-_session_lock = threading.Lock()
+def check_auth() -> AuthStatus:
+    """Check if we have valid authentication."""
+    creds = get_credentials()
+    if not creds:
+        return AuthStatus(authenticated=False, error="No credentials found")
 
+    oauth = creds.get("claudeAiOauth", {})
+    if not oauth.get("accessToken"):
+        return AuthStatus(authenticated=False, error="No access token")
 
-def get_session(model: str = "haiku", workspace: str = "/workspace") -> ClaudeSession:
-    """Get or create the global Claude session."""
-    global _session
-    with _session_lock:
-        if _session is None or not _session.is_alive():
-            _session = ClaudeSession(model=model, workspace=workspace)
-        return _session
+    return AuthStatus(
+        authenticated=True,
+        expires_at=oauth.get("expiresAt"),
+        subscription_type=oauth.get("subscriptionType"),
+    )
 
 
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    session = get_session()
+    auth = check_auth()
     return {
         "status": "ok",
-        "service": "claude-code-api",
-        "session_alive": session.is_alive(),
-        "session_id": session.session_id,
+        "service": "claude-agent-api",
+        "authenticated": auth.authenticated,
     }
+
+
+@app.get("/auth/status", response_model=AuthStatus)
+async def auth_status():
+    """Check authentication status."""
+    return check_auth()
+
+
+@app.post("/auth/login")
+async def auth_login():
+    """
+    Initiate OAuth login flow.
+    Returns a URL for the user to open in their browser.
+    """
+    try:
+        # Start claude login process and capture its output
+        # We use script to fake a TTY
+        result = subprocess.run(
+            ["script", "-q", "/dev/null", "claude", "login"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**os.environ, "TERM": "dumb"},
+        )
+
+        output = result.stdout + result.stderr
+
+        # Look for URL in output
+        url_match = re.search(r'https://[^\s\]]+', output)
+        if url_match:
+            return {
+                "status": "pending",
+                "message": "Open this URL to authenticate",
+                "url": url_match.group(0),
+            }
+
+        # If no URL found, return the raw output for debugging
+        return {
+            "status": "error",
+            "message": "Could not extract auth URL",
+            "output": output[:500],
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "message": "Login command timed out",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/auth/token")
+async def auth_set_token(token: str):
+    """
+    Set authentication token directly.
+    Useful for setting an API key.
+    """
+    # For API key, set environment variable
+    os.environ["ANTHROPIC_API_KEY"] = token
+
+    return {"status": "ok", "message": "Token set"}
 
 
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute_claude(request: ExecuteRequest):
     """
-    Execute Claude Code CLI with the given prompt.
-    Uses persistent session for fast responses.
+    Execute a prompt using Claude CLI.
     """
     try:
-        session = get_session(model=request.model, workspace=request.workspace)
-
-        # Run in thread pool to not block
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            session.send_message,
-            request.prompt
+        # Run claude with -p flag for non-interactive output
+        result = subprocess.run(
+            [
+                "claude",
+                "-p",
+                "--dangerously-skip-permissions",
+                "--no-session-persistence",
+                "--model", request.model,
+                request.prompt,
+            ],
+            cwd=request.workspace,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
         )
+
+        if result.returncode != 0 and "401" in result.stdout:
+            return ExecuteResponse(
+                output="",
+                error="Authentication expired. Please re-authenticate via /auth/login",
+            )
 
         return ExecuteResponse(
-            output=result,
-            session_id=session.session_id,
+            output=result.stdout,
+            error=result.stderr if result.returncode != 0 else None,
         )
 
-    except TimeoutError:
+    except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Claude execution timed out")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/restart")
-async def restart_session():
-    """Force restart the Claude session."""
-    global _session
-    with _session_lock:
-        if _session:
-            _session.restart()
-    return {"status": "restarted"}
+async def restart():
+    """Restart placeholder - no persistent state in subprocess mode."""
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

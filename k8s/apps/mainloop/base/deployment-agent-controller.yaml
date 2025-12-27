@@ -19,11 +19,11 @@ spec:
         - name: agent-controller
           image: ghcr.io/oldsj/mainloop-agent-controller:latest
           env:
-            - name: CLAUDE_CREDENTIALS
+            - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: claude-credentials
-                  key: claude-creds.json
+                  key: oauth-token
           volumeMounts:
             - name: workspace
               mountPath: /workspace
