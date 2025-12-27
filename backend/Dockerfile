@@ -1,22 +1,32 @@
-# Build stage - install dependencies
-FROM python:3.13-slim AS builder
-
-# Copy uv binary from official uv image
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Build stage - use uv image with Python pre-installed
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Copy backend files for building
+# Enable bytecode compilation for faster startup
+ENV UV_COMPILE_BYTECODE=1
+
+# Copy from cache instead of linking
+ENV UV_LINK_MODE=copy
+
+# Copy dependency files first (for layer caching)
 COPY backend/pyproject.toml backend/.python-version backend/uv.lock backend/README.md ./
-COPY backend/src ./src
 
 # Copy shared models package
 COPY models ../models
 
-# Install dependencies and the project
-RUN uv sync --frozen
+# Install dependencies only (separate from code for layer caching)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
 
-# Runtime stage
+# Copy source code
+COPY backend/src ./src
+
+# Install the project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
+
+# Runtime stage - minimal image without uv
 FROM python:3.13-slim
 
 WORKDIR /app

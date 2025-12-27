@@ -20,5 +20,5 @@ else
     echo "  Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY env var"
 fi
 
-# Run the HTTP API server
-exec python3 /home/claude/server.py
+# Run the HTTP API server (using venv uvicorn from PATH)
+cd /app && exec uvicorn server:app --host 0.0.0.0 --port 8001
