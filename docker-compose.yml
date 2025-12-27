@@ -11,11 +11,10 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
-      - CLAUDE_CREDENTIALS=${CLAUDE_CREDENTIALS}
+      - CLAUDE_WORKSPACE=/workspace
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
-    depends_on:
-      - claude-agent
+      - claude-workdir:/workspace
     develop:
       watch:
         - action: rebuild
@@ -61,10 +60,10 @@ services:
     container_name: mainloop-claude-agent
     ports:
       - "8001:8001"  # Expose for debugging
+    env_file:
+      - .env
     volumes:
       - claude-workdir:/workspace
-      - claude-config:/home/claude/.claude  # Credentials from: make setup-claude-creds
 
 volumes:
   claude-workdir:
-  claude-config:

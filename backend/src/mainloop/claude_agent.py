@@ -1,52 +1,70 @@
-"""Claude agent orchestration."""
+"""Claude agent orchestration using the Agent SDK."""
 
-import httpx
+from claude_agent_sdk import (
+    query,
+    ClaudeAgentOptions,
+    AssistantMessage,
+    ResultMessage,
+    TextBlock,
+)
 from models import AgentTask, AgentResponse
 from mainloop.config import settings
 
 
 class ClaudeAgent:
-    """Client for interacting with Claude Code CLI container."""
+    """Client for interacting with Claude Code via the Agent SDK."""
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(self):
         """Initialize Claude agent client."""
-        self.base_url = base_url or settings.agent_controller_url
-        self.client = httpx.AsyncClient(timeout=300.0)  # 5 minute timeout
+        pass
 
     async def execute_task(self, task: AgentTask) -> AgentResponse:
-        """Execute a task via Claude Code CLI container."""
+        """Execute a task via Claude Code Agent SDK."""
         try:
-            response = await self.client.post(
-                f"{self.base_url}/execute",
-                json={
-                    "prompt": task.prompt,
-                    "workspace": "/workspace"
-                }
+            options = ClaudeAgentOptions(
+                model=settings.claude_model,
+                permission_mode="bypassPermissions",
+                cwd=settings.claude_workspace,
             )
-            response.raise_for_status()
-            data = response.json()
 
-            # Check for errors from Claude execution
-            if data.get("error"):
-                return AgentResponse(
-                    task_id=task.id,
-                    content=f"Claude execution error: {data['error']}"
-                )
+            collected_text: list[str] = []
+
+            async for message in query(prompt=task.prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            collected_text.append(block.text)
+                elif isinstance(message, ResultMessage):
+                    if message.is_error:
+                        return AgentResponse(
+                            task_id=task.id,
+                            content=f"Error: {message.result or 'Unknown error'}"
+                        )
 
             return AgentResponse(
                 task_id=task.id,
-                content=data.get("output", "")
+                content="\n".join(collected_text) if collected_text else "No response"
             )
-        except httpx.HTTPError as e:
+
+        except Exception as e:
             return AgentResponse(
                 task_id=task.id,
-                content=f"Failed to communicate with Claude agent: {str(e)}"
+                content=f"Claude SDK error: {str(e)}"
             )
 
     async def stream_task(self, task: AgentTask):
         """Stream task execution results."""
-        # TODO: Implement SSE streaming from Claude agent
-        yield "Mock streaming response"
+        options = ClaudeAgentOptions(
+            model=settings.claude_model,
+            permission_mode="bypassPermissions",
+            cwd=settings.claude_workspace,
+        )
+
+        async for message in query(prompt=task.prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        yield block.text
 
 
 # Global agent instance

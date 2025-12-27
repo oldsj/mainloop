@@ -11,8 +11,9 @@ class Settings(BaseSettings):
     google_cloud_project: str = ""
     bigquery_dataset: str = "mainloop"
 
-    # Agent Controller
-    agent_controller_url: str = "http://mainloop-agent-controller:8001"
+    # Claude Agent
+    claude_workspace: str = "/workspace"
+    claude_model: str = "haiku"
 
     # Server
     host: str = "0.0.0.0"
