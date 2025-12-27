@@ -28,14 +28,15 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
-      - CLAUDE_WORKSPACE=/workspace
+      - CLAUDE_AGENT_URL=http://claude-agent:8001
       - DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
       - DBOS_SYSTEM_DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
-      - claude-workdir:/workspace
     depends_on:
       postgres:
+        condition: service_healthy
+      claude-agent:
         condition: service_healthy
     develop:
       watch:
@@ -86,6 +87,12 @@ services:
       - .env
     volumes:
       - claude-workdir:/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   claude-workdir:

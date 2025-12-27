@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     bigquery_dataset: str = "mainloop"
 
     # Claude Agent
+    claude_agent_url: str = "http://claude-agent:8001"
     claude_workspace: str = "/workspace"
-    claude_model: str = "haiku"
+    claude_model: str = "sonnet"
 
     # GitHub
     github_token: str = ""
