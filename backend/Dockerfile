@@ -37,10 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g @anthropic-ai/claude-code \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for Claude
+# Create non-root user for Claude and workspace directory
 RUN useradd -m -s /bin/bash claude \
-    && mkdir -p /home/claude/.claude \
-    && chown -R claude:claude /home/claude
+    && mkdir -p /home/claude/.claude /workspace \
+    && chown -R claude:claude /home/claude /workspace
 
 WORKDIR /app
 

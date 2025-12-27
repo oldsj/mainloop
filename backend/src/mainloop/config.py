@@ -2,13 +2,24 @@
 
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import computed_field
 
 
 class Settings(BaseSettings):
     """Application settings."""
 
-    # Database (PostgreSQL)
-    database_url: str = ""
+    # Database (PostgreSQL) - constructed from parts
+    db_host: str = "localhost"
+    db_port: str = "5432"
+    db_name: str = "mainloop"
+    db_user: str = "mainloop"
+    db_password: str = ""
+
+    @computed_field
+    @property
+    def database_url(self) -> str:
+        """Construct database URL from parts."""
+        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
     # Google Cloud (legacy - being migrated to PostgreSQL)
     google_cloud_project: str = ""

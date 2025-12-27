@@ -29,8 +29,11 @@ services:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
       - CLAUDE_AGENT_URL=http://claude-agent:8001
-      - DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
-      - DBOS_SYSTEM_DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=mainloop
+      - DB_USER=mainloop
+      - DB_PASSWORD=mainloop
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
     depends_on:

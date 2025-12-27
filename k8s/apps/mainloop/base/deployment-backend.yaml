@@ -26,16 +26,16 @@ spec:
             - secretRef:
                 name: mainloop-secrets
           env:
-            - name: DATABASE_URL
+            - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: mainloop-db-credentials
-                  key: uri
-            - name: DBOS_SYSTEM_DATABASE_URL
+                  key: username
+            - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: mainloop-db-credentials
-                  key: uri
+                  key: password
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
