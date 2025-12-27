@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mainloop-postgres
+    environment:
+      POSTGRES_USER: mainloop
+      POSTGRES_PASSWORD: mainloop
+      POSTGRES_DB: mainloop
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mainloop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -12,9 +29,14 @@ services:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
       - CLAUDE_WORKSPACE=/workspace
+      - DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
+      - DBOS_SYSTEM_DATABASE_URL=postgresql://mainloop:mainloop@postgres:5432/mainloop
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
       - claude-workdir:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
     develop:
       watch:
         - action: rebuild
@@ -67,3 +89,4 @@ services:
 
 volumes:
   claude-workdir:
+  postgres-data:

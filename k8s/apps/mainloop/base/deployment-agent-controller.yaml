@@ -24,6 +24,11 @@ spec:
                 secretKeyRef:
                   name: claude-credentials
                   key: oauth-token
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials
+                  key: token
           volumeMounts:
             - name: workspace
               mountPath: /workspace

@@ -20,5 +20,15 @@ else
     echo "  Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY env var"
 fi
 
+# Configure GitHub CLI authentication
+if [ -n "$GH_TOKEN" ]; then
+    echo "✓ GitHub CLI configured with GH_TOKEN"
+    # gh CLI automatically uses GH_TOKEN env var
+    git config --global user.name "Mainloop Bot"
+    git config --global user.email "bot@mainloop.ai"
+else
+    echo "⚠ GH_TOKEN not set - GitHub operations will fail"
+fi
+
 # Run the HTTP API server (using venv uvicorn from PATH)
 cd /app && exec uvicorn server:app --host 0.0.0.0 --port 8001

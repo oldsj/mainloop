@@ -25,6 +25,22 @@ spec:
                 name: mainloop-config
             - secretRef:
                 name: mainloop-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-db-credentials
+                  key: uri
+            - name: DBOS_SYSTEM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-db-credentials
+                  key: uri
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: anthropic-api-key
           resources:
             requests:
               memory: "256Mi"

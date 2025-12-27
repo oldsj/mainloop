@@ -105,10 +105,8 @@ make deploy              # Full deploy (build images + push + restart K8s)
 - Backend communicates with container via internal Docker network
 - Workspace mounted at `/workspace` for file operations
 
-### BigQuery (Conversation Memory)
-- All conversations persisted to BigQuery
-- Schema: conversations, messages tables
-- Use parameterized queries for all operations
+### DBOS
+- See docs/DBOS.md for details on how to set up and use DBOS for durable execution.
 
 ## Important
 

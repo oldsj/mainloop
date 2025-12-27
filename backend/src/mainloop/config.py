@@ -7,13 +7,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application settings."""
 
-    # Google Cloud
+    # Database (PostgreSQL)
+    database_url: str = ""
+
+    # Google Cloud (legacy - being migrated to PostgreSQL)
     google_cloud_project: str = ""
     bigquery_dataset: str = "mainloop"
 
     # Claude Agent
     claude_workspace: str = "/workspace"
     claude_model: str = "haiku"
+
+    # GitHub
+    github_token: str = ""
 
     # Server
     host: str = "0.0.0.0"
