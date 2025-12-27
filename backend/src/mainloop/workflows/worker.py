@@ -34,7 +34,7 @@ async def update_task_running(task_id: str) -> None:
 
 
 @DBOS.step()
-async def execute_claude_task(prompt: str) -> dict[str, Any]:
+async def execute_claude_task(prompt: str, model: str | None = None) -> dict[str, Any]:
     """Execute a task using Claude Agent SDK via HTTP API.
 
     Claude-agent manages its own isolated workspace internally.
@@ -43,7 +43,7 @@ async def execute_claude_task(prompt: str) -> dict[str, Any]:
 
     response = await client.execute(
         prompt=prompt,
-        model=settings.claude_model,
+        model=model or settings.claude_worker_model,
         timeout=600.0,  # 10 minute timeout for complex tasks
     )
 
@@ -101,7 +101,7 @@ Additional context:
 """
 
         # Execute the task - Claude-agent manages workspace isolation
-        result = await execute_claude_task(prompt)
+        result = await execute_claude_task(prompt, model=task.model)
         agent_output = result["output"]
 
         # Send result to main thread

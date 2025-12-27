@@ -77,6 +77,7 @@ class WorkerTask(BaseModel):
     )
     description: str = Field(..., description="Human-readable task description")
     prompt: str = Field(..., description="Full prompt for Claude")
+    model: str | None = Field(None, description="Claude model to use (haiku, sonnet, opus)")
 
     # Repository context
     repo_url: str | None = Field(None, description="GitHub repository URL")
@@ -115,6 +116,7 @@ class WorkerTaskCreate(BaseModel):
     description: str = Field(..., description="Task description")
     repo_url: str | None = Field(None, description="Repository URL")
     base_branch: str = Field(default="main", description="Base branch")
+    model: str | None = Field(None, description="Claude model (haiku, sonnet, opus)")
     context: dict[str, Any] = Field(
         default_factory=dict, description="Additional context"
     )
