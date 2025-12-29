@@ -1,0 +1,99 @@
+/**
+ * Tasks store for managing active worker tasks
+ */
+
+import { writable, derived } from 'svelte/store';
+import { api, type WorkerTask } from '$lib/api';
+
+interface TasksState {
+  tasks: WorkerTask[];
+  isOpen: boolean;
+  isLoading: boolean;
+  error: string | null;
+}
+
+const initialState: TasksState = {
+  tasks: [],
+  isOpen: false,
+  isLoading: false,
+  error: null
+};
+
+function createTasksStore() {
+  const { subscribe, set, update } = writable<TasksState>(initialState);
+
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  return {
+    subscribe,
+
+    async fetchTasks() {
+      update((s) => ({ ...s, isLoading: true, error: null }));
+      try {
+        const tasks = await api.listTasks();
+        update((s) => ({ ...s, tasks, isLoading: false }));
+      } catch (e) {
+        update((s) => ({ ...s, error: 'Failed to load tasks', isLoading: false }));
+      }
+    },
+
+    async cancelTask(taskId: string) {
+      try {
+        await api.cancelTask(taskId);
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'cancelled' } : task
+          )
+        }));
+        // Refetch to update the list
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to cancel task:', e);
+        throw e;
+      }
+    },
+
+    open() {
+      update((s) => ({ ...s, isOpen: true }));
+      this.fetchTasks();
+    },
+
+    close() {
+      update((s) => ({ ...s, isOpen: false }));
+    },
+
+    toggle() {
+      update((s) => {
+        if (!s.isOpen) {
+          this.fetchTasks();
+        }
+        return { ...s, isOpen: !s.isOpen };
+      });
+    },
+
+    startPolling(intervalMs = 10000) {
+      this.stopPolling();
+      this.fetchTasks();
+      pollInterval = setInterval(() => {
+        this.fetchTasks();
+      }, intervalMs);
+    },
+
+    stopPolling() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    }
+  };
+}
+
+export const tasks = createTasksStore();
+
+// Derived stores for convenience
+export const tasksList = derived(tasks, ($tasks) => $tasks.tasks);
+export const isTasksOpen = derived(tasks, ($tasks) => $tasks.isOpen);
+export const activeTasksCount = derived(tasks, ($tasks) =>
+  $tasks.tasks.filter((t) => !['completed', 'failed', 'cancelled'].includes(t.status)).length
+);

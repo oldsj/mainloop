@@ -1,11 +1,26 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
   import { api } from '$lib/api';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
 
   let { messages, isLoading } = $derived($conversationStore);
+  let messagesContainer: HTMLDivElement;
+
+  // Auto-scroll to bottom when messages change or loading state changes
+  $effect(() => {
+    // Track these values to trigger effect
+    messages;
+    isLoading;
+
+    // Scroll after DOM updates
+    tick().then(() => {
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    });
+  });
 
   onMount(async () => {
     // Load the most recent conversation on startup
@@ -66,7 +81,7 @@
 
 <div class="flex h-full flex-col">
   <!-- Messages -->
-  <div class="flex-1 overflow-y-auto p-4 space-y-4">
+  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-4 space-y-4">
     {#if messages.length === 0}
       <div class="flex h-full items-center justify-center text-neutral-400">
         <p>Start a conversation</p>

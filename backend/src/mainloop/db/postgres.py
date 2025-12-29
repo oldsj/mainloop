@@ -288,6 +288,74 @@ class Database:
                     *params,
                 )
 
+    async def add_recent_repo(self, thread_id: str, repo_url: str, max_repos: int = 5):
+        """Add a repo to the recent repos list in main thread context.
+
+        Keeps the list at max_repos, removing oldest entries.
+        """
+        if not self._pool:
+            return
+
+        async with self.connection() as conn:
+            # Get current context
+            row = await conn.fetchrow(
+                "SELECT context FROM main_threads WHERE id = $1", thread_id
+            )
+            if not row:
+                return
+
+            # Parse context - handle both dict and string
+            raw_context = row["context"]
+            if isinstance(raw_context, dict):
+                context = raw_context
+            elif raw_context:
+                context = json.loads(raw_context)
+            else:
+                context = {}
+
+            recent_repos = context.get("recent_repos", [])
+
+            # Remove if already exists (to move to front)
+            recent_repos = [r for r in recent_repos if r != repo_url]
+
+            # Add to front
+            recent_repos.insert(0, repo_url)
+
+            # Trim to max
+            recent_repos = recent_repos[:max_repos]
+
+            context["recent_repos"] = recent_repos
+
+            await conn.execute(
+                "UPDATE main_threads SET context = $1, last_activity_at = $2 WHERE id = $3",
+                json.dumps(context),
+                datetime.now(timezone.utc),
+                thread_id,
+            )
+
+    async def get_recent_repos(self, thread_id: str) -> list[str]:
+        """Get recent repos from main thread context."""
+        if not self._pool:
+            return []
+
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT context FROM main_threads WHERE id = $1", thread_id
+            )
+            if not row:
+                return []
+
+            # Parse context - handle both dict and string
+            raw_context = row["context"]
+            if isinstance(raw_context, dict):
+                context = raw_context
+            elif raw_context:
+                context = json.loads(raw_context)
+            else:
+                context = {}
+
+            return context.get("recent_repos", [])
+
     async def add_active_task(self, thread_id: str, task_id: str):
         """Add a task to the active tasks list."""
         if not self._pool:
