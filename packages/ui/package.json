@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./theme": "./src/theme.ts",
+    "./theme.css": "./src/theme.css",
     "./tailwind.preset": "./src/tailwind.preset.ts"
   },
   "files": ["src"],

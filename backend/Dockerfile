@@ -53,6 +53,10 @@ COPY --chown=claude:claude backend/src ./src
 # Copy shared models package (owned by claude)
 COPY --chown=claude:claude models ../models
 
+# Copy entrypoint script
+COPY --chown=claude:claude backend/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Set up PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
@@ -61,4 +65,5 @@ USER claude
 
 EXPOSE 8000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000"]

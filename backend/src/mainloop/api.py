@@ -137,6 +137,8 @@ async def chat(
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
     """Send a message and get an immediate response."""
+    from mainloop.services.compaction import trigger_compaction
+
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
@@ -151,36 +153,45 @@ async def chat(
     else:
         conversation = await db.create_conversation(user_id)
 
-    # Save user message
+    # Load context: summary + recent messages after last summarized point
+    recent_messages = await db.get_messages_after(
+        conversation.id,
+        conversation.summarized_through_id,
+        limit=20,
+    )
+
+    # Save user message and increment count
     await db.create_message(
         conversation_id=conversation.id,
         role="user",
         content=request.message,
     )
+    await db.increment_message_count(conversation.id)
 
     # Get main thread record for the ID
     main_thread = await db.get_main_thread_by_user(user_id)
     thread_id = main_thread.id if main_thread else main_thread_id
 
-    # Process message synchronously (pass Claude session ID for continuity)
+    # Process message with summary + recent messages for context
     result = await process_message(
         user_id=user_id,
         message=request.message,
         conversation_id=conversation.id,
         main_thread_id=thread_id,
-        claude_session_id=conversation.claude_session_id,
+        summary=conversation.summary,
+        recent_messages=recent_messages,
     )
 
-    # Update conversation's Claude session ID if we got a new one
-    if result.claude_session_id and result.claude_session_id != conversation.claude_session_id:
-        await db.update_conversation_session(conversation.id, result.claude_session_id)
-
-    # Save assistant response
+    # Save assistant response and increment count
     assistant_message = await db.create_message(
         conversation_id=conversation.id,
         role="assistant",
         content=result.response,
     )
+    new_count = await db.increment_message_count(conversation.id)
+
+    # Trigger async compaction if needed (fire-and-forget)
+    trigger_compaction(conversation.id, new_count)
 
     return ChatResponse(
         conversation_id=conversation.id,

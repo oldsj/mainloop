@@ -8,6 +8,7 @@ from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, Result
 
 from models import (
     WorkerTask,
+    Message,
     QueueItem,
     QueueItemType,
     QueueItemPriority,
@@ -25,6 +26,53 @@ from mainloop.workflows.dbos_config import worker_queue
 logger = logging.getLogger(__name__)
 
 
+def format_conversation_history(messages: list[Message]) -> str:
+    """Format conversation history for inclusion in prompt."""
+    if not messages:
+        return ""
+
+    lines = []
+    for msg in messages:
+        role = "User" if msg.role == "user" else "Assistant"
+        lines.append(f"{role}: {msg.content}")
+
+    return "\n\n".join(lines)
+
+
+def build_context_prompt(
+    summary: str | None,
+    recent_messages: list[Message],
+    new_message: str,
+) -> str:
+    """Build the full prompt with summary and recent messages.
+
+    Structure:
+    1. Summary of earlier conversation (if exists)
+    2. Recent messages (unsummarized)
+    3. New user message
+    """
+    parts = []
+
+    if summary:
+        parts.append(f"[Summary of earlier conversation]\n{summary}")
+
+    if recent_messages:
+        history = format_conversation_history(recent_messages)
+        parts.append(f"[Recent conversation]\n{history}")
+
+    parts.append(f"User: {new_message}")
+
+    if parts:
+        context = "\n\n".join(parts)
+        return f"""Continue this conversation naturally, taking into account the full context above.
+
+{context}
+
+Respond to the user's latest message."""
+    else:
+        return new_message
+
+
 @dataclass
 class ChatResult:
     """Result of processing a chat message."""
@@ -33,51 +81,52 @@ class ChatResult:
     task_id: str | None = None
     needs_inbox_action: bool = False
     queue_item: QueueItem | None = None
-    claude_session_id: str | None = None
 
 
 @dataclass
 class ClaudeResponse:
-    """Response from Claude including session info."""
+    """Response from Claude."""
 
     text: str
-    session_id: str | None = None
     compacted: bool = False
     compaction_count: int = 0
 
 
 async def get_claude_response(
     message: str,
-    claude_session_id: str | None = None,
+    summary: str | None = None,
+    recent_messages: list[Message] | None = None,
     model: str = "sonnet",
 ) -> ClaudeResponse:
-    """Get a response from Claude using the Agent SDK with session resumption.
+    """Get a response from Claude with conversation context.
 
-    If claude_session_id is provided, resumes that session (Claude maintains context).
-    Otherwise starts a new session. Tracks context compaction events.
+    Context is provided via:
+    - summary: Compacted summary of older messages (from PostgreSQL)
+    - recent_messages: Recent unsummarized messages (from PostgreSQL)
+
+    This ensures continuity across sessions, pod restarts, and deployments.
     """
     try:
+        # Build prompt with summary and recent messages
+        prompt = build_context_prompt(summary, recent_messages or [], message)
+
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="bypassPermissions",
-            resume=claude_session_id,  # Resume existing session if provided
         )
 
         collected_text: list[str] = []
-        session_id: str | None = None
         compaction_count: int = 0
 
-        async for msg in query(prompt=message, options=options):
+        async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         collected_text.append(block.text)
             elif isinstance(msg, ResultMessage):
-                session_id = msg.session_id
                 if msg.is_error:
                     return ClaudeResponse(
                         text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
-                        session_id=session_id,
                         compacted=compaction_count > 0,
                         compaction_count=compaction_count,
                     )
@@ -92,7 +141,6 @@ async def get_claude_response(
 
         return ClaudeResponse(
             text="\n".join(collected_text) if collected_text else "No response generated.",
-            session_id=session_id,
             compacted=compaction_count > 0,
             compaction_count=compaction_count,
         )
@@ -139,7 +187,8 @@ async def process_message(
     message: str,
     conversation_id: str,
     main_thread_id: str,
-    claude_session_id: str | None = None,
+    summary: str | None = None,
+    recent_messages: list[Message] | None = None,
 ) -> ChatResult:
     """Process a user message and return an immediate response.
 
@@ -149,8 +198,8 @@ async def process_message(
     - Direct Claude responses for everything else (no inbox)
 
     Args:
-        claude_session_id: Claude session ID for conversation continuity.
-            If provided, resumes the existing Claude session.
+        summary: Compacted summary of older messages.
+        recent_messages: Recent unsummarized messages for context.
     """
     # Check for routing to existing tasks first
     matches = await find_matching_tasks(user_id, message)
@@ -226,14 +275,12 @@ async def process_message(
     model = settings.claude_model  # Uses haiku by default
     claude_response = await get_claude_response(
         message,
-        claude_session_id=claude_session_id,
+        summary=summary,
+        recent_messages=recent_messages,
         model=model,
     )
 
-    return ChatResult(
-        response=claude_response.text,
-        claude_session_id=claude_response.session_id,
-    )
+    return ChatResult(response=claude_response.text)
 
 
 async def _create_routing_queue_item(

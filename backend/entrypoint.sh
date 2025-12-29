@@ -1,9 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Starting Claude Agent Worker API..."
-echo "Workspace: /workspace"
-echo "Listening on port 8001"
+echo "Starting Mainloop Backend API..."
 
 # Create Claude credentials file from env var if token is provided
 # This is required for the Claude Agent SDK to authenticate
@@ -29,14 +27,5 @@ else
     echo "  Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY env var"
 fi
 
-# Configure GitHub CLI authentication
-if [ -n "$GH_TOKEN" ]; then
-    echo "✓ GitHub CLI configured with GH_TOKEN"
-    git config --global user.name "Mainloop Bot"
-    git config --global user.email "bot@mainloop.ai"
-else
-    echo "⚠ GH_TOKEN not set - GitHub operations will fail"
-fi
-
-# Run the HTTP API server
-cd /app && exec uvicorn server:app --host 0.0.0.0 --port 8001
+# Execute the main command
+exec "$@"

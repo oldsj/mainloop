@@ -90,12 +90,14 @@ CREATE INDEX IF NOT EXISTS idx_queue_items_user_id ON queue_items(user_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
 CREATE INDEX IF NOT EXISTS idx_queue_items_main_thread ON queue_items(main_thread_id);
 
--- Conversations (migrated from BigQuery)
+-- Conversations
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     title TEXT,
-    claude_session_id TEXT,
+    summary TEXT,
+    summarized_through_id TEXT,
+    message_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -139,9 +141,19 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
         ALTER TABLE queue_items ADD COLUMN read_at TIMESTAMPTZ;
     END IF;
-    -- Add claude_session_id to conversations
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='claude_session_id') THEN
-        ALTER TABLE conversations ADD COLUMN claude_session_id TEXT;
+    -- Add compaction fields to conversations
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='summary') THEN
+        ALTER TABLE conversations ADD COLUMN summary TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='summarized_through_id') THEN
+        ALTER TABLE conversations ADD COLUMN summarized_through_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='message_count') THEN
+        ALTER TABLE conversations ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0;
+    END IF;
+    -- Drop deprecated claude_session_id if it exists
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='claude_session_id') THEN
+        ALTER TABLE conversations DROP COLUMN claude_session_id;
     END IF;
 END $$;
 
@@ -693,6 +705,7 @@ class Database:
             id=str(uuid.uuid4()),
             user_id=user_id,
             title=title or "New Conversation",
+            message_count=0,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
@@ -701,13 +714,13 @@ class Database:
         async with self.connection() as conn:
             await conn.execute(
                 """
-                INSERT INTO conversations (id, user_id, title, claude_session_id, created_at, updated_at)
+                INSERT INTO conversations (id, user_id, title, message_count, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 conversation.id,
                 conversation.user_id,
                 conversation.title,
-                conversation.claude_session_id,
+                conversation.message_count,
                 conversation.created_at,
                 conversation.updated_at,
             )
@@ -723,14 +736,7 @@ class Database:
             )
         if not row:
             return None
-        return Conversation(
-            id=row["id"],
-            user_id=row["user_id"],
-            title=row["title"],
-            claude_session_id=row["claude_session_id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
+        return self._row_to_conversation(row)
 
     async def list_conversations(
         self, user_id: str, limit: int = 50
@@ -749,35 +755,58 @@ class Database:
                 user_id,
                 limit,
             )
-        return [
-            Conversation(
-                id=row["id"],
-                user_id=row["user_id"],
-                title=row["title"],
-                claude_session_id=row["claude_session_id"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in rows
-        ]
+        return [self._row_to_conversation(row) for row in rows]
 
-    async def update_conversation_session(
-        self, conversation_id: str, claude_session_id: str
+    async def update_conversation_summary(
+        self,
+        conversation_id: str,
+        summary: str,
+        summarized_through_id: str,
     ) -> None:
-        """Update the Claude session ID for a conversation."""
+        """Update the compaction summary for a conversation."""
         if not self._pool:
             return
         async with self.connection() as conn:
             await conn.execute(
                 """
                 UPDATE conversations
-                SET claude_session_id = $1, updated_at = $2
-                WHERE id = $3
+                SET summary = $1, summarized_through_id = $2, updated_at = $3
+                WHERE id = $4
                 """,
-                claude_session_id,
+                summary,
+                summarized_through_id,
                 datetime.now(timezone.utc),
                 conversation_id,
             )
+
+    async def increment_message_count(self, conversation_id: str) -> int:
+        """Increment message count and return new value."""
+        if not self._pool:
+            return 0
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE conversations
+                SET message_count = message_count + 1, updated_at = $1
+                WHERE id = $2
+                RETURNING message_count
+                """,
+                datetime.now(timezone.utc),
+                conversation_id,
+            )
+        return row["message_count"] if row else 0
+
+    def _row_to_conversation(self, row: asyncpg.Record) -> Conversation:
+        return Conversation(
+            id=row["id"],
+            user_id=row["user_id"],
+            title=row["title"],
+            summary=row.get("summary"),
+            summarized_through_id=row.get("summarized_through_id"),
+            message_count=row.get("message_count", 0),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
     async def create_message(
         self, conversation_id: str, role: str, content: str
@@ -857,16 +886,88 @@ class Database:
             )
         # Reverse to get chronological order
         rows = list(reversed(rows))
-        return [
-            Message(
-                id=row["id"],
-                conversation_id=row["conversation_id"],
-                role=row["role"],  # type: ignore
-                content=row["content"],
-                created_at=row["created_at"],
+        return [self._row_to_message(row) for row in rows]
+
+    async def get_messages_after(
+        self, conversation_id: str, after_message_id: str | None, limit: int = 20
+    ) -> list[Message]:
+        """Get messages after a specific message ID (for unsummarized messages)."""
+        if not self._pool:
+            return []
+        async with self.connection() as conn:
+            if after_message_id:
+                # Get the timestamp of the after_message_id
+                ref_row = await conn.fetchrow(
+                    "SELECT created_at FROM messages WHERE id = $1",
+                    after_message_id,
+                )
+                if ref_row:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM messages
+                        WHERE conversation_id = $1 AND created_at > $2
+                        ORDER BY created_at DESC
+                        LIMIT $3
+                        """,
+                        conversation_id,
+                        ref_row["created_at"],
+                        limit,
+                    )
+                else:
+                    # Reference message not found, get recent
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM messages
+                        WHERE conversation_id = $1
+                        ORDER BY created_at DESC
+                        LIMIT $2
+                        """,
+                        conversation_id,
+                        limit,
+                    )
+            else:
+                # No reference, get recent messages
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM messages
+                    WHERE conversation_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    """,
+                    conversation_id,
+                    limit,
+                )
+        # Reverse to get chronological order
+        rows = list(reversed(rows))
+        return [self._row_to_message(row) for row in rows]
+
+    async def get_messages_for_compaction(
+        self, conversation_id: str, up_to_count: int
+    ) -> list[Message]:
+        """Get oldest messages for compaction (up to a count)."""
+        if not self._pool:
+            return []
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM messages
+                WHERE conversation_id = $1
+                ORDER BY created_at ASC
+                LIMIT $2
+                """,
+                conversation_id,
+                up_to_count,
             )
-            for row in rows
-        ]
+        return [self._row_to_message(row) for row in rows]
+
+    def _row_to_message(self, row: asyncpg.Record) -> Message:
+        return Message(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            role=row["role"],  # type: ignore
+            content=row["content"],
+            created_at=row["created_at"],
+        )
 
 
 # Global database instance
