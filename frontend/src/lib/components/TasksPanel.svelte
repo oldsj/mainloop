@@ -29,7 +29,7 @@
       case 'implementing':
         return 'bg-blue-100 text-blue-800';
       case 'waiting_plan_review':
-      case 'waiting_human':
+      case 'under_review':
         return 'bg-purple-100 text-purple-800';
       case 'completed':
         return 'bg-green-100 text-green-800';
@@ -52,8 +52,8 @@
         return 'Awaiting Plan Review';
       case 'implementing':
         return 'Implementing';
-      case 'waiting_human':
-        return 'Awaiting Review';
+      case 'under_review':
+        return 'Under Review';
       case 'completed':
         return 'Completed';
       case 'failed':

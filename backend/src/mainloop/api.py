@@ -467,14 +467,28 @@ async def task_complete(task_id: str, result: TaskResult):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Update task status in database
+    # Update task with job result
+    # NOTE: "completed" here means the K8s job finished, NOT that the task is done.
+    # The task is only truly completed when the PR is merged (handled by workflow).
+    # We just store the PR URL/number here without changing status.
     if result.status == "completed":
-        await db.update_worker_task(
-            task_id,
-            status=TaskStatus.COMPLETED,
-            result=result.result,
-            pr_url=result.result.get("pr_url") if result.result else None,
-        )
+        pr_url = result.result.get("pr_url") if result.result else None
+        pr_number = None
+        if pr_url:
+            # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
+            try:
+                pr_number = int(pr_url.split("/")[-1])
+            except (ValueError, IndexError):
+                pass
+        # Don't mark task COMPLETED - workflow manages status based on PR state
+        # Only update the PR URL/number for tracking
+        if pr_url:
+            await db.update_worker_task(
+                task_id,
+                result=result.result,
+                pr_url=pr_url,
+                pr_number=pr_number,
+            )
     elif result.status == "failed":
         await db.update_worker_task(
             task_id,
@@ -503,6 +517,137 @@ async def task_complete(task_id: str, result: TaskResult):
     )
 
     return {"status": "ok", "task_id": task_id}
+
+
+# ============= Debug Endpoints =============
+
+
+class DebugTaskInfo(BaseModel):
+    """Debug info for a worker task including workflow state."""
+
+    task: WorkerTask
+    workflow_status: str | None = None
+    workflow_error: str | None = None
+    workflow_created_at: datetime | None = None
+    workflow_updated_at: datetime | None = None
+    namespace_exists: bool = False
+    k8s_jobs: list[str] = []
+
+
+@app.get("/debug/tasks", response_model=list[DebugTaskInfo])
+async def debug_list_tasks(
+    limit: int = 10,
+):
+    """List all tasks with debug info (no auth required for debugging)."""
+    from datetime import timezone
+    from mainloop.services.k8s_namespace import namespace_exists, get_k8s_client
+
+    # Get all tasks (bypass user filter for debugging)
+    async with db.connection() as conn:
+        task_rows = await conn.fetch(
+            """
+            SELECT * FROM worker_tasks
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+        # Get workflow status for each task
+        results = []
+        for task_row in task_rows:
+            task = db._row_to_worker_task(task_row)
+
+            # Get DBOS workflow status
+            workflow_row = await conn.fetchrow(
+                """
+                SELECT status, error, created_at, updated_at
+                FROM dbos.workflow_status
+                WHERE workflow_uuid = $1
+                """,
+                task.id,
+            )
+
+            workflow_status = None
+            workflow_error = None
+            workflow_created_at = None
+            workflow_updated_at = None
+
+            if workflow_row:
+                workflow_status = workflow_row["status"]
+                # Just show raw error string (it's base64-encoded pickle, but we show it raw)
+                if workflow_row["error"]:
+                    workflow_error = f"[encoded] {workflow_row['error'][:200]}..."
+                workflow_created_at = datetime.fromtimestamp(
+                    workflow_row["created_at"] / 1000, tz=timezone.utc
+                )
+                workflow_updated_at = datetime.fromtimestamp(
+                    workflow_row["updated_at"] / 1000, tz=timezone.utc
+                )
+
+            # Check if namespace exists
+            ns_exists = False
+            k8s_jobs = []
+            try:
+                ns_exists = await namespace_exists(task.id)
+                if ns_exists:
+                    _, batch_v1 = get_k8s_client()
+                    namespace_name = f"task-{task.id[:8]}"
+                    jobs = batch_v1.list_namespaced_job(namespace=namespace_name)
+                    k8s_jobs = [j.metadata.name for j in jobs.items]
+            except Exception:
+                pass
+
+            results.append(
+                DebugTaskInfo(
+                    task=task,
+                    workflow_status=workflow_status,
+                    workflow_error=workflow_error,
+                    workflow_created_at=workflow_created_at,
+                    workflow_updated_at=workflow_updated_at,
+                    namespace_exists=ns_exists,
+                    k8s_jobs=k8s_jobs,
+                )
+            )
+
+        return results
+
+
+@app.post("/debug/tasks/{task_id}/retry")
+async def debug_retry_task(task_id: str):
+    """Retry a failed task by resetting its status and re-enqueueing."""
+    from dbos import SetWorkflowID
+    from mainloop.workflows.dbos_config import worker_queue
+    from mainloop.workflows.worker import worker_task_workflow
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Reset task status to pending
+    await db.update_worker_task(task_id, status=TaskStatus.PENDING, error=None)
+
+    # Delete the failed workflow from DBOS
+    async with db.connection() as conn:
+        await conn.execute(
+            "DELETE FROM dbos.workflow_status WHERE workflow_uuid = $1",
+            task_id,
+        )
+
+    # Re-enqueue via DBOS worker queue
+    with SetWorkflowID(task_id):
+        worker_queue.enqueue(worker_task_workflow, task_id)
+
+    return {"status": "retried", "task_id": task_id}
+
+
+@app.delete("/debug/tasks/{task_id}/namespace")
+async def debug_delete_namespace(task_id: str):
+    """Force delete a task namespace."""
+    from mainloop.services.k8s_namespace import delete_task_namespace
+
+    await delete_task_namespace(task_id)
+    return {"status": "deleted", "namespace": f"task-{task_id[:8]}"}
 
 
 # ============= Run =============

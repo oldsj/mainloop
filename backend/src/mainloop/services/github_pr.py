@@ -394,12 +394,51 @@ async def get_check_failure_logs(repo_url: str, pr_number: int) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+# Tag that triggers the agent to act on a comment
+AGENT_MENTION_TAG = "@mainloop"
+
+
+def _should_agent_act_on_comment(comment: PRComment) -> bool:
+    """Check if the agent should act on a comment.
+
+    Returns True if:
+    - Comment mentions @mainloop
+    - Comment is a code review comment (inline on code)
+    """
+    if AGENT_MENTION_TAG.lower() in comment.body.lower():
+        return True
+    if comment.is_review_comment:
+        return True
+    return False
+
+
+def _should_agent_act_on_review(review: PRReview) -> bool:
+    """Check if the agent should act on a review.
+
+    Returns True if:
+    - Review requests changes (explicit feedback)
+    - Review body mentions @mainloop
+    """
+    if review.state == "CHANGES_REQUESTED":
+        return True
+    if review.body and AGENT_MENTION_TAG.lower() in review.body.lower():
+        return True
+    return False
+
+
 async def format_feedback_for_agent(
     repo_url: str,
     pr_number: int,
     since: datetime | None = None,
 ) -> str:
     """Format PR feedback as context for the agent.
+
+    Only includes feedback that the agent should act on:
+    - Comments mentioning @mainloop
+    - Code review comments (inline on specific lines)
+    - Reviews requesting changes
+
+    General discussion comments without @mainloop are ignored.
 
     Args:
         repo_url: GitHub repository URL
@@ -418,14 +457,73 @@ async def format_feedback_for_agent(
 
     parts = []
 
-    # Add review feedback
+    # Add review feedback (only if agent should act on it)
     for review in reviews:
-        if review.state in ("CHANGES_REQUESTED", "COMMENTED") and review.body:
+        if _should_agent_act_on_review(review) and review.body:
             parts.append(f"## Review from @{review.user} ({review.state})\n{review.body}")
 
-    # Add comments
+    # Add comments (only if agent should act on them)
     for comment in comments:
-        comment_type = "Code comment" if comment.is_review_comment else "Comment"
-        parts.append(f"## {comment_type} from @{comment.user}\n{comment.body}")
+        if _should_agent_act_on_comment(comment):
+            comment_type = "Code comment" if comment.is_review_comment else "Comment"
+            parts.append(f"## {comment_type} from @{comment.user}\n{comment.body}")
 
     return "\n\n---\n\n".join(parts) if parts else ""
+
+
+async def add_reaction_to_comment(
+    repo_url: str,
+    comment_id: int,
+    is_review_comment: bool = False,
+    reaction: str = "eyes",  # 👀 - indicates "looking at this"
+) -> bool:
+    """Add a reaction to acknowledge a PR comment.
+
+    Args:
+        repo_url: GitHub repository URL
+        comment_id: The comment ID
+        is_review_comment: True if it's a code review comment
+        reaction: Reaction type (eyes, +1, heart, rocket, etc.)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    # Different endpoints for issue comments vs review comments
+    if is_review_comment:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"
+    else:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                url,
+                headers=_get_headers(),
+                json={"content": reaction},
+            )
+            # 201 = created, 200 = already exists
+            return response.status_code in (200, 201)
+        except Exception as e:
+            logger.warning(f"Failed to add reaction to comment {comment_id}: {e}")
+            return False
+
+
+async def acknowledge_comments(
+    repo_url: str,
+    comments: list[PRComment],
+) -> None:
+    """Add 👀 reaction to comments to indicate they've been seen.
+
+    Args:
+        repo_url: GitHub repository URL
+        comments: List of comments to acknowledge
+    """
+    for comment in comments:
+        await add_reaction_to_comment(
+            repo_url,
+            comment.id,
+            is_review_comment=comment.is_review_comment,
+            reaction="eyes",
+        )

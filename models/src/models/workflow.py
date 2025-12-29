@@ -18,10 +18,10 @@ class TaskStatus(str, Enum):
     PLANNING = "planning"  # Creating implementation plan
     WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
     IMPLEMENTING = "implementing"  # Writing code per approved plan
-    WAITING_HUMAN = "waiting_human"  # Code review
-    COMPLETED = "completed"
+    UNDER_REVIEW = "under_review"  # PR created, awaiting review/merge
+    COMPLETED = "completed"  # PR merged
     FAILED = "failed"
-    CANCELLED = "cancelled"
+    CANCELLED = "cancelled"  # PR closed without merge
 
 
 class QueueItemType(str, Enum):

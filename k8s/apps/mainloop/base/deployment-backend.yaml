@@ -42,6 +42,11 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: claude-secret-token
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-token
           resources:
             requests:
               memory: "1Gi"

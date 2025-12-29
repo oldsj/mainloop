@@ -116,14 +116,14 @@ async def find_matching_tasks(
     Matching criteria:
     1. Exact repo_url match in message
     2. Keywords overlap (description, keywords array)
-    3. Only considers PLANNING, WAITING_PLAN_REVIEW, IMPLEMENTING, or WAITING_HUMAN tasks
+    3. Only considers PLANNING, WAITING_PLAN_REVIEW, IMPLEMENTING, or UNDER_REVIEW tasks
     """
     # Get active tasks
     active_statuses = [
         TaskStatus.PLANNING.value,
         TaskStatus.WAITING_PLAN_REVIEW.value,
         TaskStatus.IMPLEMENTING.value,
-        TaskStatus.WAITING_HUMAN.value,
+        TaskStatus.UNDER_REVIEW.value,
     ]
 
     all_tasks: list[WorkerTask] = []

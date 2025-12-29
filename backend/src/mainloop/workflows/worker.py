@@ -23,6 +23,7 @@ from mainloop.services.github_pr import (
     is_pr_merged,
     get_check_status,
     get_check_failure_logs,
+    acknowledge_comments,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def load_worker_task(task_id: str) -> WorkerTask | None:
 
 
 @DBOS.step()
-async def update_task_status(
+async def update_worker_task_status(
     task_id: str,
     status: TaskStatus,
     pr_url: str | None = None,
@@ -184,7 +185,17 @@ async def get_feedback_context(
     pr_number: int,
     since: datetime,
 ) -> str:
-    """Get formatted feedback for the agent."""
+    """Get formatted feedback for the agent and acknowledge comments."""
+    # Get comments first to acknowledge them
+    from mainloop.services.github_pr import get_pr_comments, _should_agent_act_on_comment
+
+    comments = await get_pr_comments(repo_url, pr_number, since=since)
+    actionable_comments = [c for c in comments if _should_agent_act_on_comment(c)]
+
+    # Add 👀 reaction to acknowledge we've seen the comments
+    if actionable_comments:
+        await acknowledge_comments(repo_url, actionable_comments)
+
     return await format_feedback_for_agent(repo_url, pr_number, since=since)
 
 
@@ -272,6 +283,106 @@ def is_approval_comment(comments: list[dict]) -> bool:
     return False
 
 
+async def _run_code_review_loop(
+    task_id: str,
+    task: Any,
+    namespace: str,
+    pr_url: str,
+    pr_number: int,
+    since: datetime | None = None,
+) -> dict[str, Any]:
+    """Run the code review loop for an existing PR.
+
+    This is used both by the main workflow and when resuming a task
+    that already has a PR.
+
+    Args:
+        since: Check for comments from this time. If None, uses task.created_at
+               for resumed tasks, or now for new PRs.
+    """
+    try:
+        logger.info(f"Starting code review loop for PR #{pr_number}")
+        # For resumed tasks, check from task creation time to catch missed comments
+        last_check = since or task.created_at.replace(tzinfo=timezone.utc)
+        feedback_iteration = 0
+
+        while True:
+            await DBOS.sleep_async(PR_POLL_INTERVAL)
+
+            # Check PR status
+            pr_status = await check_pr_status(task.repo_url, pr_number)
+
+            if pr_status["state"] == "not_found":
+                logger.warning(f"PR #{pr_number} not found")
+                break
+
+            if pr_status["merged"]:
+                logger.info(f"PR #{pr_number} has been merged")
+                await update_worker_task_status(task_id, TaskStatus.COMPLETED)
+                notify_main_thread(
+                    task.user_id, task_id, "worker_result",
+                    {"status": "completed", "result": {"pr_url": pr_url, "merged": True}},
+                )
+                return {"status": "completed", "pr_url": pr_url, "merged": True}
+
+            if pr_status["state"] == "closed":
+                logger.info(f"PR #{pr_number} was closed without merge")
+                await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                notify_main_thread(
+                    task.user_id, task_id, "worker_result",
+                    {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
+                )
+                return {"status": "cancelled", "pr_url": pr_url}
+
+            # Check for new comments
+            new_comments = await check_for_new_comments(task.repo_url, pr_number, last_check)
+
+            if new_comments:
+                logger.info(f"Found {len(new_comments)} new comments on PR #{pr_number}")
+                feedback = await get_feedback_context(task.repo_url, pr_number, last_check)
+
+                if feedback:
+                    feedback_iteration += 1
+                    logger.info(f"Spawning feedback job (iteration {feedback_iteration})...")
+
+                    # Set status to implementing while Claude works
+                    await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
+
+                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, feedback_iteration)
+
+                    feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+
+                    # Set status back to under_review after job completes
+                    await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+
+                    if feedback_result and feedback_result.get("status") == "completed":
+                        notify_main_thread(
+                            task.user_id, task_id, "worker_result",
+                            {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
+                        )
+
+            last_check = datetime.now(timezone.utc)
+
+        return {"status": "completed", "pr_url": pr_url}
+
+    except Exception as e:
+        logger.error(f"Code review loop failed: {e}")
+        await update_worker_task_status(task_id, TaskStatus.FAILED, error=str(e))
+        notify_main_thread(
+            task.user_id, task_id, "worker_result",
+            {"status": "failed", "error": str(e)},
+        )
+        return {"status": "failed", "error": str(e)}
+
+    finally:
+        # Cleanup namespace
+        logger.info(f"Cleaning up namespace: {namespace}")
+        try:
+            await cleanup_namespace(task_id)
+        except Exception as e:
+            logger.warning(f"Cleanup failed: {e}")
+
+
 @DBOS.workflow()
 async def worker_task_workflow(task_id: str) -> dict[str, Any]:
     """
@@ -296,6 +407,28 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
     if not task:
         return {"status": "failed", "error": "Task not found"}
 
+    # Check if task already has a PR - if so, skip to code review
+    if task.pr_url and task.pr_number:
+        logger.info(f"Task already has PR #{task.pr_number}, skipping to code review")
+        pr_url = task.pr_url
+        pr_number = task.pr_number
+
+        # Setup namespace for any feedback jobs
+        namespace = await setup_namespace(task_id)
+
+        try:
+            # Jump directly to code review loop
+            await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+            # Use a goto-like pattern by raising to the code review section
+            # (We'll handle this below in a cleaner way)
+        except Exception as e:
+            logger.error(f"Failed to resume task: {e}")
+            await cleanup_namespace(task_id)
+            raise
+
+        # Go to code review loop (PHASE 3)
+        return await _run_code_review_loop(task_id, task, namespace, pr_url, pr_number)
+
     # Setup namespace
     logger.info(f"Creating namespace for task: {task_id}")
     namespace = await setup_namespace(task_id)
@@ -309,7 +442,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         # PHASE 1: PLANNING (unless skip_plan is True)
         # ============================================================
         if not task.skip_plan:
-            await update_task_status(task_id, TaskStatus.PLANNING)
+            await update_worker_task_status(task_id, TaskStatus.PLANNING)
             logger.info(f"Spawning plan job in namespace: {namespace}")
             await spawn_plan_job(task_id, namespace, task, iteration=1)
 
@@ -328,7 +461,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 raise RuntimeError("Plan job did not create a draft PR")
 
             pr_number = int(pr_url.split("/")[-1])
-            await update_task_status(
+            await update_worker_task_status(
                 task_id, TaskStatus.WAITING_PLAN_REVIEW,
                 pr_url=pr_url, pr_number=pr_number
             )
@@ -357,7 +490,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 if pr_status["state"] == "not_found":
                     raise RuntimeError(f"PR #{pr_number} not found")
                 if pr_status["state"] == "closed":
-                    await update_task_status(task_id, TaskStatus.CANCELLED)
+                    await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                     notify_main_thread(
                         task.user_id, task_id, "worker_result",
                         {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
@@ -390,7 +523,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         # ============================================================
         # PHASE 2: IMPLEMENTATION
         # ============================================================
-        await update_task_status(task_id, TaskStatus.IMPLEMENTING)
+        await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
         if task.skip_plan:
             # Skip plan mode: create PR directly with implementation
@@ -479,7 +612,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         if ci_iteration >= MAX_CI_ITERATIONS:
             raise RuntimeError(f"CI checks still failing after {MAX_CI_ITERATIONS} fix attempts")
 
-        await update_task_status(task_id, TaskStatus.WAITING_HUMAN, pr_url=pr_url, pr_number=pr_number)
+        await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
 
         # Notify human that code is ready for review
         notify_main_thread(
@@ -511,7 +644,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
             if pr_status["merged"]:
                 logger.info(f"PR #{pr_number} has been merged")
-                await update_task_status(task_id, TaskStatus.COMPLETED)
+                await update_worker_task_status(task_id, TaskStatus.COMPLETED)
                 notify_main_thread(
                     task.user_id, task_id, "worker_result",
                     {"status": "completed", "result": {"pr_url": pr_url, "merged": True}},
@@ -520,7 +653,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
             if pr_status["state"] == "closed":
                 logger.info(f"PR #{pr_number} was closed without merge")
-                await update_task_status(task_id, TaskStatus.CANCELLED)
+                await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                 notify_main_thread(
                     task.user_id, task_id, "worker_result",
                     {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
@@ -537,9 +670,16 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 if feedback:
                     feedback_iteration += 1
                     logger.info(f"Spawning feedback job (iteration {feedback_iteration})...")
+
+                    # Set status to implementing while Claude works
+                    await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
+
                     await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, feedback_iteration)
 
                     feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+
+                    # Set status back to under_review after job completes
+                    await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
 
                     if feedback_result and feedback_result.get("status") == "completed":
                         notify_main_thread(
@@ -553,7 +693,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Worker task failed: {e}")
-        await update_task_status(task_id, TaskStatus.FAILED, error=str(e))
+        await update_worker_task_status(task_id, TaskStatus.FAILED, error=str(e))
         notify_main_thread(
             task.user_id, task_id, "worker_result",
             {"status": "failed", "error": str(e)},

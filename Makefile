@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-frontend build-backend push-backend install clean setup-claude-creds setup-claude-creds-k8s
+.PHONY: help dev build deploy deploy-loop deploy-frontend build-backend push-backend install clean setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Configuration
 GHCR_REGISTRY := ghcr.io
@@ -156,3 +156,28 @@ test-k8s-job: ## Test K8s job creation (creates a real job)
 
 test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
+
+# Debugging commands
+debug-tasks: ## Show all tasks with workflow status
+	@curl -s https://mainloop-api.olds.network/debug/tasks | jq '.[] | {id: .task.id, status: .task.status, workflow: .workflow_status, error: .workflow_error, namespace: .namespace_exists, pr: .task.pr_url}'
+
+debug-task: ## Show detailed info for a specific task (usage: make debug-task TASK_ID=xxx)
+	@curl -s https://mainloop-api.olds.network/debug/tasks | jq '.[] | select(.task.id | startswith("$(TASK_ID)"))'
+
+debug-retry: ## Retry a failed task (usage: make debug-retry TASK_ID=xxx)
+	@curl -s -X POST https://mainloop-api.olds.network/debug/tasks/$(TASK_ID)/retry | jq
+
+debug-logs: ## Show backend logs
+	kubectl logs -n mainloop deployment/mainloop-backend --tail=100 -f
+
+debug-db: ## Query tasks directly from database
+	@kubectl exec -n mainloop deployment/mainloop-backend -- python3 -c "\
+import asyncio; \
+from mainloop.db import db; \
+async def q(): \
+    await db.connect(); \
+    async with db.connection() as c: \
+        rows = await c.fetch('SELECT id, status, pr_url, error FROM worker_tasks ORDER BY created_at DESC LIMIT 5'); \
+        for r in rows: print(dict(r)); \
+    await db.disconnect(); \
+asyncio.run(q())"

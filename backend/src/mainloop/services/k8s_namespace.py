@@ -182,7 +182,7 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
             },
         ),
         subjects=[
-            client.V1Subject(
+            client.RbacV1Subject(
                 kind="ServiceAccount",
                 name=WORKER_SERVICE_ACCOUNT,
                 namespace=namespace,

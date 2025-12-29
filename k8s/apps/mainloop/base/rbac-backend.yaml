@@ -30,6 +30,13 @@ rules:
     resources: ["rolebindings"]
     verbs: ["create", "get", "delete"]
 
+  # ClusterRole binding - allow binding the worker-role to service accounts
+  # This is required for RBAC escalation prevention - we must explicitly allow binding this role
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: ["mainloop-worker-role"]
+    verbs: ["bind"]
+
   # Job management - create/monitor/delete worker jobs
   - apiGroups: ["batch"]
     resources: ["jobs"]

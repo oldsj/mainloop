@@ -496,7 +496,7 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
         )
 
     elif status == "needs_input":
-        await update_task_status(task_id, TaskStatus.WAITING_HUMAN)
+        await update_task_status(task_id, TaskStatus.UNDER_REVIEW)
 
         question = result.get("question", "The worker needs your input.")
         options = result.get("options")
