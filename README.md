@@ -11,10 +11,10 @@ You (phone/laptop)
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│                    Main Thread                       │
-│              (Haiku - fast coordinator)              │
+│                   Chat Interface                     │
+│           Claude with spawn_task tool               │
 │                                                      │
-│   Analyzes requests, spawns workers, reports back   │
+│   "Should I spawn a worker for this? (confirms)"    │
 └──────────────┬────────────────┬─────────────────────┘
                │                │
        ┌───────▼──────┐  ┌──────▼───────┐
@@ -25,9 +25,10 @@ You (phone/laptop)
        └──────────────┘  └──────────────┘
 ```
 
-- **Main thread**: Fast Haiku model coordinates your requests
-- **Workers**: Opus models handle complex tasks in parallel (features, bug fixes, reviews)
+- **Chat**: Claude responds naturally, uses `spawn_task` tool when you confirm work
+- **Workers**: Opus models handle complex tasks in isolated K8s namespaces
 - **Durable execution**: Tasks survive restarts via [DBOS](docs/DBOS.md)
+- **Conversation memory**: Compaction keeps context across devices/sessions
 
 ## Quick Start
 
@@ -47,12 +48,19 @@ make dev
 ```
 mainloop/
 ├── backend/       # Python FastAPI + DBOS workflows
-├── frontend/      # SvelteKit + Tailwind (mobile-first)
+├── frontend/      # SvelteKit + Tailwind v4 (mobile-first responsive)
 ├── claude-agent/  # Claude Code CLI container
 ├── models/        # Shared Pydantic models
-├── packages/ui/   # Design tokens
+├── packages/ui/   # Design tokens + theme.css
 └── k8s/           # Kubernetes manifests
 ```
+
+## UI
+
+- **Mobile**: Bottom tab bar (Chat / Tasks / Inbox)
+- **Desktop**: Chat with always-visible Tasks sidebar, Inbox overlay
+- **Tasks Panel**: Track active workers with live status updates
+- **Inbox**: Human review queue for worker questions/approvals
 
 ## Agent Workflow
 

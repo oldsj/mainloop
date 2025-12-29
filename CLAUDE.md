@@ -32,12 +32,30 @@ Frontend must have `VITE_API_URL=https://mainloop-api.olds.network` configured.
 ### Data Flow
 1. **User** -> Tailscale -> Frontend (SvelteKit)
 2. **Frontend** -> Backend API (FastAPI) via `mainloop-api.olds.network`
-3. **Backend** -> Claude Agent Container (Claude Code CLI)
-4. **Backend** <-> PostgreSQL (conversation memory)
+3. **Backend** -> Claude with `spawn_task` MCP tool
+4. **Claude** -> Spawns K8s worker jobs when user confirms
+5. **Backend** <-> PostgreSQL (conversation memory + compaction)
 
 ### Authentication
 - Tailscale handles network-level access control
 - Only devices on the tailnet can reach the services
+
+### Conversation Continuity
+Conversations persist across devices and sessions via **compaction**:
+- `summary`: Compacted summary of older messages (stored in PostgreSQL)
+- `summarized_through_id`: Last message included in summary
+- `message_count`: Triggers compaction at threshold
+- Recent unsummarized messages fetched for context
+
+This replaces Claude session resumption which didn't survive pod restarts.
+
+### spawn_task Tool
+Claude has an MCP tool to spawn workers. It:
+1. Asks user for confirmation before spawning
+2. Suggests recent repos from user's history
+3. Validates GitHub URL format
+4. Creates WorkerTask and enqueues via DBOS
+5. Tracks repo in user's MRU list
 
 ## Development Commands
 
@@ -90,6 +108,7 @@ make setup-claude-creds-k8s
 # Deploy services
 make deploy-frontend     # Build and deploy frontend to k8s
 make deploy              # Full deploy (build images + push + restart K8s)
+make deploy-loop         # Watch for changes and auto-deploy (requires watchexec)
 ```
 
 **Note**: Run `make setup-claude-creds-k8s` when credentials change to update the 1Password vault. The k8s deployment will automatically use the credentials from the vault.
@@ -102,10 +121,11 @@ make deploy              # Full deploy (build images + push + restart K8s)
 - **Type hints** throughout (Python 3.13+)
 - Import shared models: `from models import Conversation, Message`
 
-### Frontend (SvelteKit + Tailwind)
-- **Mobile-first** design - this is primarily a phone interface
-- **Use shared UI package**: `import { theme } from '@mainloop/ui/theme'`
-- **Tailwind preset**: Import from `@mainloop/ui/tailwind.preset`
+### Frontend (SvelteKit 5 + Tailwind v4)
+- **Mobile-first** responsive design with desktop enhancements
+- **Svelte 5 runes**: Use `$state`, `$derived`, `$effect`, `$props`
+- **Shared theme**: `@import '@mainloop/ui/theme.css'` in app.css
+- **Stores**: Use `$lib/stores/` for state (conversation, tasks, inbox)
 - **API calls**: Use `$lib/api.ts` - never hardcode endpoints
 
 ### Claude Agent Container
@@ -116,6 +136,40 @@ make deploy              # Full deploy (build images + push + restart K8s)
 
 ### DBOS
 - See docs/DBOS.md for details on how to set up and use DBOS for durable execution.
+
+### Worker Workflow (CI Verification Loop)
+Workers iterate until GitHub Actions pass before requesting human review:
+1. Create draft PR with implementation
+2. Poll GitHub Actions check status
+3. On failure: analyze logs, spawn fix job, push fix
+4. Retry up to 5 times before failing
+5. Only proceed to human review when CI is green
+
+Key files:
+- `backend/src/mainloop/workflows/worker.py` - Main workflow with CI loop
+- `backend/src/mainloop/services/github_pr.py` - `get_check_status()`, `get_check_failure_logs()`
+- `claude-agent/job_runner.py` - `fix` mode for CI failures
+
+### Frontend Components
+```
+frontend/src/lib/
+├── components/
+│   ├── Chat.svelte          # Main chat interface
+│   ├── TasksPanel.svelte    # Active workers list
+│   ├── TasksBadge.svelte    # Header badge with count
+│   ├── InboxPanel.svelte    # Human review queue
+│   ├── InboxBadge.svelte    # Header badge with unread count
+│   ├── MobileTabBar.svelte  # Bottom navigation (mobile)
+│   └── InputBar.svelte      # Message input
+└── stores/
+    ├── conversation.ts      # Chat messages state
+    ├── tasks.ts             # Active tasks state + polling
+    └── inbox.ts             # Inbox items state + polling
+```
+
+Layout modes:
+- **Desktop (≥768px)**: Header with badges, Tasks sidebar always visible, Inbox overlay
+- **Mobile (<768px)**: Bottom tab bar, full-screen panels per tab
 
 ## Important
 
