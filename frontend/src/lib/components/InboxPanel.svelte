@@ -2,6 +2,8 @@
   import { inbox, inboxItems, isInboxOpen, unreadCount } from '$lib/stores/inbox';
   import InboxItem from './InboxItem.svelte';
 
+  let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
+
   function handleClose() {
     inbox.close();
   }
@@ -11,6 +13,9 @@
   }
 
   function handleClickOutside(e: MouseEvent) {
+    // Skip click outside handling for desktop/mobile modes
+    if (desktop || mobile) return;
+
     // Only process if panel is open
     if (!$isInboxOpen) return;
 
@@ -24,9 +29,18 @@
 
 <svelte:window on:click={handleClickOutside} />
 
-{#if $isInboxOpen}
+{#if desktop || mobile || $isInboxOpen}
   <div
-    class="inbox-panel fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-neutral-200 bg-white shadow-xl"
+    class="inbox-panel flex h-full flex-col bg-white"
+    class:fixed={!desktop && !mobile}
+    class:right-0={!desktop && !mobile}
+    class:top-0={!desktop && !mobile}
+    class:z-50={!desktop && !mobile}
+    class:w-full={!desktop && !mobile}
+    class:max-w-md={!desktop && !mobile}
+    class:border-l={!desktop && !mobile}
+    class:border-neutral-200={!desktop && !mobile}
+    class:shadow-xl={!desktop && !mobile}
   >
     <header class="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
       <div class="flex items-center gap-2">
@@ -46,22 +60,24 @@
             Mark all read
           </button>
         {/if}
-        <button
-          onclick={handleClose}
-          class="rounded-lg p-1 transition-colors hover:bg-neutral-100"
-          aria-label="Close inbox"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="1.5"
-            stroke="currentColor"
-            class="h-6 w-6 text-neutral-600"
+        {#if !desktop && !mobile}
+          <button
+            onclick={handleClose}
+            class="rounded-lg p-1 transition-colors hover:bg-neutral-100"
+            aria-label="Close inbox"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-          </svg>
-        </button>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="1.5"
+              stroke="currentColor"
+              class="h-6 w-6 text-neutral-600"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        {/if}
       </div>
     </header>
 

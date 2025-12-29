@@ -135,8 +135,9 @@ deploy: push-all ## Full deployment to k8s
 	kubectl rollout restart deployment/mainloop-frontend -n mainloop
 
 deploy-loop: ## Watch for changes and deploy (requires watchexec)
-	watchexec -w backend -w frontend/src -w k8s -w models \
+	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models \
 		-e py,ts,svelte,yaml,toml \
+		--on-busy-update restart \
 		-- $(MAKE) deploy || true
 
 # K8s commands (for local testing before moving to infrastructure repo)
