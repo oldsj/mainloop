@@ -50,6 +50,8 @@ def build_prompt() -> str:
         return build_implement_prompt()
     elif MODE == "feedback":
         return build_feedback_prompt()
+    elif MODE == "fix":
+        return build_fix_prompt()
     else:
         raise ValueError(f"Unknown mode: {MODE}")
 
@@ -188,6 +190,55 @@ def build_feedback_prompt() -> str:
         "5. Push the updated branch",
         "",
         "Be thorough in addressing all points raised in the feedback.",
+    ])
+
+    return "\n".join(parts)
+
+
+def build_fix_prompt() -> str:
+    """Build prompt for fixing CI failures."""
+    parts = [
+        f"Task ID: {TASK_ID[:8]}",
+        f"Original Task: {TASK_PROMPT}",
+        "",
+        f"You are fixing CI failures on PR #{PR_NUMBER}",
+        "",
+    ]
+
+    if REPO_URL:
+        parts.extend([
+            f"Repository: {REPO_URL}",
+            f"Branch: mainloop/{TASK_ID[:8]}",
+            "",
+        ])
+
+    parts.extend([
+        "GitHub Actions checks have FAILED. You must fix them.",
+        "",
+    ])
+
+    if FEEDBACK_CONTEXT:
+        parts.extend([
+            "Failed checks and logs:",
+            "---",
+            FEEDBACK_CONTEXT,
+            "---",
+            "",
+        ])
+
+    parts.extend([
+        "Instructions:",
+        "1. Clone the repository and checkout the existing branch",
+        "2. Analyze the failure logs above carefully",
+        "3. Identify the root cause of each failure",
+        "4. Fix the issues (lint errors, test failures, type errors, build errors)",
+        "5. Run `trunk check` locally if available to verify before pushing",
+        "6. Commit and push your fix with a clear message",
+        "",
+        "IMPORTANT:",
+        "- Focus ONLY on fixing the specific failures shown above",
+        "- Do NOT refactor or change unrelated code",
+        "- Do NOT mark the PR ready - the workflow will re-check Actions after you push",
     ])
 
     return "\n".join(parts)

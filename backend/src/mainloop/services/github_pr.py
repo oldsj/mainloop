@@ -45,6 +45,7 @@ class PRStatus(BaseModel):
     title: str
     body: str | None
     head_branch: str
+    head_sha: str
     base_branch: str
     url: str
     created_at: datetime
@@ -113,6 +114,7 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
             title=data["title"],
             body=data.get("body"),
             head_branch=data["head"]["ref"],
+            head_sha=data["head"]["sha"],
             base_branch=data["base"]["ref"],
             url=data["html_url"],
             created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
@@ -269,6 +271,127 @@ async def is_pr_approved(repo_url: str, pr_number: int) -> bool:
 
     # Check if any user has approved
     return any(r.state == "APPROVED" for r in user_reviews.values())
+
+
+class CheckRunStatus(BaseModel):
+    """Status of a GitHub Actions check run."""
+
+    name: str
+    status: Literal["queued", "in_progress", "completed"]
+    conclusion: Literal[
+        "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
+    ] | None
+    details_url: str | None
+    output_title: str | None = None
+    output_summary: str | None = None
+
+
+class CombinedCheckStatus(BaseModel):
+    """Combined status of all check runs for a commit."""
+
+    status: Literal["pending", "success", "failure"]
+    total_count: int
+    check_runs: list[CheckRunStatus]
+    failed_runs: list[CheckRunStatus]
+
+
+async def get_check_status(repo_url: str, pr_number: int) -> CombinedCheckStatus:
+    """Get combined status of GitHub Actions checks for a PR's head commit.
+
+    Args:
+        repo_url: GitHub repository URL
+        pr_number: PR number
+
+    Returns:
+        CombinedCheckStatus with overall status and individual check runs
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    # First get the PR to find the head SHA
+    pr_status = await get_pr_status(repo_url, pr_number)
+    if not pr_status:
+        return CombinedCheckStatus(
+            status="pending",
+            total_count=0,
+            check_runs=[],
+            failed_runs=[],
+        )
+
+    head_sha = pr_status.head_sha
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits/{head_sha}/check-runs",
+            headers=_get_headers(),
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    check_runs = []
+    for run in data.get("check_runs", []):
+        check_runs.append(
+            CheckRunStatus(
+                name=run["name"],
+                status=run["status"],
+                conclusion=run.get("conclusion"),
+                details_url=run.get("details_url"),
+                output_title=run.get("output", {}).get("title"),
+                output_summary=run.get("output", {}).get("summary"),
+            )
+        )
+
+    failed = [r for r in check_runs if r.conclusion == "failure"]
+    pending = [r for r in check_runs if r.status != "completed"]
+
+    if pending:
+        status: Literal["pending", "success", "failure"] = "pending"
+    elif failed:
+        status = "failure"
+    else:
+        status = "success"
+
+    return CombinedCheckStatus(
+        status=status,
+        total_count=len(check_runs),
+        check_runs=check_runs,
+        failed_runs=failed,
+    )
+
+
+async def get_check_failure_logs(repo_url: str, pr_number: int) -> str:
+    """Get formatted failure context from failed check runs.
+
+    This retrieves the output summary from each failed check run,
+    which typically contains the error details.
+
+    Args:
+        repo_url: GitHub repository URL
+        pr_number: PR number
+
+    Returns:
+        Formatted string of failure context for the agent
+    """
+    check_status = await get_check_status(repo_url, pr_number)
+
+    if not check_status.failed_runs:
+        return ""
+
+    parts = []
+    for run in check_status.failed_runs:
+        lines = [f"## Failed: {run.name}"]
+        if run.output_title:
+            lines.append(f"**{run.output_title}**")
+        if run.output_summary:
+            # Truncate long summaries
+            summary = run.output_summary[:2000]
+            if len(run.output_summary) > 2000:
+                summary += "\n... (truncated)"
+            lines.append(summary)
+        if run.details_url:
+            lines.append(f"Details: {run.details_url}")
+        parts.append("\n".join(lines))
+
+    return "\n\n---\n\n".join(parts)
 
 
 async def format_feedback_for_agent(

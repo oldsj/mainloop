@@ -21,6 +21,8 @@ from mainloop.services.github_pr import (
     get_pr_comments,
     format_feedback_for_agent,
     is_pr_merged,
+    get_check_status,
+    get_check_failure_logs,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 TOPIC_JOB_RESULT = "job_result"
 
 # Polling interval for PR status (seconds)
-PR_POLL_INTERVAL = 60
+PR_POLL_INTERVAL = 30
 
 
 @DBOS.step()
@@ -190,6 +192,52 @@ async def get_feedback_context(
 async def cleanup_namespace(task_id: str) -> None:
     """Delete the task namespace."""
     await delete_task_namespace(task_id)
+
+
+@DBOS.step()
+async def get_check_status_step(repo_url: str, pr_number: int) -> dict:
+    """Get combined status of GitHub Actions checks for a PR."""
+    status = await get_check_status(repo_url, pr_number)
+    return {
+        "status": status.status,
+        "total_count": status.total_count,
+        "failed_count": len(status.failed_runs),
+        "failed_names": [r.name for r in status.failed_runs],
+    }
+
+
+@DBOS.step()
+async def get_check_failure_logs_step(repo_url: str, pr_number: int) -> str:
+    """Get formatted failure logs from failed check runs."""
+    return await get_check_failure_logs(repo_url, pr_number)
+
+
+@DBOS.step()
+async def spawn_fix_job(
+    task_id: str,
+    namespace: str,
+    task: WorkerTask,
+    pr_number: int,
+    failure_logs: str,
+    iteration: int = 1,
+) -> str:
+    """Spawn a Job to fix CI failures."""
+    callback_url = f"{settings.backend_internal_url}/internal/tasks/{task_id}/complete"
+
+    job_name = await create_worker_job(
+        task_id=task_id,
+        namespace=namespace,
+        prompt=task.description,
+        mode="fix",
+        callback_url=callback_url,
+        model=task.model,
+        repo_url=task.repo_url,
+        pr_number=pr_number,
+        feedback_context=failure_logs,
+        iteration=iteration,
+    )
+
+    return job_name
 
 
 def notify_main_thread(
@@ -373,6 +421,63 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 )
                 return {"status": "completed", "result": impl_result.get("result")}
             pr_number = int(pr_url.split("/")[-1])
+
+        # ============================================================
+        # PHASE 2.5: CI VERIFICATION LOOP
+        # ============================================================
+        # Wait for GitHub Actions to pass before entering code review
+        logger.info(f"Waiting for GitHub Actions to complete on PR #{pr_number}")
+        ci_iteration = 0
+        MAX_CI_ITERATIONS = 5  # Limit fix attempts
+
+        while ci_iteration < MAX_CI_ITERATIONS:
+            await DBOS.sleep_async(PR_POLL_INTERVAL)
+
+            check_status = await get_check_status_step(task.repo_url, pr_number)
+
+            if check_status["status"] == "success":
+                logger.info("All CI checks passed! Continuing to code review...")
+                break
+            elif check_status["status"] == "failure":
+                ci_iteration += 1
+                failed_names = check_status.get("failed_names", [])
+                logger.info(
+                    f"CI checks failed ({', '.join(failed_names)}), "
+                    f"spawning fix job (iteration {ci_iteration})..."
+                )
+
+                # Notify human about CI failure
+                notify_main_thread(
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "ci_failed",
+                        "result": {
+                            "pr_url": pr_url,
+                            "failed_checks": failed_names,
+                            "iteration": ci_iteration,
+                        },
+                    },
+                )
+
+                failure_logs = await get_check_failure_logs_step(task.repo_url, pr_number)
+                await spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, ci_iteration)
+
+                fix_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+                if fix_result is None:
+                    raise RuntimeError("Timed out waiting for fix job to complete")
+                if fix_result.get("status") == "failed":
+                    raise RuntimeError(fix_result.get("error", "Fix job failed"))
+
+                # After fix, wait a bit for new checks to start
+                await DBOS.sleep_async(30)
+            else:
+                # Pending - continue waiting
+                continue
+
+        if ci_iteration >= MAX_CI_ITERATIONS:
+            raise RuntimeError(f"CI checks still failing after {MAX_CI_ITERATIONS} fix attempts")
 
         await update_task_status(task_id, TaskStatus.WAITING_HUMAN, pr_url=pr_url, pr_number=pr_number)
 

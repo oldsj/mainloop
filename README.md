@@ -54,6 +54,43 @@ mainloop/
 └── k8s/           # Kubernetes manifests
 ```
 
+## Agent Workflow
+
+Agents follow a structured workflow: **plan in issue → implement in draft PR → iterate until CI green → ready for human review**.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Planning  │────►│    Draft    │────►│  Iteration  │────►│   Review    │
+│  (GH Issue) │     │    (PR)     │     │  (CI Loop)  │     │   (Human)   │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+```
+
+### Phases
+
+1. **Planning (GitHub Issue)** - Agent creates/updates an issue with problem analysis, proposed approach, and implementation plan. The issue is the "thinking out loud" space before code.
+
+2. **Draft PR** - Agent creates a draft PR linked to the issue. Implements in small, logical commits. Uses PR comments to narrate progress and decisions.
+
+3. **Iteration (CI Loop)** - Agent polls GitHub Actions after each push. On failure: analyzes logs, fixes, commits. Continues until green checkmark.
+
+4. **Ready for Review** - Agent marks PR ready and adds summary comment. Human reviewer steps in for final approval.
+
+### Verification
+
+Agents use these tools to verify work before marking ready:
+- **LSP server integration** - Real-time type/lint errors
+- **`trunk` CLI** - Unified super-linter
+- **Project test suites** - Via GitHub Actions
+
+### Project Template (Future)
+
+| Component | Purpose |
+|-----------|---------|
+| GitHub Actions | CI pipeline (lint, type-check, test) |
+| K8s/Helm | Preview environments per PR |
+| CNPG operator | Dynamic test databases |
+| trunk.yaml | Unified linter config |
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) - System design and data flow
