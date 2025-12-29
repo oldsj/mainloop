@@ -25,10 +25,11 @@ class Settings(BaseSettings):
     google_cloud_project: str = ""
     bigquery_dataset: str = "mainloop"
 
-    # Claude Agent
+    # Claude
+    claude_oauth_token: str = ""  # OAuth token for Claude API
     claude_agent_url: str = "http://claude-agent:8001"
     claude_workspace: str = "/workspace"
-    claude_model: str = "haiku"  # Main agent model
+    claude_model: str = "sonnet"  # Main thread model
     claude_worker_model: str = "opus"  # Worker model (for background tasks)
 
     # GitHub

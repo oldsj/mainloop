@@ -22,6 +22,11 @@ function createConversationStore() {
     subscribe,
     setConversation: (conversation: Conversation, messages: Message[]) =>
       set({ currentConversation: conversation, messages, isLoading: false }),
+    setCurrentConversation: (conversation: Conversation) =>
+      update((state) => ({
+        ...state,
+        currentConversation: conversation
+      })),
     addMessage: (message: Message) =>
       update((state) => ({
         ...state,

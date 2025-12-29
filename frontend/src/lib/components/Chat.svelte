@@ -6,27 +6,39 @@
 
   let { messages, isLoading } = $derived($conversationStore);
 
-  async function handleSendMessage(event: CustomEvent<{ message: string }>) {
-    const userMessage = event.detail.message;
+  async function handleSendMessage(detail: { message: string }) {
+    const userMessage = detail.message;
+    const currentConversationId = $conversationStore.currentConversation?.id;
+
+    // Optimistic: Add user message immediately
+    conversationStore.addMessage({
+      id: `temp-${Date.now()}`,
+      conversation_id: currentConversationId || 'pending',
+      role: 'user',
+      content: userMessage,
+      created_at: new Date().toISOString()
+    });
 
     conversationStore.setLoading(true);
 
     try {
       const response = await api.sendMessage({
         message: userMessage,
-        conversation_id: $conversationStore.currentConversation?.id
+        conversation_id: currentConversationId
       });
 
-      // Add user message
-      conversationStore.addMessage({
-        id: `temp-${Date.now()}`,
-        conversation_id: response.conversation_id,
-        role: 'user',
-        content: userMessage,
-        created_at: new Date().toISOString()
-      });
+      // Update conversation ID if this was the first message
+      if (!currentConversationId) {
+        conversationStore.setCurrentConversation({
+          id: response.conversation_id,
+          user_id: '',
+          title: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+      }
 
-      // Add assistant message
+      // Add assistant response (now returned synchronously)
       conversationStore.addMessage(response.message);
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -50,14 +62,21 @@
     {/if}
 
     {#if isLoading}
-      <div class="flex justify-center">
-        <div class="text-neutral-400">Thinking...</div>
+      <div class="flex justify-start">
+        <div class="flex items-center gap-2 rounded-2xl bg-neutral-100 px-4 py-3">
+          <div class="flex gap-1">
+            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 0ms"></span>
+            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 150ms"></span>
+            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 300ms"></span>
+          </div>
+          <span class="text-sm text-neutral-500">Thinking...</span>
+        </div>
       </div>
     {/if}
   </div>
 
   <!-- Input -->
   <div class="border-t border-neutral-200 p-4">
-    <InputBar on:send={handleSendMessage} disabled={isLoading} />
+    <InputBar onsend={handleSendMessage} disabled={isLoading} />
   </div>
 </div>

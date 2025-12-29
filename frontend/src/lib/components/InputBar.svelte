@@ -1,15 +1,12 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-
-  let { disabled = false }: { disabled?: boolean } = $props();
+  let { disabled = false, onsend }: { disabled?: boolean; onsend?: (detail: { message: string }) => void } = $props();
 
   let message = $state('');
-  const dispatch = createEventDispatcher<{ send: { message: string } }>();
 
   function handleSubmit(event: SubmitEvent) {
     event.preventDefault();
-    if (message.trim() && !disabled) {
-      dispatch('send', { message: message.trim() });
+    if (message.trim() && !disabled && onsend) {
+      onsend({ message: message.trim() });
       message = '';
     }
   }

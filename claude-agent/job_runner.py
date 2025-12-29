@@ -7,7 +7,8 @@ It reads configuration from environment variables, executes the task using
 Claude Agent SDK, and POSTs the result back to the backend.
 
 Modes:
-  - initial: Clone repo, implement feature, create PR
+  - plan: Clone repo, analyze task, create DRAFT PR with implementation plan (no code)
+  - implement: Checkout existing branch, implement code per approved plan, mark PR ready
   - feedback: Address PR comments, push new commits
 """
 
@@ -32,7 +33,7 @@ from claude_agent_sdk import (
 TASK_ID = os.environ.get("TASK_ID", "")
 TASK_PROMPT = os.environ.get("TASK_PROMPT", "")
 CALLBACK_URL = os.environ.get("CALLBACK_URL", "")
-MODE = os.environ.get("MODE", "initial")
+MODE = os.environ.get("MODE", "plan")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "sonnet")
 REPO_URL = os.environ.get("REPO_URL", "")
 PR_NUMBER = os.environ.get("PR_NUMBER", "")
@@ -43,16 +44,18 @@ WORKSPACE = "/workspace"
 
 def build_prompt() -> str:
     """Build the prompt based on mode and context."""
-    if MODE == "initial":
-        return build_initial_prompt()
+    if MODE == "plan":
+        return build_plan_prompt()
+    elif MODE == "implement":
+        return build_implement_prompt()
     elif MODE == "feedback":
         return build_feedback_prompt()
     else:
         raise ValueError(f"Unknown mode: {MODE}")
 
 
-def build_initial_prompt() -> str:
-    """Build prompt for initial task (create PR)."""
+def build_plan_prompt() -> str:
+    """Build prompt for planning phase (create DRAFT PR with plan, no code)."""
     parts = [
         f"Task ID: {TASK_ID[:8]}",
         f"Task: {TASK_PROMPT}",
@@ -65,18 +68,83 @@ def build_initial_prompt() -> str:
             f"Branch name: mainloop/{TASK_ID[:8]}",
             "",
             "Instructions:",
-            "1. Clone the repository",
-            "2. Create a new feature branch",
-            "3. Implement the task described above",
-            "4. Commit your changes with clear commit messages",
-            "5. Push the branch and create a pull request",
-            "6. Include a clear PR description explaining the changes",
+            "1. Clone the repository and explore the codebase to understand the structure",
+            "2. Analyze what changes are needed to complete this task",
+            "3. Create a new feature branch",
+            "4. Create a DRAFT pull request with your implementation plan:",
+            "",
+            "The PR description should include:",
+            "## Approach",
+            "Describe your implementation strategy in 2-3 sentences.",
+            "",
+            "## Files to Modify",
+            "List each file you plan to change and briefly describe the changes.",
+            "",
+            "## Files to Create",
+            "List any new files you need to create and their purpose.",
+            "",
+            "## Considerations",
+            "Note any risks, edge cases, or decisions that need confirmation.",
+            "",
+            "5. Use `gh pr create --draft` to create the draft PR",
+            "6. Do NOT write any implementation code yet - only the plan",
             "",
         ])
     else:
         parts.extend([
             "Instructions:",
-            "1. Complete the task described above",
+            "1. Analyze the task and create a plan",
+            "2. Document what you would do to complete the task",
+            "3. Do NOT implement yet - only plan",
+            "",
+        ])
+
+    # Add feedback context if this is a plan revision
+    if FEEDBACK_CONTEXT:
+        parts.extend([
+            "Feedback on your previous plan:",
+            "---",
+            FEEDBACK_CONTEXT,
+            "---",
+            "",
+            "Update your plan to address this feedback, then update the PR description.",
+        ])
+
+    return "\n".join(parts)
+
+
+def build_implement_prompt() -> str:
+    """Build prompt for implementation phase (write code, mark PR ready)."""
+    parts = [
+        f"Task ID: {TASK_ID[:8]}",
+        f"Original Task: {TASK_PROMPT}",
+        "",
+    ]
+
+    if REPO_URL:
+        parts.extend([
+            f"Repository: {REPO_URL}",
+            f"Branch: mainloop/{TASK_ID[:8]}",
+            f"PR: #{PR_NUMBER}",
+            "",
+            "Your implementation plan has been approved. Now implement it:",
+            "",
+            "Instructions:",
+            "1. Clone the repository and checkout your existing branch",
+            "2. Read your plan from the PR description",
+            "3. Implement the code according to your approved plan",
+            "4. Commit your changes with clear commit messages",
+            "5. Push the updated branch",
+            "6. Mark the PR as ready for review using `gh pr ready`",
+            "",
+            "Follow your plan carefully. If you discover issues during implementation,",
+            "add a comment to the PR explaining any deviations from the plan.",
+            "",
+        ])
+    else:
+        parts.extend([
+            "Instructions:",
+            "1. Implement the task as planned",
             "2. Create any necessary files in /workspace",
             "3. Summarize what you accomplished",
             "",

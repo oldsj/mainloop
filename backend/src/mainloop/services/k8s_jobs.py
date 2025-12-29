@@ -20,7 +20,7 @@ async def create_worker_job(
     task_id: str,
     namespace: str,
     prompt: str,
-    mode: Literal["initial", "feedback"],
+    mode: Literal["plan", "implement", "feedback"],
     callback_url: str,
     model: str | None = None,
     repo_url: str | None = None,
@@ -34,13 +34,13 @@ async def create_worker_job(
         task_id: The task ID
         namespace: Target namespace for the Job
         prompt: The task prompt/description
-        mode: "initial" for new PR, "feedback" for addressing comments
+        mode: "plan" for draft PR with plan, "implement" for code, "feedback" for comments
         callback_url: URL to POST results to
         model: Claude model to use (defaults to settings.claude_worker_model)
         repo_url: Repository URL to clone
-        pr_number: PR number (for feedback mode)
-        feedback_context: PR comments to address (for feedback mode)
-        iteration: Iteration number for feedback jobs (ensures unique names)
+        pr_number: PR number (for implement and feedback modes)
+        feedback_context: PR comments/feedback to address
+        iteration: Iteration number for jobs (ensures unique names)
 
     Returns:
         The Job name

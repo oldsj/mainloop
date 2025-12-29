@@ -33,6 +33,7 @@ from mainloop.workflows.main_thread import (
     send_user_message,
     send_queue_response,
 )
+from mainloop.services.chat_handler import process_message
 
 app = FastAPI(
     title="Mainloop API",
@@ -45,6 +46,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3030",
         "https://mainloop.olds.network",
     ],
     allow_credentials=True,
@@ -134,12 +136,12 @@ async def chat(
     request: ChatRequest,
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
-    """Send a message through the main thread workflow."""
+    """Send a message and get an immediate response."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
-    # Ensure main thread is running
-    get_or_start_main_thread(user_id)
+    # Ensure main thread is running (for background coordination)
+    main_thread_id = get_or_start_main_thread(user_id)
 
     # Get or create conversation
     if request.conversation_id:
@@ -150,18 +152,34 @@ async def chat(
         conversation = await db.create_conversation(user_id)
 
     # Save user message
-    user_message = await db.create_message(
+    await db.create_message(
         conversation_id=conversation.id,
         role="user",
         content=request.message,
     )
 
-    # Send message to the main thread workflow
-    send_user_message(user_id, request.message, conversation.id)
+    # Get main thread record for the ID
+    main_thread = await db.get_main_thread_by_user(user_id)
+    thread_id = main_thread.id if main_thread else main_thread_id
+
+    # Process message synchronously
+    result = await process_message(
+        user_id=user_id,
+        message=request.message,
+        conversation_id=conversation.id,
+        main_thread_id=thread_id,
+    )
+
+    # Save assistant response
+    assistant_message = await db.create_message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=result.response,
+    )
 
     return ChatResponse(
         conversation_id=conversation.id,
-        message=user_message,
+        message=assistant_message,
     )
 
 
@@ -197,20 +215,51 @@ async def get_conversation(conversation_id: str):
     )
 
 
-# ============= Queue Endpoints =============
+# ============= Queue/Inbox Endpoints =============
+
+
+class UnreadCountResponse(BaseModel):
+    """Unread count response."""
+
+    count: int
 
 
 @app.get("/queue", response_model=list[QueueItem])
 async def list_queue_items(
     user_id: str = Header(alias="X-User-ID", default=None),
     status: str = "pending",
+    unread_only: bool = False,
+    task_id: str | None = None,
 ):
-    """List queue items for the user."""
+    """List queue items for the user.
+
+    Args:
+        status: Filter by status (default: "pending")
+        unread_only: Only return unread items
+        task_id: Filter by task ID
+    """
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
-    items = await db.list_queue_items(user_id=user_id, status=status)
+    items = await db.list_queue_items(
+        user_id=user_id,
+        status=status,
+        unread_only=unread_only,
+        task_id=task_id,
+    )
     return items
+
+
+@app.get("/queue/unread/count", response_model=UnreadCountResponse)
+async def get_unread_count(
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Get the count of unread queue items (for inbox badge)."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    count = await db.count_unread_queue_items(user_id)
+    return UnreadCountResponse(count=count)
 
 
 @app.get("/queue/{item_id}", response_model=QueueItem)
@@ -220,6 +269,38 @@ async def get_queue_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
     return item
+
+
+@app.post("/queue/{item_id}/read")
+async def mark_queue_item_read(
+    item_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Mark a queue item as read."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    item = await db.get_queue_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+
+    if item.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your queue item")
+
+    await db.mark_queue_item_read(item_id)
+    return {"status": "ok"}
+
+
+@app.post("/queue/read-all")
+async def mark_all_queue_items_read(
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Mark all queue items as read for the user."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    await db.mark_all_queue_items_read(user_id)
+    return {"status": "ok"}
 
 
 @app.post("/queue/{item_id}/respond")
@@ -239,12 +320,25 @@ async def respond_to_queue_item(
     if item.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not your queue item")
 
-    # Send response to the main thread workflow
-    send_queue_response(
-        user_id=user_id,
-        queue_item_id=item_id,
-        response=response.response,
-        task_id=item.task_id,
+    # Mark as read when responding
+    await db.mark_queue_item_read(item_id)
+
+    # Send response to the main thread workflow with full context
+    from mainloop.workflows.main_thread import TOPIC_QUEUE_RESPONSE
+
+    main_thread_workflow_id = f"main-thread-{user_id}"
+    DBOS.send(
+        main_thread_workflow_id,
+        {
+            "type": TOPIC_QUEUE_RESPONSE,
+            "payload": {
+                "queue_item_id": item_id,
+                "response": response.response,
+                "task_id": item.task_id,
+                "context": item.context,
+                "item_type": item.item_type.value if item.item_type else None,
+            },
+        },
     )
 
     return {"status": "ok", "message": "Response sent"}
@@ -266,6 +360,13 @@ async def list_tasks(
     return tasks
 
 
+class TaskContext(BaseModel):
+    """Full task context for pull-based retrieval."""
+
+    task: WorkerTask
+    queue_items: list[QueueItem]
+
+
 @app.get("/tasks/{task_id}", response_model=WorkerTask)
 async def get_task(task_id: str):
     """Get a specific worker task."""
@@ -273,6 +374,32 @@ async def get_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@app.get("/tasks/{task_id}/context", response_model=TaskContext)
+async def get_task_context(
+    task_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Get full task context including queue items.
+
+    This endpoint is for pull-based context retrieval when the main thread
+    needs to know what's happening with a specific task.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    # Get all queue items for this task
+    queue_items = await db.list_queue_items(user_id=user_id, task_id=task_id)
+
+    return TaskContext(task=task, queue_items=queue_items)
 
 
 @app.post("/tasks/{task_id}/cancel")

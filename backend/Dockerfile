@@ -44,17 +44,20 @@ RUN useradd -m -s /bin/bash claude \
 
 WORKDIR /app
 
-# Copy the virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
+# Copy the virtual environment from builder (owned by claude)
+COPY --from=builder --chown=claude:claude /app/.venv /app/.venv
 
-# Copy source code
-COPY backend/src ./src
+# Copy source code (owned by claude)
+COPY --chown=claude:claude backend/src ./src
 
-# Copy shared models package
-COPY models ../models
+# Copy shared models package (owned by claude)
+COPY --chown=claude:claude models ../models
 
 # Set up PATH
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Switch to non-root user (required for Claude SDK bypass permissions)
+USER claude
 
 EXPOSE 8000
 

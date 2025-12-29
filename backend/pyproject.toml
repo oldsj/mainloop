@@ -21,6 +21,7 @@ dependencies = [
     "dbos>=2.7.0",
     "pydantic-ai[dbos]>=1.39.0",
     "kubernetes>=34.1.0",
+    "anthropic>=0.75.0",
 ]
 
 [project.scripts]

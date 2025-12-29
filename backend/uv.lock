@@ -1450,6 +1450,7 @@ name = "mainloop-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "asyncpg" },
     { name = "claude-agent-sdk" },
     { name = "dbos" },
@@ -1467,6 +1468,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=0.75.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "claude-agent-sdk", specifier = ">=0.1.18" },
     { name = "dbos", specifier = ">=2.7.0" },

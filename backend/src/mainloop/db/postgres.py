@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS worker_tasks (
     task_type TEXT NOT NULL,
     description TEXT NOT NULL,
     prompt TEXT NOT NULL,
+    model TEXT,
     repo_url TEXT,
     branch_name TEXT,
     base_branch TEXT DEFAULT 'main',
@@ -54,13 +55,19 @@ CREATE TABLE IF NOT EXISTS worker_tasks (
     result JSONB,
     error TEXT,
     pr_url TEXT,
-    commit_sha TEXT
+    pr_number INTEGER,
+    commit_sha TEXT,
+    -- Conversation linking for routing
+    conversation_id TEXT,
+    message_id TEXT,
+    keywords TEXT[] DEFAULT '{}',
+    skip_plan BOOLEAN DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_main_thread ON worker_tasks(main_thread_id);
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_user_id ON worker_tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_status ON worker_tasks(status);
 
--- Queue items (human-in-the-loop)
+-- Queue items (human-in-the-loop / inbox)
 CREATE TABLE IF NOT EXISTS queue_items (
     id TEXT PRIMARY KEY,
     main_thread_id TEXT NOT NULL REFERENCES main_threads(id),
@@ -75,6 +82,7 @@ CREATE TABLE IF NOT EXISTS queue_items (
     status TEXT NOT NULL DEFAULT 'pending',
     response TEXT,
     responded_at TIMESTAMPTZ,
+    read_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ
 );
@@ -101,6 +109,40 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+"""
+
+# Migration SQL for adding new columns to existing tables
+MIGRATION_SQL = """
+-- Add new columns to worker_tasks if they don't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='model') THEN
+        ALTER TABLE worker_tasks ADD COLUMN model TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_number') THEN
+        ALTER TABLE worker_tasks ADD COLUMN pr_number INTEGER;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='conversation_id') THEN
+        ALTER TABLE worker_tasks ADD COLUMN conversation_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='message_id') THEN
+        ALTER TABLE worker_tasks ADD COLUMN message_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='keywords') THEN
+        ALTER TABLE worker_tasks ADD COLUMN keywords TEXT[] DEFAULT '{}';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='skip_plan') THEN
+        ALTER TABLE worker_tasks ADD COLUMN skip_plan BOOLEAN DEFAULT FALSE;
+    END IF;
+    -- Add read_at to queue_items
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
+        ALTER TABLE queue_items ADD COLUMN read_at TIMESTAMPTZ;
+    END IF;
+END $$;
+
+-- Create indexes if they don't exist
+CREATE INDEX IF NOT EXISTS idx_worker_tasks_keywords ON worker_tasks USING GIN(keywords);
+CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
 """
 
 
@@ -135,11 +177,12 @@ class Database:
             yield conn
 
     async def ensure_tables_exist(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist and run migrations."""
         if not self._pool:
             return
         async with self.connection() as conn:
             await conn.execute(SCHEMA_SQL)
+            await conn.execute(MIGRATION_SQL)
 
     # ============= Main Thread Operations =============
 
@@ -282,9 +325,10 @@ class Database:
             await conn.execute(
                 """
                 INSERT INTO worker_tasks
-                (id, main_thread_id, user_id, task_type, description, prompt,
-                 repo_url, branch_name, base_branch, status, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                (id, main_thread_id, user_id, task_type, description, prompt, model,
+                 repo_url, branch_name, base_branch, status, created_at,
+                 conversation_id, message_id, keywords, skip_plan)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 """,
                 task.id,
                 task.main_thread_id,
@@ -292,11 +336,16 @@ class Database:
                 task.task_type,
                 task.description,
                 task.prompt,
+                task.model,
                 task.repo_url,
                 task.branch_name,
                 task.base_branch,
                 task.status.value,
                 task.created_at,
+                task.conversation_id,
+                task.message_id,
+                task.keywords,
+                task.skip_plan,
             )
         return task
 
@@ -415,6 +464,7 @@ class Database:
             task_type=row["task_type"],
             description=row["description"],
             prompt=row["prompt"],
+            model=row.get("model"),
             repo_url=row["repo_url"],
             branch_name=row["branch_name"],
             base_branch=row["base_branch"],
@@ -427,7 +477,12 @@ class Database:
             result=row["result"] if isinstance(row["result"], dict) else (json.loads(row["result"]) if row["result"] else None),
             error=row["error"],
             pr_url=row["pr_url"],
+            pr_number=row.get("pr_number"),
             commit_sha=row["commit_sha"],
+            conversation_id=row.get("conversation_id"),
+            message_id=row.get("message_id"),
+            keywords=list(row["keywords"]) if row.get("keywords") else [],
+            skip_plan=row.get("skip_plan", False),
         )
 
     # ============= Queue Item Operations =============
@@ -477,29 +532,52 @@ class Database:
         user_id: str,
         status: str = "pending",
         limit: int = 50,
+        unread_only: bool = False,
+        task_id: str | None = None,
     ) -> list[QueueItem]:
-        """List queue items for a user."""
+        """List queue items for a user.
+
+        Args:
+            user_id: The user ID
+            status: Filter by status (default: "pending")
+            limit: Max items to return
+            unread_only: Only return unread items
+            task_id: Filter by task ID
+        """
         if not self._pool:
             return []
+
+        # Build query dynamically based on filters
+        conditions = ["user_id = $1", "status = $2"]
+        params: list[Any] = [user_id, status]
+        param_idx = 3
+
+        if unread_only:
+            conditions.append("read_at IS NULL")
+
+        if task_id:
+            conditions.append(f"task_id = ${param_idx}")
+            params.append(task_id)
+            param_idx += 1
+
+        params.append(limit)
+
+        query = f"""
+            SELECT * FROM queue_items
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+                CASE priority
+                    WHEN 'urgent' THEN 1
+                    WHEN 'high' THEN 2
+                    WHEN 'normal' THEN 3
+                    ELSE 4
+                END,
+                created_at DESC
+            LIMIT ${param_idx}
+        """
+
         async with self.connection() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT * FROM queue_items
-                WHERE user_id = $1 AND status = $2
-                ORDER BY
-                    CASE priority
-                        WHEN 'urgent' THEN 1
-                        WHEN 'high' THEN 2
-                        WHEN 'normal' THEN 3
-                        ELSE 4
-                    END,
-                    created_at DESC
-                LIMIT $3
-                """,
-                user_id,
-                status,
-                limit,
-            )
+            rows = await conn.fetch(query, *params)
         return [self._row_to_queue_item(row) for row in rows]
 
     async def update_queue_item(
@@ -536,6 +614,48 @@ class Database:
                     *params,
                 )
 
+    async def count_unread_queue_items(self, user_id: str) -> int:
+        """Count unread queue items for a user."""
+        if not self._pool:
+            return 0
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) as count FROM queue_items
+                WHERE user_id = $1 AND read_at IS NULL AND status = 'pending'
+                """,
+                user_id,
+            )
+        return row["count"] if row else 0
+
+    async def mark_queue_item_read(self, item_id: str) -> None:
+        """Mark a queue item as read."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                "UPDATE queue_items SET read_at = NOW() WHERE id = $1",
+                item_id,
+            )
+
+    async def mark_all_queue_items_read(self, user_id: str) -> int:
+        """Mark all pending queue items as read for a user."""
+        if not self._pool:
+            return 0
+        async with self.connection() as conn:
+            result = await conn.execute(
+                """
+                UPDATE queue_items SET read_at = NOW()
+                WHERE user_id = $1 AND read_at IS NULL AND status = 'pending'
+                """,
+                user_id,
+            )
+        # Parse the result string "UPDATE N" to get count
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
     def _row_to_queue_item(self, row: asyncpg.Record) -> QueueItem:
         return QueueItem(
             id=row["id"],
@@ -551,6 +671,7 @@ class Database:
             status=row["status"],
             response=row["response"],
             responded_at=row["responded_at"],
+            read_at=row.get("read_at"),
             created_at=row["created_at"],
             expires_at=row["expires_at"],
         )
@@ -680,6 +801,36 @@ class Database:
                 """,
                 conversation_id,
             )
+        return [
+            Message(
+                id=row["id"],
+                conversation_id=row["conversation_id"],
+                role=row["role"],  # type: ignore
+                content=row["content"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    async def list_messages(
+        self, conversation_id: str, limit: int = 20
+    ) -> list[Message]:
+        """Get recent messages for a conversation (for context window)."""
+        if not self._pool:
+            return []
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM messages
+                WHERE conversation_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                conversation_id,
+                limit,
+            )
+        # Reverse to get chronological order
+        rows = list(reversed(rows))
         return [
             Message(
                 id=row["id"],

@@ -43,6 +43,12 @@ async def save_queue_item(item: QueueItem) -> QueueItem:
 
 
 @DBOS.step()
+async def save_assistant_message(conversation_id: str, content: str) -> None:
+    """Save an assistant message to a conversation."""
+    await db.create_message(conversation_id, "assistant", content)
+
+
+@DBOS.step()
 async def update_queue_item_response(item_id: str, response: str) -> None:
     """Update queue item with response."""
     await db.update_queue_item(item_id, status="responded", response=response)
@@ -130,23 +136,96 @@ async def main_thread_workflow(user_id: str) -> None:
 
 
 async def handle_user_message(thread: MainThread, payload: dict) -> None:
-    """Process a user message."""
+    """Process a user message with smart routing."""
     message = payload.get("message", "")
     conversation_id = payload.get("conversation_id")
+    message_id = payload.get("message_id")
+    skip_routing = payload.get("skip_routing", False)
 
     logger.info(f"User message: {message[:100]}...")
 
-    # For now, analyze the message to determine if we need a worker
-    # In the future, this will use Claude to analyze intent
+    # Import routing service
+    from mainloop.services.task_router import (
+        find_matching_tasks,
+        extract_keywords,
+        should_skip_plan,
+    )
 
-    # Simple heuristic: if message mentions a repo or asks to build/fix something
+    # Check for routing to existing tasks (unless we've already processed this)
+    if not skip_routing:
+        matches = await find_matching_tasks(thread.user_id, message)
+
+        if matches:
+            best_match = matches[0]
+
+            if best_match.confidence >= 0.7:
+                # High confidence - suggest routing with confirmation
+                logger.info(f"High confidence match ({best_match.confidence:.2f}): {best_match.task.id}")
+
+                # Save response to conversation for chat UI
+                response_content = f"This looks related to an existing task: {best_match.task.description[:100]}. Check your inbox to confirm routing."
+                if conversation_id:
+                    await save_assistant_message(conversation_id, response_content)
+
+                await add_to_queue(
+                    thread,
+                    item_type=QueueItemType.ROUTING_SUGGESTION,
+                    title="Route to existing task?",
+                    content=f"This looks related to: {best_match.task.description[:100]}",
+                    task_id=best_match.task.id,
+                    priority=QueueItemPriority.HIGH,
+                    options=["Route to this task", "Create new task"],
+                    context={
+                        "suggested_task_id": best_match.task.id,
+                        "confidence": best_match.confidence,
+                        "match_reasons": best_match.match_reasons,
+                        "original_message": message,
+                        "conversation_id": conversation_id,
+                        "message_id": message_id,
+                    },
+                )
+                return
+            elif len(matches) > 1 and matches[0].confidence >= 0.4:
+                # Multiple possible matches - ask user to choose
+                logger.info(f"Multiple matches found, asking user to choose")
+                task_options = [f"{m.task.description[:50]}..." for m in matches[:3]]
+                task_options.append("Create new task")
+
+                # Save response to conversation for chat UI
+                response_content = f"Multiple active tasks might match. Check your inbox to choose one."
+                if conversation_id:
+                    await save_assistant_message(conversation_id, response_content)
+
+                await add_to_queue(
+                    thread,
+                    item_type=QueueItemType.ROUTING_SUGGESTION,
+                    title="Which task?",
+                    content=f"Multiple active tasks might match: {message[:100]}",
+                    priority=QueueItemPriority.HIGH,
+                    options=task_options,
+                    context={
+                        "matches": [
+                            {"task_id": m.task.id, "confidence": m.confidence}
+                            for m in matches[:3]
+                        ],
+                        "original_message": message,
+                        "conversation_id": conversation_id,
+                        "message_id": message_id,
+                    },
+                )
+                return
+
+    # No match or low confidence - check if message needs worker
     needs_worker = any(
         keyword in message.lower()
-        for keyword in ["build", "fix", "create", "update", "implement", "add", "remove"]
+        for keyword in ["build", "fix", "create", "update", "implement", "add", "remove", "change"]
     )
 
     if needs_worker:
-        # Extract task details (simplified - will use Claude for real extraction)
+        # Extract keywords for future routing
+        keywords = extract_keywords(message)
+        skip_plan = should_skip_plan(message)
+
         task = WorkerTask(
             main_thread_id=thread.id,
             user_id=thread.user_id,
@@ -154,34 +233,49 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
             description=message,
             prompt=message,
             status=TaskStatus.PENDING,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            keywords=keywords,
+            skip_plan=skip_plan,
         )
         task = await save_worker_task(task)
 
-        # Enqueue the worker task with task.id as workflow ID
-        # This allows the callback endpoint to send results via DBOS.send(task_id, ...)
+        # Enqueue the worker task
         from mainloop.workflows.worker import worker_task_workflow
         with SetWorkflowID(task.id):
             worker_queue.enqueue(worker_task_workflow, task.id)
 
-        # Notify user
-        logger.info(f"Spawned worker task: {task.id}")
+        logger.info(f"Spawned worker task: {task.id} (skip_plan={skip_plan})")
 
-        # Add acknowledgment to queue
+        # Create response message
+        response_content = f"I'm working on: {task.description[:100]}. I'll update you when I have progress."
+
+        # Save assistant message to conversation for chat UI
+        if conversation_id:
+            await save_assistant_message(conversation_id, response_content)
+
+        # Add acknowledgment to queue (for inbox)
         await add_to_queue(
             thread,
             task_id=task.id,
             item_type=QueueItemType.NOTIFICATION,
             title="Task started",
-            content=f"Working on: {task.description}",
-            priority=QueueItemPriority.NORMAL,
+            content=response_content,
+            priority=QueueItemPriority.LOW,
         )
     else:
         # Direct response (will use Claude for real responses)
+        response_content = f"I received your message: {message}. For now I can only spawn workers for tasks that involve building, fixing, or implementing something."
+
+        # Save assistant message to conversation for chat UI
+        if conversation_id:
+            await save_assistant_message(conversation_id, response_content)
+
         await add_to_queue(
             thread,
             item_type=QueueItemType.NOTIFICATION,
             title="Response",
-            content=f"I received your message: {message}. For now I can only spawn workers for tasks that involve building, fixing, or implementing something.",
+            content=response_content,
             priority=QueueItemPriority.NORMAL,
         )
 
@@ -191,11 +285,80 @@ async def handle_queue_response(thread: MainThread, payload: dict) -> None:
     queue_item_id = payload.get("queue_item_id")
     response = payload.get("response")
     task_id = payload.get("task_id")
+    item_context = payload.get("context", {})
+    item_type = payload.get("item_type")
 
     logger.info(f"Queue response for {queue_item_id}: {response}")
 
     # Update the queue item
     await update_queue_item_response(queue_item_id, response)
+
+    # Handle routing suggestions
+    if item_type == QueueItemType.ROUTING_SUGGESTION.value:
+        original_message = item_context.get("original_message", "")
+        conversation_id = item_context.get("conversation_id")
+        message_id = item_context.get("message_id")
+
+        if response == "Route to this task":
+            # User chose to route to existing task
+            target_task_id = item_context.get("suggested_task_id")
+            if target_task_id:
+                # Send the message as additional context to the worker
+                DBOS.send(
+                    target_task_id,
+                    {
+                        "type": "additional_context",
+                        "message": original_message,
+                        "conversation_id": conversation_id,
+                    },
+                )
+
+                await add_to_queue(
+                    thread,
+                    task_id=target_task_id,
+                    item_type=QueueItemType.NOTIFICATION,
+                    title="Message routed",
+                    content=f"Added context to task: {original_message[:50]}...",
+                    priority=QueueItemPriority.LOW,
+                )
+        elif response == "Create new task":
+            # User wants a new task - process as new message
+            await handle_user_message(
+                thread,
+                {
+                    "message": original_message,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "skip_routing": True,  # Prevent infinite loop
+                },
+            )
+        elif item_context.get("matches"):
+            # User selected from multiple matches
+            try:
+                # Response might be the task description or an index
+                matches = item_context["matches"]
+                for i, match in enumerate(matches):
+                    if response.startswith(f"{i+1}.") or response == match.get("task_id"):
+                        target_task_id = match["task_id"]
+                        DBOS.send(
+                            target_task_id,
+                            {
+                                "type": "additional_context",
+                                "message": original_message,
+                            },
+                        )
+                        await add_to_queue(
+                            thread,
+                            task_id=target_task_id,
+                            item_type=QueueItemType.NOTIFICATION,
+                            title="Message routed",
+                            content=f"Added context to selected task",
+                            priority=QueueItemPriority.LOW,
+                        )
+                        break
+            except Exception as e:
+                logger.error(f"Error routing to selected task: {e}")
+        return
 
     # If this was for a worker task, forward the response
     if task_id:
@@ -212,7 +375,59 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
 
     logger.info(f"Worker result for {task_id}: {status}")
 
-    if status == "completed":
+    if status == "plan_ready":
+        # Plan draft PR is ready for review
+        pr_url = result.get("pr_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.PLAN_READY,
+            title="Plan ready for review",
+            content=result.get("message", f"Draft PR created: {pr_url}"),
+            priority=QueueItemPriority.HIGH,
+            context={"pr_url": pr_url},
+        )
+
+    elif status == "plan_updated":
+        # Plan was revised based on feedback
+        pr_url = result.get("pr_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.NOTIFICATION,
+            title="Plan updated",
+            content=f"Plan revised based on your feedback: {pr_url}",
+            priority=QueueItemPriority.NORMAL,
+            context={"pr_url": pr_url},
+        )
+
+    elif status == "code_ready":
+        # Code is ready for review
+        pr_url = result.get("pr_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.CODE_READY,
+            title="Code ready for review",
+            content=result.get("message", f"Implementation complete: {pr_url}"),
+            priority=QueueItemPriority.HIGH,
+            context={"pr_url": pr_url},
+        )
+
+    elif status == "feedback_addressed":
+        # Worker addressed PR feedback
+        pr_url = result.get("pr_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.FEEDBACK_ADDRESSED,
+            title="Feedback addressed",
+            content=f"Changes pushed to address your feedback: {pr_url}",
+            priority=QueueItemPriority.NORMAL,
+            context={"pr_url": pr_url},
+        )
+
+    elif status == "completed":
         await update_task_status(
             task_id,
             TaskStatus.COMPLETED,
@@ -220,16 +435,27 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
             pr_url=result.get("pr_url"),
         )
 
-        # Add completion to queue for review
+        # Add completion notification
         pr_url = result.get("pr_url")
-        if pr_url:
+        merged = result.get("merged", False)
+        if pr_url and merged:
             await add_to_queue(
                 thread,
                 task_id=task_id,
-                item_type=QueueItemType.REVIEW,
-                title="PR ready for review",
-                content=f"Pull request created: {pr_url}",
-                priority=QueueItemPriority.HIGH,
+                item_type=QueueItemType.NOTIFICATION,
+                title="PR merged",
+                content=f"Pull request merged: {pr_url}",
+                priority=QueueItemPriority.NORMAL,
+                context={"pr_url": pr_url, "merged": True},
+            )
+        elif pr_url:
+            await add_to_queue(
+                thread,
+                task_id=task_id,
+                item_type=QueueItemType.NOTIFICATION,
+                title="Task completed",
+                content=f"Task completed: {pr_url}",
+                priority=QueueItemPriority.NORMAL,
                 context={"pr_url": pr_url},
             )
         else:
@@ -241,6 +467,20 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
                 content=result.get("summary", "Task completed successfully"),
                 priority=QueueItemPriority.NORMAL,
             )
+
+    elif status == "cancelled":
+        await update_task_status(task_id, TaskStatus.CANCELLED)
+
+        pr_url = result.get("pr_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.NOTIFICATION,
+            title="Task cancelled",
+            content=f"PR was closed: {pr_url}" if pr_url else "Task was cancelled",
+            priority=QueueItemPriority.NORMAL,
+            context={"pr_url": pr_url} if pr_url else {},
+        )
 
     elif status == "failed":
         await update_task_status(task_id, TaskStatus.FAILED, error=error)

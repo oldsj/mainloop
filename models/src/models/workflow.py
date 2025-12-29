@@ -15,8 +15,10 @@ class TaskStatus(str, Enum):
     """Status of a worker task."""
 
     PENDING = "pending"
-    RUNNING = "running"
-    WAITING_HUMAN = "waiting_human"
+    PLANNING = "planning"  # Creating implementation plan
+    WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
+    IMPLEMENTING = "implementing"  # Writing code per approved plan
+    WAITING_HUMAN = "waiting_human"  # Code review
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -30,6 +32,11 @@ class QueueItemType(str, Enum):
     REVIEW = "review"
     ERROR = "error"
     NOTIFICATION = "notification"
+    # New types for plan-first workflow
+    PLAN_READY = "plan_ready"  # Plan is ready for review
+    CODE_READY = "code_ready"  # Code is ready for review
+    FEEDBACK_ADDRESSED = "feedback_addressed"  # Worker addressed feedback
+    ROUTING_SUGGESTION = "routing_suggestion"  # Suggesting to route to existing task
 
 
 class QueueItemPriority(str, Enum):
@@ -106,7 +113,14 @@ class WorkerTask(BaseModel):
 
     # GitHub integration
     pr_url: str | None = Field(None, description="Created PR URL")
+    pr_number: int | None = Field(None, description="PR number")
     commit_sha: str | None = Field(None, description="Final commit SHA")
+
+    # Conversation linking (for routing)
+    conversation_id: str | None = Field(None, description="Originating conversation ID")
+    message_id: str | None = Field(None, description="Originating message ID")
+    keywords: list[str] = Field(default_factory=list, description="Keywords for task routing")
+    skip_plan: bool = Field(default=False, description="Skip plan phase if user said 'just do it'")
 
 
 class WorkerTaskCreate(BaseModel):
@@ -150,6 +164,7 @@ class QueueItem(BaseModel):
     )
     response: str | None = Field(None, description="Human response")
     responded_at: datetime | None = Field(None, description="Response timestamp")
+    read_at: datetime | None = Field(None, description="When item was read/acknowledged")
 
     # Timestamps
     created_at: datetime = Field(
