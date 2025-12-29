@@ -20,6 +20,16 @@ rules:
     resources: ["secrets"]
     verbs: ["create", "get", "list", "delete"]
 
+  # ServiceAccount management - create worker service accounts in task namespaces
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["create", "get", "delete"]
+
+  # RoleBinding management - bind worker role in task namespaces
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "get", "delete"]
+
   # Job management - create/monitor/delete worker jobs
   - apiGroups: ["batch"]
     resources: ["jobs"]
@@ -42,3 +52,60 @@ roleRef:
   kind: ClusterRole
   name: mainloop-backend-cluster-role
   apiGroup: rbac.authorization.k8s.io
+---
+# ClusterRole for worker jobs - grants broad permissions within a namespace
+# This is bound to the worker ServiceAccount via RoleBinding in each task namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mainloop-worker-role
+rules:
+  # Core resources - pods, services, configmaps, secrets, etc.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - pods/exec
+      - services
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+      - serviceaccounts
+      - endpoints
+    verbs: ["*"]
+
+  # Apps - deployments, replicasets, statefulsets, daemonsets
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs: ["*"]
+
+  # Batch - jobs, cronjobs
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["*"]
+
+  # Networking - ingresses, networkpolicies
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["*"]
+
+  # RBAC within namespace - roles, rolebindings
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+    verbs: ["*"]
+
+  # Events - for debugging
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]

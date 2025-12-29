@@ -18,6 +18,12 @@ DEFAULT_SECRETS_TO_COPY = [
 # Source namespace for secrets
 SOURCE_NAMESPACE = "mainloop"
 
+# Worker service account name
+WORKER_SERVICE_ACCOUNT = "worker"
+
+# ClusterRole to bind to worker service account
+WORKER_CLUSTER_ROLE = "mainloop-worker-role"
+
 
 def get_k8s_client() -> tuple[client.CoreV1Api, client.BatchV1Api]:
     """Get Kubernetes API clients.
@@ -32,6 +38,16 @@ def get_k8s_client() -> tuple[client.CoreV1Api, client.BatchV1Api]:
         logger.info("Loaded kubeconfig for local development")
 
     return client.CoreV1Api(), client.BatchV1Api()
+
+
+def get_rbac_client() -> client.RbacAuthorizationV1Api:
+    """Get Kubernetes RBAC API client."""
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    return client.RbacAuthorizationV1Api()
 
 
 async def create_task_namespace(task_id: str) -> str:
@@ -120,6 +136,73 @@ async def copy_secrets_to_namespace(
                 logger.warning(f"Secret {secret_name} not found in {SOURCE_NAMESPACE}, skipping")
             else:
                 raise
+
+
+async def setup_worker_rbac(task_id: str, namespace: str) -> None:
+    """Create ServiceAccount and RoleBinding for worker in task namespace.
+
+    This gives the worker pod permissions to deploy resources within its namespace.
+
+    Args:
+        task_id: The task ID
+        namespace: Target namespace
+    """
+    core_v1, _ = get_k8s_client()
+    rbac_v1 = get_rbac_client()
+
+    # Create worker ServiceAccount
+    service_account = client.V1ServiceAccount(
+        metadata=client.V1ObjectMeta(
+            name=WORKER_SERVICE_ACCOUNT,
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/task-id": task_id,
+            },
+        ),
+    )
+
+    try:
+        core_v1.create_namespaced_service_account(namespace=namespace, body=service_account)
+        logger.info(f"Created ServiceAccount {WORKER_SERVICE_ACCOUNT} in {namespace}")
+    except ApiException as e:
+        if e.status == 409:
+            logger.info(f"ServiceAccount {WORKER_SERVICE_ACCOUNT} already exists in {namespace}")
+        else:
+            raise
+
+    # Create RoleBinding to bind ClusterRole to ServiceAccount
+    role_binding = client.V1RoleBinding(
+        metadata=client.V1ObjectMeta(
+            name="worker-role-binding",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/task-id": task_id,
+            },
+        ),
+        subjects=[
+            client.V1Subject(
+                kind="ServiceAccount",
+                name=WORKER_SERVICE_ACCOUNT,
+                namespace=namespace,
+            ),
+        ],
+        role_ref=client.V1RoleRef(
+            kind="ClusterRole",
+            name=WORKER_CLUSTER_ROLE,
+            api_group="rbac.authorization.k8s.io",
+        ),
+    )
+
+    try:
+        rbac_v1.create_namespaced_role_binding(namespace=namespace, body=role_binding)
+        logger.info(f"Created RoleBinding for {WORKER_SERVICE_ACCOUNT} in {namespace}")
+    except ApiException as e:
+        if e.status == 409:
+            logger.info(f"RoleBinding already exists in {namespace}")
+        else:
+            raise
 
 
 async def delete_task_namespace(task_id: str) -> None:

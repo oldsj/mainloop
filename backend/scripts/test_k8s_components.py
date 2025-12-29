@@ -28,6 +28,7 @@ async def test_namespace():
     from mainloop.services.k8s_namespace import (
         create_task_namespace,
         copy_secrets_to_namespace,
+        setup_worker_rbac,
         delete_task_namespace,
     )
 
@@ -53,8 +54,16 @@ async def test_namespace():
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
-    # Test 3: Verify namespace exists
-    print("3. Verifying namespace...")
+    # Test 3: Setup worker RBAC
+    print("3. Setting up worker RBAC...")
+    try:
+        await setup_worker_rbac(task_id, namespace)
+        print(f"   ✓ Worker RBAC configured")
+    except Exception as e:
+        print(f"   ✗ Failed: {e}")
+
+    # Test 4: Verify namespace exists
+    print("4. Verifying namespace...")
     from mainloop.services.k8s_namespace import get_k8s_client
     core_v1, _ = get_k8s_client()
     try:
@@ -63,8 +72,8 @@ async def test_namespace():
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
-    # Test 4: List secrets in namespace
-    print("4. Checking secrets...")
+    # Test 5: List secrets in namespace
+    print("5. Checking secrets...")
     try:
         secrets = core_v1.list_namespaced_secret(namespace)
         secret_names = [s.metadata.name for s in secrets.items if not s.metadata.name.startswith("default")]
@@ -72,8 +81,8 @@ async def test_namespace():
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
-    # Test 5: Delete namespace
-    print("5. Deleting namespace...")
+    # Test 6: Delete namespace
+    print("6. Deleting namespace...")
     try:
         await delete_task_namespace(task_id)
         print(f"   ✓ Deletion initiated")
@@ -89,6 +98,7 @@ async def test_job():
     from mainloop.services.k8s_namespace import (
         create_task_namespace,
         copy_secrets_to_namespace,
+        setup_worker_rbac,
         delete_task_namespace,
     )
     from mainloop.services.k8s_jobs import create_worker_job, get_job_status, get_job_logs
@@ -102,6 +112,7 @@ async def test_job():
     print("1. Setting up namespace...")
     namespace = await create_task_namespace(task_id)
     await copy_secrets_to_namespace(task_id, namespace)
+    await setup_worker_rbac(task_id, namespace)
     print(f"   ✓ Namespace ready: {namespace}")
 
     # Create job

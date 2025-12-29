@@ -9,26 +9,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Monorepo Structure:**
 ```
 mainloop/
-├── backend/      # Python 3.13+ FastAPI + BigQuery
-├── frontend/     # TypeScript/SvelteKit 5 + Tailwind v4 + Cloudflare Pages
+├── backend/      # Python 3.13+ FastAPI + PostgreSQL
+├── frontend/     # TypeScript/SvelteKit 5 + Tailwind v4
 ├── claude-agent/ # Claude Code CLI container (Max subscription)
 ├── models/       # Shared Pydantic models (Python)
 ├── packages/ui/  # Shared design tokens + Tailwind preset
-└── k8s/          # Kubernetes manifests
+└── k8s/          # Kubernetes manifests (Tailscale Gateway routing)
 ```
 
 ## Core Architecture
 
+### Production Networking (Tailscale Gateway)
+All production traffic routes through Tailscale Gateway - no public ingress. HTTPRoutes defined in `k8s/apps/mainloop/base/httproute.yaml`:
+
+| Service | Hostname | Port |
+|---------|----------|------|
+| Frontend | `mainloop.olds.network` | 3000 |
+| Backend API | `mainloop-api.olds.network` | 8000 |
+
+Frontend must have `VITE_API_URL=https://mainloop-api.olds.network` configured.
+
 ### Data Flow
-1. **User** -> Frontend (SvelteKit) -> Cloudflare Access (auth)
-2. **Frontend** -> Backend API (FastAPI) via Cloudflare Tunnel
+1. **User** -> Tailscale -> Frontend (SvelteKit)
+2. **Frontend** -> Backend API (FastAPI) via `mainloop-api.olds.network`
 3. **Backend** -> Claude Agent Container (Claude Code CLI)
-4. **Backend** <-> BigQuery (conversation memory)
+4. **Backend** <-> PostgreSQL (conversation memory)
 
 ### Authentication
-- Cloudflare Access handles ALL authentication
-- No app-level auth needed - trust CF headers
-- `Cf-Access-Jwt-Assertion` header contains user identity
+- Tailscale handles network-level access control
+- Only devices on the tailnet can reach the services
 
 ## Development Commands
 
@@ -79,7 +88,7 @@ pnpm check               # Type check
 make setup-claude-creds-k8s
 
 # Deploy services
-make deploy-frontend     # Deploy to Cloudflare Pages
+make deploy-frontend     # Build and deploy frontend to k8s
 make deploy              # Full deploy (build images + push + restart K8s)
 ```
 

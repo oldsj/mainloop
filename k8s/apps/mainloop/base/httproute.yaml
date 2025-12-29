@@ -29,3 +29,6 @@ spec:
     - backendRefs:
         - name: mainloop-backend
           port: 8000
+      timeouts:
+        request: 120s
+        backendRequest: 120s

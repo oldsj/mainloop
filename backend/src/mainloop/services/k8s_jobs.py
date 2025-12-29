@@ -6,7 +6,7 @@ from typing import Literal
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from mainloop.services.k8s_namespace import get_k8s_client
+from mainloop.services.k8s_namespace import get_k8s_client, WORKER_SERVICE_ACCOUNT
 from mainloop.config import settings
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,7 @@ async def create_worker_job(
                 ),
                 spec=client.V1PodSpec(
                     restart_policy="Never",
+                    service_account_name=WORKER_SERVICE_ACCOUNT,
                     image_pull_secrets=[
                         client.V1LocalObjectReference(name="ghcr-secret"),
                     ],
