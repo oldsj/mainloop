@@ -11,6 +11,9 @@
   }
 
   function handleClickOutside(e: MouseEvent) {
+    // Only process if panel is open
+    if (!$isInboxOpen) return;
+
     const target = e.target as HTMLElement;
     if (target.closest('.inbox-panel') || target.closest('[aria-label="Open inbox"]')) {
       return;

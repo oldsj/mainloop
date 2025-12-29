@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-frontend build-backend push-backend install clean setup-claude-creds setup-claude-creds-k8s
+.PHONY: help dev build deploy deploy-loop deploy-frontend build-backend push-backend install clean setup-claude-creds setup-claude-creds-k8s
 
 # Configuration
 GHCR_REGISTRY := ghcr.io
@@ -133,6 +133,11 @@ deploy: push-all ## Full deployment to k8s
 	kubectl rollout restart deployment/mainloop-backend -n mainloop
 	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop
 	kubectl rollout restart deployment/mainloop-frontend -n mainloop
+
+deploy-loop: ## Watch for changes and deploy (requires watchexec)
+	watchexec -w backend -w frontend/src -w k8s -w models \
+		-e py,ts,svelte,yaml,toml \
+		-- $(MAKE) deploy || true
 
 # K8s commands (for local testing before moving to infrastructure repo)
 k8s-apply: ## Apply K8s manifests locally

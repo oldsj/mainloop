@@ -64,12 +64,14 @@ function createTasksStore() {
     },
 
     toggle() {
+      let shouldFetch = false;
       update((s) => {
-        if (!s.isOpen) {
-          this.fetchTasks();
-        }
+        shouldFetch = !s.isOpen;
         return { ...s, isOpen: !s.isOpen };
       });
+      if (shouldFetch) {
+        this.fetchTasks();
+      }
     },
 
     startPolling(intervalMs = 10000) {

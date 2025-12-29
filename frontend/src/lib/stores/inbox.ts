@@ -106,12 +106,14 @@ function createInboxStore() {
     },
 
     toggle() {
+      let shouldFetch = false;
       update((s) => {
-        if (!s.isOpen) {
-          this.fetchItems();
-        }
+        shouldFetch = !s.isOpen;
         return { ...s, isOpen: !s.isOpen };
       });
+      if (shouldFetch) {
+        this.fetchItems();
+      }
     },
 
     startPolling(intervalMs = 30000) {
