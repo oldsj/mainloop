@@ -21,5 +21,6 @@ class Conversation(BaseModel):
     id: str = Field(..., description="Unique conversation ID")
     user_id: str = Field(..., description="User ID from Cloudflare Access")
     title: str | None = Field(None, description="Conversation title")
+    claude_session_id: str | None = Field(None, description="Claude session ID for resumption")
     created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
     updated_at: datetime = Field(default_factory=datetime.now, description="Last update timestamp")

@@ -1,10 +1,26 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
   import { api } from '$lib/api';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
 
   let { messages, isLoading } = $derived($conversationStore);
+
+  onMount(async () => {
+    // Load the most recent conversation on startup
+    try {
+      const { conversations } = await api.listConversations();
+      if (conversations.length > 0) {
+        // Load the most recent conversation (already sorted by updated_at desc)
+        const latest = conversations[0];
+        const { conversation, messages } = await api.getConversation(latest.id);
+        conversationStore.setConversation(conversation, messages);
+      }
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+    }
+  });
 
   async function handleSendMessage(detail: { message: string }) {
     const userMessage = detail.message;

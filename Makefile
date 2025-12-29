@@ -128,7 +128,7 @@ deploy-frontend: ## Deploy frontend to Cloudflare Pages
 
 deploy: push-all ## Full deployment to k8s
 	@echo "Applying Kubernetes manifests..."
-	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side
+	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
 	@echo "Restarting Kubernetes deployments..."
 	kubectl rollout restart deployment/mainloop-backend -n mainloop
 	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from dbos import SetWorkflowID
-from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage, TextBlock
+from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage, SystemMessage, TextBlock
 
 from models import (
     WorkerTask,
@@ -33,54 +33,72 @@ class ChatResult:
     task_id: str | None = None
     needs_inbox_action: bool = False
     queue_item: QueueItem | None = None
+    claude_session_id: str | None = None
+
+
+@dataclass
+class ClaudeResponse:
+    """Response from Claude including session info."""
+
+    text: str
+    session_id: str | None = None
+    compacted: bool = False
+    compaction_count: int = 0
 
 
 async def get_claude_response(
     message: str,
-    conversation_id: str,
+    claude_session_id: str | None = None,
     model: str = "sonnet",
-) -> str:
-    """Get a response from Claude using the Agent SDK with conversation history."""
-    # Load conversation history from database
-    history = await db.list_messages(conversation_id, limit=20)
+) -> ClaudeResponse:
+    """Get a response from Claude using the Agent SDK with session resumption.
 
-    # Build prompt with conversation context
-    context_parts = []
-    for msg in history:
-        role = "User" if msg.role == "user" else "Assistant"
-        context_parts.append(f"{role}: {msg.content}")
-
-    if context_parts:
-        prompt = f"""Previous conversation:
-{chr(10).join(context_parts)}
-
-User: {message}
-
-Respond to the user's message. Be concise and helpful."""
-    else:
-        prompt = message
-
+    If claude_session_id is provided, resumes that session (Claude maintains context).
+    Otherwise starts a new session. Tracks context compaction events.
+    """
     try:
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="bypassPermissions",
+            resume=claude_session_id,  # Resume existing session if provided
         )
 
         collected_text: list[str] = []
+        session_id: str | None = None
+        compaction_count: int = 0
 
-        async for msg in query(prompt=prompt, options=options):
+        async for msg in query(prompt=message, options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         collected_text.append(block.text)
             elif isinstance(msg, ResultMessage):
+                session_id = msg.session_id
                 if msg.is_error:
-                    return f"Sorry, I encountered an error: {msg.result or 'Unknown error'}"
+                    return ClaudeResponse(
+                        text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
+                        session_id=session_id,
+                        compacted=compaction_count > 0,
+                        compaction_count=compaction_count,
+                    )
+            elif isinstance(msg, SystemMessage):
+                # Track compaction events (context was automatically summarized)
+                if msg.subtype == "compact_boundary":
+                    compaction_count += 1
+                    data = msg.data or {}
+                    pre_tokens = data.get("pre_tokens", 0)
+                    trigger = data.get("trigger", "unknown")
+                    logger.info(f"Context compacted ({trigger}): {pre_tokens} tokens summarized")
 
-        return "\n".join(collected_text) if collected_text else "No response generated."
+        return ClaudeResponse(
+            text="\n".join(collected_text) if collected_text else "No response generated.",
+            session_id=session_id,
+            compacted=compaction_count > 0,
+            compaction_count=compaction_count,
+        )
     except Exception as e:
         logger.error(f"Claude Agent SDK error: {e}")
-        return f"Sorry, I encountered an error: {str(e)}"
+        return ClaudeResponse(text=f"Sorry, I encountered an error: {str(e)}")
 
 
 def is_task_request(message: str) -> bool:
@@ -121,6 +139,7 @@ async def process_message(
     message: str,
     conversation_id: str,
     main_thread_id: str,
+    claude_session_id: str | None = None,
 ) -> ChatResult:
     """Process a user message and return an immediate response.
 
@@ -128,6 +147,10 @@ async def process_message(
     - Routing to existing tasks
     - Spawning new workers for coding tasks
     - Direct Claude responses for everything else (no inbox)
+
+    Args:
+        claude_session_id: Claude session ID for conversation continuity.
+            If provided, resumes the existing Claude session.
     """
     # Check for routing to existing tasks first
     matches = await find_matching_tasks(user_id, message)
@@ -201,9 +224,16 @@ async def process_message(
 
     # For regular questions/chat, get a direct response from Claude (no inbox)
     model = settings.claude_model  # Uses haiku by default
-    response = await get_claude_response(message, conversation_id, model=model)
+    claude_response = await get_claude_response(
+        message,
+        claude_session_id=claude_session_id,
+        model=model,
+    )
 
-    return ChatResult(response=response)
+    return ChatResult(
+        response=claude_response.text,
+        claude_session_id=claude_response.session_id,
+    )
 
 
 async def _create_routing_queue_item(

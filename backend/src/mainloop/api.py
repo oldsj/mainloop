@@ -162,13 +162,18 @@ async def chat(
     main_thread = await db.get_main_thread_by_user(user_id)
     thread_id = main_thread.id if main_thread else main_thread_id
 
-    # Process message synchronously
+    # Process message synchronously (pass Claude session ID for continuity)
     result = await process_message(
         user_id=user_id,
         message=request.message,
         conversation_id=conversation.id,
         main_thread_id=thread_id,
+        claude_session_id=conversation.claude_session_id,
     )
+
+    # Update conversation's Claude session ID if we got a new one
+    if result.claude_session_id and result.claude_session_id != conversation.claude_session_id:
+        await db.update_conversation_session(conversation.id, result.claude_session_id)
 
     # Save assistant response
     assistant_message = await db.create_message(

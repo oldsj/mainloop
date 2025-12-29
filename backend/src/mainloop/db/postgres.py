@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     title TEXT,
+    claude_session_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -137,6 +138,10 @@ BEGIN
     -- Add read_at to queue_items
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
         ALTER TABLE queue_items ADD COLUMN read_at TIMESTAMPTZ;
+    END IF;
+    -- Add claude_session_id to conversations
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='claude_session_id') THEN
+        ALTER TABLE conversations ADD COLUMN claude_session_id TEXT;
     END IF;
 END $$;
 
@@ -696,12 +701,13 @@ class Database:
         async with self.connection() as conn:
             await conn.execute(
                 """
-                INSERT INTO conversations (id, user_id, title, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO conversations (id, user_id, title, claude_session_id, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 conversation.id,
                 conversation.user_id,
                 conversation.title,
+                conversation.claude_session_id,
                 conversation.created_at,
                 conversation.updated_at,
             )
@@ -721,6 +727,7 @@ class Database:
             id=row["id"],
             user_id=row["user_id"],
             title=row["title"],
+            claude_session_id=row["claude_session_id"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -747,11 +754,30 @@ class Database:
                 id=row["id"],
                 user_id=row["user_id"],
                 title=row["title"],
+                claude_session_id=row["claude_session_id"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
             )
             for row in rows
         ]
+
+    async def update_conversation_session(
+        self, conversation_id: str, claude_session_id: str
+    ) -> None:
+        """Update the Claude session ID for a conversation."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE conversations
+                SET claude_session_id = $1, updated_at = $2
+                WHERE id = $3
+                """,
+                claude_session_id,
+                datetime.now(timezone.utc),
+                conversation_id,
+            )
 
     async def create_message(
         self, conversation_id: str, role: str, content: str

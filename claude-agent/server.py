@@ -15,6 +15,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     AssistantMessage,
     ResultMessage,
+    SystemMessage,
     TextBlock,
 )
 
@@ -99,17 +100,20 @@ async def auth_status():
 
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute_claude(request: ExecuteRequest):
-    """Execute a prompt using Claude Agent SDK."""
+    """Execute a prompt using Claude Agent SDK with session and compaction support."""
     try:
         options = ClaudeAgentOptions(
             model=request.model,
             permission_mode="bypassPermissions",
             cwd=request.workspace,
+            resume=request.session_id,  # Resume existing session if provided
+            max_turns=request.max_turns,  # Limit agent turns
         )
 
         collected_text: list[str] = []
         session_id: str | None = None
         cost_usd: float | None = None
+        compaction_count: int = 0
 
         async for message in query(prompt=request.prompt, options=options):
             if isinstance(message, AssistantMessage):
@@ -125,15 +129,28 @@ async def execute_claude(request: ExecuteRequest):
                         session_id=session_id,
                         cost_usd=cost_usd,
                         error=message.result or "Unknown error",
+                        compacted=compaction_count > 0,
+                        compaction_count=compaction_count,
                     )
+            elif isinstance(message, SystemMessage):
+                # Track compaction events (context was automatically summarized)
+                if message.subtype == "compact_boundary":
+                    compaction_count += 1
+                    data = message.data or {}
+                    pre_tokens = data.get("pre_tokens", 0)
+                    trigger = data.get("trigger", "unknown")
+                    logger.info(f"Context compacted ({trigger}): {pre_tokens} tokens summarized")
 
         return ExecuteResponse(
             output="\n".join(collected_text) if collected_text else "",
             session_id=session_id,
             cost_usd=cost_usd,
+            compacted=compaction_count > 0,
+            compaction_count=compaction_count,
         )
 
     except Exception as e:
+        logger.exception(f"Execute failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
