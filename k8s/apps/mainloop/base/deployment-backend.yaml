@@ -13,6 +13,7 @@ spec:
       labels:
         app: mainloop-backend
     spec:
+      serviceAccountName: mainloop-backend
       imagePullSecrets:
         - name: ghcr-secret
       containers:
@@ -29,18 +30,13 @@ spec:
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: mainloop-db-credentials
-                  key: username
+                  name: mainloop-secrets
+                  key: db-username
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mainloop-db-credentials
-                  key: password
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
                   name: mainloop-secrets
-                  key: anthropic-api-key
+                  key: db-password
           resources:
             requests:
               memory: "256Mi"

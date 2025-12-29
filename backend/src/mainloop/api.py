@@ -18,7 +18,11 @@ from models import (
     QueueItem,
     QueueItemResponse,
     WorkerTask,
+    TaskStatus,
 )
+from pydantic import BaseModel
+from typing import Any
+from datetime import datetime
 
 # Import DBOS config to initialize DBOS before defining workflows
 from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
@@ -290,10 +294,72 @@ async def cancel_task(
     # Cancel the DBOS workflow
     DBOS.cancel_workflow(task_id)
 
-    from models import TaskStatus
     await db.update_worker_task(task_id, status=TaskStatus.CANCELLED)
 
     return {"status": "cancelled"}
+
+
+# ============= Internal Endpoints (for K8s Jobs) =============
+
+
+class TaskResult(BaseModel):
+    """Result from a worker Job."""
+
+    task_id: str
+    status: str  # "completed" or "failed"
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    completed_at: str | None = None
+
+
+@app.post("/internal/tasks/{task_id}/complete")
+async def task_complete(task_id: str, result: TaskResult):
+    """Callback endpoint for K8s Jobs to report completion.
+
+    This is called by the job_runner when a worker Job finishes.
+    It updates the task status and notifies the main thread workflow.
+    """
+    # Verify task exists
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Update task status in database
+    if result.status == "completed":
+        await db.update_worker_task(
+            task_id,
+            status=TaskStatus.COMPLETED,
+            result=result.result,
+            pr_url=result.result.get("pr_url") if result.result else None,
+        )
+    elif result.status == "failed":
+        await db.update_worker_task(
+            task_id,
+            status=TaskStatus.FAILED,
+            error=result.error,
+        )
+
+    # Send result to the worker workflow via DBOS.send()
+    # The worker workflow is waiting on TOPIC_JOB_RESULT
+    from mainloop.workflows.worker import TOPIC_JOB_RESULT
+
+    # Send to the worker workflow (which uses task_id as workflow ID via the queue)
+    # Actually, we need to send to the workflow that's waiting
+    # The worker_task_workflow is running with the task_id as part of its workflow context
+    # We use DBOS.send with the workflow_id to target it
+    workflow_id = task_id  # The worker workflow uses task_id for idempotency
+
+    DBOS.send(
+        workflow_id,
+        {
+            "status": result.status,
+            "result": result.result,
+            "error": result.error,
+        },
+        topic=TOPIC_JOB_RESULT,
+    )
+
+    return {"status": "ok", "task_id": task_id}
 
 
 # ============= Run =============

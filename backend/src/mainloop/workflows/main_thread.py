@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS, SetWorkflowID, SetEnqueueOptions
 
 from models import (
     MainThread,
@@ -157,9 +157,11 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
         )
         task = await save_worker_task(task)
 
-        # Enqueue the worker task
+        # Enqueue the worker task with task.id as workflow ID
+        # This allows the callback endpoint to send results via DBOS.send(task_id, ...)
         from mainloop.workflows.worker import worker_task_workflow
-        worker_queue.enqueue(worker_task_workflow, task.id)
+        with SetWorkflowID(task.id):
+            worker_queue.enqueue(worker_task_workflow, task.id)
 
         # Notify user
         logger.info(f"Spawned worker task: {task.id}")

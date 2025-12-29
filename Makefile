@@ -140,3 +140,13 @@ k8s-apply: ## Apply K8s manifests locally
 
 k8s-delete: ## Delete K8s resources
 	kubectl delete -k k8s/apps/mainloop/overlays/prod
+
+# E2E Testing
+test-k8s: ## Test K8s namespace/secret creation (quick)
+	cd backend && uv run python scripts/test_k8s_components.py
+
+test-k8s-job: ## Test K8s job creation (creates a real job)
+	cd backend && uv run python scripts/test_k8s_components.py --job
+
+test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
+	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py

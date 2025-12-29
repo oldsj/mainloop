@@ -2,6 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: mainloop-db
+  namespace: mainloop
 spec:
   instances: 1
 
@@ -28,6 +29,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
   name: mainloop-db-database
+  namespace: mainloop
 spec:
   name: mainloop
   owner: mainloop
@@ -41,6 +43,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Pooler
 metadata:
   name: mainloop-db-pooler
+  namespace: mainloop
 spec:
   cluster:
     name: mainloop-db

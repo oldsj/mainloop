@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Claude Agent Worker API using the Agent SDK.
-Each worker maintains its own independent session.
+Each worker maintains its own independent session with context compaction support.
 """
 import json
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -17,6 +18,8 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Claude Agent Worker API")
 
@@ -28,6 +31,8 @@ class ExecuteRequest(BaseModel):
     prompt: str
     workspace: str = "/workspace"
     model: str = "haiku"
+    session_id: str | None = None  # Resume from existing session
+    max_turns: int | None = None  # Limit agent turns
 
 
 class ExecuteResponse(BaseModel):
@@ -36,6 +41,8 @@ class ExecuteResponse(BaseModel):
     session_id: str | None = None
     cost_usd: float | None = None
     error: str | None = None
+    compacted: bool = False  # Whether context was compacted during execution
+    compaction_count: int = 0  # Number of compactions that occurred
 
 
 class AuthStatus(BaseModel):

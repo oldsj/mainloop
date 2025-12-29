@@ -347,6 +347,7 @@ class Database:
         result: dict | None = None,
         error: str | None = None,
         pr_url: str | None = None,
+        pr_number: int | None = None,
         commit_sha: str | None = None,
     ):
         """Update worker task fields."""
@@ -387,6 +388,10 @@ class Database:
         if pr_url is not None:
             updates.append(f"pr_url = ${param_idx}")
             params.append(pr_url)
+            param_idx += 1
+        if pr_number is not None:
+            updates.append(f"pr_number = ${param_idx}")
+            params.append(pr_number)
             param_idx += 1
         if commit_sha is not None:
             updates.append(f"commit_sha = ${param_idx}")

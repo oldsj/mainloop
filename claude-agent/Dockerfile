@@ -44,8 +44,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Copy application code
 COPY --chown=claude:claude server.py /app/server.py
+COPY --chown=claude:claude job_runner.py /app/job_runner.py
 COPY --chown=claude:claude entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /app/server.py
+RUN chmod +x /entrypoint.sh /app/server.py /app/job_runner.py
 
 # Place venv executables at front of path
 ENV PATH="/app/.venv/bin:$PATH"
