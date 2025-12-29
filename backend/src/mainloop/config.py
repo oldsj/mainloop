@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     bigquery_dataset: str = "mainloop"
 
     # Claude
-    claude_oauth_token: str = ""  # OAuth token for Claude API
+    claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
     claude_agent_url: str = "http://claude-agent:8001"
     claude_workspace: str = "/workspace"
     claude_model: str = "sonnet"  # Main thread model
