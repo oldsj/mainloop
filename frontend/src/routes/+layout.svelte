@@ -5,8 +5,6 @@
   import { inbox } from '$lib/stores/inbox';
   import { tasks } from '$lib/stores/tasks';
   import { themeStore } from '$lib/stores/theme';
-  import InboxBadge from '$lib/components/InboxBadge.svelte';
-  import InboxPanel from '$lib/components/InboxPanel.svelte';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
@@ -14,7 +12,7 @@
 
   let { children, data }: { children: any; data: LayoutData } = $props();
 
-  type Tab = 'chat' | 'tasks' | 'inbox';
+  type Tab = 'chat' | 'tasks';
   let activeTab = $state<Tab>('chat');
 
   onMount(() => {
@@ -37,7 +35,6 @@
     <div class="flex items-center gap-3">
       <ThemeSelector />
       <TasksBadge />
-      <InboxBadge />
     </div>
   </header>
 
@@ -71,15 +68,8 @@
       </div>
     {:else if activeTab === 'tasks'}
       <TasksPanel desktop={false} mobile={true} />
-    {:else if activeTab === 'inbox'}
-      <InboxPanel desktop={false} mobile={true} />
     {/if}
   </div>
 
   <MobileTabBar bind:activeTab />
-</div>
-
-<!-- Desktop overlays for inbox -->
-<div class="hidden md:block">
-  <InboxPanel desktop={true} />
 </div>

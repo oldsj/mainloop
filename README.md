@@ -1,8 +1,10 @@
 # mainloop
 
-An AI agent orchestrator - one place to manage all AI work, accessible from any device.
+An attention management system — one place to focus, accessible from any device.
 
-Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) - your attention is the bottleneck, so spawn parallel AI workers and never let your cores idle.
+Your main conversation thread is the closest digital mapping to your own internal thread of consciousness. Everything else flows into a unified inbox that surfaces only what needs your attention.
+
+Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI workers and let them handle the work while you stay in flow.
 
 ## How It Works
 
@@ -25,10 +27,10 @@ You (phone/laptop)
        └──────────────┘  └──────────────┘
 ```
 
-- **Chat**: Claude responds naturally, uses `spawn_task` tool when you confirm work
+- **Main thread**: One continuous conversation — Claude responds naturally, spawns workers when you confirm
 - **Workers**: Opus models handle complex tasks in isolated K8s namespaces
-- **Durable execution**: Tasks survive restarts via [DBOS](docs/DBOS.md)
-- **Conversation memory**: Compaction keeps context across devices/sessions
+- **Inbox**: Unified attention queue — what needs you surfaces; everything else folds away
+- **Persistence**: Conversations and tasks survive restarts via compaction + [DBOS](docs/DBOS.md)
 
 ## Quick Start
 
@@ -57,10 +59,15 @@ mainloop/
 
 ## UI
 
-- **Mobile**: Bottom tab bar (Chat / Tasks / Inbox)
-- **Desktop**: Chat with always-visible Tasks sidebar, Inbox overlay
-- **Tasks Panel**: Track active workers with live status updates
-- **Inbox**: Human review queue for worker questions/approvals
+- **Mobile**: Bottom tab bar (Chat / Inbox)
+- **Desktop**: Chat with always-visible Inbox sidebar
+
+**Inbox** — a unified view of everything that needs your attention:
+1. Questions and approvals from workers
+2. Active tasks (with expandable live logs)
+3. Recent failures (always visible, one-click retry)
+4. Recently completed work
+5. History (collapsed)
 
 ## Agent Workflow
 

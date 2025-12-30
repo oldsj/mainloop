@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**mainloop** is an AI agent orchestrator - one place to manage all AI work, accessible from any device. It provides a single continuous conversation across all devices with persistent memory.
+**mainloop** is an attention management system - a single place to focus, accessible from any device.
+
+The core insight: your main conversation thread is the closest digital mapping to your own internal human thread of consciousness. Everything else—tasks, notifications, reviews—flows into a unified inbox designed to help you manage attention effectively, not fragment it.
+
+**Philosophy:**
+- One continuous conversation that persists across all devices
+- Parallel AI workers handle tasks in the background
+- A unified inbox surfaces only what needs your attention
+- Recently completed work and failures bubble up; old stuff folds away
+- You stay in flow; the system manages the interrupts
 
 **Monorepo Structure:**
 ```
@@ -154,22 +163,27 @@ Key files:
 ```
 frontend/src/lib/
 ├── components/
-│   ├── Chat.svelte          # Main chat interface
-│   ├── TasksPanel.svelte    # Active workers list
-│   ├── TasksBadge.svelte    # Header badge with count
-│   ├── InboxPanel.svelte    # Human review queue
-│   ├── InboxBadge.svelte    # Header badge with unread count
+│   ├── Chat.svelte          # Main conversation thread
+│   ├── TasksPanel.svelte    # Unified inbox (tasks + queue items)
+│   ├── TasksBadge.svelte    # Header badge with attention count
 │   ├── MobileTabBar.svelte  # Bottom navigation (mobile)
 │   └── InputBar.svelte      # Message input
 └── stores/
     ├── conversation.ts      # Chat messages state
-    ├── tasks.ts             # Active tasks state + polling
-    └── inbox.ts             # Inbox items state + polling
+    ├── tasks.ts             # Worker tasks state + polling
+    └── inbox.ts             # Queue items state + polling
 ```
 
+**Inbox hierarchy** (what needs attention first):
+1. Queue items needing response (questions, approvals)
+2. Active tasks (in progress with live logs)
+3. Recently failed jobs (always visible, with retry)
+4. Recently completed (last 30 min)
+5. History (collapsed, older stuff)
+
 Layout modes:
-- **Desktop (≥768px)**: Header with badges, Tasks sidebar always visible, Inbox overlay
-- **Mobile (<768px)**: Bottom tab bar, full-screen panels per tab
+- **Desktop (≥768px)**: Chat + always-visible Inbox sidebar
+- **Mobile (<768px)**: Bottom tab bar (Chat / Inbox)
 
 ## Important
 
