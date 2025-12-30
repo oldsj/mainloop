@@ -2,24 +2,38 @@
  * Terminal-aesthetic design tokens for mainloop
  * Inspired by r/unixporn terminal themes
  *
- * Themes: Dracula (default), Nord, Gruvbox, Tokyo Night
+ * Themes: Base16 Eighties (default), Dracula, Nord, Gruvbox, Tokyo Night
  */
 
 /* ============= Theme Variables ============= */
 
-/* Default theme (Dracula) */
+/* Default theme (Base16 Eighties) */
 :root {
-  --term-bg: #282a36;
-  --term-bg-secondary: #44475a;
-  --term-fg: #f8f8f2;
-  --term-fg-muted: #6272a4;
-  --term-border: #44475a;
-  --term-accent: #bd93f9;
-  --term-accent-alt: #50fa7b;
-  --term-warning: #ffb86c;
-  --term-error: #ff5555;
-  --term-info: #8be9fd;
-  --term-selection: #44475a;
+  --term-bg: #2d2d2d;
+  --term-bg-secondary: #393939;
+  --term-fg: #d3d0c8;
+  --term-fg-muted: #747369;
+  --term-border: #515151;
+  --term-accent: #6699cc;
+  --term-accent-alt: #99cc99;
+  --term-warning: #f99157;
+  --term-error: #f2777a;
+  --term-info: #66cccc;
+  --term-selection: #515151;
+}
+
+.theme-eighties {
+  --term-bg: #2d2d2d;
+  --term-bg-secondary: #393939;
+  --term-fg: #d3d0c8;
+  --term-fg-muted: #747369;
+  --term-border: #515151;
+  --term-accent: #6699cc;
+  --term-accent-alt: #99cc99;
+  --term-warning: #f99157;
+  --term-error: #f2777a;
+  --term-info: #66cccc;
+  --term-selection: #515151;
 }
 
 .theme-dracula {
