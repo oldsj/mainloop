@@ -7,10 +7,12 @@
 /* Base terminal styling */
 html {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
+  overflow-x: hidden;
 }
 
 body {
   @apply bg-term-bg text-term-fg;
+  overflow-x: hidden;
 }
 
 /* Selection styling */

@@ -51,13 +51,16 @@
     border: 1px solid var(--term-border);
     padding: 0.125em 0.375em;
     font-size: 0.9em;
+    word-break: break-word;
   }
   .prose-terminal :global(pre) {
     background: var(--term-bg);
     border: 1px solid var(--term-border);
     padding: 0.75em;
-    overflow-x: auto;
     margin: 0.5em 0;
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .prose-terminal :global(pre code) {
     background: none;
