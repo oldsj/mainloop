@@ -54,6 +54,23 @@ function createTasksStore() {
       }
     },
 
+    async retryTask(taskId: string) {
+      try {
+        await api.retryTask(taskId);
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'pending', error: null } : task
+          )
+        }));
+        // Refetch to update the list
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to retry task:', e);
+        throw e;
+      }
+    },
+
     open() {
       update((s) => ({ ...s, isOpen: true }));
       this.fetchTasks();

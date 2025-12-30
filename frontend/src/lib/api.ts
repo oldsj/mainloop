@@ -213,6 +213,13 @@ export const api = {
     if (!response.ok) throw new Error('Failed to cancel task');
   },
 
+  async retryTask(taskId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/tasks/${taskId}/retry`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to retry task');
+  },
+
   async getTaskLogs(taskId: string, tail: number = 100): Promise<TaskLogsResponse> {
     const response = await fetch(`${API_URL}/tasks/${taskId}/logs?tail=${tail}`);
     if (!response.ok) throw new Error('Failed to get task logs');

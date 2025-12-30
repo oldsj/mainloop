@@ -41,6 +41,10 @@ TOPIC_JOB_RESULT = "job_result"
 ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
 PR_POLL_INTERVAL = 30     # Implementation PRs - more urgent during CI
 
+# Retry configuration
+MAX_JOB_RETRIES = 5  # Max retry attempts for failed jobs
+JOB_TIMEOUT_SECONDS = 3600  # 1 hour timeout per job attempt
+
 
 @DBOS.step()
 async def load_worker_task(task_id: str) -> WorkerTask | None:
@@ -365,6 +369,53 @@ def notify_main_thread(
     )
 
 
+async def run_job_with_retry(
+    spawn_fn,
+    job_name: str,
+    max_retries: int = MAX_JOB_RETRIES,
+) -> dict:
+    """Run a job with exponential backoff retry on failure.
+
+    Args:
+        spawn_fn: Async function that spawns the job (already bound with args)
+        job_name: Human-readable job name for logging
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        The successful job result
+
+    Raises:
+        RuntimeError: If all retries are exhausted
+    """
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Spawning {job_name} (attempt {attempt}/{max_retries})...")
+        await spawn_fn()
+
+        # Wait for job result
+        result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=JOB_TIMEOUT_SECONDS)
+
+        if result is None:
+            last_error = f"Timed out waiting for {job_name} to complete"
+            logger.warning(f"{last_error} (attempt {attempt}/{max_retries})")
+        elif result.get("status") == "failed":
+            last_error = result.get("error", f"{job_name} failed")
+            logger.warning(f"{job_name} failed: {last_error} (attempt {attempt}/{max_retries})")
+        else:
+            # Success!
+            return result
+
+        # If we have more retries, wait with exponential backoff
+        if attempt < max_retries:
+            backoff_seconds = 2 ** attempt  # 2, 4, 8, 16, 32 seconds
+            logger.info(f"Retrying {job_name} in {backoff_seconds}s...")
+            await DBOS.sleep_async(backoff_seconds)
+
+    # All retries exhausted
+    raise RuntimeError(f"{job_name} failed after {max_retries} attempts: {last_error}")
+
+
 async def _run_code_review_loop(
     task_id: str,
     task: Any,
@@ -425,23 +476,21 @@ async def _run_code_review_loop(
 
                 if feedback:
                     feedback_iteration += 1
-                    logger.info(f"Spawning feedback job (iteration {feedback_iteration})...")
 
                     # Set status to implementing while Claude works
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
-                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, task.branch_name, feedback_iteration)
-
-                    feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+                    await run_job_with_retry(
+                        lambda: spawn_feedback_job(task_id, namespace, task, pr_number, feedback, task.branch_name, feedback_iteration),
+                        f"feedback job (iteration {feedback_iteration})",
+                    )
 
                     # Set status back to under_review after job completes
                     await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
-
-                    if feedback_result and feedback_result.get("status") == "completed":
-                        notify_main_thread(
-                            task.user_id, task_id, "worker_result",
-                            {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
-                        )
+                    notify_main_thread(
+                        task.user_id, task_id, "worker_result",
+                        {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
+                    )
 
             last_check = datetime.now(timezone.utc)
 
@@ -527,17 +576,12 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         # ============================================================
         if not task.skip_plan:
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
-            logger.info(f"Spawning plan job in namespace: {namespace}")
-            await spawn_plan_job(task_id, namespace, task, iteration=1)
 
-            # Wait for plan job to complete
-            logger.info("Waiting for plan job to complete...")
-            result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
-
-            if result is None:
-                raise RuntimeError("Timed out waiting for plan job to complete")
-            if result.get("status") == "failed":
-                raise RuntimeError(result.get("error", "Plan job failed"))
+            # Run plan job with retry
+            result = await run_job_with_retry(
+                lambda: spawn_plan_job(task_id, namespace, task, iteration=1),
+                "plan job",
+            )
 
             # Extract ISSUE URL from result (not PR)
             issue_url = result.get("result", {}).get("issue_url")
@@ -626,13 +670,14 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         # User wants changes - use feedback from command
                         logger.info(f"User requested plan revision via /revise: {command.feedback}")
                         plan_iteration += 1
-                        await spawn_plan_job(task_id, namespace, task, command.feedback, plan_iteration)
-                        plan_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
-                        if plan_result and plan_result.get("status") == "completed":
-                            notify_main_thread(
-                                task.user_id, task_id, "worker_result",
-                                {"status": "plan_updated", "result": {"issue_url": issue_url}},
-                            )
+                        await run_job_with_retry(
+                            lambda: spawn_plan_job(task_id, namespace, task, command.feedback, plan_iteration),
+                            f"plan revision job (iteration {plan_iteration})",
+                        )
+                        notify_main_thread(
+                            task.user_id, task_id, "worker_result",
+                            {"status": "plan_updated", "result": {"issue_url": issue_url}},
+                        )
                     # No recognized command - ignore general discussion
 
                 last_check = datetime.now(timezone.utc)
@@ -645,24 +690,16 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
         if task.skip_plan:
             # Skip plan mode: create PR directly with implementation
-            logger.info("Skip plan mode: spawning implement job to create PR")
-            await spawn_implement_job(task_id, namespace, task)
+            impl_result = await run_job_with_retry(
+                lambda: spawn_implement_job(task_id, namespace, task),
+                "implement job (skip plan)",
+            )
         else:
             # Normal mode: implement the approved plan
-            logger.info(f"Spawning implement job for approved plan (issue #{issue_number}, branch: {branch_name})")
-            await spawn_implement_job(
-                task_id, namespace, task,
-                issue_number=issue_number,
-                branch_name=branch_name
+            impl_result = await run_job_with_retry(
+                lambda: spawn_implement_job(task_id, namespace, task, issue_number=issue_number, branch_name=branch_name),
+                f"implement job (issue #{issue_number})",
             )
-
-        # Wait for implementation to complete
-        impl_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
-
-        if impl_result is None:
-            raise RuntimeError("Timed out waiting for implement job to complete")
-        if impl_result.get("status") == "failed":
-            raise RuntimeError(impl_result.get("error", "Implement job failed"))
 
         # If we skipped planning, extract PR URL now
         if task.skip_plan:
@@ -717,13 +754,10 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 )
 
                 failure_logs = await get_check_failure_logs_step(task.repo_url, pr_number)
-                await spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, branch_name, ci_iteration)
-
-                fix_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
-                if fix_result is None:
-                    raise RuntimeError("Timed out waiting for fix job to complete")
-                if fix_result.get("status") == "failed":
-                    raise RuntimeError(fix_result.get("error", "Fix job failed"))
+                await run_job_with_retry(
+                    lambda: spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, branch_name, ci_iteration),
+                    f"fix job (CI iteration {ci_iteration})",
+                )
 
                 # After fix, wait a bit for new checks to start
                 await DBOS.sleep_async(30)
@@ -791,23 +825,21 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
                 if feedback:
                     feedback_iteration += 1
-                    logger.info(f"Spawning feedback job (iteration {feedback_iteration})...")
 
                     # Set status to implementing while Claude works
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
-                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, branch_name, feedback_iteration)
-
-                    feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+                    await run_job_with_retry(
+                        lambda: spawn_feedback_job(task_id, namespace, task, pr_number, feedback, branch_name, feedback_iteration),
+                        f"feedback job (iteration {feedback_iteration})",
+                    )
 
                     # Set status back to under_review after job completes
                     await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
-
-                    if feedback_result and feedback_result.get("status") == "completed":
-                        notify_main_thread(
-                            task.user_id, task_id, "worker_result",
-                            {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
-                        )
+                    notify_main_thread(
+                        task.user_id, task_id, "worker_result",
+                        {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
+                    )
 
             last_check = datetime.now(timezone.utc)
 

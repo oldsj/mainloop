@@ -689,8 +689,8 @@ async def debug_list_tasks(
         return results
 
 
-@app.post("/debug/tasks/{task_id}/retry")
-async def debug_retry_task(task_id: str):
+@app.post("/tasks/{task_id}/retry")
+async def retry_task(task_id: str):
     """Retry a failed task by resetting its status and re-enqueueing."""
     from dbos import SetWorkflowID
     from mainloop.workflows.dbos_config import worker_queue
