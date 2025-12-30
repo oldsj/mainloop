@@ -26,6 +26,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 
 
@@ -59,7 +60,7 @@ def build_prompt() -> str:
 
 
 def build_plan_prompt() -> str:
-    """Build prompt for planning phase (create GitHub ISSUE with plan, no code)."""
+    """Build prompt for planning phase using native plan mode."""
     parts = [
         f"Task ID: {TASK_ID[:8]}",
         f"Task: {TASK_PROMPT}",
@@ -70,46 +71,19 @@ def build_plan_prompt() -> str:
         parts.extend([
             f"Repository: {REPO_URL}",
             "",
-            "Instructions:",
-            "1. Clone the repository and explore the codebase to understand the structure",
-            "2. Analyze what changes are needed to complete this task",
-            "3. Create a GitHub ISSUE (not a PR) with your implementation plan",
+            "Clone the repository and create an implementation plan for this task.",
+            "Explore the codebase to understand the structure and patterns used.",
             "",
-            "The issue should have:",
-            "- A clear, concise title summarizing the task",
-            "- Body with these sections:",
-            "",
-            "## Approach",
-            "Describe your implementation strategy in 2-3 sentences.",
-            "",
-            "## Files to Modify",
-            "List each file you plan to change and briefly describe the changes.",
-            "",
-            "## Files to Create",
-            "List any new files you need to create and their purpose.",
-            "",
-            "## Considerations",
-            "Note any risks, edge cases, or decisions that need confirmation.",
-            "",
-            "---",
-            "",
-            "## Commands",
-            "Reply with:",
-            "- `/implement` - Approve this plan and start implementation",
-            "- `/revise <feedback>` - Request changes to the plan",
-            "",
-            "4. Use `gh issue create --title \"...\" --body \"...\"` to create the issue",
-            "5. Add the label `mainloop-plan` to the issue: `gh issue edit <number> --add-label mainloop-plan`",
-            "6. Do NOT write any implementation code yet - only the plan",
-            "7. Do NOT create a branch or PR yet - that happens after approval",
+            "Your plan should include:",
+            "- Approach: Your implementation strategy",
+            "- Files to modify: List each file and describe the changes",
+            "- Files to create: Any new files needed and their purpose",
+            "- Considerations: Risks, edge cases, or decisions needing confirmation",
             "",
         ])
     else:
         parts.extend([
-            "Instructions:",
-            "1. Analyze the task and create a plan",
-            "2. Document what you would do to complete the task",
-            "3. Do NOT implement yet - only plan",
+            "Create an implementation plan for this task.",
             "",
         ])
 
@@ -121,7 +95,7 @@ def build_plan_prompt() -> str:
             FEEDBACK_CONTEXT,
             "---",
             "",
-            "Update your plan to address this feedback. Edit the issue body with `gh issue edit <number> --body \"...\"`",
+            "Update your plan to address this feedback.",
         ])
 
     return "\n".join(parts)
@@ -288,13 +262,18 @@ async def execute_task() -> dict:
     print(f"[job_runner] Model: {CLAUDE_MODEL}")
     print(f"[job_runner] Prompt:\n{prompt[:500]}...")
 
+    # Use native plan mode for planning phase, bypass for everything else
+    perm_mode = "plan" if MODE == "plan" else "bypassPermissions"
+    print(f"[job_runner] Permission mode: {perm_mode}")
+
     options = ClaudeAgentOptions(
         model=CLAUDE_MODEL,
-        permission_mode="bypassPermissions",
+        permission_mode=perm_mode,
         cwd=WORKSPACE,
     )
 
     collected_text: list[str] = []
+    plan_content: str | None = None
     session_id: str | None = None
     cost_usd: float | None = None
 
@@ -304,17 +283,28 @@ async def execute_task() -> dict:
                 if isinstance(block, TextBlock):
                     print(f"[claude] {block.text[:200]}...")
                     collected_text.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    # Capture plan from ExitPlanMode tool call
+                    if block.name == "ExitPlanMode":
+                        plan_content = block.input.get("plan", "")
+                        print(f"[claude] ExitPlanMode called with plan ({len(plan_content)} chars)")
         elif isinstance(message, ResultMessage):
             session_id = message.session_id
             cost_usd = message.total_cost_usd
             if message.is_error:
                 raise RuntimeError(message.result or "Claude execution failed")
 
-    output = "\n".join(collected_text)
+    # Use plan content if available (from plan mode), otherwise use collected text
+    output = plan_content if plan_content else "\n".join(collected_text)
 
     # Try to extract URLs from output
     pr_url = extract_pr_url(output)
     issue_url = extract_issue_url(output)
+
+    # If we got a plan from ExitPlanMode and no issue was created, create one now
+    if plan_content and not issue_url and MODE == "plan":
+        print("[job_runner] Creating GitHub issue from plan content...")
+        issue_url = create_github_issue_from_plan(plan_content)
 
     return {
         "output": output,
@@ -343,6 +333,60 @@ def extract_issue_url(output: str) -> str | None:
     issue_pattern = r"https://github\.com/[^/]+/[^/]+/issues/\d+"
     match = re.search(issue_pattern, output)
     return match.group(0) if match else None
+
+
+def create_github_issue_from_plan(plan_content: str) -> str | None:
+    """Create a GitHub issue from plan content using gh CLI."""
+    import subprocess
+
+    if not REPO_URL:
+        print("[job_runner] No REPO_URL, cannot create issue")
+        return None
+
+    # Generate issue title from task
+    title = f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+
+    # Build issue body with plan and commands
+    body = f"""{plan_content}
+
+---
+
+## Commands
+Reply with:
+- `/implement` - Approve this plan and start implementation
+- `/revise <feedback>` - Request changes to the plan
+"""
+
+    try:
+        # Create issue using gh CLI
+        result = subprocess.run(
+            ["gh", "issue", "create", "--title", title, "--body", body],
+            capture_output=True,
+            text=True,
+            cwd=WORKSPACE,
+        )
+
+        if result.returncode != 0:
+            print(f"[job_runner] Failed to create issue: {result.stderr}")
+            return None
+
+        issue_url = result.stdout.strip()
+        print(f"[job_runner] Created issue: {issue_url}")
+
+        # Add mainloop-plan label
+        issue_number = issue_url.split("/")[-1]
+        subprocess.run(
+            ["gh", "issue", "edit", issue_number, "--add-label", "mainloop-plan"],
+            capture_output=True,
+            text=True,
+            cwd=WORKSPACE,
+        )
+
+        return issue_url
+
+    except Exception as e:
+        print(f"[job_runner] Error creating issue: {e}")
+        return None
 
 
 async def send_result(status: str, result: dict | None = None, error: str | None = None):
