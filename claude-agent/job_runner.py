@@ -45,6 +45,64 @@ FEEDBACK_CONTEXT = os.environ.get("FEEDBACK_CONTEXT", "")
 WORKSPACE = "/workspace"
 
 
+def pre_clone_repo() -> str | None:
+    """Pre-clone the repo before Claude starts.
+
+    Returns the path to the cloned repo, or None if no repo URL.
+    Uses shallow clone (--depth=1) for plan mode for speed.
+    """
+    import subprocess
+    from urllib.parse import urlparse
+
+    if not REPO_URL:
+        return None
+
+    # Parse repo URL to get repo name for target dir
+    parsed = urlparse(REPO_URL)
+    path_parts = parsed.path.strip("/").split("/")
+    if len(path_parts) >= 2:
+        repo_name = path_parts[-1].replace(".git", "")
+    else:
+        repo_name = "repo"
+
+    target_dir = f"{WORKSPACE}/{repo_name}"
+
+    # Build clone command - shallow for plan mode, full for others
+    if MODE == "plan":
+        # Shallow clone for plan mode - fast (2-5 seconds)
+        cmd = ["git", "clone", "--depth=1", REPO_URL, target_dir]
+        print(f"[job_runner] Shallow cloning for plan mode...")
+    else:
+        # Full clone for implement/feedback/fix modes
+        cmd = ["git", "clone", REPO_URL, target_dir]
+        print(f"[job_runner] Full cloning for {MODE} mode...")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            print(f"[job_runner] Clone failed: {result.stderr}")
+            return None
+
+        # For non-plan modes, fetch all refs for branch checkout
+        if MODE != "plan":
+            subprocess.run(
+                ["git", "fetch", "--all"],
+                cwd=target_dir,
+                capture_output=True,
+                timeout=120,
+            )
+
+        print(f"[job_runner] Repo cloned to {target_dir}")
+        return target_dir
+
+    except subprocess.TimeoutExpired:
+        print(f"[job_runner] Clone timed out")
+        return None
+    except Exception as e:
+        print(f"[job_runner] Clone error: {e}")
+        return None
+
+
 def build_prompt() -> str:
     """Build the prompt based on mode and context."""
     if MODE == "plan":
@@ -68,10 +126,10 @@ def build_plan_prompt() -> str:
     ]
 
     if REPO_URL:
+        parts.append(f"Repository: {REPO_URL}")
+        parts.append("")
         parts.extend([
-            f"Repository: {REPO_URL}",
-            "",
-            "Clone the repository and create an implementation plan for this task.",
+            "The repository is already cloned and you are in its directory.",
             "Explore the codebase to understand the structure and patterns used.",
             "",
             "Your plan should include:",
@@ -124,7 +182,7 @@ def build_implement_prompt() -> str:
             "Your implementation plan has been approved. Now implement it:",
             "",
             "Instructions:",
-            "1. Clone the repository",
+            "1. The repository is already cloned and you are in its directory",
             f"2. Create and checkout a new branch: `git checkout -b {branch_name}`",
         ])
         if ISSUE_NUMBER:
@@ -192,7 +250,7 @@ def build_feedback_prompt() -> str:
 
     parts.extend([
         "Instructions:",
-        "1. Clone the repository and checkout the existing branch",
+        f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
         "2. Review the feedback above",
         "3. Make the necessary changes to address the feedback",
         "4. Commit your changes with a clear message referencing the feedback",
@@ -239,7 +297,7 @@ def build_fix_prompt() -> str:
 
     parts.extend([
         "Instructions:",
-        "1. Clone the repository and checkout the existing branch",
+        f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
         "2. Analyze the failure logs above carefully",
         "3. Identify the root cause of each failure",
         "4. Fix the issues (lint errors, test failures, type errors, build errors)",
@@ -442,6 +500,13 @@ async def main():
     # Ensure workspace exists
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
     os.chdir(WORKSPACE)
+
+    # Pre-clone repo using cache if available (for faster startup)
+    repo_dir = pre_clone_repo()
+    if repo_dir:
+        # Change to cloned repo directory so Claude can work on it
+        os.chdir(repo_dir)
+        print(f"[job_runner] Working in repo: {repo_dir}")
 
     try:
         result = await execute_task()
