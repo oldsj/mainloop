@@ -111,9 +111,17 @@ class WorkerTask(BaseModel):
     result: dict[str, Any] | None = Field(None, description="Task result data")
     error: str | None = Field(None, description="Error message if failed")
 
-    # GitHub integration
-    pr_url: str | None = Field(None, description="Created PR URL")
+    # GitHub integration - Plan phase (issue)
+    issue_url: str | None = Field(None, description="Plan issue URL")
+    issue_number: int | None = Field(None, description="Plan issue number")
+    issue_etag: str | None = Field(None, description="ETag for conditional polling")
+    issue_last_modified: datetime | None = Field(None, description="Last-Modified for polling")
+
+    # GitHub integration - Implementation phase (PR)
+    pr_url: str | None = Field(None, description="Implementation PR URL")
     pr_number: int | None = Field(None, description="PR number")
+    pr_etag: str | None = Field(None, description="ETag for conditional PR polling")
+    pr_last_modified: datetime | None = Field(None, description="Last-Modified for PR polling")
     commit_sha: str | None = Field(None, description="Final commit SHA")
 
     # Conversation linking (for routing)

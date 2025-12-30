@@ -20,11 +20,13 @@ async def create_worker_job(
     task_id: str,
     namespace: str,
     prompt: str,
-    mode: Literal["plan", "implement", "feedback"],
+    mode: Literal["plan", "implement", "feedback", "fix"],
     callback_url: str,
     model: str | None = None,
     repo_url: str | None = None,
     pr_number: int | None = None,
+    issue_number: int | None = None,
+    branch_name: str | None = None,
     feedback_context: str | None = None,
     iteration: int = 0,
 ) -> str:
@@ -34,11 +36,13 @@ async def create_worker_job(
         task_id: The task ID
         namespace: Target namespace for the Job
         prompt: The task prompt/description
-        mode: "plan" for draft PR with plan, "implement" for code, "feedback" for comments
+        mode: "plan" for issue with plan, "implement" for code, "feedback" for comments, "fix" for CI
         callback_url: URL to POST results to
         model: Claude model to use (defaults to settings.claude_worker_model)
         repo_url: Repository URL to clone
-        pr_number: PR number (for implement and feedback modes)
+        pr_number: PR number (for implement, feedback, fix modes)
+        issue_number: Issue number (for implement mode - references plan issue)
+        branch_name: Branch name to use (for implement, feedback, fix modes)
         feedback_context: PR comments/feedback to address
         iteration: Iteration number for jobs (ensures unique names)
 
@@ -109,6 +113,10 @@ async def create_worker_job(
         env_vars.append(client.V1EnvVar(name="REPO_URL", value=repo_url))
     if pr_number:
         env_vars.append(client.V1EnvVar(name="PR_NUMBER", value=str(pr_number)))
+    if issue_number:
+        env_vars.append(client.V1EnvVar(name="ISSUE_NUMBER", value=str(issue_number)))
+    if branch_name:
+        env_vars.append(client.V1EnvVar(name="BRANCH_NAME", value=branch_name))
     if feedback_context:
         env_vars.append(client.V1EnvVar(name="FEEDBACK_CONTEXT", value=feedback_context))
 

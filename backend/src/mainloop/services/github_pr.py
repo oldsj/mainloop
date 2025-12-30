@@ -404,10 +404,15 @@ def _should_agent_act_on_comment(comment: PRComment) -> bool:
     Returns True if:
     - Comment mentions @mainloop
     - Comment is a code review comment (inline on code)
+    - Comment starts with /revise command
     """
     if AGENT_MENTION_TAG.lower() in comment.body.lower():
         return True
     if comment.is_review_comment:
+        return True
+    # Check for /revise command
+    command, _ = parse_issue_command(comment.body)
+    if command == "revise":
         return True
     return False
 
@@ -466,7 +471,14 @@ async def format_feedback_for_agent(
     for comment in comments:
         if _should_agent_act_on_comment(comment):
             comment_type = "Code comment" if comment.is_review_comment else "Comment"
-            parts.append(f"## {comment_type} from @{comment.user}\n{comment.body}")
+            body = comment.body
+
+            # Extract feedback from /revise command if present
+            command, feedback = parse_issue_command(body)
+            if command == "revise" and feedback:
+                body = feedback  # Use just the feedback text, not the /revise prefix
+
+            parts.append(f"## {comment_type} from @{comment.user}\n{body}")
 
     return "\n\n---\n\n".join(parts) if parts else ""
 
@@ -527,3 +539,346 @@ async def acknowledge_comments(
             is_review_comment=comment.is_review_comment,
             reaction="eyes",
         )
+
+
+# ============= GitHub Issue Support =============
+
+class IssueStatus(BaseModel):
+    """Status of a GitHub issue."""
+
+    number: int
+    state: Literal["open", "closed"]
+    title: str
+    body: str | None
+    url: str
+    created_at: datetime
+    updated_at: datetime
+    labels: list[str]
+
+
+class IssueComment(BaseModel):
+    """A comment on a GitHub issue."""
+
+    id: int
+    body: str
+    user: str
+    created_at: datetime
+    updated_at: datetime
+    url: str
+
+
+class ConditionalResponse(BaseModel):
+    """Response with conditional request metadata for rate limiting."""
+
+    data: dict | list | None = None
+    etag: str | None = None
+    last_modified: datetime | None = None
+    not_modified: bool = False  # True if 304 response (content unchanged)
+
+
+class IssueCommand(BaseModel):
+    """A parsed slash command from an issue comment."""
+
+    command: Literal["implement", "revise", "none"]
+    feedback: str | None = None  # Feedback text for /revise command
+    comment_id: int | None = None  # ID of the comment containing the command
+    user: str | None = None  # User who issued the command
+
+
+def parse_issue_command(comment_body: str) -> tuple[Literal["implement", "revise", "none"], str | None]:
+    """Parse a slash command from an issue comment.
+
+    Supported commands:
+        /implement - Approve the plan and start implementation
+        /revise <feedback> - Request changes to the plan
+
+    Args:
+        comment_body: The comment text to parse
+
+    Returns:
+        Tuple of (command_type, feedback_text)
+        - ("implement", None) for /implement
+        - ("revise", "feedback text") for /revise
+        - ("none", None) for no recognized command
+    """
+    import re
+
+    # Normalize whitespace
+    body = comment_body.strip()
+
+    # Check for /implement command (case insensitive)
+    if re.match(r"^/implement\s*$", body, re.IGNORECASE):
+        return ("implement", None)
+
+    # Also accept /lgtm as alias for implement
+    if re.match(r"^/lgtm\s*$", body, re.IGNORECASE):
+        return ("implement", None)
+
+    # Check for /revise command with feedback
+    revise_match = re.match(r"^/revise\s+(.+)$", body, re.IGNORECASE | re.DOTALL)
+    if revise_match:
+        feedback = revise_match.group(1).strip()
+        return ("revise", feedback)
+
+    return ("none", None)
+
+
+def parse_comments_for_command(comments: list[dict]) -> IssueCommand:
+    """Parse a list of issue comments to find the most recent command.
+
+    Scans comments in reverse chronological order to find the latest command.
+
+    Args:
+        comments: List of comment dicts (from get_issue_comments response.data)
+
+    Returns:
+        IssueCommand with the most recent command found, or command="none" if no command
+    """
+    # Sort by created_at descending (most recent first)
+    sorted_comments = sorted(
+        comments,
+        key=lambda c: c.get("created_at", ""),
+        reverse=True,
+    )
+
+    for comment in sorted_comments:
+        command, feedback = parse_issue_command(comment.get("body", ""))
+        if command != "none":
+            return IssueCommand(
+                command=command,
+                feedback=feedback,
+                comment_id=comment.get("id"),
+                user=comment.get("user"),
+            )
+
+    return IssueCommand(command="none")
+
+
+def _parse_last_modified(header: str | None) -> datetime | None:
+    """Parse Last-Modified header to datetime."""
+    if not header:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(header)
+    except (ValueError, TypeError):
+        return None
+
+
+async def get_issue_status(
+    repo_url: str,
+    issue_number: int,
+    etag: str | None = None,
+    if_modified_since: datetime | None = None,
+) -> ConditionalResponse:
+    """Get the current status of an issue with conditional request support.
+
+    Uses ETags/If-Modified-Since for rate-limit friendly polling.
+    304 Not Modified responses don't count against GitHub's rate limit.
+
+    Args:
+        repo_url: GitHub repository URL
+        issue_number: Issue number
+        etag: ETag from previous request (If-None-Match header)
+        if_modified_since: Datetime from previous request (If-Modified-Since header)
+
+    Returns:
+        ConditionalResponse with issue data or not_modified=True
+    """
+    owner, repo = _parse_repo(repo_url)
+    headers = _get_headers()
+
+    if etag:
+        headers["If-None-Match"] = etag
+    if if_modified_since:
+        headers["If-Modified-Since"] = if_modified_since.strftime(
+            "%a, %d %b %Y %H:%M:%S GMT"
+        )
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}",
+            headers=headers,
+        )
+
+        # 304 = Not Modified (content unchanged, doesn't count against rate limit)
+        if response.status_code == 304:
+            return ConditionalResponse(
+                not_modified=True,
+                etag=response.headers.get("ETag"),
+                last_modified=_parse_last_modified(response.headers.get("Last-Modified")),
+            )
+
+        if response.status_code == 404:
+            return ConditionalResponse(data={"state": "not_found"})
+
+        response.raise_for_status()
+        data = response.json()
+
+        issue = IssueStatus(
+            number=data["number"],
+            state=data["state"],
+            title=data["title"],
+            body=data.get("body"),
+            url=data["html_url"],
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
+            labels=[label["name"] for label in data.get("labels", [])],
+        )
+
+        return ConditionalResponse(
+            data=issue.model_dump(),
+            etag=response.headers.get("ETag"),
+            last_modified=_parse_last_modified(response.headers.get("Last-Modified")),
+        )
+
+
+async def get_issue_comments(
+    repo_url: str,
+    issue_number: int,
+    since: datetime | None = None,
+    etag: str | None = None,
+) -> ConditionalResponse:
+    """Get comments on an issue with conditional request support.
+
+    Args:
+        repo_url: GitHub repository URL
+        issue_number: Issue number
+        since: Only return comments after this timestamp
+        etag: ETag from previous request
+
+    Returns:
+        ConditionalResponse with list of IssueComment data or not_modified=True
+    """
+    owner, repo = _parse_repo(repo_url)
+    headers = _get_headers()
+
+    if etag:
+        headers["If-None-Match"] = etag
+
+    params = {}
+    if since:
+        params["since"] = since.isoformat()
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments",
+            headers=headers,
+            params=params,
+        )
+
+        if response.status_code == 304:
+            return ConditionalResponse(
+                not_modified=True,
+                etag=response.headers.get("ETag"),
+            )
+
+        response.raise_for_status()
+        data = response.json()
+
+        comments = []
+        for c in data:
+            comments.append(
+                IssueComment(
+                    id=c["id"],
+                    body=c["body"],
+                    user=c["user"]["login"],
+                    created_at=datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")),
+                    updated_at=datetime.fromisoformat(c["updated_at"].replace("Z", "+00:00")),
+                    url=c["html_url"],
+                ).model_dump()
+            )
+
+        return ConditionalResponse(
+            data=comments,
+            etag=response.headers.get("ETag"),
+        )
+
+
+def generate_branch_name(
+    issue_number: int,
+    title: str,
+    task_type: str = "feature",
+) -> str:
+    """Generate an intelligent branch name from issue metadata.
+
+    Examples:
+        - issue_number=42, title="Add dark mode toggle", type="feature"
+          -> "feature/42-add-dark-mode-toggle"
+        - issue_number=123, title="Fix login crash on iOS", type="bugfix"
+          -> "fix/123-login-crash-ios"
+
+    Args:
+        issue_number: GitHub issue number
+        title: Issue title
+        task_type: Type of task (feature, bugfix, bug, fix, refactor, docs, chore, test)
+
+    Returns:
+        Branch name like "feature/42-add-dark-mode"
+    """
+    import re
+
+    # Map task types to branch prefixes
+    prefix_map = {
+        "feature": "feature",
+        "bugfix": "fix",
+        "bug": "fix",
+        "fix": "fix",
+        "refactor": "refactor",
+        "docs": "docs",
+        "test": "test",
+        "chore": "chore",
+    }
+    prefix = prefix_map.get(task_type.lower(), "feature")
+
+    # Slugify title
+    slug = title.lower()
+    slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
+    slug = re.sub(r"[\s_]+", "-", slug)   # Spaces/underscores to hyphens
+    slug = re.sub(r"-+", "-", slug)        # Collapse multiple hyphens
+    slug = slug.strip("-")
+
+    # Remove stop words
+    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are", "was", "were"}
+    words = [w for w in slug.split("-") if w and w not in stop_words]
+    slug = "-".join(words[:8])  # Max 8 words
+
+    # Trim to reasonable length
+    if len(slug) > 50:
+        slug = slug[:50].rsplit("-", 1)[0]
+
+    return f"{prefix}/{issue_number}-{slug}"
+
+
+async def format_issue_feedback_for_agent(
+    repo_url: str,
+    issue_number: int,
+    since: datetime | None = None,
+) -> str:
+    """Format issue comments as feedback context for the agent.
+
+    Args:
+        repo_url: GitHub repository URL
+        issue_number: Issue number
+        since: Only include comments after this timestamp
+
+    Returns:
+        Formatted string of feedback
+    """
+    response = await get_issue_comments(repo_url, issue_number, since=since)
+
+    if response.not_modified or not response.data:
+        return ""
+
+    parts = []
+    for comment in response.data:
+        body = comment['body']
+
+        # Extract feedback from /revise command if present
+        command, feedback = parse_issue_command(body)
+        if command == "revise" and feedback:
+            body = feedback  # Use just the feedback text, not the /revise prefix
+
+        parts.append(f"## Comment from @{comment['user']}\n{body}")
+
+    return "\n\n---\n\n".join(parts) if parts else ""

@@ -24,6 +24,12 @@ from mainloop.services.github_pr import (
     get_check_status,
     get_check_failure_logs,
     acknowledge_comments,
+    # Issue support
+    get_issue_status,
+    get_issue_comments,
+    format_issue_feedback_for_agent,
+    generate_branch_name,
+    parse_comments_for_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,8 +37,9 @@ logger = logging.getLogger(__name__)
 # Topic for receiving results from K8s Jobs
 TOPIC_JOB_RESULT = "job_result"
 
-# Polling interval for PR status (seconds)
-PR_POLL_INTERVAL = 30
+# Polling intervals (seconds)
+ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
+PR_POLL_INTERVAL = 30     # Implementation PRs - more urgent during CI
 
 
 @DBOS.step()
@@ -45,16 +52,22 @@ async def load_worker_task(task_id: str) -> WorkerTask | None:
 async def update_worker_task_status(
     task_id: str,
     status: TaskStatus,
+    issue_url: str | None = None,
+    issue_number: int | None = None,
     pr_url: str | None = None,
     pr_number: int | None = None,
+    branch_name: str | None = None,
     error: str | None = None,
 ) -> None:
     """Update task status in database."""
     await db.update_worker_task(
         task_id,
         status=status,
+        issue_url=issue_url,
+        issue_number=issue_number,
         pr_url=pr_url,
         pr_number=pr_number,
+        branch_name=branch_name,
         error=error,
     )
 
@@ -76,7 +89,7 @@ async def spawn_plan_job(
     feedback: str | None = None,
     iteration: int = 1,
 ) -> str:
-    """Spawn a Job to create the implementation plan (draft PR)."""
+    """Spawn a Job to create the implementation plan (GitHub issue)."""
     callback_url = f"{settings.backend_internal_url}/internal/tasks/{task_id}/complete"
 
     job_name = await create_worker_job(
@@ -99,7 +112,8 @@ async def spawn_implement_job(
     task_id: str,
     namespace: str,
     task: WorkerTask,
-    pr_number: int,
+    issue_number: int | None = None,
+    branch_name: str | None = None,
 ) -> str:
     """Spawn a Job to implement the approved plan."""
     callback_url = f"{settings.backend_internal_url}/internal/tasks/{task_id}/complete"
@@ -112,7 +126,8 @@ async def spawn_implement_job(
         callback_url=callback_url,
         model=task.model,
         repo_url=task.repo_url,
-        pr_number=pr_number,
+        issue_number=issue_number,
+        branch_name=branch_name,
     )
 
     return job_name
@@ -125,6 +140,7 @@ async def spawn_feedback_job(
     task: WorkerTask,
     pr_number: int,
     feedback: str,
+    branch_name: str | None = None,
     iteration: int = 1,
 ) -> str:
     """Spawn a Job to address PR feedback."""
@@ -139,6 +155,7 @@ async def spawn_feedback_job(
         model=task.model,
         repo_url=task.repo_url,
         pr_number=pr_number,
+        branch_name=branch_name,
         feedback_context=feedback,
         iteration=iteration,
     )
@@ -158,6 +175,84 @@ async def check_pr_status(repo_url: str, pr_number: int) -> dict:
         "merged": status.merged,
         "updated_at": status.updated_at.isoformat(),
     }
+
+
+@DBOS.step()
+async def check_issue_status_step(
+    repo_url: str,
+    issue_number: int,
+    etag: str | None = None,
+) -> dict:
+    """Check the current status of an issue with conditional request support."""
+    response = await get_issue_status(repo_url, issue_number, etag=etag)
+
+    if response.not_modified:
+        return {"not_modified": True}
+
+    if not response.data or response.data.get("state") == "not_found":
+        return {"state": "not_found"}
+
+    return {
+        "not_modified": False,
+        "state": response.data["state"],
+        "title": response.data["title"],
+        "updated_at": response.data["updated_at"],
+        "etag": response.etag,
+    }
+
+
+@DBOS.step()
+async def check_for_new_issue_comments(
+    repo_url: str,
+    issue_number: int,
+    since: datetime,
+    etag: str | None = None,
+) -> dict:
+    """Check for new comments on an issue with conditional request support."""
+    response = await get_issue_comments(repo_url, issue_number, since=since, etag=etag)
+
+    if response.not_modified:
+        return {"not_modified": True, "comments": []}
+
+    return {
+        "not_modified": False,
+        "comments": response.data or [],
+        "etag": response.etag,
+    }
+
+
+@DBOS.step()
+async def get_issue_feedback_context(
+    repo_url: str,
+    issue_number: int,
+    since: datetime,
+) -> str:
+    """Get formatted issue feedback for the agent."""
+    return await format_issue_feedback_for_agent(repo_url, issue_number, since=since)
+
+
+@DBOS.step()
+async def generate_branch_name_step(
+    issue_number: int,
+    title: str,
+    task_type: str,
+) -> str:
+    """Generate an intelligent branch name from issue metadata."""
+    return generate_branch_name(issue_number, title, task_type)
+
+
+@DBOS.step()
+async def update_task_etag(
+    task_id: str,
+    issue_etag: str | None = None,
+    pr_etag: str | None = None,
+) -> None:
+    """Update the stored ETag for polling."""
+    await db.update_worker_task(
+        task_id,
+        issue_etag=issue_etag,
+        pr_etag=pr_etag,
+    )
 
 
 @DBOS.step()
@@ -230,6 +325,7 @@ async def spawn_fix_job(
     task: WorkerTask,
     pr_number: int,
     failure_logs: str,
+    branch_name: str | None = None,
     iteration: int = 1,
 ) -> str:
     """Spawn a Job to fix CI failures."""
@@ -244,6 +340,7 @@ async def spawn_fix_job(
         model=task.model,
         repo_url=task.repo_url,
         pr_number=pr_number,
+        branch_name=branch_name,
         feedback_context=failure_logs,
         iteration=iteration,
     )
@@ -266,21 +363,6 @@ def notify_main_thread(
             "payload": {"task_id": task_id, **payload},
         },
     )
-
-
-def is_approval_comment(comments: list[dict]) -> bool:
-    """Check if any comment approves the plan."""
-    approval_phrases = [
-        "looks good", "lgtm", "approved", "proceed", "go ahead", "ship it",
-        "good to go", "approve", "let's do it", "sounds good", "perfect",
-        "all good", "nice", "great plan", "go for it"
-    ]
-    for comment in comments:
-        body = comment.get("body", "").lower().strip()
-        # Check if any approval phrase is in the comment
-        if any(phrase in body for phrase in approval_phrases):
-            return True
-    return False
 
 
 async def _run_code_review_loop(
@@ -348,7 +430,7 @@ async def _run_code_review_loop(
                     # Set status to implementing while Claude works
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
-                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, feedback_iteration)
+                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, task.branch_name, feedback_iteration)
 
                     feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
 
@@ -390,9 +472,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
     This workflow follows a plan-first approach:
     1. Creates an isolated namespace for the task
-    2. PLAN PHASE: Spawns a Job to create a draft PR with implementation plan
+    2. PLAN PHASE: Spawns a Job to create a GitHub issue with implementation plan
     3. Polls for plan approval (user comments "looks good", "lgtm", etc.)
-    4. IMPLEMENT PHASE: Spawns a Job to implement the approved plan
+    4. IMPLEMENT PHASE: Spawns a Job to implement the approved plan, creates PR
     5. REVIEW PHASE: Polls for code review feedback, addresses comments
     6. Waits for human to merge the PR
     7. Cleans up the namespace
@@ -419,8 +501,6 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         try:
             # Jump directly to code review loop
             await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
-            # Use a goto-like pattern by raising to the code review section
-            # (We'll handle this below in a cleaner way)
         except Exception as e:
             logger.error(f"Failed to resume task: {e}")
             await cleanup_namespace(task_id)
@@ -434,12 +514,16 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
     namespace = await setup_namespace(task_id)
 
     try:
+        issue_url: str | None = None
+        issue_number: int | None = None
+        branch_name: str | None = None
         pr_url: str | None = None
         pr_number: int | None = None
         plan_iteration = 0
 
         # ============================================================
         # PHASE 1: PLANNING (unless skip_plan is True)
+        # Creates a GitHub ISSUE with the implementation plan
         # ============================================================
         if not task.skip_plan:
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
@@ -455,15 +539,29 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
             if result.get("status") == "failed":
                 raise RuntimeError(result.get("error", "Plan job failed"))
 
-            # Extract PR URL from result
-            pr_url = result.get("result", {}).get("pr_url")
-            if not pr_url:
-                raise RuntimeError("Plan job did not create a draft PR")
+            # Extract ISSUE URL from result (not PR)
+            issue_url = result.get("result", {}).get("issue_url")
+            if not issue_url:
+                raise RuntimeError("Plan job did not create a GitHub issue")
 
-            pr_number = int(pr_url.split("/")[-1])
+            issue_number = int(issue_url.split("/")[-1])
+
+            # Get issue details for branch name generation
+            issue_status = await check_issue_status_step(task.repo_url, issue_number)
+            issue_title = issue_status.get("title", task.description[:50])
+            current_etag = issue_status.get("etag")
+
+            # Generate intelligent branch name
+            branch_name = await generate_branch_name_step(
+                issue_number, issue_title, task.task_type
+            )
+            logger.info(f"Generated branch name: {branch_name}")
+
+            # Store issue info and branch name
             await update_worker_task_status(
                 task_id, TaskStatus.WAITING_PLAN_REVIEW,
-                pr_url=pr_url, pr_number=pr_number
+                issue_url=issue_url, issue_number=issue_number,
+                branch_name=branch_name
             )
 
             # Notify human that plan is ready for review
@@ -473,66 +571,90 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 "worker_result",
                 {
                     "status": "plan_ready",
-                    "result": {"pr_url": pr_url, "message": "Plan ready for review"},
+                    "result": {"issue_url": issue_url, "message": "Plan ready for review"},
                 },
             )
 
-            # Poll for plan approval
-            logger.info(f"Waiting for plan approval on PR #{pr_number}")
+            # Poll for plan approval on ISSUE (with ETag for rate limiting)
+            logger.info(f"Waiting for plan approval on issue #{issue_number}")
             last_check = datetime.now(timezone.utc)
             plan_iteration = 0
 
             while True:
-                await DBOS.sleep_async(PR_POLL_INTERVAL)
+                await DBOS.sleep_async(ISSUE_POLL_INTERVAL)  # 60 seconds for issues
 
-                # Check PR status
-                pr_status = await check_pr_status(task.repo_url, pr_number)
-                if pr_status["state"] == "not_found":
-                    raise RuntimeError(f"PR #{pr_number} not found")
-                if pr_status["state"] == "closed":
+                # Check issue status with ETag (conditional request)
+                issue_status = await check_issue_status_step(
+                    task.repo_url, issue_number, etag=current_etag
+                )
+
+                if issue_status.get("not_modified"):
+                    # No changes - skip comment check too (saves API calls)
+                    continue
+
+                # Update stored ETag
+                if issue_status.get("etag"):
+                    current_etag = issue_status["etag"]
+                    await update_task_etag(task_id, issue_etag=current_etag)
+
+                if issue_status.get("state") == "not_found":
+                    raise RuntimeError(f"Issue #{issue_number} not found")
+
+                if issue_status["state"] == "closed":
                     await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                     notify_main_thread(
                         task.user_id, task_id, "worker_result",
-                        {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
+                        {"status": "cancelled", "result": {"issue_url": issue_url, "closed": True}},
                     )
-                    return {"status": "cancelled", "pr_url": pr_url}
+                    return {"status": "cancelled", "issue_url": issue_url}
 
-                # Check for new comments
-                new_comments = await check_for_new_comments(task.repo_url, pr_number, last_check)
+                # Check for new comments (only if issue was modified)
+                comments_result = await check_for_new_issue_comments(
+                    task.repo_url, issue_number, last_check
+                )
 
-                if new_comments:
-                    if is_approval_comment(new_comments):
-                        logger.info("Plan approved! Proceeding to implementation...")
+                if comments_result.get("comments"):
+                    comments = comments_result["comments"]
+
+                    # Parse for slash commands (/implement, /revise)
+                    command = parse_comments_for_command(comments)
+
+                    if command.command == "implement":
+                        logger.info(f"Plan approved via /implement by {command.user}! Proceeding to implementation...")
                         break
-                    else:
-                        # Address plan feedback
-                        logger.info(f"Found {len(new_comments)} comments, updating plan...")
-                        feedback = await get_feedback_context(task.repo_url, pr_number, last_check)
-                        if feedback:
-                            plan_iteration += 1
-                            await spawn_plan_job(task_id, namespace, task, feedback, plan_iteration)
-                            plan_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
-                            if plan_result and plan_result.get("status") == "completed":
-                                notify_main_thread(
-                                    task.user_id, task_id, "worker_result",
-                                    {"status": "plan_updated", "result": {"pr_url": pr_url}},
-                                )
+                    elif command.command == "revise":
+                        # User wants changes - use feedback from command
+                        logger.info(f"User requested plan revision via /revise: {command.feedback}")
+                        plan_iteration += 1
+                        await spawn_plan_job(task_id, namespace, task, command.feedback, plan_iteration)
+                        plan_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
+                        if plan_result and plan_result.get("status") == "completed":
+                            notify_main_thread(
+                                task.user_id, task_id, "worker_result",
+                                {"status": "plan_updated", "result": {"issue_url": issue_url}},
+                            )
+                    # No recognized command - ignore general discussion
 
                 last_check = datetime.now(timezone.utc)
 
         # ============================================================
         # PHASE 2: IMPLEMENTATION
+        # Creates a PR that references the plan issue
         # ============================================================
         await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
         if task.skip_plan:
             # Skip plan mode: create PR directly with implementation
             logger.info("Skip plan mode: spawning implement job to create PR")
-            await spawn_implement_job(task_id, namespace, task, pr_number=0)
+            await spawn_implement_job(task_id, namespace, task)
         else:
             # Normal mode: implement the approved plan
-            logger.info(f"Spawning implement job for approved plan on PR #{pr_number}")
-            await spawn_implement_job(task_id, namespace, task, pr_number)
+            logger.info(f"Spawning implement job for approved plan (issue #{issue_number}, branch: {branch_name})")
+            await spawn_implement_job(
+                task_id, namespace, task,
+                issue_number=issue_number,
+                branch_name=branch_name
+            )
 
         # Wait for implementation to complete
         impl_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
@@ -595,7 +717,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 )
 
                 failure_logs = await get_check_failure_logs_step(task.repo_url, pr_number)
-                await spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, ci_iteration)
+                await spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, branch_name, ci_iteration)
 
                 fix_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
                 if fix_result is None:
@@ -674,7 +796,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     # Set status to implementing while Claude works
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
-                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, feedback_iteration)
+                    await spawn_feedback_job(task_id, namespace, task, pr_number, feedback, branch_name, feedback_iteration)
 
                     feedback_result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=3600)
 

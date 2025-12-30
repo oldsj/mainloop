@@ -533,22 +533,35 @@ async def task_complete(task_id: str, result: TaskResult):
     # Update task with job result
     # NOTE: "completed" here means the K8s job finished, NOT that the task is done.
     # The task is only truly completed when the PR is merged (handled by workflow).
-    # We just store the PR URL/number here without changing status.
+    # We just store the URL/number here without changing status.
     if result.status == "completed":
+        # Handle both issue URLs (plan phase) and PR URLs (implement phase)
+        issue_url = result.result.get("issue_url") if result.result else None
         pr_url = result.result.get("pr_url") if result.result else None
+        issue_number = None
         pr_number = None
+
+        if issue_url:
+            # Extract issue number from URL (e.g., https://github.com/owner/repo/issues/123)
+            try:
+                issue_number = int(issue_url.split("/")[-1])
+            except (ValueError, IndexError):
+                pass
+
         if pr_url:
             # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
             try:
                 pr_number = int(pr_url.split("/")[-1])
             except (ValueError, IndexError):
                 pass
-        # Don't mark task COMPLETED - workflow manages status based on PR state
-        # Only update the PR URL/number for tracking
-        if pr_url:
+
+        # Update task with URLs - don't mark COMPLETED, workflow manages status
+        if issue_url or pr_url:
             await db.update_worker_task(
                 task_id,
                 result=result.result,
+                issue_url=issue_url,
+                issue_number=issue_number,
                 pr_url=pr_url,
                 pr_number=pr_number,
             )

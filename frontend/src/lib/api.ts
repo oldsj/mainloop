@@ -80,6 +80,10 @@ export interface WorkerTask {
   completed_at: string | null;
   result: Record<string, unknown> | null;
   error: string | null;
+  // Plan phase (issue)
+  issue_url: string | null;
+  issue_number: number | null;
+  // Implementation phase (PR)
   pr_url: string | null;
   pr_number: number | null;
   commit_sha: string | null;

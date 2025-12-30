@@ -137,6 +137,26 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='skip_plan') THEN
         ALTER TABLE worker_tasks ADD COLUMN skip_plan BOOLEAN DEFAULT FALSE;
     END IF;
+    -- Issue tracking columns (plan phase)
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_url') THEN
+        ALTER TABLE worker_tasks ADD COLUMN issue_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_number') THEN
+        ALTER TABLE worker_tasks ADD COLUMN issue_number INTEGER;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_etag') THEN
+        ALTER TABLE worker_tasks ADD COLUMN issue_etag TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_last_modified') THEN
+        ALTER TABLE worker_tasks ADD COLUMN issue_last_modified TIMESTAMPTZ;
+    END IF;
+    -- ETag columns for PR polling
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_etag') THEN
+        ALTER TABLE worker_tasks ADD COLUMN pr_etag TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_last_modified') THEN
+        ALTER TABLE worker_tasks ADD COLUMN pr_last_modified TIMESTAMPTZ;
+    END IF;
     -- Add read_at to queue_items
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
         ALTER TABLE queue_items ADD COLUMN read_at TIMESTAMPTZ;
@@ -480,9 +500,18 @@ class Database:
         completed_at: datetime | None = None,
         result: dict | None = None,
         error: str | None = None,
+        # Issue fields (plan phase)
+        issue_url: str | None = None,
+        issue_number: int | None = None,
+        issue_etag: str | None = None,
+        issue_last_modified: datetime | None = None,
+        # PR fields (implementation phase)
         pr_url: str | None = None,
         pr_number: int | None = None,
+        pr_etag: str | None = None,
+        pr_last_modified: datetime | None = None,
         commit_sha: str | None = None,
+        branch_name: str | None = None,
     ):
         """Update worker task fields."""
         if not self._pool:
@@ -531,6 +560,34 @@ class Database:
             updates.append(f"commit_sha = ${param_idx}")
             params.append(commit_sha)
             param_idx += 1
+        if branch_name is not None:
+            updates.append(f"branch_name = ${param_idx}")
+            params.append(branch_name)
+            param_idx += 1
+        if issue_url is not None:
+            updates.append(f"issue_url = ${param_idx}")
+            params.append(issue_url)
+            param_idx += 1
+        if issue_number is not None:
+            updates.append(f"issue_number = ${param_idx}")
+            params.append(issue_number)
+            param_idx += 1
+        if issue_etag is not None:
+            updates.append(f"issue_etag = ${param_idx}")
+            params.append(issue_etag)
+            param_idx += 1
+        if issue_last_modified is not None:
+            updates.append(f"issue_last_modified = ${param_idx}")
+            params.append(issue_last_modified)
+            param_idx += 1
+        if pr_etag is not None:
+            updates.append(f"pr_etag = ${param_idx}")
+            params.append(pr_etag)
+            param_idx += 1
+        if pr_last_modified is not None:
+            updates.append(f"pr_last_modified = ${param_idx}")
+            params.append(pr_last_modified)
+            param_idx += 1
 
         params.append(task_id)
 
@@ -561,8 +618,16 @@ class Database:
             completed_at=row["completed_at"],
             result=row["result"] if isinstance(row["result"], dict) else (json.loads(row["result"]) if row["result"] else None),
             error=row["error"],
+            # Issue fields (plan phase)
+            issue_url=row.get("issue_url"),
+            issue_number=row.get("issue_number"),
+            issue_etag=row.get("issue_etag"),
+            issue_last_modified=row.get("issue_last_modified"),
+            # PR fields (implementation phase)
             pr_url=row["pr_url"],
             pr_number=row.get("pr_number"),
+            pr_etag=row.get("pr_etag"),
+            pr_last_modified=row.get("pr_last_modified"),
             commit_sha=row["commit_sha"],
             conversation_id=row.get("conversation_id"),
             message_id=row.get("message_id"),
