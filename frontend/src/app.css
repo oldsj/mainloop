@@ -1,2 +1,49 @@
 @import '@mainloop/ui/theme.css';
 @import 'tailwindcss';
+
+/* JetBrains Mono from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* Base terminal styling */
+html {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
+}
+
+body {
+  @apply bg-term-bg text-term-fg;
+}
+
+/* Selection styling */
+::selection {
+  background-color: var(--term-selection);
+  color: var(--term-fg);
+}
+
+/* Scrollbar styling for terminal aesthetic */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--term-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--term-border);
+  border: 1px solid var(--term-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--term-fg-muted);
+}
+
+/* Terminal cursor blink animation */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-cursor {
+  animation: cursor-blink 1s step-end infinite;
+}

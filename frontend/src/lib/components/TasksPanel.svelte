@@ -11,10 +11,7 @@
   }
 
   function handleClickOutside(e: MouseEvent) {
-    // Skip click outside handling for desktop/mobile modes
     if (desktop || mobile) return;
-
-    // Only process if panel is open
     if (!$isTasksOpen) return;
 
     const target = e.target as HTMLElement;
@@ -24,47 +21,47 @@
     tasks.close();
   }
 
-  function getStatusColor(status: string): string {
+  function getStatusStyle(status: string): string {
     switch (status) {
       case 'pending':
-        return 'bg-yellow-100 text-yellow-800';
+        return 'border-term-warning text-term-warning';
       case 'planning':
       case 'implementing':
-        return 'bg-blue-100 text-blue-800';
+        return 'border-term-info text-term-info';
       case 'waiting_plan_review':
       case 'under_review':
-        return 'bg-purple-100 text-purple-800';
+        return 'border-term-accent text-term-accent';
       case 'completed':
-        return 'bg-green-100 text-green-800';
+        return 'border-term-accent-alt text-term-accent-alt';
       case 'failed':
-        return 'bg-red-100 text-red-800';
+        return 'border-term-error text-term-error';
       case 'cancelled':
-        return 'bg-neutral-100 text-neutral-800';
+        return 'border-term-fg-muted text-term-fg-muted';
       default:
-        return 'bg-neutral-100 text-neutral-800';
+        return 'border-term-fg-muted text-term-fg-muted';
     }
   }
 
   function getStatusLabel(status: string): string {
     switch (status) {
       case 'pending':
-        return 'Pending';
+        return 'PENDING';
       case 'planning':
-        return 'Planning';
+        return 'PLANNING';
       case 'waiting_plan_review':
-        return 'Awaiting Plan Review';
+        return 'PLAN_REVIEW';
       case 'implementing':
-        return 'Implementing';
+        return 'IMPLEMENTING';
       case 'under_review':
-        return 'Under Review';
+        return 'REVIEW';
       case 'completed':
-        return 'Completed';
+        return 'DONE';
       case 'failed':
-        return 'Failed';
+        return 'FAILED';
       case 'cancelled':
-        return 'Cancelled';
+        return 'CANCELLED';
       default:
-        return status;
+        return status.toUpperCase();
     }
   }
 
@@ -76,14 +73,14 @@
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
-    if (minutes < 1) return 'just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    return `${days}d ago`;
+    if (minutes < 1) return 'now';
+    if (minutes < 60) return `${minutes}m`;
+    if (hours < 24) return `${hours}h`;
+    return `${days}d`;
   }
 
   function handleCancel(taskId: string) {
-    if (confirm('Are you sure you want to cancel this task?')) {
+    if (confirm('Cancel this task?')) {
       tasks.cancelTask(taskId);
     }
   }
@@ -93,7 +90,6 @@
   }
 
   function toggleExpand(taskId: string, status: string) {
-    // Only allow expansion for active tasks (those that might have logs)
     const terminalStatuses = ['completed', 'failed', 'cancelled'];
     if (terminalStatuses.includes(status)) return;
 
@@ -109,7 +105,7 @@
 
 {#if desktop || mobile || $isTasksOpen}
   <div
-    class="tasks-panel flex h-full flex-col bg-white"
+    class="tasks-panel flex h-full flex-col bg-term-bg"
     class:fixed={!desktop && !mobile}
     class:right-0={!desktop && !mobile}
     class:top-0={!desktop && !mobile}
@@ -117,14 +113,14 @@
     class:w-full={!desktop && !mobile}
     class:max-w-md={!desktop && !mobile}
     class:border-l={!desktop && !mobile}
-    class:border-neutral-200={!desktop && !mobile}
+    class:border-term-border={!desktop && !mobile}
     class:shadow-xl={!desktop && !mobile}
   >
-    <header class="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+    <header class="flex items-center justify-between border-b border-term-border px-4 py-3">
       <div class="flex items-center gap-2">
-        <h2 class="text-lg font-semibold text-neutral-900">Tasks</h2>
+        <h2 class="text-term-fg">[TASKS]</h2>
         {#if $activeTasksCount > 0}
-          <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+          <span class="border border-term-info px-2 py-0.5 text-xs text-term-info">
             {$activeTasksCount} active
           </span>
         {/if}
@@ -132,7 +128,7 @@
       {#if !desktop && !mobile}
         <button
           onclick={handleClose}
-          class="rounded-lg p-1 transition-colors hover:bg-neutral-100"
+          class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
           aria-label="Close tasks"
         >
           <svg
@@ -141,9 +137,9 @@
             viewBox="0 0 24 24"
             stroke-width="1.5"
             stroke="currentColor"
-            class="h-6 w-6 text-neutral-600"
+            class="h-6 w-6"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            <path stroke-linecap="square" stroke-linejoin="miter" d="M6 18 18 6M6 6l12 12" />
           </svg>
         </button>
       {/if}
@@ -152,28 +148,14 @@
     <div class="flex-1 overflow-y-auto">
       {#if $tasksList.length === 0}
         <div class="flex h-full flex-col items-center justify-center px-4 text-center">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="1.5"
-            stroke="currentColor"
-            class="mb-4 h-12 w-12 text-neutral-300"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 1 0 0 6h13.5a3 3 0 1 0 0-6m-16.5-3a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3m-19.5 0a4.5 4.5 0 0 1 .9-2.7L5.737 5.1a3.375 3.375 0 0 1 2.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 0 1 .9 2.7m0 0a3 3 0 0 1-3 3m0 3h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Z"
-            />
-          </svg>
-          <p class="text-neutral-500">No tasks</p>
-          <p class="mt-1 text-sm text-neutral-400">Worker agents will appear here</p>
+          <p class="text-term-fg-muted">$ ls tasks/</p>
+          <p class="mt-2 text-term-fg-muted">No tasks found</p>
+          <p class="mt-1 text-sm text-term-fg-muted">Workers will appear here</p>
         </div>
       {:else}
-        <div class="divide-y divide-neutral-200">
+        <div class="divide-y divide-term-border">
           {#each $tasksList as task (task.id)}
-            <div class="border-b border-neutral-200 last:border-b-0">
-              <!-- Task row - clickable for expandable tasks -->
+            <div class="border-b border-term-border last:border-b-0">
               <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
               <div
                 onclick={() => toggleExpand(task.id, task.status)}
@@ -181,23 +163,23 @@
                 role={isExpandable(task.status) ? 'button' : undefined}
                 tabindex={isExpandable(task.status) ? 0 : undefined}
                 class="w-full p-4 text-left transition-colors {isExpandable(task.status)
-                  ? 'cursor-pointer hover:bg-neutral-50'
+                  ? 'cursor-pointer hover:bg-term-selection'
                   : ''}"
               >
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium text-neutral-900">
+                    <p class="truncate text-sm text-term-fg">
                       {task.description.length > 60
                         ? task.description.slice(0, 60) + '...'
                         : task.description}
                     </p>
-                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                      <span class={`rounded-full px-2 py-0.5 ${getStatusColor(task.status)}`}>
+                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                      <span class={`border px-2 py-0.5 ${getStatusStyle(task.status)}`}>
                         {getStatusLabel(task.status)}
                       </span>
-                      <span>{formatTime(task.created_at)}</span>
+                      <span class="text-term-fg-muted">{formatTime(task.created_at)}</span>
                       {#if task.repo_url}
-                        <span class="max-w-32 truncate" title={task.repo_url}>
+                        <span class="max-w-32 truncate text-term-fg-muted" title={task.repo_url}>
                           {task.repo_url.replace('https://github.com/', '')}
                         </span>
                       {/if}
@@ -208,12 +190,10 @@
                         target="_blank"
                         rel="noopener noreferrer"
                         onclick={(e) => e.stopPropagation()}
-                        class="mt-2 inline-flex items-center gap-1 text-xs text-purple-600 hover:underline"
+                        class="mt-2 inline-flex items-center gap-1 text-xs text-term-accent hover:underline"
                       >
                         <svg class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
-                          <path
-                            d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"
-                          />
+                          <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
                           <path
                             d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"
                           />
@@ -227,7 +207,7 @@
                         target="_blank"
                         rel="noopener noreferrer"
                         onclick={(e) => e.stopPropagation()}
-                        class="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                        class="mt-2 inline-flex items-center gap-1 text-xs text-term-info hover:underline"
                       >
                         <svg class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
                           <path
@@ -238,19 +218,18 @@
                       </a>
                     {/if}
                     {#if task.error}
-                      <p class="mt-2 text-xs text-red-600">{task.error}</p>
+                      <p class="mt-2 text-xs text-term-error">{task.error}</p>
                     {/if}
                   </div>
 
                   <div class="flex items-center gap-1">
-                    <!-- Retry button for failed tasks -->
                     {#if task.status === 'failed'}
                       <button
                         onclick={(e) => {
                           e.stopPropagation();
                           handleRetry(task.id);
                         }}
-                        class="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-blue-600"
+                        class="p-1 text-term-fg-muted transition-colors hover:text-term-info"
                         aria-label="Retry task"
                         title="Retry task"
                       >
@@ -263,21 +242,20 @@
                           class="h-4 w-4"
                         >
                           <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                            stroke-linecap="square"
+                            stroke-linejoin="miter"
                             d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
                           />
                         </svg>
                       </button>
                     {/if}
-                    <!-- Cancel button for active tasks -->
                     {#if isExpandable(task.status)}
                       <button
                         onclick={(e) => {
                           e.stopPropagation();
                           handleCancel(task.id);
                         }}
-                        class="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-red-600"
+                        class="p-1 text-term-fg-muted transition-colors hover:text-term-error"
                         aria-label="Cancel task"
                         title="Cancel task"
                       >
@@ -290,28 +268,27 @@
                           class="h-4 w-4"
                         >
                           <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                            stroke-linecap="square"
+                            stroke-linejoin="miter"
                             d="M6 18 18 6M6 6l12 12"
                           />
                         </svg>
                       </button>
 
-                      <!-- Chevron indicator -->
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke-width="1.5"
                         stroke="currentColor"
-                        class="h-4 w-4 text-neutral-400 transition-transform {expandedTaskId ===
+                        class="h-4 w-4 text-term-fg-muted transition-transform {expandedTaskId ===
                         task.id
                           ? 'rotate-180'
                           : ''}"
                       >
                         <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
+                          stroke-linecap="square"
+                          stroke-linejoin="miter"
                           d="m19.5 8.25-7.5 7.5-7.5-7.5"
                         />
                       </svg>
@@ -320,9 +297,8 @@
                 </div>
               </div>
 
-              <!-- Expanded log viewer -->
               {#if expandedTaskId === task.id}
-                <div class="border-t border-neutral-100 bg-neutral-50">
+                <div class="border-t border-term-border bg-term-bg-secondary">
                   <LogViewer taskId={task.id} taskStatus={task.status} />
                 </div>
               {/if}

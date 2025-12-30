@@ -1,37 +1,109 @@
 /**
- * Shared design tokens for mainloop
- * Mobile-first, clean interface for AI conversation
+ * Terminal-aesthetic design tokens for mainloop
+ * Inspired by r/unixporn terminal themes
  *
- * This is the single source of truth for all theme values.
- * Import this file in your app's CSS before Tailwind.
+ * Themes: Dracula (default), Nord, Gruvbox, Tokyo Night
  */
 
+/* ============= Theme Variables ============= */
+
+/* Default theme (Dracula) */
+:root {
+  --term-bg: #282a36;
+  --term-bg-secondary: #44475a;
+  --term-fg: #f8f8f2;
+  --term-fg-muted: #6272a4;
+  --term-border: #44475a;
+  --term-accent: #bd93f9;
+  --term-accent-alt: #50fa7b;
+  --term-warning: #ffb86c;
+  --term-error: #ff5555;
+  --term-info: #8be9fd;
+  --term-selection: #44475a;
+}
+
+.theme-dracula {
+  --term-bg: #282a36;
+  --term-bg-secondary: #44475a;
+  --term-fg: #f8f8f2;
+  --term-fg-muted: #6272a4;
+  --term-border: #44475a;
+  --term-accent: #bd93f9;
+  --term-accent-alt: #50fa7b;
+  --term-warning: #ffb86c;
+  --term-error: #ff5555;
+  --term-info: #8be9fd;
+  --term-selection: #44475a;
+}
+
+.theme-nord {
+  --term-bg: #2e3440;
+  --term-bg-secondary: #3b4252;
+  --term-fg: #eceff4;
+  --term-fg-muted: #4c566a;
+  --term-border: #4c566a;
+  --term-accent: #88c0d0;
+  --term-accent-alt: #a3be8c;
+  --term-warning: #ebcb8b;
+  --term-error: #bf616a;
+  --term-info: #81a1c1;
+  --term-selection: #434c5e;
+}
+
+.theme-gruvbox {
+  --term-bg: #282828;
+  --term-bg-secondary: #3c3836;
+  --term-fg: #ebdbb2;
+  --term-fg-muted: #928374;
+  --term-border: #504945;
+  --term-accent: #fabd2f;
+  --term-accent-alt: #b8bb26;
+  --term-warning: #fe8019;
+  --term-error: #fb4934;
+  --term-info: #83a598;
+  --term-selection: #504945;
+}
+
+.theme-tokyo-night {
+  --term-bg: #1a1b26;
+  --term-bg-secondary: #24283b;
+  --term-fg: #c0caf5;
+  --term-fg-muted: #565f89;
+  --term-border: #414868;
+  --term-accent: #7aa2f7;
+  --term-accent-alt: #9ece6a;
+  --term-warning: #e0af68;
+  --term-error: #f7768e;
+  --term-info: #7dcfff;
+  --term-selection: #33467c;
+}
+
+/* ============= Tailwind Theme Integration ============= */
+
 @theme {
-  /* ============= Colors ============= */
+  /* Terminal semantic colors - map to CSS variables */
+  --color-term-bg: var(--term-bg);
+  --color-term-bg-secondary: var(--term-bg-secondary);
+  --color-term-fg: var(--term-fg);
+  --color-term-fg-muted: var(--term-fg-muted);
+  --color-term-border: var(--term-border);
+  --color-term-accent: var(--term-accent);
+  --color-term-accent-alt: var(--term-accent-alt);
+  --color-term-warning: var(--term-warning);
+  --color-term-error: var(--term-error);
+  --color-term-info: var(--term-info);
+  --color-term-selection: var(--term-selection);
 
-  /* Primary - Sky blue palette */
-  --color-primary-50: #f0f9ff;
-  --color-primary-100: #e0f2fe;
-  --color-primary-200: #bae6fd;
-  --color-primary-300: #7dd3fc;
-  --color-primary-400: #38bdf8;
-  --color-primary-500: #0ea5e9;
-  --color-primary-600: #0284c7;
-  --color-primary-700: #0369a1;
-  --color-primary-800: #075985;
-  --color-primary-900: #0c4a6e;
+  /* Typography - Monospace */
+  --font-family-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
 
-  /* Neutral grays */
-  --color-neutral-50: #fafafa;
-  --color-neutral-100: #f5f5f5;
-  --color-neutral-200: #e5e5e5;
-  --color-neutral-300: #d4d4d4;
-  --color-neutral-400: #a3a3a3;
-  --color-neutral-500: #737373;
-  --color-neutral-600: #525252;
-  --color-neutral-700: #404040;
-  --color-neutral-800: #262626;
-  --color-neutral-900: #171717;
+  /* Border Radius - All zero for terminal aesthetic */
+  --radius-none: 0;
+  --radius-sm: 0;
+  --radius-default: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-full: 0;
 
   /* ============= Spacing ============= */
   --spacing-xs: 0.25rem;
@@ -41,7 +113,7 @@
   --spacing-xl: 2rem;
   --spacing-2xl: 3rem;
 
-  /* ============= Typography ============= */
+  /* ============= Typography Sizes ============= */
   --font-size-xs: 0.75rem;
   --line-height-xs: 1rem;
   --font-size-sm: 0.875rem;
@@ -57,19 +129,11 @@
   --font-size-3xl: 1.875rem;
   --line-height-3xl: 2.25rem;
 
-  /* ============= Border Radius ============= */
-  --radius-none: 0;
-  --radius-sm: 0.25rem;
-  --radius-default: 0.5rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-full: 9999px;
-
   /* ============= Max Width ============= */
-  --max-width-sm: 24rem;   /* 384px */
-  --max-width-md: 28rem;   /* 448px */
-  --max-width-lg: 32rem;   /* 512px */
-  --max-width-xl: 36rem;   /* 576px */
-  --max-width-2xl: 42rem;  /* 672px */
-  --max-width-3xl: 48rem;  /* 768px */
+  --max-width-sm: 24rem;
+  --max-width-md: 28rem;
+  --max-width-lg: 32rem;
+  --max-width-xl: 36rem;
+  --max-width-2xl: 42rem;
+  --max-width-3xl: 48rem;
 }

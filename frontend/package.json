@@ -33,6 +33,7 @@
     "wrangler": "^4.50.0"
   },
   "dependencies": {
-    "@mainloop/ui": "workspace:*"
+    "@mainloop/ui": "workspace:*",
+    "marked": "^17.0.1"
   }
 }

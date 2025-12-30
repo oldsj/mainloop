@@ -19,7 +19,6 @@
       source = result.source;
       error = null;
 
-      // Auto-scroll to bottom on new logs
       if (logsContainer) {
         requestAnimationFrame(() => {
           logsContainer.scrollTop = logsContainer.scrollHeight;
@@ -35,7 +34,6 @@
   onMount(() => {
     fetchLogs();
 
-    // Only poll for active tasks
     const activeStatuses = ['planning', 'implementing', 'pending'];
     if (activeStatuses.includes(taskStatus)) {
       pollInterval = setInterval(fetchLogs, 3000);
@@ -51,43 +49,29 @@
 
 <div class="p-4">
   {#if isLoading}
-    <div class="flex items-center gap-2 text-sm text-neutral-500">
-      <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-        <circle
-          class="opacity-25"
-          cx="12"
-          cy="12"
-          r="10"
-          stroke="currentColor"
-          stroke-width="4"
-        />
-        <path
-          class="opacity-75"
-          fill="currentColor"
-          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-        />
-      </svg>
+    <div class="flex items-center gap-2 text-sm text-term-fg-muted">
+      <span class="animate-cursor text-term-accent">_</span>
       Loading logs...
     </div>
   {:else if error}
-    <p class="text-sm text-red-600">{error}</p>
+    <p class="text-sm text-term-error">{error}</p>
   {:else if !logs}
-    <p class="text-sm text-neutral-500">No logs available yet</p>
+    <p class="text-sm text-term-fg-muted">No logs available yet</p>
   {:else}
     <div class="mb-2 flex items-center justify-between">
-      <span class="text-xs text-neutral-400">
+      <span class="text-xs text-term-fg-muted">
         {source === 'k8s' ? 'Live from pod' : 'No pod running'}
       </span>
       {#if source === 'k8s'}
-        <span class="flex items-center gap-1 text-xs text-green-600">
-          <span class="h-2 w-2 animate-pulse rounded-full bg-green-500"></span>
-          Live
+        <span class="flex items-center gap-1 text-xs text-term-accent-alt">
+          <span class="h-2 w-2 animate-pulse bg-term-accent-alt"></span>
+          LIVE
         </span>
       {/if}
     </div>
     <pre
       bind:this={logsContainer}
-      class="max-h-64 overflow-auto rounded-lg bg-neutral-900 p-3 font-mono text-xs whitespace-pre-wrap text-neutral-100"
+      class="max-h-64 overflow-auto border border-term-border bg-term-bg p-3 text-xs whitespace-pre-wrap text-term-fg"
     >{logs}</pre>
   {/if}
 </div>

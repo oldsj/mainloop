@@ -1,5 +1,8 @@
 <script lang="ts">
-  let { disabled = false, onsend }: { disabled?: boolean; onsend?: (detail: { message: string }) => void } = $props();
+  let {
+    disabled = false,
+    onsend
+  }: { disabled?: boolean; onsend?: (detail: { message: string }) => void } = $props();
 
   let message = $state('');
 
@@ -19,20 +22,21 @@
   }
 </script>
 
-<form onsubmit={handleSubmit} class="flex gap-2">
+<form onsubmit={handleSubmit} class="flex items-center gap-2 border border-term-border bg-term-bg-secondary px-3 py-2">
+  <span class="shrink-0 text-term-accent">$</span>
   <textarea
     bind:value={message}
     onkeydown={handleKeydown}
     {disabled}
-    placeholder="Type a message..."
+    placeholder="Enter command..."
     rows="1"
-    class="flex-1 resize-none rounded-lg border border-neutral-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
-  />
+    class="flex-1 resize-none border-none bg-transparent text-term-fg placeholder:text-term-fg-muted focus:outline-none disabled:opacity-50"
+  ></textarea>
   <button
     type="submit"
     {disabled}
-    class="rounded-lg bg-primary-500 px-6 py-2 text-white hover:bg-primary-600 disabled:opacity-50 disabled:hover:bg-primary-500"
+    class="border border-term-border bg-term-bg px-4 py-1 text-term-fg hover:border-term-accent hover:text-term-accent disabled:opacity-50 disabled:hover:border-term-border disabled:hover:text-term-fg"
   >
-    Send
+    EXEC
   </button>
 </form>

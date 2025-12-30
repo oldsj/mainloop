@@ -79,12 +79,14 @@
   }
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col bg-term-bg">
   <!-- Messages -->
-  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-4 space-y-4">
+  <div bind:this={messagesContainer} class="flex-1 space-y-2 overflow-y-auto p-4">
     {#if messages.length === 0}
-      <div class="flex h-full items-center justify-center text-neutral-400">
-        <p>Start a conversation</p>
+      <div class="flex h-full flex-col items-center justify-center text-term-fg-muted">
+        <p class="text-term-accent">$ mainloop --help</p>
+        <p class="mt-2">Start a conversation to begin</p>
+        <p class="animate-cursor text-term-accent">_</p>
       </div>
     {:else}
       {#each messages as message (message.id)}
@@ -93,21 +95,23 @@
     {/if}
 
     {#if isLoading}
-      <div class="flex justify-start">
-        <div class="flex items-center gap-2 rounded-2xl bg-neutral-100 px-4 py-3">
-          <div class="flex gap-1">
-            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 0ms"></span>
-            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 150ms"></span>
-            <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-400" style="animation-delay: 300ms"></span>
-          </div>
-          <span class="text-sm text-neutral-500">Thinking...</span>
+      <div
+        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
+      >
+        <span class="text-xs text-term-accent md:text-sm">
+          >
+          <span class="hidden md:inline">claude@mainloop</span>
+        </span>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-term-fg-muted">processing</span>
+          <span class="animate-cursor text-term-accent">_</span>
         </div>
       </div>
     {/if}
   </div>
 
   <!-- Input -->
-  <div class="border-t border-neutral-200 p-4">
+  <div class="border-t border-term-border p-4">
     <InputBar onsend={handleSendMessage} disabled={isLoading} />
   </div>
 </div>
