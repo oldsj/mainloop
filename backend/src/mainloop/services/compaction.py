@@ -11,6 +11,7 @@ from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBl
 
 from models import Message
 from mainloop.db import db
+from mainloop.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ RECENT_MESSAGES_TO_KEEP = 10  # Keep this many recent messages unsummarized
 
 
 async def summarize_messages(messages: list[Message]) -> str:
-    """Use Claude (haiku) to summarize a list of messages."""
+    """Use Claude to summarize a list of messages."""
     if not messages:
         return ""
 
@@ -46,7 +47,7 @@ Write a concise summary (2-4 paragraphs) that captures the essential context."""
 
     try:
         options = ClaudeAgentOptions(
-            model="haiku",  # Fast and cheap for summarization
+            model=settings.claude_model,  # Use same model as main thread
             permission_mode="bypassPermissions",
         )
 

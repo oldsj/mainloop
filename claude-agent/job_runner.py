@@ -164,16 +164,7 @@ def build_implement_prompt() -> str:
             parts.extend([
                 f"7. Create a pull request that links to and auto-closes the plan issue:",
                 f"   The PR body MUST start with 'Closes #{ISSUE_NUMBER}' - this auto-closes the issue on merge.",
-                "",
-                "   Example:",
-                f'   `gh pr create --title "Add feature X" --body "Closes #{ISSUE_NUMBER}',
-                "",
-                "   ## Summary",
-                "   Brief description of what was implemented.",
-                "",
-                "   ## Changes",
-                '   - Change 1',
-                '   - Change 2"`,
+                f"   Example: gh pr create --title \"...\" --body \"Closes #{ISSUE_NUMBER} - <summary of changes>\"",
             ])
         else:
             parts.extend([
