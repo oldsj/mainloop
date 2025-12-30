@@ -94,6 +94,12 @@ export interface TaskContext {
   queue_items: QueueItem[];
 }
 
+export interface TaskLogsResponse {
+  logs: string;
+  source: 'k8s' | 'none';
+  task_status: string;
+}
+
 export const api = {
   async listConversations(): Promise<{ conversations: Conversation[]; total: number }> {
     const response = await fetch(`${API_URL}/conversations`);
@@ -201,5 +207,11 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to cancel task');
+  },
+
+  async getTaskLogs(taskId: string, tail: number = 100): Promise<TaskLogsResponse> {
+    const response = await fetch(`${API_URL}/tasks/${taskId}/logs?tail=${tail}`);
+    if (!response.ok) throw new Error('Failed to get task logs');
+    return response.json();
   }
 };

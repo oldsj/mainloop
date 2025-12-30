@@ -1,7 +1,10 @@
 <script lang="ts">
   import { tasks, tasksList, isTasksOpen, activeTasksCount } from '$lib/stores/tasks';
+  import LogViewer from './LogViewer.svelte';
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
+
+  let expandedTaskId = $state<string | null>(null);
 
   function handleClose() {
     tasks.close();
@@ -84,6 +87,18 @@
       tasks.cancelTask(taskId);
     }
   }
+
+  function toggleExpand(taskId: string, status: string) {
+    // Only allow expansion for active tasks (those that might have logs)
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(status)) return;
+
+    expandedTaskId = expandedTaskId === taskId ? null : taskId;
+  }
+
+  function isExpandable(status: string): boolean {
+    return !['completed', 'failed', 'cancelled'].includes(status);
+  }
 </script>
 
 <svelte:window on:click={handleClickOutside} />
@@ -153,64 +168,114 @@
       {:else}
         <div class="divide-y divide-neutral-200">
           {#each $tasksList as task (task.id)}
-            <div class="p-4 hover:bg-neutral-50">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0 flex-1">
-                  <p class="truncate text-sm font-medium text-neutral-900">
-                    {task.description.length > 60
-                      ? task.description.slice(0, 60) + '...'
-                      : task.description}
-                  </p>
-                  <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                    <span class={`rounded-full px-2 py-0.5 ${getStatusColor(task.status)}`}>
-                      {getStatusLabel(task.status)}
-                    </span>
-                    <span>{formatTime(task.created_at)}</span>
-                    {#if task.repo_url}
-                      <span class="truncate max-w-32" title={task.repo_url}>
-                        {task.repo_url.replace('https://github.com/', '')}
+            <div class="border-b border-neutral-200 last:border-b-0">
+              <!-- Task row - clickable for expandable tasks -->
+              <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
+              <div
+                onclick={() => toggleExpand(task.id, task.status)}
+                onkeydown={(e) => e.key === 'Enter' && toggleExpand(task.id, task.status)}
+                role={isExpandable(task.status) ? 'button' : undefined}
+                tabindex={isExpandable(task.status) ? 0 : undefined}
+                class="w-full p-4 text-left transition-colors {isExpandable(task.status)
+                  ? 'cursor-pointer hover:bg-neutral-50'
+                  : ''}"
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm font-medium text-neutral-900">
+                      {task.description.length > 60
+                        ? task.description.slice(0, 60) + '...'
+                        : task.description}
+                    </p>
+                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                      <span class={`rounded-full px-2 py-0.5 ${getStatusColor(task.status)}`}>
+                        {getStatusLabel(task.status)}
                       </span>
+                      <span>{formatTime(task.created_at)}</span>
+                      {#if task.repo_url}
+                        <span class="max-w-32 truncate" title={task.repo_url}>
+                          {task.repo_url.replace('https://github.com/', '')}
+                        </span>
+                      {/if}
+                    </div>
+                    {#if task.pr_url}
+                      <a
+                        href={task.pr_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onclick={(e) => e.stopPropagation()}
+                        class="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                      >
+                        <svg class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                          <path
+                            d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z"
+                          />
+                        </svg>
+                        PR #{task.pr_number}
+                      </a>
+                    {/if}
+                    {#if task.error}
+                      <p class="mt-2 text-xs text-red-600">{task.error}</p>
                     {/if}
                   </div>
-                  {#if task.pr_url}
-                    <a
-                      href={task.pr_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-                    >
-                      <svg class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+
+                  <div class="flex items-center gap-1">
+                    <!-- Cancel button for active tasks -->
+                    {#if isExpandable(task.status)}
+                      <button
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          handleCancel(task.id);
+                        }}
+                        class="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-red-600"
+                        aria-label="Cancel task"
+                        title="Cancel task"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke-width="1.5"
+                          stroke="currentColor"
+                          class="h-4 w-4"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M6 18 18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+
+                      <!-- Chevron indicator -->
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="h-4 w-4 text-neutral-400 transition-transform {expandedTaskId ===
+                        task.id
+                          ? 'rotate-180'
+                          : ''}"
+                      >
                         <path
-                          d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="m19.5 8.25-7.5 7.5-7.5-7.5"
                         />
                       </svg>
-                      PR #{task.pr_number}
-                    </a>
-                  {/if}
-                  {#if task.error}
-                    <p class="mt-2 text-xs text-red-600">{task.error}</p>
-                  {/if}
+                    {/if}
+                  </div>
                 </div>
-                {#if !['completed', 'failed', 'cancelled'].includes(task.status)}
-                  <button
-                    onclick={() => handleCancel(task.id)}
-                    class="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-red-600"
-                    aria-label="Cancel task"
-                    title="Cancel task"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke-width="1.5"
-                      stroke="currentColor"
-                      class="h-4 w-4"
-                    >
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                {/if}
               </div>
+
+              <!-- Expanded log viewer -->
+              {#if expandedTaskId === task.id}
+                <div class="border-t border-neutral-100 bg-neutral-50">
+                  <LogViewer taskId={task.id} taskStatus={task.status} />
+                </div>
+              {/if}
             </div>
           {/each}
         </div>

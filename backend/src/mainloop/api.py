@@ -33,6 +33,7 @@ from mainloop.workflows.main_thread import (
     send_user_message,
     send_queue_response,
 )
+from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
 from mainloop.services.chat_handler import process_message
 
 app = FastAPI(
@@ -416,6 +417,68 @@ async def get_task_context(
     queue_items = await db.list_queue_items(user_id=user_id, task_id=task_id)
 
     return TaskContext(task=task, queue_items=queue_items)
+
+
+class TaskLogsResponse(BaseModel):
+    """Response for task logs endpoint."""
+
+    logs: str
+    source: str  # "k8s" or "none"
+    task_status: str
+
+
+@app.get("/tasks/{task_id}/logs", response_model=TaskLogsResponse)
+async def get_task_logs(
+    task_id: str,
+    tail: int = 100,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Get logs for a worker task from its K8s pod.
+
+    Args:
+        task_id: The task ID
+        tail: Number of lines to return from the end (default 100)
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    # Try to get live logs from K8s
+    from mainloop.services.k8s_jobs import get_job_logs
+    import logging
+
+    logger = logging.getLogger(__name__)
+    namespace = f"task-{task_id[:8]}"
+
+    logs = None
+    source = "k8s"
+
+    try:
+        logs = await get_job_logs(task_id, namespace)
+    except Exception as e:
+        logger.warning(f"Failed to get K8s logs for task {task_id}: {e}")
+
+    if not logs:
+        logs = ""
+        source = "none"
+    else:
+        # Tail the logs to requested number of lines
+        lines = logs.split("\n")
+        if len(lines) > tail:
+            lines = lines[-tail:]
+        logs = "\n".join(lines)
+
+    return TaskLogsResponse(
+        logs=logs,
+        source=source,
+        task_status=task.status.value,
+    )
 
 
 @app.post("/tasks/{task_id}/cancel")
