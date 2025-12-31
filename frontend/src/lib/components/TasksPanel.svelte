@@ -3,19 +3,67 @@
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
   import type { QueueItem, WorkerTask, TaskQuestion } from '$lib/api';
   import LogViewer from './LogViewer.svelte';
+  import { marked } from 'marked';
+
+  // Configure marked for terminal aesthetic
+  marked.setOptions({ breaks: true, gfm: true });
+
+  // Auto-focus action for inputs
+  function autofocus(node: HTMLInputElement) {
+    // Small delay to ensure DOM is ready
+    setTimeout(() => node.focus(), 50);
+    return {};
+  }
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
 
   let expandedTaskIds = $state<Set<string>>(new Set());
+  let autoExpandedTaskIds = $state<Set<string>>(new Set());  // Track which tasks we've auto-expanded
   let respondingItemId = $state<string | null>(null);
   let customResponses = $state<Record<string, string>>({});
   let showRecent = $state(false);
 
+  // Auto-expand tasks that need attention (but only once, so user can collapse them)
+  $effect(() => {
+    const tasksNeedingAttention = $tasksList.filter(t => needsAttention(t));
+    for (const task of tasksNeedingAttention) {
+      if (!autoExpandedTaskIds.has(task.id)) {
+        // First time seeing this task need attention - auto-expand it
+        expandedTaskIds = new Set([...expandedTaskIds, task.id]);
+        autoExpandedTaskIds = new Set([...autoExpandedTaskIds, task.id]);
+      }
+    }
+  });
+
   // State for task interactions (questions and plan reviews)
   let selectedAnswers = $state<Record<string, Record<string, string>>>({});  // taskId -> questionId -> answer
   let customQuestionInputs = $state<Record<string, Record<string, string>>>({});  // taskId -> questionId -> custom text
+  let editingQuestionId = $state<Record<string, string | null>>({});  // taskId -> currently editing question id
   let planRevisionText = $state<Record<string, string>>({});  // taskId -> revision text
   let submittingTaskId = $state<string | null>(null);
+
+  // Get which question should be shown expanded (editing or first unanswered)
+  function getActiveQuestionId(task: WorkerTask): string | null {
+    if (!task.pending_questions?.length) return null;
+
+    // If user is editing a specific question, show that
+    if (editingQuestionId[task.id]) return editingQuestionId[task.id];
+
+    // Otherwise find first unanswered question
+    for (const q of task.pending_questions) {
+      if (!getAnswer(task.id, q.id)) return q.id;
+    }
+
+    // All answered - show none expanded (ready to submit)
+    return null;
+  }
+
+  // When user selects an answer, auto-advance to next question
+  function selectOptionAndAdvance(taskId: string, questionId: string, option: string) {
+    selectOption(taskId, questionId, option);
+    // Clear editing state to auto-advance to next unanswered
+    editingQuestionId[taskId] = null;
+  }
 
   // Helper to check if task needs attention (questions or plan review)
   function needsAttention(task: WorkerTask): boolean {
@@ -178,7 +226,7 @@
       case 'implementing':
         return 'border-term-info text-term-info';
       case 'waiting_questions':
-        return 'border-term-warning text-term-warning animate-pulse';
+        return 'border-term-warning text-term-warning';  // No pulse - waiting on user, not working
       case 'waiting_plan_review':
       case 'under_review':
         return 'border-term-accent text-term-accent';
@@ -200,9 +248,9 @@
       case 'planning':
         return 'PLANNING';
       case 'waiting_questions':
-        return 'QUESTIONS';
+        return 'NEEDS INPUT';  // Clear that system is waiting on user
       case 'waiting_plan_review':
-        return 'PLAN_REVIEW';
+        return 'REVIEW PLAN';  // Clear that system is waiting on user
       case 'implementing':
         return 'IMPLEMENTING';
       case 'under_review':
@@ -552,13 +600,14 @@
           <!-- Active tasks (in progress) -->
           {#each activeTasks as task (task.id)}
             {@const isActive = ['planning', 'implementing'].includes(task.status)}
+            {@const isWaitingOnUser = needsAttention(task)}
             <div class="border-b border-term-border">
               <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
               <div
                 onclick={() => toggleExpand(task.id, task.status)}
-                onkeydown={(e) => e.key === 'Enter' && toggleExpand(task.id, task.status)}
+                onkeydown={(e) => !isWaitingOnUser && e.key === 'Enter' && toggleExpand(task.id, task.status)}
                 role="button"
-                tabindex={0}
+                tabindex={isWaitingOnUser ? -1 : 0}
                 class="w-full cursor-pointer p-4 text-left transition-colors hover:bg-term-selection"
               >
                 <div class="flex items-start justify-between gap-2">
@@ -660,79 +709,126 @@
                 </div>
               </div>
 
-              {#if expandedTaskIds.has(task.id) || needsAttention(task)}
+              {#if expandedTaskIds.has(task.id)}
                 <div class="border-t border-term-border bg-term-bg-secondary">
                   <!-- Questions UI -->
                   {#if task.status === 'waiting_questions' && task.pending_questions}
-                    <div class="p-4 space-y-4">
-                      <div class="text-xs text-term-fg-muted uppercase tracking-wide">Answer these questions to continue</div>
-                      {#each task.pending_questions as question (question.id)}
-                        <div class="space-y-2">
-                          <div class="flex items-center gap-2">
-                            <span class="px-2 py-0.5 text-xs border border-term-accent text-term-accent">{question.header}</span>
-                          </div>
-                          <p class="text-sm text-term-fg">{question.question}</p>
-                          <div class="flex flex-wrap gap-2">
-                            {#each question.options as opt}
-                              <button
-                                onclick={() => selectOption(task.id, question.id, opt.label)}
+                    {@const activeQuestionId = getActiveQuestionId(task)}
+                    <div class="p-4 space-y-2">
+                      {#each task.pending_questions as question, qIndex (question.id)}
+                        {@const answer = getAnswer(task.id, question.id)}
+                        {@const isActive = question.id === activeQuestionId}
+                        {@const isAnswered = !!answer}
+
+                        {#if isAnswered && !isActive}
+                          <!-- Answered question - collapsed view, clickable to edit -->
+                          <button
+                            onclick={() => editingQuestionId[task.id] = question.id}
+                            class="w-full flex items-center gap-2 p-2 text-left border border-term-border/50 bg-term-bg hover:border-term-accent/50 transition-colors group"
+                          >
+                            <span class="text-term-accent-alt text-xs">✓</span>
+                            <span class="px-1.5 py-0.5 text-xs border border-term-fg-muted/50 text-term-fg-muted">{question.header}</span>
+                            <span class="text-sm text-term-fg truncate flex-1">{answer}</span>
+                            <span class="text-xs text-term-fg-muted opacity-0 group-hover:opacity-100">edit</span>
+                          </button>
+                        {:else if isActive}
+                          <!-- Active question - expanded view -->
+                          <div class="space-y-3 p-3 border border-term-accent/30 bg-term-bg">
+                            <div class="flex items-center gap-2">
+                              <span class="w-5 h-5 flex items-center justify-center text-xs border border-term-accent text-term-accent">{qIndex + 1}</span>
+                              <span class="px-2 py-0.5 text-xs border border-term-accent text-term-accent">{question.header}</span>
+                            </div>
+                            <p class="text-sm text-term-fg">{question.question}</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each question.options as opt}
+                                <button
+                                  type="button"
+                                  tabindex={-1}
+                                  onclick={() => selectOptionAndAdvance(task.id, question.id, opt.label)}
+                                  disabled={submittingTaskId === task.id}
+                                  class="border px-3 py-1.5 text-sm transition-colors disabled:opacity-50
+                                    {selectedAnswers[task.id]?.[question.id] === opt.label
+                                      ? 'border-term-accent bg-term-accent/10 text-term-accent'
+                                      : 'border-term-border text-term-fg hover:border-term-accent hover:text-term-accent'}"
+                                  title={opt.description || ''}
+                                >
+                                  {opt.label}
+                                </button>
+                              {/each}
+                            </div>
+                            <!-- Custom input with inline confirm -->
+                            <div class="flex gap-2" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+                              <input
+                                use:autofocus
+                                type="text"
+                                placeholder="Or type a custom answer..."
+                                value={customQuestionInputs[task.id]?.[question.id] || ''}
+                                onfocus={() => editingQuestionId[task.id] = question.id}
+                                oninput={(e) => setCustomAnswer(task.id, question.id, (e.target as HTMLInputElement).value)}
+                                onkeydown={(e) => {
+                                  e.stopPropagation();  // Prevent bubbling to parent handlers
+                                  if (e.key === 'Enter' && customQuestionInputs[task.id]?.[question.id]?.trim()) {
+                                    editingQuestionId[task.id] = null;  // Advance to next
+                                  }
+                                }}
                                 disabled={submittingTaskId === task.id}
-                                class="border px-3 py-1.5 text-sm transition-colors disabled:opacity-50
-                                  {selectedAnswers[task.id]?.[question.id] === opt.label
-                                    ? 'border-term-accent bg-term-accent/10 text-term-accent'
-                                    : 'border-term-border text-term-fg hover:border-term-accent hover:text-term-accent'}"
-                                title={opt.description || ''}
-                              >
-                                {opt.label}
-                              </button>
-                            {/each}
+                                class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
+                              />
+                              {#if customQuestionInputs[task.id]?.[question.id]?.trim()}
+                                <button
+                                  onclick={() => editingQuestionId[task.id] = null}
+                                  class="border border-term-accent px-3 py-1.5 text-sm text-term-accent hover:bg-term-accent/10"
+                                >
+                                  OK
+                                </button>
+                              {/if}
+                            </div>
                           </div>
-                          <!-- Custom input -->
-                          <div class="flex gap-2">
-                            <input
-                              type="text"
-                              placeholder="Or type a custom answer..."
-                              value={customQuestionInputs[task.id]?.[question.id] || ''}
-                              oninput={(e) => setCustomAnswer(task.id, question.id, (e.target as HTMLInputElement).value)}
-                              disabled={submittingTaskId === task.id}
-                              class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
-                            />
+                        {:else}
+                          <!-- Future question - dimmed -->
+                          <div class="flex items-center gap-2 p-2 opacity-40">
+                            <span class="w-5 h-5 flex items-center justify-center text-xs border border-term-fg-muted text-term-fg-muted">{qIndex + 1}</span>
+                            <span class="px-1.5 py-0.5 text-xs border border-term-fg-muted/50 text-term-fg-muted">{question.header}</span>
                           </div>
-                        </div>
+                        {/if}
                       {/each}
-                      <!-- Submit button -->
-                      <div class="flex gap-2 pt-2 border-t border-term-border">
-                        <button
-                          onclick={() => submitAnswers(task.id)}
-                          disabled={submittingTaskId === task.id || !allQuestionsAnswered(task)}
-                          class="border border-term-accent bg-term-accent/10 px-4 py-2 text-sm text-term-accent transition-colors hover:bg-term-accent/20 disabled:opacity-50"
-                        >
-                          {submittingTaskId === task.id ? 'Submitting...' : 'Submit Answers'}
-                        </button>
-                        <button
-                          onclick={() => tasks.cancelQuestions(task.id)}
-                          disabled={submittingTaskId === task.id}
-                          class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
+
+                      <!-- Submit button - shows when all answered -->
+                      {#if allQuestionsAnswered(task)}
+                        <div class="flex gap-2 pt-3 mt-2 border-t border-term-border">
+                          <button
+                            onclick={() => submitAnswers(task.id)}
+                            disabled={submittingTaskId === task.id}
+                            class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
+                          >
+                            {submittingTaskId === task.id ? 'Submitting...' : 'Continue →'}
+                          </button>
+                          <button
+                            onclick={() => tasks.cancelQuestions(task.id)}
+                            disabled={submittingTaskId === task.id}
+                            class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      {/if}
                     </div>
                   {:else if task.status === 'waiting_plan_review' && task.plan_text}
-                    <!-- Plan Review UI -->
-                    <div class="p-4 space-y-4">
-                      <div class="text-xs text-term-fg-muted uppercase tracking-wide">Review Implementation Plan</div>
-                      <div class="max-h-96 overflow-y-auto rounded border border-term-border bg-term-bg p-3">
-                        <pre class="whitespace-pre-wrap text-xs text-term-fg">{task.plan_text}</pre>
+                    <!-- Plan Review UI - no separate collapse, just shows in task -->
+                    <div class="p-4 space-y-3">
+                      <!-- Plan content with markdown rendering -->
+                      <div class="max-h-[60vh] overflow-y-auto rounded border border-term-border bg-term-bg p-4 prose-terminal text-sm">
+                        {@html marked.parse(task.plan_text)}
                       </div>
+
                       <!-- Approve/Revise buttons -->
-                      <div class="flex gap-2">
+                      <div class="flex gap-2 pt-2">
                         <button
                           onclick={() => handleApprovePlan(task.id)}
                           disabled={submittingTaskId === task.id}
                           class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
                         >
-                          {submittingTaskId === task.id ? 'Approving...' : 'Approve Plan'}
+                          {submittingTaskId === task.id ? 'Approving...' : 'Approve → Create Issue'}
                         </button>
                         <button
                           onclick={() => tasks.cancelTask(task.id)}
@@ -922,3 +1018,80 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* Markdown styles for plan content */
+  .prose-terminal :global(p) {
+    margin-bottom: 0.75rem;
+  }
+  .prose-terminal :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .prose-terminal :global(code) {
+    background-color: var(--term-bg-secondary);
+    padding: 0.125rem 0.25rem;
+    border-radius: 0.125rem;
+    font-size: 0.85em;
+    color: var(--term-accent);
+  }
+  .prose-terminal :global(pre) {
+    background-color: var(--term-bg-secondary);
+    padding: 0.75rem;
+    border-radius: 0.25rem;
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    border: 1px solid var(--term-border);
+  }
+  .prose-terminal :global(pre code) {
+    background: none;
+    padding: 0;
+    color: var(--term-fg);
+  }
+  .prose-terminal :global(ul),
+  .prose-terminal :global(ol) {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+  .prose-terminal :global(li) {
+    margin: 0.25rem 0;
+  }
+  .prose-terminal :global(ul) {
+    list-style-type: disc;
+  }
+  .prose-terminal :global(ol) {
+    list-style-type: decimal;
+  }
+  .prose-terminal :global(strong) {
+    font-weight: 600;
+    color: var(--term-fg);
+  }
+  .prose-terminal :global(h1),
+  .prose-terminal :global(h2),
+  .prose-terminal :global(h3),
+  .prose-terminal :global(h4) {
+    font-weight: 600;
+    color: var(--term-fg);
+    margin: 1rem 0 0.5rem 0;
+  }
+  .prose-terminal :global(h1) {
+    font-size: 1.25rem;
+  }
+  .prose-terminal :global(h2) {
+    font-size: 1.1rem;
+  }
+  .prose-terminal :global(h3),
+  .prose-terminal :global(h4) {
+    font-size: 1rem;
+  }
+  .prose-terminal :global(blockquote) {
+    border-left: 2px solid var(--term-border);
+    padding-left: 0.75rem;
+    margin: 0.5rem 0;
+    color: var(--term-fg-muted);
+  }
+  .prose-terminal :global(hr) {
+    border: none;
+    border-top: 1px solid var(--term-border);
+    margin: 1rem 0;
+  }
+</style>

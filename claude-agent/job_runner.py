@@ -44,6 +44,34 @@ BRANCH_NAME = os.environ.get("BRANCH_NAME", "")
 FEEDBACK_CONTEXT = os.environ.get("FEEDBACK_CONTEXT", "")
 
 WORKSPACE = "/workspace"
+CLAUDE_PLANS_DIR = Path.home() / ".claude" / "plans"
+
+
+def find_plan_file() -> Path | None:
+    """Find the most recently modified plan file in Claude's plans directory."""
+    if not CLAUDE_PLANS_DIR.exists():
+        print(f"[job_runner] Plans directory not found: {CLAUDE_PLANS_DIR}")
+        return None
+
+    plan_files = list(CLAUDE_PLANS_DIR.glob("*.md"))
+    if not plan_files:
+        print(f"[job_runner] No plan files found in {CLAUDE_PLANS_DIR}")
+        return None
+
+    # Return the most recently modified plan file
+    latest = max(plan_files, key=lambda p: p.stat().st_mtime)
+    print(f"[job_runner] Found plan file: {latest}")
+    return latest
+
+
+def read_plan_file(path: Path) -> str:
+    """Read the content of a plan file."""
+    try:
+        content = path.read_text()
+        return content
+    except Exception as e:
+        print(f"[job_runner] Error reading plan file {path}: {e}")
+        return ""
 
 
 def pre_clone_repo() -> str | None:
@@ -366,17 +394,29 @@ async def execute_task() -> dict:
                 elif isinstance(block, ToolUseBlock):
                     # Capture plan from ExitPlanMode tool call
                     if block.name == "ExitPlanMode":
-                        plan_content = block.input.get("plan", "")
-                        print(f"[claude] ExitPlanMode called with plan ({len(plan_content)} chars)")
+                        # ExitPlanMode doesn't pass content - find and read the plan file
+                        plan_file_path = find_plan_file()
+                        if plan_file_path:
+                            plan_content = read_plan_file(plan_file_path)
+                            print(f"[claude] ExitPlanMode - read plan from {plan_file_path} ({len(plan_content)} chars)")
+                        else:
+                            print("[claude] ExitPlanMode called but no plan file found")
 
                     # Capture questions from AskUserQuestion tool call
                     elif block.name == "AskUserQuestion":
                         questions = block.input.get("questions", [])
                         print(f"[claude] AskUserQuestion called with {len(questions)} question(s)")
+                        # Deduplicate by header to avoid repeats from multiple AskUserQuestion calls
+                        existing_headers = {q["header"] for q in collected_questions}
                         for q in questions:
+                            header = q.get("header", "")
+                            if header and header in existing_headers:
+                                print(f"[claude] Skipping duplicate question: {header}")
+                                continue
+                            existing_headers.add(header)
                             collected_questions.append({
                                 "id": str(uuid.uuid4()),
-                                "header": q.get("header", ""),
+                                "header": header,
                                 "question": q.get("question", ""),
                                 "options": [
                                     {"label": opt.get("label", ""), "description": opt.get("description")}
@@ -416,15 +456,19 @@ async def execute_task() -> dict:
 
     # For plan mode: return plan content and questions for inbox review
     if MODE == "plan" and output:
-        # Use the last substantial text block as the plan (skip short exploration messages)
-        plan_text = None
-        for text in reversed(collected_text):
-            if len(text) > 200:  # Substantial text block
-                plan_text = text
-                break
-
-        plan_text = plan_text or output
-        print(f"[job_runner] Returning plan for inbox review ({len(plan_text)} chars)")
+        # Prefer plan_content from ExitPlanMode (actual plan file), fall back to collected text
+        if plan_content:
+            plan_text = plan_content
+            print(f"[job_runner] Using plan from ExitPlanMode ({len(plan_text)} chars)")
+        else:
+            # Fall back to last substantial text block
+            plan_text = None
+            for text in reversed(collected_text):
+                if len(text) > 200:  # Substantial text block
+                    plan_text = text
+                    break
+            plan_text = plan_text or output
+            print(f"[job_runner] Using collected text as plan ({len(plan_text)} chars)")
         print(f"[job_runner] Collected {len(collected_questions)} question(s)")
 
         # Extract suggested options from the plan
