@@ -33,6 +33,9 @@ from mainloop.services.github_pr import (
     create_github_issue,
     update_github_issue,
     add_issue_comment,
+    # Question support
+    format_questions_for_issue,
+    parse_question_answers_from_comment,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,6 +363,51 @@ async def add_issue_comment_step(
 ) -> bool:
     """Add a comment to a GitHub issue."""
     return await add_issue_comment(repo_url, issue_number, body)
+
+
+@DBOS.step()
+async def post_questions_to_issue(
+    repo_url: str,
+    issue_number: int,
+    questions: list[dict],
+) -> bool:
+    """Format and post questions as a GitHub issue comment."""
+    body = format_questions_for_issue(questions)
+    return await add_issue_comment(repo_url, issue_number, body)
+
+
+@DBOS.step()
+async def check_issue_for_question_answers(
+    repo_url: str,
+    issue_number: int,
+    questions: list[dict],
+    since: datetime,
+) -> dict[str, str] | None:
+    """Check issue comments for answers to questions.
+
+    Returns:
+        Dict mapping question ID to answer, or None if no answers found.
+    """
+    response = await get_issue_comments(repo_url, issue_number, since=since)
+
+    if response.not_modified or not response.data:
+        return None
+
+    # Check each comment for answers (newest first)
+    sorted_comments = sorted(
+        response.data,
+        key=lambda c: c.get("created_at", ""),
+        reverse=True,
+    )
+
+    for comment in sorted_comments:
+        body = comment.get("body", "")
+        answers = parse_question_answers_from_comment(body, questions)
+        if answers:
+            logger.info(f"Found answers in issue comment: {answers}")
+            return answers
+
+    return None
 
 
 @DBOS.step()
@@ -807,11 +855,8 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         plan_text=plan_text,
                     )
 
-                    # Update issue with questions
-                    await add_issue_comment_step(
-                        task.repo_url, issue_number,
-                        "❓ **Gathering requirements** - waiting for answers to clarifying questions."
-                    )
+                    # Post formatted questions to GitHub issue
+                    await post_questions_to_issue(task.repo_url, issue_number, questions)
 
                     # Notify main thread about questions (task UI will show them)
                     notify_main_thread(
@@ -829,11 +874,44 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         },
                     )
 
-                    # Wait for user to answer questions (24 hour timeout)
-                    response = await DBOS.recv_async(
-                        topic=TOPIC_QUESTION_RESPONSE,
-                        timeout_seconds=PLAN_REVIEW_TIMEOUT_SECONDS,
-                    )
+                    # Poll for answers with exponential backoff
+                    # Check both: 1) DBOS message from UI, 2) GitHub issue comments
+                    # Start at 10s, max out at 5 minutes
+                    poll_interval = 10  # seconds
+                    max_poll_interval = 300  # 5 minutes
+                    questions_posted_at = datetime.now(timezone.utc)
+                    total_wait = 0
+                    response = None
+                    answer_source = None
+
+                    while total_wait < PLAN_REVIEW_TIMEOUT_SECONDS:
+                        # First, check for DBOS message (non-blocking with short timeout)
+                        response = await DBOS.recv_async(
+                            topic=TOPIC_QUESTION_RESPONSE,
+                            timeout_seconds=poll_interval,
+                        )
+
+                        if response is not None:
+                            answer_source = "ui"
+                            logger.info("Received answers via UI")
+                            break
+
+                        # No UI response - check GitHub issue comments
+                        gh_answers = await check_issue_for_question_answers(
+                            task.repo_url, issue_number, questions, questions_posted_at
+                        )
+
+                        if gh_answers:
+                            # Found answers in GitHub comments!
+                            response = {"answers": gh_answers, "action": "answer"}
+                            answer_source = "github"
+                            logger.info(f"Found answers in GitHub issue comment: {gh_answers}")
+                            break
+
+                        # No answers yet - increase poll interval (exponential backoff)
+                        total_wait += poll_interval
+                        poll_interval = min(poll_interval * 1.5, max_poll_interval)
+                        logger.debug(f"No answers yet, next poll in {poll_interval:.0f}s (total wait: {total_wait}s)")
 
                     if response is None:
                         raise RuntimeError("Question response timed out after 24 hours")
@@ -856,7 +934,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
                     # Store answers and update issue with Q&A
                     user_answers = response.get("answers", {})
-                    logger.info(f"User answered {len(user_answers)} questions, re-running plan...")
+                    logger.info(f"User answered {len(user_answers)} questions via {answer_source}, re-running plan...")
 
                     # Update issue body with requirements
                     updated_body = _build_issue_body(
@@ -867,10 +945,18 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     await update_github_issue_step(
                         task.repo_url, issue_number, body=updated_body
                     )
-                    await add_issue_comment_step(
-                        task.repo_url, issue_number,
-                        "✅ Requirements gathered. Generating implementation plan..."
-                    )
+
+                    # Post confirmation comment (mention source if from GitHub)
+                    if answer_source == "github":
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            "✅ Got your answers! Generating implementation plan..."
+                        )
+                    else:
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            "✅ Requirements gathered. Generating implementation plan..."
+                        )
 
                     # Clear questions from task since they've been answered
                     await update_worker_task_status(

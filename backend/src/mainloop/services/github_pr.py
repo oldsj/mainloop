@@ -1019,3 +1019,200 @@ async def add_issue_comment(
         except Exception as e:
             logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
             return False
+
+
+def format_questions_for_issue(questions: list[dict]) -> str:
+    """Format task questions as a GitHub issue comment.
+
+    Args:
+        questions: List of question dicts with id, header, question, options, multi_select
+
+    Returns:
+        Markdown-formatted comment body
+    """
+    lines = [
+        "## ❓ Questions",
+        "",
+        "I have some questions before I can create the implementation plan:",
+        "",
+    ]
+
+    for i, q in enumerate(questions, 1):
+        header = q.get("header", f"Question {i}")
+        question_text = q.get("question", "")
+        options = q.get("options", [])
+        multi = q.get("multi_select", False)
+
+        lines.append(f"### {i}. [{header}]")
+        lines.append(f"**{question_text}**")
+        if multi:
+            lines.append("_(Select all that apply)_")
+        lines.append("")
+
+        for j, opt in enumerate(options):
+            letter = chr(ord('A') + j)
+            label = opt.get("label", "")
+            desc = opt.get("description", "")
+            if desc:
+                lines.append(f"- **{letter})** {label} - {desc}")
+            else:
+                lines.append(f"- **{letter})** {label}")
+
+        lines.append("")
+
+    # Add instructions for responding
+    lines.extend([
+        "---",
+        "",
+        "**To answer**, reply to this issue with your choices:",
+        "```",
+    ])
+    for i in range(1, len(questions) + 1):
+        lines.append(f"{i}. A")
+    lines.extend([
+        "```",
+        "Or answer using the option label: `1. JWT tokens`",
+        "",
+        "_You can also answer in the [Mainloop app](https://mainloop.olds.network)._",
+    ])
+
+    return "\n".join(lines)
+
+
+def parse_question_answers_from_comment(
+    comment_body: str,
+    questions: list[dict],
+) -> dict[str, str] | None:
+    """Parse answers to questions from an issue comment.
+
+    Supports formats:
+        - "1. A" or "1: A" or "1) A"
+        - "1. JWT tokens" (by label)
+        - "Auth method: JWT tokens" (by header)
+        - Multi-select: "1. A, B" or "1. A and B"
+
+    Args:
+        comment_body: The comment text to parse
+        questions: List of question dicts to match against
+
+    Returns:
+        Dict mapping question ID to answer string, or None if no valid answers found
+    """
+    import re
+
+    body = comment_body.strip()
+    answers: dict[str, str] = {}
+
+    # Skip if this looks like a bot comment or system message
+    if body.startswith("🤖") or body.startswith("##") or body.startswith("❓"):
+        return None
+
+    # Build lookup maps for each question
+    for i, q in enumerate(questions, 1):
+        q_id = q.get("id", str(i))
+        header = q.get("header", "").lower().strip()
+        options = q.get("options", [])
+
+        # Build option lookup: letter -> label, label_lower -> label
+        option_by_letter: dict[str, str] = {}
+        option_by_label: dict[str, str] = {}
+        for j, opt in enumerate(options):
+            letter = chr(ord('A') + j).upper()
+            label = opt.get("label", "")
+            option_by_letter[letter] = label
+            option_by_label[label.lower().strip()] = label
+
+        # Try to find answer by number: "1. A" or "1: JWT" or "1) A, B"
+        patterns = [
+            rf"^{i}[\.\:\)]\s*(.+)$",  # "1. answer" or "1: answer" or "1) answer"
+            rf"^\#{i}[\.\:\)]?\s*(.+)$",  # "#1. answer"
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, body, re.MULTILINE | re.IGNORECASE)
+            if match:
+                answer_text = match.group(1).strip()
+                resolved = _resolve_answer(answer_text, option_by_letter, option_by_label)
+                if resolved:
+                    answers[q_id] = resolved
+                    break
+
+        # Also try by header: "Auth method: JWT tokens"
+        if q_id not in answers and header:
+            header_pattern = rf"{re.escape(header)}[\:\s]+(.+)"
+            match = re.search(header_pattern, body, re.MULTILINE | re.IGNORECASE)
+            if match:
+                answer_text = match.group(1).strip()
+                resolved = _resolve_answer(answer_text, option_by_letter, option_by_label)
+                if resolved:
+                    answers[q_id] = resolved
+
+    return answers if answers else None
+
+
+def _resolve_answer(
+    answer_text: str,
+    option_by_letter: dict[str, str],
+    option_by_label: dict[str, str],
+) -> str | None:
+    """Resolve an answer text to an option label.
+
+    Args:
+        answer_text: Raw answer like "A" or "JWT tokens" or "A, B"
+        option_by_letter: Map of letter -> label
+        option_by_label: Map of lowercase label -> label
+
+    Returns:
+        The resolved label(s) or None
+    """
+    import re
+
+    answer_text = answer_text.strip()
+
+    # First, try exact match on the whole string
+    if answer_text.upper() in option_by_letter:
+        return option_by_letter[answer_text.upper()]
+    if answer_text.lower() in option_by_label:
+        return option_by_label[answer_text.lower()]
+
+    # Try fuzzy match on whole string first (e.g., "JWT" matches "JWT tokens")
+    for label_lower, label in option_by_label.items():
+        if label_lower.startswith(answer_text.lower()) or answer_text.lower() in label_lower:
+            return label
+
+    # Handle multi-select: "A, B" or "A and B"
+    # Only split on comma or "and" - not spaces (to preserve "JWT tokens")
+    parts = re.split(r"\s*[,&]\s*|\s+and\s+", answer_text)
+    if len(parts) == 1:
+        return None  # Single part already tried above
+
+    resolved_parts = []
+    seen = set()  # Avoid duplicates
+
+    for part in parts:
+        part = part.strip().rstrip(".,;")
+        if not part:
+            continue
+
+        resolved = None
+
+        # Check if it's a letter (A, B, C, etc.)
+        if len(part) == 1 and part.upper() in option_by_letter:
+            resolved = option_by_letter[part.upper()]
+        # Check if it matches an option label
+        elif part.lower() in option_by_label:
+            resolved = option_by_label[part.lower()]
+        # Fuzzy match
+        else:
+            for label_lower, label in option_by_label.items():
+                if label_lower.startswith(part.lower()) or part.lower() in label_lower:
+                    resolved = label
+                    break
+
+        if resolved and resolved not in seen:
+            resolved_parts.append(resolved)
+            seen.add(resolved)
+
+    if resolved_parts:
+        return ", ".join(resolved_parts)
+    return None

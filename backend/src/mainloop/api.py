@@ -552,6 +552,13 @@ async def answer_task_questions(
         topic=TOPIC_QUESTION_RESPONSE,
     )
 
+    # Update task status immediately so frontend sees correct state on refetch
+    # The workflow will also update this, but we do it here to prevent race conditions
+    if body.action == "cancel":
+        await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, pending_questions=[])
+    else:
+        await db.update_worker_task(task_id, status=TaskStatus.PLANNING, pending_questions=[])
+
     return {"status": "ok", "message": f"Sent {len(body.answers)} answer(s) to task"}
 
 
@@ -594,6 +601,15 @@ async def approve_task_plan(
         topic=TOPIC_PLAN_RESPONSE,
     )
 
+    # Update task status immediately so frontend sees correct state on refetch
+    if action == "cancel":
+        await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, plan_text=None)
+    elif action == "approve":
+        await db.update_worker_task(task_id, status=TaskStatus.READY_TO_IMPLEMENT)
+    else:
+        # Revision - back to planning
+        await db.update_worker_task(task_id, status=TaskStatus.PLANNING)
+
     return {"status": "ok", "action": action}
 
 
@@ -630,6 +646,9 @@ async def start_task_implementation(
         {"action": "start"},
         topic=TOPIC_START_IMPLEMENTATION,
     )
+
+    # Update task status immediately so frontend sees correct state on refetch
+    await db.update_worker_task(task_id, status=TaskStatus.IMPLEMENTING)
 
     return {"status": "ok", "message": "Implementation started"}
 
