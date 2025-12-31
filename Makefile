@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-frontend build-backend push-backend install clean setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Configuration
 GHCR_REGISTRY := ghcr.io
@@ -122,23 +122,81 @@ push-agent-controller: build-agent-controller ## Push agent controller to GHCR
 
 push-all: push-backend push-frontend push-agent-controller ## Push all images to GHCR
 
+# Parallel build + push (much faster)
+build-all-parallel: ## Build all Docker images in parallel
+	@echo "Building all images in parallel..."
+	@docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) . & \
+	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) . & \
+	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent & \
+	wait
+	@echo "All builds complete"
+
+push-all-parallel: build-all-parallel ## Build and push all images in parallel
+	@echo "Pushing all images in parallel..."
+	@docker push $(BACKEND_IMAGE) & \
+	docker push $(FRONTEND_IMAGE) & \
+	docker push $(AGENT_CONTROLLER_IMAGE) & \
+	wait
+	@echo "All pushes complete"
+
 # Deployment
 deploy-frontend: ## Deploy frontend to Cloudflare Pages
 	cd frontend && pnpm build && npx wrangler deploy --env production
 
-deploy: push-all ## Full deployment to k8s
+deploy: push-all-parallel ## Full deployment to k8s (parallel builds + pushes)
 	@echo "Applying Kubernetes manifests..."
 	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
-	@echo "Restarting Kubernetes deployments..."
-	kubectl rollout restart deployment/mainloop-backend -n mainloop
-	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop
-	kubectl rollout restart deployment/mainloop-frontend -n mainloop
+	@echo "Restarting Kubernetes deployments in parallel..."
+	@kubectl rollout restart deployment/mainloop-backend -n mainloop & \
+	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop & \
+	kubectl rollout restart deployment/mainloop-frontend -n mainloop & \
+	wait
+	@echo "Rollouts triggered"
 
-deploy-loop: ## Watch for changes and deploy (requires watchexec)
-	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models \
-		-e py,ts,svelte,yaml,toml \
+deploy-loop: ## Smart watch - detects which service changed and deploys only that
+	@echo "Starting smart deploy loop (Ctrl+C to stop)..."
+	@echo "Watching: backend/ models/ -> deploy-backend"
+	@echo "Watching: frontend/src/ -> deploy-frontend-k8s"
+	@echo "Watching: claude-agent/ -> deploy-agent"
+	@echo "Watching: k8s/ -> deploy-manifests"
+	@trap 'kill 0' INT; \
+	watchexec -w backend -w models -e py,toml \
+		-i 'test*' -i '*_test.py' -i 'tests/' -i '__pycache__/' -i 'scripts/' \
+		--on-busy-update restart -- $(MAKE) deploy-backend & \
+	watchexec -w frontend/src -e ts,svelte,css \
+		--on-busy-update restart -- $(MAKE) deploy-frontend-k8s & \
+	watchexec -w claude-agent -e py,Dockerfile,toml \
+		-i 'test*' \
+		--on-busy-update restart -- $(MAKE) deploy-agent & \
+	watchexec -w k8s -e yaml \
+		--on-busy-update restart -- $(MAKE) deploy-manifests & \
+	wait
+
+deploy-loop-all: ## Watch all and redeploy everything (old behavior)
+	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models -w claude-agent \
+		-e py,ts,svelte,yaml,toml,Dockerfile \
+		-i 'test*' -i '*_test.py' -i 'tests/' -i '__pycache__/' -i '.pytest_cache/' -i 'scripts/' \
 		--on-busy-update restart \
 		-- $(MAKE) deploy || true
+
+# Selective deploy targets (faster - skip kubectl apply, just build+push+restart)
+deploy-backend: ## Build, push, and restart backend only
+	docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
+	docker push $(BACKEND_IMAGE)
+	kubectl rollout restart deployment/mainloop-backend -n mainloop
+
+deploy-agent: ## Build, push, and restart agent controller only
+	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent
+	docker push $(AGENT_CONTROLLER_IMAGE)
+	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop
+
+deploy-frontend-k8s: ## Build, push, and restart frontend only (k8s version)
+	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
+	docker push $(FRONTEND_IMAGE)
+	kubectl rollout restart deployment/mainloop-frontend -n mainloop
+
+deploy-manifests: ## Apply k8s manifests only (no image builds)
+	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
 
 # K8s commands (for local testing before moving to infrastructure repo)
 k8s-apply: ## Apply K8s manifests locally
