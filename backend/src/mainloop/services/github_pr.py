@@ -936,3 +936,86 @@ async def create_github_issue(
         except Exception as e:
             logger.error(f"Failed to create GitHub issue: {e}")
             return None
+
+
+async def update_github_issue(
+    repo_url: str,
+    issue_number: int,
+    title: str | None = None,
+    body: str | None = None,
+    state: str | None = None,
+    labels: list[str] | None = None,
+) -> bool:
+    """Update a GitHub issue.
+
+    Args:
+        repo_url: GitHub repository URL
+        issue_number: Issue number to update
+        title: New title (optional)
+        body: New body (optional)
+        state: New state - 'open' or 'closed' (optional)
+        labels: New labels (optional, replaces existing)
+
+    Returns:
+        True if update succeeded, False otherwise
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    payload = {}
+    if title is not None:
+        payload["title"] = title
+    if body is not None:
+        payload["body"] = body
+    if state is not None:
+        payload["state"] = state
+    if labels is not None:
+        payload["labels"] = labels
+
+    if not payload:
+        return True  # Nothing to update
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.patch(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}",
+                headers=_get_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+            logger.info(f"Updated issue #{issue_number} in {owner}/{repo}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update GitHub issue #{issue_number}: {e}")
+            return False
+
+
+async def add_issue_comment(
+    repo_url: str,
+    issue_number: int,
+    body: str,
+) -> bool:
+    """Add a comment to a GitHub issue.
+
+    Args:
+        repo_url: GitHub repository URL
+        issue_number: Issue number
+        body: Comment body (markdown)
+
+    Returns:
+        True if comment was added, False otherwise
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments",
+                headers=_get_headers(),
+                json={"body": body},
+            )
+            response.raise_for_status()
+            logger.info(f"Added comment to issue #{issue_number} in {owner}/{repo}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
+            return False

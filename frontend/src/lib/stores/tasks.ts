@@ -139,6 +139,22 @@ function createTasksStore() {
       }
     },
 
+    async startImplementation(taskId: string) {
+      try {
+        await api.startImplementation(taskId);
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'implementing' } : task
+          )
+        }));
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to start implementation:', e);
+        throw e;
+      }
+    },
+
     open() {
       update((s) => ({ ...s, isOpen: true }));
       this.fetchTasks();

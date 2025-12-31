@@ -65,9 +65,9 @@
     editingQuestionId[taskId] = null;
   }
 
-  // Helper to check if task needs attention (questions or plan review)
+  // Helper to check if task needs attention (questions, plan review, or ready to implement)
   function needsAttention(task: WorkerTask): boolean {
-    return task.status === 'waiting_questions' || task.status === 'waiting_plan_review';
+    return task.status === 'waiting_questions' || task.status === 'waiting_plan_review' || task.status === 'ready_to_implement';
   }
 
   // Get answer for a question
@@ -161,6 +161,18 @@
     }
   }
 
+  // Start implementation
+  async function handleStartImplementation(taskId: string) {
+    submittingTaskId = taskId;
+    try {
+      await tasks.startImplementation(taskId);
+    } catch (e) {
+      console.error('Failed to start implementation:', e);
+    } finally {
+      submittingTaskId = null;
+    }
+  }
+
   // Split tasks into active vs terminal
   const activeTasks = $derived(
     $tasksList
@@ -230,6 +242,8 @@
       case 'waiting_plan_review':
       case 'under_review':
         return 'border-term-accent text-term-accent';
+      case 'ready_to_implement':
+        return 'border-term-accent-alt text-term-accent-alt';  // Plan approved, ready to go
       case 'completed':
         return 'border-term-accent-alt text-term-accent-alt';
       case 'failed':
@@ -251,6 +265,8 @@
         return 'NEEDS INPUT';  // Clear that system is waiting on user
       case 'waiting_plan_review':
         return 'REVIEW PLAN';  // Clear that system is waiting on user
+      case 'ready_to_implement':
+        return 'READY';  // Plan approved, ready to implement
       case 'implementing':
         return 'IMPLEMENTING';
       case 'under_review':
@@ -828,7 +844,7 @@
                           disabled={submittingTaskId === task.id}
                           class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
                         >
-                          {submittingTaskId === task.id ? 'Approving...' : 'Approve → Create Issue'}
+                          {submittingTaskId === task.id ? 'Approving...' : 'Approve Plan'}
                         </button>
                         <button
                           onclick={() => tasks.cancelTask(task.id)}
@@ -855,6 +871,56 @@
                           Revise
                         </button>
                       </div>
+                    </div>
+                  {:else if task.status === 'ready_to_implement' && task.plan_text}
+                    <!-- Ready to Implement UI - plan approved, waiting to start -->
+                    <div class="p-4 space-y-3">
+                      <!-- Plan content with markdown rendering -->
+                      <div class="max-h-[60vh] overflow-y-auto rounded border border-term-accent-alt/30 bg-term-bg p-4 prose-terminal text-sm">
+                        {@html marked.parse(task.plan_text)}
+                      </div>
+
+                      <!-- Status message -->
+                      <div class="flex items-center gap-2 text-sm text-term-accent-alt">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                        </svg>
+                        Plan approved! Ready to start implementation.
+                      </div>
+
+                      <!-- Start Implementation button -->
+                      <div class="flex gap-2 pt-2">
+                        <button
+                          onclick={() => handleStartImplementation(task.id)}
+                          disabled={submittingTaskId === task.id}
+                          class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
+                        >
+                          {submittingTaskId === task.id ? 'Starting...' : 'Start Implementation →'}
+                        </button>
+                        <button
+                          onclick={() => tasks.cancelTask(task.id)}
+                          disabled={submittingTaskId === task.id}
+                          class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+
+                      <!-- Link to GitHub issue if available -->
+                      {#if task.issue_url}
+                        <a
+                          href={task.issue_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="inline-flex items-center gap-1 text-xs text-term-info hover:underline"
+                        >
+                          <svg class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+                          </svg>
+                          View on GitHub
+                        </a>
+                      {/if}
                     </div>
                   {:else}
                     <LogViewer taskId={task.id} taskStatus={task.status} />

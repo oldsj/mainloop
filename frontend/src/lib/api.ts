@@ -271,5 +271,12 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to approve plan');
+  },
+
+  async startImplementation(taskId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/tasks/${taskId}/start-implementation`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to start implementation');
   }
 };

@@ -597,6 +597,43 @@ async def approve_task_plan(
     return {"status": "ok", "action": action}
 
 
+@app.post("/tasks/{task_id}/start-implementation")
+async def start_task_implementation(
+    task_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Start implementation of an approved plan.
+
+    This triggers the worker to proceed from ready_to_implement to implementing.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    if task.status != TaskStatus.READY_TO_IMPLEMENT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not ready for implementation (status: {task.status})"
+        )
+
+    # Send implementation trigger to the worker workflow
+    from mainloop.workflows.worker import TOPIC_START_IMPLEMENTATION
+
+    DBOS.send(
+        task_id,
+        {"action": "start"},
+        topic=TOPIC_START_IMPLEMENTATION,
+    )
+
+    return {"status": "ok", "message": "Implementation started"}
+
+
 # ============= Internal Endpoints (for K8s Jobs) =============
 
 

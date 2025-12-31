@@ -31,6 +31,8 @@ from mainloop.services.github_pr import (
     generate_branch_name,
     parse_comments_for_command,
     create_github_issue,
+    update_github_issue,
+    add_issue_comment,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 TOPIC_JOB_RESULT = "job_result"  # Results from K8s Jobs
 TOPIC_PLAN_RESPONSE = "plan_response"  # User approval/revision of plan from inbox
 TOPIC_QUESTION_RESPONSE = "question_response"  # User answers to agent questions
+TOPIC_START_IMPLEMENTATION = "start_implementation"  # User triggers implementation after plan approval
 
 # Polling intervals (seconds)
 ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
@@ -50,6 +53,87 @@ PLAN_REVIEW_TIMEOUT_SECONDS = 86400  # 24 hours
 # Retry configuration
 MAX_JOB_RETRIES = 5  # Max retry attempts for failed jobs
 JOB_TIMEOUT_SECONDS = 3600  # 1 hour timeout per job attempt
+
+
+def _build_issue_body(
+    original_prompt: str,
+    task_id: str,
+    requirements: dict[str, str] | None = None,
+    plan_text: str | None = None,
+    status: str = "Planning",
+) -> str:
+    """Build the GitHub issue body with evolving sections.
+
+    The issue body is structured with clear sections that get filled in
+    as the planning process progresses.
+    """
+    sections = []
+
+    # Original request section
+    sections.append(f"""## Original Request
+
+> {original_prompt}
+""")
+
+    # Requirements section (filled in after questions are answered)
+    if requirements:
+        req_lines = "\n".join([f"- **{k}**: {v}" for k, v in requirements.items()])
+        sections.append(f"""## Requirements
+
+{req_lines}
+""")
+
+    # Plan section (filled in when plan is ready)
+    if plan_text:
+        sections.append(f"""## Implementation Plan
+
+{plan_text}
+""")
+
+    # Footer
+    sections.append(f"""---
+
+_Task ID: `{task_id}`_ | _Status: {status}_
+_Managed by [Mainloop](https://github.com/oldsj/mainloop)_
+""")
+
+    return "\n".join(sections)
+
+
+def _generate_issue_title(description: str, max_length: int = 70) -> str:
+    """Generate a brief, intelligent issue title from a task description.
+
+    Extracts the core intent and truncates at word boundaries.
+    """
+    # Take first line only
+    first_line = description.split("\n")[0].strip()
+
+    # Remove common prefixes that add noise
+    prefixes_to_remove = [
+        "please ", "can you ", "could you ", "i want to ", "i need to ",
+        "help me ", "i'd like to ", "let's ", "we should ", "we need to ",
+    ]
+    lower = first_line.lower()
+    for prefix in prefixes_to_remove:
+        if lower.startswith(prefix):
+            first_line = first_line[len(prefix):]
+            break
+
+    # Capitalize first letter
+    if first_line:
+        first_line = first_line[0].upper() + first_line[1:]
+
+    # If already short enough, return it
+    if len(first_line) <= max_length:
+        return first_line
+
+    # Truncate at word boundary
+    truncated = first_line[:max_length]
+    last_space = truncated.rfind(" ")
+    if last_space > max_length // 2:
+        truncated = truncated[:last_space]
+
+    return truncated.rstrip(".,;:") + "..."
 
 
 @DBOS.step()
@@ -253,6 +337,29 @@ async def generate_branch_name_step(
 ) -> str:
     """Generate an intelligent branch name from issue metadata."""
     return generate_branch_name(issue_number, title, task_type)
+
+
+@DBOS.step()
+async def update_github_issue_step(
+    repo_url: str,
+    issue_number: int,
+    title: str | None = None,
+    body: str | None = None,
+    state: str | None = None,
+    labels: list[str] | None = None,
+) -> bool:
+    """Update a GitHub issue."""
+    return await update_github_issue(repo_url, issue_number, title, body, state, labels)
+
+
+@DBOS.step()
+async def add_issue_comment_step(
+    repo_url: str,
+    issue_number: int,
+    body: str,
+) -> bool:
+    """Add a comment to a GitHub issue."""
+    return await add_issue_comment(repo_url, issue_number, body)
 
 
 @DBOS.step()
@@ -610,8 +717,8 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
         # ============================================================
         # PHASE 1: PLANNING (unless skip_plan is True)
-        # Interactive plan review in inbox, then creates GitHub issue on approval
-        # Handles questions from agent before plan approval
+        # Creates GitHub issue immediately, updates as plan evolves
+        # Pauses after plan approval, waiting for user to trigger implementation
         # ============================================================
         if not task.skip_plan:
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
@@ -619,6 +726,39 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
             plan_text: str | None = None
             suggested_options: list[str] = []
             user_answers: dict[str, str] = {}  # Accumulated answers to questions
+
+            # Create GitHub issue immediately with original prompt
+            issue_title = _generate_issue_title(task.description)
+            initial_issue_body = _build_issue_body(
+                original_prompt=task.description,
+                task_id=task_id,
+            )
+
+            issue_result = await create_github_issue_step(
+                task.repo_url,
+                issue_title,
+                initial_issue_body,
+                labels=["mainloop-plan", "planning"],
+            )
+
+            if not issue_result:
+                raise RuntimeError("Failed to create GitHub issue")
+
+            issue_url = issue_result["url"]
+            issue_number = issue_result["number"]
+            logger.info(f"Created GitHub issue #{issue_number}: {issue_url}")
+
+            # Store issue info immediately
+            await update_worker_task_status(
+                task_id, TaskStatus.PLANNING,
+                issue_url=issue_url, issue_number=issue_number,
+            )
+
+            # Add comment that we're starting to explore
+            await add_issue_comment_step(
+                task.repo_url, issue_number,
+                "🤖 Starting to explore the codebase and gather requirements..."
+            )
 
             while True:
                 plan_iteration += 1
@@ -667,6 +807,12 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         plan_text=plan_text,
                     )
 
+                    # Update issue with questions
+                    await add_issue_comment_step(
+                        task.repo_url, issue_number,
+                        "❓ **Gathering requirements** - waiting for answers to clarifying questions."
+                    )
+
                     # Notify main thread about questions (task UI will show them)
                     notify_main_thread(
                         task.user_id,
@@ -677,6 +823,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                             "result": {
                                 "questions": questions,
                                 "plan_text": plan_text,
+                                "issue_url": issue_url,
                                 "message": "Please answer these questions to continue",
                             },
                         },
@@ -694,15 +841,36 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     if response.get("action") == "cancel":
                         logger.info("Task cancelled by user during questions")
                         await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            "❌ Task cancelled by user."
+                        )
+                        await update_github_issue_step(
+                            task.repo_url, issue_number, state="closed"
+                        )
                         notify_main_thread(
                             task.user_id, task_id, "worker_result",
                             {"status": "cancelled", "result": {"message": "Cancelled by user"}},
                         )
                         return {"status": "cancelled", "message": "Cancelled by user"}
 
-                    # Store answers and re-run plan job with answers as context
+                    # Store answers and update issue with Q&A
                     user_answers = response.get("answers", {})
                     logger.info(f"User answered {len(user_answers)} questions, re-running plan...")
+
+                    # Update issue body with requirements
+                    updated_body = _build_issue_body(
+                        original_prompt=task.description,
+                        requirements=user_answers,
+                        task_id=task_id,
+                    )
+                    await update_github_issue_step(
+                        task.repo_url, issue_number, body=updated_body
+                    )
+                    await add_issue_comment_step(
+                        task.repo_url, issue_number,
+                        "✅ Requirements gathered. Generating implementation plan..."
+                    )
 
                     # Clear questions from task since they've been answered
                     await update_worker_task_status(
@@ -712,6 +880,21 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     continue  # Re-run plan job with answers
 
                 # PHASE 1b: No questions - proceed to plan review
+                # Update issue body with the plan
+                updated_body = _build_issue_body(
+                    original_prompt=task.description,
+                    requirements=user_answers,
+                    plan_text=plan_text,
+                    task_id=task_id,
+                )
+                await update_github_issue_step(
+                    task.repo_url, issue_number, body=updated_body
+                )
+                await add_issue_comment_step(
+                    task.repo_url, issue_number,
+                    "📋 **Plan ready for review.** Approve to proceed with implementation."
+                )
+
                 # Update status to waiting for plan review
                 await update_worker_task_status(
                     task_id, TaskStatus.WAITING_PLAN_REVIEW,
@@ -728,6 +911,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         "result": {
                             "plan_text": plan_text,
                             "suggested_options": suggested_options,
+                            "issue_url": issue_url,
                             "message": "Plan ready for review",
                         },
                     },
@@ -747,11 +931,18 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 response_text = response.get("text", "")
 
                 if response_action == "approve" or response_action.lower() in ["approve", "lgtm", "looks good"]:
-                    logger.info("Plan approved! Creating GitHub issue and proceeding to implementation...")
+                    logger.info("Plan approved! Waiting for user to start implementation...")
                     break
                 elif response_action == "cancel":
                     logger.info("Plan cancelled by user")
                     await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                    await add_issue_comment_step(
+                        task.repo_url, issue_number,
+                        "❌ Plan cancelled by user."
+                    )
+                    await update_github_issue_step(
+                        task.repo_url, issue_number, state="closed"
+                    )
                     notify_main_thread(
                         task.user_id, task_id, "worker_result",
                         {"status": "cancelled", "result": {"message": "Plan cancelled by user"}},
@@ -761,35 +952,25 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     # User provided feedback - re-run plan with feedback
                     feedback = response_text or response_action
                     logger.info(f"User requested plan revision: {feedback}")
+                    await add_issue_comment_step(
+                        task.repo_url, issue_number,
+                        f"📝 **Revision requested:**\n> {feedback}\n\nRegenerating plan..."
+                    )
                     plan_text = feedback  # Pass feedback to next iteration
                     user_answers = {}  # Clear answers for new iteration
                     continue
 
-            # Create GitHub issue from approved plan
-            issue_title = f"[Plan] {task.description[:80]}"
-            issue_body = f"""## Implementation Plan
-
-{plan_text}
-
----
-
-_This plan was approved via Mainloop inbox._
-_Task ID: {task_id}_
-"""
-
-            issue_result = await create_github_issue_step(
-                task.repo_url,
-                issue_title,
-                issue_body,
-                labels=["mainloop-plan"],
+            # Plan approved - update issue and pause for implementation trigger
+            await add_issue_comment_step(
+                task.repo_url, issue_number,
+                "✅ **Plan approved!** Ready to start implementation when triggered."
             )
 
-            if not issue_result:
-                raise RuntimeError("Failed to create GitHub issue from approved plan")
-
-            issue_url = issue_result["url"]
-            issue_number = issue_result["number"]
-            logger.info(f"Created GitHub issue #{issue_number}: {issue_url}")
+            # Update issue labels
+            await update_github_issue_step(
+                task.repo_url, issue_number,
+                labels=["mainloop-plan", "approved"],
+            )
 
             # Generate intelligent branch name
             branch_name = await generate_branch_name_step(
@@ -797,22 +978,58 @@ _Task ID: {task_id}_
             )
             logger.info(f"Generated branch name: {branch_name}")
 
-            # Store issue info and branch name
+            # Set status to ready_to_implement and PAUSE
             await update_worker_task_status(
-                task_id, TaskStatus.IMPLEMENTING,
+                task_id, TaskStatus.READY_TO_IMPLEMENT,
                 issue_url=issue_url, issue_number=issue_number,
-                branch_name=branch_name
+                branch_name=branch_name, plan_text=plan_text,
             )
 
-            # Notify that issue was created and implementation is starting
+            # Notify that plan is approved and waiting for implementation trigger
             notify_main_thread(
                 task.user_id,
                 task_id,
                 "worker_result",
                 {
-                    "status": "plan_approved",
-                    "result": {"issue_url": issue_url, "message": "Plan approved, starting implementation"},
+                    "status": "ready_to_implement",
+                    "result": {
+                        "issue_url": issue_url,
+                        "plan_text": plan_text,
+                        "message": "Plan approved. Click 'Start Implementation' when ready.",
+                    },
                 },
+            )
+
+            # Wait for user to trigger implementation (24 hour timeout)
+            logger.info("Waiting for user to trigger implementation...")
+            impl_response = await DBOS.recv_async(
+                topic=TOPIC_START_IMPLEMENTATION,
+                timeout_seconds=PLAN_REVIEW_TIMEOUT_SECONDS,
+            )
+
+            if impl_response is None:
+                raise RuntimeError("Implementation trigger timed out after 24 hours")
+
+            if impl_response.get("action") == "cancel":
+                logger.info("Implementation cancelled by user")
+                await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                await add_issue_comment_step(
+                    task.repo_url, issue_number,
+                    "❌ Implementation cancelled by user."
+                )
+                await update_github_issue_step(
+                    task.repo_url, issue_number, state="closed"
+                )
+                notify_main_thread(
+                    task.user_id, task_id, "worker_result",
+                    {"status": "cancelled", "result": {"message": "Cancelled by user"}},
+                )
+                return {"status": "cancelled", "message": "Cancelled by user"}
+
+            logger.info("Implementation triggered! Proceeding to Phase 2...")
+            await add_issue_comment_step(
+                task.repo_url, issue_number,
+                "🚀 **Starting implementation...**"
             )
 
         # ============================================================

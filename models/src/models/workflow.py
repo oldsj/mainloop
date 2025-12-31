@@ -18,6 +18,7 @@ class TaskStatus(str, Enum):
     PLANNING = "planning"  # Creating implementation plan
     WAITING_QUESTIONS = "waiting_questions"  # Agent asked questions, needs answers
     WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
+    READY_TO_IMPLEMENT = "ready_to_implement"  # Plan approved, waiting for user to start implementation
     IMPLEMENTING = "implementing"  # Writing code per approved plan
     UNDER_REVIEW = "under_review"  # PR created, awaiting review/merge
     COMPLETED = "completed"  # PR merged
