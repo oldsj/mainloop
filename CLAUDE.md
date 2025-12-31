@@ -193,6 +193,30 @@ Layout modes:
 - **Desktop (≥768px)**: Chat + always-visible Inbox sidebar
 - **Mobile (<768px)**: Bottom tab bar (Chat / Inbox)
 
+## Devlog & Changelog Conventions
+
+Mainloop is developed in public with a devlog and changelog:
+
+**Devlog** (`/content/devlog/`):
+- Long-form entries exploring vision, architecture, and learnings
+- Numbered sequentially: `001-topic.md`, `002-topic.md`, etc.
+- Each entry has a theme, key insights, and links to next/previous
+- Update `README.md` index when adding new entries
+
+**Changelog** (`/CHANGELOG.md`):
+- Keep a Changelog format (keepachangelog.com)
+- Update `[Unreleased]` section when shipping significant features
+- Categories: Added, Changed, Fixed, Removed, Architecture
+
+**Social Templates** (`/content/social/`):
+- LinkedIn and Twitter templates for adapting devlog content
+- Use these when creating social posts from devlog entries
+
+**When to update**:
+- New features → CHANGELOG.md (under [Unreleased])
+- Vision/architecture insights → New devlog entry
+- Significant milestones → Both
+
 ## Important
 
 - Avoid creating markdown documentation unless explicitly asked

@@ -6,6 +6,19 @@ Your main conversation thread is the closest digital mapping to your own interna
 
 Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI workers and let them handle the work while you stay in flow.
 
+## The Deeper Vision
+
+Mainloop isn't "GitHub issues as a task queue for AI agents." That's the mechanic, not the meaning.
+
+The paradigm shift:
+- **You are the main thread** — Your consciousness is single-threaded. Everything else flows into a unified inbox.
+- **Attention is the scarce resource** — Not compute, not code. Human attention is the bottleneck. Protect it.
+- **Memory is the new context** — The Temporal Pyramid keeps conversations alive for months, not minutes.
+- **Plan first, code second** — Workers plan in issues, implement in draft PRs, iterate until CI passes.
+- **Self-amplifying development** — Building the system with the system, each improvement makes the next faster.
+
+📖 **[Read the devlog](/content/devlog/)** for the full journey.
+
 ## How It Works
 
 ```
@@ -111,3 +124,15 @@ Agents use these tools to verify work before marking ready:
 - [Architecture](docs/architecture.md) - System design and data flow
 - [Development](docs/development.md) - Local setup and commands
 - [DBOS Workflows](docs/DBOS.md) - Durable task orchestration
+- [Memory Strategy](MEMORY_STRATEGY.md) - Temporal Pyramid compression
+- [Changelog](CHANGELOG.md) - What's new
+
+## Building in Public
+
+Mainloop is developed openly, with regular devlog updates and social posts documenting the journey.
+
+- 📖 **[Devlog](/content/devlog/)** - Deep dives into the vision and architecture
+- 📝 **[Changelog](CHANGELOG.md)** - Tracked changes and milestones
+- 🐦 **Social** - Follow [@oldsj](https://linkedin.com/in/oldsj) for updates
+
+The goal: share the paradigm shift from "AI as code generator" to "AI as coordinated workforce" — and learn in public what works (and what doesn't).
