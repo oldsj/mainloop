@@ -418,10 +418,7 @@
                         : task.description}
                     </p>
                     <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                      <span class="flex items-center gap-1 border px-2 py-0.5 {getStatusStyle(task.status)}">
-                        {#if isActive}
-                          <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current"></span>
-                        {/if}
+                      <span class="flex items-center gap-1 border px-2 py-0.5 {getStatusStyle(task.status)} {isActive ? 'animate-pulse' : ''}">
                         {getStatusLabel(task.status)}
                       </span>
                       <span class="text-term-fg-muted">{formatTime(task.created_at)}</span>
