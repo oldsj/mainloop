@@ -32,8 +32,9 @@ class QueueItemType(str, Enum):
     REVIEW = "review"
     ERROR = "error"
     NOTIFICATION = "notification"
-    # New types for plan-first workflow
-    PLAN_READY = "plan_ready"  # Plan is ready for review
+    # Plan-first workflow types
+    PLAN_READY = "plan_ready"  # Legacy: Plan ready as GitHub issue
+    PLAN_REVIEW = "plan_review"  # Interactive plan review in inbox (with options + text input)
     CODE_READY = "code_ready"  # Code is ready for review
     FEEDBACK_ADDRESSED = "feedback_addressed"  # Worker addressed feedback
     ROUTING_SUGGESTION = "routing_suggestion"  # Suggesting to route to existing task

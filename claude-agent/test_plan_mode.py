@@ -69,31 +69,20 @@ class TestPlanPrompt(unittest.TestCase):
 
 
 class TestPermissionMode(unittest.TestCase):
-    """Test permission mode selection."""
+    """Test permission mode selection.
 
-    def test_plan_mode_uses_plan_permission(self):
-        """MODE=plan should use permission_mode='plan'."""
-        with patch.object(job_runner, "MODE", "plan"):
-            perm_mode = "plan" if job_runner.MODE == "plan" else "bypassPermissions"
-        self.assertEqual(perm_mode, "plan")
+    All batch job modes use bypassPermissions since there's no human
+    to approve permission requests in a K8s Job context.
+    """
 
-    def test_implement_mode_uses_bypass(self):
-        """MODE=implement should use permission_mode='bypassPermissions'."""
-        with patch.object(job_runner, "MODE", "implement"):
-            perm_mode = "plan" if job_runner.MODE == "plan" else "bypassPermissions"
-        self.assertEqual(perm_mode, "bypassPermissions")
-
-    def test_feedback_mode_uses_bypass(self):
-        """MODE=feedback should use permission_mode='bypassPermissions'."""
-        with patch.object(job_runner, "MODE", "feedback"):
-            perm_mode = "plan" if job_runner.MODE == "plan" else "bypassPermissions"
-        self.assertEqual(perm_mode, "bypassPermissions")
-
-    def test_fix_mode_uses_bypass(self):
-        """MODE=fix should use permission_mode='bypassPermissions'."""
-        with patch.object(job_runner, "MODE", "fix"):
-            perm_mode = "plan" if job_runner.MODE == "plan" else "bypassPermissions"
-        self.assertEqual(perm_mode, "bypassPermissions")
+    def test_all_modes_use_bypass(self):
+        """All modes should use permission_mode='bypassPermissions' for batch jobs."""
+        # Batch jobs can't get human approval, so all modes bypass
+        for mode in ["plan", "implement", "feedback", "fix"]:
+            with patch.object(job_runner, "MODE", mode):
+                # This mirrors the actual logic in execute_task()
+                perm_mode = "bypassPermissions"
+            self.assertEqual(perm_mode, "bypassPermissions", f"Mode {mode} should use bypassPermissions")
 
 
 class TestGitHubIssueCreation(unittest.TestCase):

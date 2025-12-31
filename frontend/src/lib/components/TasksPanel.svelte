@@ -155,7 +155,12 @@
     low: 'border-l-term-fg-muted'
   };
 
+  // Track expanded plan review items
+  let expandedPlanId = $state<string | null>(null);
+
   const typeIcons: Record<string, string> = {
+    plan_review:
+      'M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z',
     plan_ready:
       'M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z',
     code_ready: 'M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5',
@@ -283,7 +288,38 @@
                     <span class="shrink-0 text-xs text-term-fg-muted">{formatTime(item.created_at)}</span>
                   </div>
 
-                  <p class="mt-1 text-sm text-term-fg-muted">{item.content}</p>
+                  <!-- Plan review items get special treatment -->
+                  {#if item.item_type === 'plan_review'}
+                    <!-- Expandable plan content -->
+                    <button
+                      onclick={() => (expandedPlanId = expandedPlanId === item.id ? null : item.id)}
+                      class="mt-2 flex w-full items-center gap-2 text-left text-sm text-term-info hover:underline"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="h-4 w-4 transition-transform {expandedPlanId === item.id ? 'rotate-180' : ''}"
+                      >
+                        <path
+                          stroke-linecap="square"
+                          stroke-linejoin="miter"
+                          d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                        />
+                      </svg>
+                      {expandedPlanId === item.id ? 'Hide plan' : 'View plan'}
+                    </button>
+
+                    {#if expandedPlanId === item.id}
+                      <div class="mt-3 max-h-96 overflow-y-auto rounded border border-term-border bg-term-bg-secondary p-3">
+                        <pre class="whitespace-pre-wrap text-xs text-term-fg">{item.content}</pre>
+                      </div>
+                    {/if}
+                  {:else}
+                    <p class="mt-1 text-sm text-term-fg-muted">{item.content}</p>
+                  {/if}
 
                   {#if getPrUrl(item)}
                     <a
@@ -316,7 +352,7 @@
                         <button
                           onclick={() => handleInboxOption(item.id, option)}
                           disabled={respondingItemId === item.id}
-                          class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
+                          class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50 {option === 'Approve' ? 'border-term-accent-alt text-term-accent-alt hover:bg-term-accent-alt/10' : ''}"
                         >
                           {option}
                         </button>
@@ -324,7 +360,8 @@
                     </div>
                   {/if}
 
-                  {#if item.item_type === 'question' && item.status === 'pending'}
+                  <!-- Text input for questions AND plan_review items -->
+                  {#if (item.item_type === 'question' || item.item_type === 'plan_review') && item.status === 'pending'}
                     <form
                       onsubmit={(e) => {
                         e.preventDefault();
@@ -336,7 +373,7 @@
                         <input
                           type="text"
                           bind:value={customResponses[item.id]}
-                          placeholder="Type your response..."
+                          placeholder={item.item_type === 'plan_review' ? 'Request changes...' : 'Type your response...'}
                           disabled={respondingItemId === item.id}
                           class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
                         />
@@ -345,7 +382,7 @@
                           disabled={respondingItemId === item.id || !customResponses[item.id]?.trim()}
                           class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
                         >
-                          SEND
+                          {item.item_type === 'plan_review' ? 'REVISE' : 'SEND'}
                         </button>
                       </div>
                     </form>

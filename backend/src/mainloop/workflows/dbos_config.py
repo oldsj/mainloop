@@ -6,9 +6,14 @@ from dbos import DBOS, DBOSConfig, Queue
 from mainloop.config import settings
 
 # DBOS configuration
+# application_version prevents recovery of old workflows after code changes
+# Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
+WORKFLOW_VERSION = "2"  # v2: Interactive plan review in inbox
+
 dbos_config: DBOSConfig = {
     "name": "mainloop",
     "system_database_url": settings.database_url or os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
+    "application_version": WORKFLOW_VERSION,
 }
 
 # Initialize DBOS - must be done before defining workflows

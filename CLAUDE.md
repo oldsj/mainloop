@@ -143,8 +143,16 @@ make deploy-loop         # Watch for changes and auto-deploy (requires watchexec
 - Backend communicates with container via internal Docker network
 - Workspace mounted at `/workspace` for file operations
 
-### DBOS
+### DBOS Durable Workflows
 - See docs/DBOS.md for details on how to set up and use DBOS for durable execution.
+
+**Workflow Versioning (CRITICAL):**
+- DBOS workflows require determinism - they replay from checkpoints expecting the same step sequence
+- Changing workflow step order/logic while workflows are running causes `DBOSUnexpectedStepError`
+- **Bump `WORKFLOW_VERSION` in `dbos_config.py`** when changing workflow logic
+- DBOS only recovers workflows matching current `application_version` - old versions are ignored
+- Current version: `"2"` (interactive plan review in inbox)
+- For safe upgrades: use blue-green deployment, let old version drain before retiring
 
 ### Worker Workflow (CI Verification Loop)
 Workers iterate until GitHub Actions pass before requesting human review:

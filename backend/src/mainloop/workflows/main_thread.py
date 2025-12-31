@@ -78,7 +78,7 @@ async def update_task_status(
     )
 
 
-@DBOS.workflow()
+@DBOS.workflow()  # v2: Added plan_review handling
 async def main_thread_workflow(user_id: str) -> None:
     """
     Main thread workflow for a user.
@@ -293,6 +293,34 @@ async def handle_queue_response(thread: MainThread, payload: dict) -> None:
     # Update the queue item
     await update_queue_item_response(queue_item_id, response)
 
+    # Handle plan review responses - route back to worker
+    if item_type == QueueItemType.PLAN_REVIEW.value:
+        if not task_id:
+            logger.error("Plan review response without task_id")
+            return
+
+        # Determine action and text from response
+        # Response could be an option click ("Approve", "Option A") or custom text
+        if response.lower() in ["approve", "lgtm", "looks good"]:
+            action = "approve"
+            text = ""
+        elif response.lower() == "cancel":
+            action = "cancel"
+            text = ""
+        else:
+            # Custom feedback or selected option that needs revision
+            action = "revise"
+            text = response
+
+        # Send response to worker on plan_response topic
+        DBOS.send(
+            task_id,
+            {"action": action, "text": text},
+            topic="plan_response",
+        )
+        logger.info(f"Sent plan response to worker {task_id}: action={action}")
+        return
+
     # Handle routing suggestions
     if item_type == QueueItemType.ROUTING_SUGGESTION.value:
         original_message = item_context.get("original_message", "")
@@ -375,8 +403,30 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
 
     logger.info(f"Worker result for {task_id}: {status}")
 
-    if status == "plan_ready":
-        # Plan draft PR is ready for review
+    if status == "plan_review":
+        # Interactive plan review in inbox (new flow)
+        plan_text = result.get("plan_text", "")
+        suggested_options = result.get("suggested_options", [])
+
+        # Use suggested options directly (already includes "Approve" from job_runner)
+        options = list(suggested_options) if suggested_options else ["Approve", "Request changes"]
+
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.PLAN_REVIEW,
+            title="Review implementation plan",
+            content=plan_text,
+            priority=QueueItemPriority.HIGH,
+            options=options,
+            context={
+                "plan_text": plan_text,
+                "suggested_options": suggested_options,
+            },
+        )
+
+    elif status == "plan_ready":
+        # Legacy: Plan draft PR is ready for review
         pr_url = result.get("pr_url")
         await add_to_queue(
             thread,
@@ -386,6 +436,19 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
             content=result.get("message", f"Draft PR created: {pr_url}"),
             priority=QueueItemPriority.HIGH,
             context={"pr_url": pr_url},
+        )
+
+    elif status == "plan_approved":
+        # Plan was approved and GitHub issue created
+        issue_url = result.get("issue_url")
+        await add_to_queue(
+            thread,
+            task_id=task_id,
+            item_type=QueueItemType.NOTIFICATION,
+            title="Plan approved",
+            content=f"Implementation starting. Plan issue: {issue_url}",
+            priority=QueueItemPriority.NORMAL,
+            context={"issue_url": issue_url},
         )
 
     elif status == "plan_updated":

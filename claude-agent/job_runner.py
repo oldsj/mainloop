@@ -7,8 +7,8 @@ It reads configuration from environment variables, executes the task using
 Claude Agent SDK, and POSTs the result back to the backend.
 
 Modes:
-  - plan: Clone repo, analyze task, create DRAFT PR with implementation plan (no code)
-  - implement: Checkout existing branch, implement code per approved plan, mark PR ready
+  - plan: Clone repo, analyze task, return implementation plan (no GitHub issue - reviewed in inbox)
+  - implement: Checkout existing branch, implement code per approved plan, create PR
   - feedback: Address PR comments, push new commits
 """
 
@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -67,14 +67,22 @@ def pre_clone_repo() -> str | None:
 
     target_dir = f"{WORKSPACE}/{repo_name}"
 
+    # Build authenticated URL if GH_TOKEN is available
+    clone_url = REPO_URL
+    gh_token = os.environ.get("GH_TOKEN")
+    if gh_token and "github.com" in REPO_URL:
+        # Insert token into URL: https://x-access-token:{token}@github.com/...
+        clone_url = REPO_URL.replace("https://github.com", f"https://x-access-token:{gh_token}@github.com")
+        print(f"[job_runner] Using authenticated clone URL")
+
     # Build clone command - shallow for plan mode, full for others
     if MODE == "plan":
         # Shallow clone for plan mode - fast (2-5 seconds)
-        cmd = ["git", "clone", "--depth=1", REPO_URL, target_dir]
+        cmd = ["git", "clone", "--depth=1", clone_url, target_dir]
         print(f"[job_runner] Shallow cloning for plan mode...")
     else:
         # Full clone for implement/feedback/fix modes
-        cmd = ["git", "clone", REPO_URL, target_dir]
+        cmd = ["git", "clone", clone_url, target_dir]
         print(f"[job_runner] Full cloning for {MODE} mode...")
 
     try:
@@ -118,7 +126,7 @@ def build_prompt() -> str:
 
 
 def build_plan_prompt() -> str:
-    """Build prompt for planning phase using native plan mode."""
+    """Build prompt for planning phase - explores codebase and outputs a plan."""
     parts = [
         f"Task ID: {TASK_ID[:8]}",
         f"Task: {TASK_PROMPT}",
@@ -132,16 +140,26 @@ def build_plan_prompt() -> str:
             "The repository is already cloned and you are in its directory.",
             "Explore the codebase to understand the structure and patterns used.",
             "",
-            "Your plan should include:",
-            "- Approach: Your implementation strategy",
-            "- Files to modify: List each file and describe the changes",
-            "- Files to create: Any new files needed and their purpose",
-            "- Considerations: Risks, edge cases, or decisions needing confirmation",
+            "Create a detailed implementation plan that includes:",
+            "- **Summary**: Brief overview of the approach",
+            "- **Files to modify**: List each file and describe the changes",
+            "- **Files to create**: Any new files needed and their purpose",
+            "- **Considerations**: Risks, edge cases, or decisions needing confirmation",
+            "",
+            "If there are multiple valid approaches, present them as options:",
+            "- **Option A**: [approach name] - [brief description]",
+            "- **Option B**: [approach name] - [brief description]",
+            "And recommend which option you prefer.",
+            "",
+            "IMPORTANT: Your final output should be ONLY the plan in clean markdown.",
+            "The plan will be shown to the user for approval before implementation.",
             "",
         ])
     else:
         parts.extend([
             "Create an implementation plan for this task.",
+            "If there are multiple approaches, present them as options.",
+            "Output your plan as clean markdown.",
             "",
         ])
 
@@ -320,7 +338,8 @@ async def execute_task() -> dict:
     print(f"[job_runner] Model: {CLAUDE_MODEL}")
     print(f"[job_runner] Prompt:\n{prompt[:500]}...")
 
-    # Use native plan mode for planning phase, bypass for everything else
+    # Use native plan mode for planning (allows reads, blocks writes)
+    # Use bypassPermissions for implement/feedback/fix (needs full access)
     perm_mode = "plan" if MODE == "plan" else "bypassPermissions"
     print(f"[job_runner] Permission mode: {perm_mode}")
 
@@ -359,10 +378,29 @@ async def execute_task() -> dict:
     pr_url = extract_pr_url(output)
     issue_url = extract_issue_url(output)
 
-    # If we got a plan from ExitPlanMode and no issue was created, create one now
-    if plan_content and not issue_url and MODE == "plan":
-        print("[job_runner] Creating GitHub issue from plan content...")
-        issue_url = create_github_issue_from_plan(plan_content)
+    # For plan mode: return plan content for inbox review (don't create GitHub issue)
+    if MODE == "plan" and output:
+        # Use the last substantial text block as the plan (skip short exploration messages)
+        plan_text = None
+        for text in reversed(collected_text):
+            if len(text) > 200:  # Substantial text block
+                plan_text = text
+                break
+
+        plan_text = plan_text or output
+        print(f"[job_runner] Returning plan for inbox review ({len(plan_text)} chars)")
+
+        # Extract suggested options from the plan
+        suggested_options = extract_plan_options(plan_text)
+        print(f"[job_runner] Extracted {len(suggested_options)} options from plan")
+
+        return {
+            "output": output,
+            "plan_text": plan_text,
+            "suggested_options": suggested_options,
+            "session_id": session_id,
+            "cost_usd": cost_usd,
+        }
 
     return {
         "output": output,
@@ -391,6 +429,43 @@ def extract_issue_url(output: str) -> str | None:
     issue_pattern = r"https://github\.com/[^/]+/[^/]+/issues/\d+"
     match = re.search(issue_pattern, output)
     return match.group(0) if match else None
+
+
+def extract_plan_options(plan_text: str) -> list[str]:
+    """Extract suggested options from a plan for user selection.
+
+    Looks for patterns like:
+    - **Option A**: ...
+    - **Option 1**: ...
+    - **Approach A**: ...
+    - Bullet points starting with "Option"
+    """
+    import re
+
+    options = ["Approve"]  # Always include approve option
+
+    # Match patterns like "**Option A**:", "**Approach 1**:", "- Option A:"
+    option_patterns = [
+        r"\*\*Option\s+([A-Za-z0-9]+)\*\*[:\s]+([^\n]+)",  # **Option A**: description
+        r"\*\*Approach\s+([A-Za-z0-9]+)\*\*[:\s]+([^\n]+)",  # **Approach 1**: description
+        r"[-*]\s*Option\s+([A-Za-z0-9]+)[:\s]+([^\n]+)",  # - Option A: description
+        r"[-*]\s*Approach\s+([A-Za-z0-9]+)[:\s]+([^\n]+)",  # - Approach 1: description
+    ]
+
+    for pattern in option_patterns:
+        matches = re.findall(pattern, plan_text, re.IGNORECASE)
+        for match in matches:
+            label, desc = match
+            # Create a concise option label
+            option = f"Use {label.strip()}"
+            if option not in options:
+                options.append(option)
+
+    # If no options found, add some defaults
+    if len(options) == 1:
+        options.append("Request changes")
+
+    return options
 
 
 def create_github_issue_from_plan(plan_content: str) -> str | None:
@@ -458,7 +533,7 @@ async def send_result(status: str, result: dict | None = None, error: str | None
         "status": status,
         "result": result,
         "error": error,
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
 
     print(f"[job_runner] Sending result to {CALLBACK_URL}")
@@ -501,8 +576,14 @@ async def main():
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
     os.chdir(WORKSPACE)
 
-    # Pre-clone repo using cache if available (for faster startup)
+    # Pre-clone repo if URL provided
     repo_dir = pre_clone_repo()
+    if REPO_URL and not repo_dir:
+        # Clone was required but failed - abort the job
+        error_msg = "Failed to clone repository - check GH_TOKEN and repo URL"
+        print(f"[job_runner] ERROR: {error_msg}")
+        await send_result(status="failed", error=error_msg)
+        sys.exit(1)
     if repo_dir:
         # Change to cloned repo directory so Claude can work on it
         os.chdir(repo_dir)

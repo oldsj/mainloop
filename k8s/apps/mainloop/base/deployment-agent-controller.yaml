@@ -27,8 +27,8 @@ spec:
             - name: GH_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: github-credentials
-                  key: token
+                  name: mainloop-secrets
+                  key: github-token
           volumeMounts:
             - name: workspace
               mountPath: /workspace

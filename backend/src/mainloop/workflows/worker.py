@@ -30,16 +30,21 @@ from mainloop.services.github_pr import (
     format_issue_feedback_for_agent,
     generate_branch_name,
     parse_comments_for_command,
+    create_github_issue,
 )
 
 logger = logging.getLogger(__name__)
 
-# Topic for receiving results from K8s Jobs
-TOPIC_JOB_RESULT = "job_result"
+# Topics for DBOS messaging
+TOPIC_JOB_RESULT = "job_result"  # Results from K8s Jobs
+TOPIC_PLAN_RESPONSE = "plan_response"  # User approval/revision of plan from inbox
 
 # Polling intervals (seconds)
 ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
 PR_POLL_INTERVAL = 30     # Implementation PRs - more urgent during CI
+
+# Plan review timeout (wait for user to approve/revise plan)
+PLAN_REVIEW_TIMEOUT_SECONDS = 86400  # 24 hours
 
 # Retry configuration
 MAX_JOB_RETRIES = 5  # Max retry attempts for failed jobs
@@ -243,6 +248,34 @@ async def generate_branch_name_step(
 ) -> str:
     """Generate an intelligent branch name from issue metadata."""
     return generate_branch_name(issue_number, title, task_type)
+
+
+@DBOS.step()
+async def create_github_issue_step(
+    repo_url: str,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+) -> dict | None:
+    """Create a GitHub issue from the approved plan.
+
+    Args:
+        repo_url: GitHub repository URL
+        title: Issue title (derived from task description)
+        body: Issue body (the approved plan)
+        labels: Optional labels to apply
+
+    Returns:
+        Dict with issue number, url, and title, or None if failed
+    """
+    result = await create_github_issue(repo_url, title, body, labels)
+    if result:
+        return {
+            "number": result.number,
+            "url": result.url,
+            "title": result.title,
+        }
+    return None
 
 
 @DBOS.step()
@@ -514,7 +547,7 @@ async def _run_code_review_loop(
             logger.warning(f"Cleanup failed: {e}")
 
 
-@DBOS.workflow()
+@DBOS.workflow()  # v2: Interactive plan review in inbox
 async def worker_task_workflow(task_id: str) -> dict[str, Any]:
     """
     Worker workflow that executes a task in an isolated K8s namespace.
@@ -572,115 +605,135 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
         # ============================================================
         # PHASE 1: PLANNING (unless skip_plan is True)
-        # Creates a GitHub ISSUE with the implementation plan
+        # Interactive plan review in inbox, then creates GitHub issue on approval
         # ============================================================
         if not task.skip_plan:
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
+            plan_iteration = 0
+            plan_text: str | None = None
+            suggested_options: list[str] = []
 
-            # Run plan job with retry
-            result = await run_job_with_retry(
-                lambda: spawn_plan_job(task_id, namespace, task, iteration=1),
-                "plan job",
+            while True:
+                plan_iteration += 1
+
+                # Run plan job with retry - now returns plan content, not GitHub issue
+                result = await run_job_with_retry(
+                    lambda iteration=plan_iteration: spawn_plan_job(
+                        task_id, namespace, task,
+                        feedback=plan_text if plan_iteration > 1 else None,
+                        iteration=iteration
+                    ),
+                    f"plan job (iteration {plan_iteration})",
+                )
+
+                # Extract plan content from result
+                plan_result = result.get("result", {})
+                plan_text = plan_result.get("plan_text")
+                suggested_options = plan_result.get("suggested_options", [])
+
+                if not plan_text:
+                    raise RuntimeError("Plan job did not return plan content")
+
+                logger.info(f"Plan ready with {len(suggested_options)} suggested options")
+
+                # Update status to waiting for plan review
+                await update_worker_task_status(task_id, TaskStatus.WAITING_PLAN_REVIEW)
+
+                # Notify main thread to create PLAN_REVIEW queue item
+                notify_main_thread(
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "plan_review",
+                        "result": {
+                            "plan_text": plan_text,
+                            "suggested_options": suggested_options,
+                            "message": "Plan ready for review",
+                        },
+                    },
+                )
+
+                # Wait for user response in inbox (24 hour timeout)
+                logger.info(f"Waiting for plan approval via inbox...")
+                response = await DBOS.recv_async(
+                    topic=TOPIC_PLAN_RESPONSE,
+                    timeout_seconds=PLAN_REVIEW_TIMEOUT_SECONDS,
+                )
+
+                if response is None:
+                    raise RuntimeError("Plan review timed out after 24 hours")
+
+                response_action = response.get("action", "")
+                response_text = response.get("text", "")
+
+                if response_action == "approve" or response_action.lower() in ["approve", "lgtm", "looks good"]:
+                    logger.info("Plan approved! Creating GitHub issue and proceeding to implementation...")
+                    break
+                elif response_action == "cancel":
+                    logger.info("Plan cancelled by user")
+                    await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                    notify_main_thread(
+                        task.user_id, task_id, "worker_result",
+                        {"status": "cancelled", "result": {"message": "Plan cancelled by user"}},
+                    )
+                    return {"status": "cancelled", "message": "Plan cancelled by user"}
+                else:
+                    # User provided feedback - re-run plan with feedback
+                    feedback = response_text or response_action
+                    logger.info(f"User requested plan revision: {feedback}")
+                    plan_text = feedback  # Pass feedback to next iteration
+                    continue
+
+            # Create GitHub issue from approved plan
+            issue_title = f"[Plan] {task.description[:80]}"
+            issue_body = f"""## Implementation Plan
+
+{plan_text}
+
+---
+
+_This plan was approved via Mainloop inbox._
+_Task ID: {task_id}_
+"""
+
+            issue_result = await create_github_issue_step(
+                task.repo_url,
+                issue_title,
+                issue_body,
+                labels=["mainloop-plan"],
             )
 
-            # Extract ISSUE URL from result (not PR)
-            issue_url = result.get("result", {}).get("issue_url")
-            if not issue_url:
-                raise RuntimeError("Plan job did not create a GitHub issue")
+            if not issue_result:
+                raise RuntimeError("Failed to create GitHub issue from approved plan")
 
-            issue_number = int(issue_url.split("/")[-1])
-
-            # Get issue details for branch name generation
-            issue_status = await check_issue_status_step(task.repo_url, issue_number)
-            issue_title = issue_status.get("title", task.description[:50])
-            current_etag = issue_status.get("etag")
+            issue_url = issue_result["url"]
+            issue_number = issue_result["number"]
+            logger.info(f"Created GitHub issue #{issue_number}: {issue_url}")
 
             # Generate intelligent branch name
             branch_name = await generate_branch_name_step(
-                issue_number, issue_title, task.task_type
+                issue_number, task.description[:50], task.task_type
             )
             logger.info(f"Generated branch name: {branch_name}")
 
             # Store issue info and branch name
             await update_worker_task_status(
-                task_id, TaskStatus.WAITING_PLAN_REVIEW,
+                task_id, TaskStatus.IMPLEMENTING,
                 issue_url=issue_url, issue_number=issue_number,
                 branch_name=branch_name
             )
 
-            # Notify human that plan is ready for review
+            # Notify that issue was created and implementation is starting
             notify_main_thread(
                 task.user_id,
                 task_id,
                 "worker_result",
                 {
-                    "status": "plan_ready",
-                    "result": {"issue_url": issue_url, "message": "Plan ready for review"},
+                    "status": "plan_approved",
+                    "result": {"issue_url": issue_url, "message": "Plan approved, starting implementation"},
                 },
             )
-
-            # Poll for plan approval on ISSUE (with ETag for rate limiting)
-            logger.info(f"Waiting for plan approval on issue #{issue_number}")
-            last_check = datetime.now(timezone.utc)
-            plan_iteration = 0
-
-            while True:
-                await DBOS.sleep_async(ISSUE_POLL_INTERVAL)  # 60 seconds for issues
-
-                # Check issue status with ETag (conditional request)
-                issue_status = await check_issue_status_step(
-                    task.repo_url, issue_number, etag=current_etag
-                )
-
-                if issue_status.get("not_modified"):
-                    # No changes - skip comment check too (saves API calls)
-                    continue
-
-                # Update stored ETag
-                if issue_status.get("etag"):
-                    current_etag = issue_status["etag"]
-                    await update_task_etag(task_id, issue_etag=current_etag)
-
-                if issue_status.get("state") == "not_found":
-                    raise RuntimeError(f"Issue #{issue_number} not found")
-
-                if issue_status["state"] == "closed":
-                    await update_worker_task_status(task_id, TaskStatus.CANCELLED)
-                    notify_main_thread(
-                        task.user_id, task_id, "worker_result",
-                        {"status": "cancelled", "result": {"issue_url": issue_url, "closed": True}},
-                    )
-                    return {"status": "cancelled", "issue_url": issue_url}
-
-                # Check for new comments (only if issue was modified)
-                comments_result = await check_for_new_issue_comments(
-                    task.repo_url, issue_number, last_check
-                )
-
-                if comments_result.get("comments"):
-                    comments = comments_result["comments"]
-
-                    # Parse for slash commands (/implement, /revise)
-                    command = parse_comments_for_command(comments)
-
-                    if command.command == "implement":
-                        logger.info(f"Plan approved via /implement by {command.user}! Proceeding to implementation...")
-                        break
-                    elif command.command == "revise":
-                        # User wants changes - use feedback from command
-                        logger.info(f"User requested plan revision via /revise: {command.feedback}")
-                        plan_iteration += 1
-                        await run_job_with_retry(
-                            lambda: spawn_plan_job(task_id, namespace, task, command.feedback, plan_iteration),
-                            f"plan revision job (iteration {plan_iteration})",
-                        )
-                        notify_main_thread(
-                            task.user_id, task_id, "worker_result",
-                            {"status": "plan_updated", "result": {"issue_url": issue_url}},
-                        )
-                    # No recognized command - ignore general discussion
-
-                last_check = datetime.now(timezone.utc)
 
         # ============================================================
         # PHASE 2: IMPLEMENTATION

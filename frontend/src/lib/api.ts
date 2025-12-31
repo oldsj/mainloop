@@ -36,6 +36,7 @@ export type QueueItemType =
   | 'error'
   | 'review'
   | 'plan_ready'
+  | 'plan_review'
   | 'code_ready'
   | 'feedback_addressed'
   | 'routing_suggestion';

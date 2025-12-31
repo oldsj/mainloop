@@ -882,3 +882,57 @@ async def format_issue_feedback_for_agent(
         parts.append(f"## Comment from @{comment['user']}\n{body}")
 
     return "\n\n---\n\n".join(parts) if parts else ""
+
+
+class CreatedIssue(BaseModel):
+    """A newly created GitHub issue."""
+
+    number: int
+    url: str
+    title: str
+
+
+async def create_github_issue(
+    repo_url: str,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+) -> CreatedIssue | None:
+    """Create a GitHub issue.
+
+    Args:
+        repo_url: GitHub repository URL
+        title: Issue title
+        body: Issue body (markdown)
+        labels: Optional list of labels to apply
+
+    Returns:
+        CreatedIssue with number and URL, or None if creation failed
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    payload = {
+        "title": title,
+        "body": body,
+    }
+    if labels:
+        payload["labels"] = labels
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues",
+                headers=_get_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            return CreatedIssue(
+                number=data["number"],
+                url=data["html_url"],
+                title=data["title"],
+            )
+        except Exception as e:
+            logger.error(f"Failed to create GitHub issue: {e}")
+            return None

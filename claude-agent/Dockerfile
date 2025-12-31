@@ -33,6 +33,9 @@ WORKDIR /app
 # Enable bytecode compilation for faster startup
 ENV UV_COMPILE_BYTECODE=1
 
+# Disable Python output buffering for real-time logs
+ENV PYTHONUNBUFFERED=1
+
 # Copy from cache instead of linking (for mounted volumes)
 ENV UV_LINK_MODE=copy
 
