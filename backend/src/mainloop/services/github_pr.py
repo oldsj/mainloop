@@ -993,16 +993,18 @@ async def add_issue_comment(
     repo_url: str,
     issue_number: int,
     body: str,
-) -> bool:
+    return_id: bool = False,
+) -> bool | int:
     """Add a comment to a GitHub issue.
 
     Args:
         repo_url: GitHub repository URL
         issue_number: Issue number
         body: Comment body (markdown)
+        return_id: If True, return the comment ID instead of bool
 
     Returns:
-        True if comment was added, False otherwise
+        True/False if return_id=False, or comment ID (int) if return_id=True
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -1015,10 +1017,69 @@ async def add_issue_comment(
             )
             response.raise_for_status()
             logger.info(f"Added comment to issue #{issue_number} in {owner}/{repo}")
+            if return_id:
+                return response.json().get("id", 0)
             return True
         except Exception as e:
             logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
-            return False
+            return 0 if return_id else False
+
+
+async def get_comment_reactions(
+    repo_url: str,
+    comment_id: int,
+) -> list[str]:
+    """Get reactions on a specific issue comment.
+
+    Args:
+        repo_url: GitHub repository URL
+        comment_id: Comment ID
+
+    Returns:
+        List of reaction types (e.g., ["+1", "rocket", "heart"])
+    """
+    owner, repo = _parse_repo(repo_url)
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+                headers={
+                    **_get_headers(),
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            response.raise_for_status()
+            reactions = response.json()
+            return [r.get("content", "") for r in reactions]
+        except Exception as e:
+            logger.error(f"Failed to get reactions for comment {comment_id}: {e}")
+            return []
+
+
+def format_plan_for_issue(plan_text: str) -> str:
+    """Format implementation plan as a GitHub issue comment with approval instructions.
+
+    Args:
+        plan_text: The plan markdown content
+
+    Returns:
+        Markdown-formatted comment body with approval instructions
+    """
+    lines = [
+        "## 📋 Implementation Plan",
+        "",
+        plan_text,
+        "",
+        "---",
+        "",
+        "**To approve:** React with 👍 on this comment, or reply `lgtm`",
+        "",
+        "**To request changes:** Reply with your feedback",
+        "",
+        "_You can also review in the [Mainloop app](https://mainloop.olds.network)._",
+    ]
+    return "\n".join(lines)
 
 
 def format_questions_for_issue(questions: list[dict]) -> str:
@@ -1077,6 +1138,50 @@ def format_questions_for_issue(questions: list[dict]) -> str:
     ])
 
     return "\n".join(lines)
+
+
+def parse_plan_approval_from_comment(comment_body: str) -> str | None:
+    """Parse plan approval or revision request from an issue comment.
+
+    Returns:
+        - "approve" if the comment approves the plan
+        - The revision text if requesting changes
+        - None if no approval/revision detected
+    """
+    body = comment_body.strip()
+    body_lower = body.lower()
+
+    # Skip bot comments
+    if body_lower.startswith("🤖") or body_lower.startswith("##") or body_lower.startswith("❓") or body_lower.startswith("📋"):
+        return None
+
+    # Approval keywords (case-insensitive)
+    approval_patterns = [
+        "lgtm",
+        "looks good",
+        "approve",
+        "/approve",
+        "ship it",
+        "go ahead",
+        "proceed",
+        "approved",
+    ]
+
+    # Check for approval - must be short or start with approval keyword
+    for pattern in approval_patterns:
+        if body_lower == pattern or body_lower.startswith(pattern):
+            return "approve"
+
+    # Check for emoji-only approval
+    if body.strip() in ["👍", "✅", "🚀", "💯"]:
+        return "approve"
+
+    # If the comment is substantial (>20 chars) and not an approval,
+    # treat it as revision feedback
+    if len(body) > 20:
+        return body  # Return as revision text
+
+    return None
 
 
 def parse_question_answers_from_comment(

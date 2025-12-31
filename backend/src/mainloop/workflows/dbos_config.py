@@ -8,7 +8,7 @@ from mainloop.config import settings
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = "5"  # v5: Post questions to GitHub issue, poll issue comments for answers
+WORKFLOW_VERSION = "6"  # v6: Poll GitHub issue for plan approval (lgtm, approve, etc.)
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",

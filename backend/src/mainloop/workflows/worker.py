@@ -33,9 +33,12 @@ from mainloop.services.github_pr import (
     create_github_issue,
     update_github_issue,
     add_issue_comment,
-    # Question support
+    get_comment_reactions,
+    # Question/plan approval support
     format_questions_for_issue,
+    format_plan_for_issue,
     parse_question_answers_from_comment,
+    parse_plan_approval_from_comment,
 )
 
 logger = logging.getLogger(__name__)
@@ -406,6 +409,84 @@ async def check_issue_for_question_answers(
         if answers:
             logger.info(f"Found answers in issue comment: {answers}")
             return answers
+
+    return None
+
+
+@DBOS.step()
+async def post_plan_to_issue(
+    repo_url: str,
+    issue_number: int,
+    plan_text: str,
+) -> int:
+    """Format and post plan as a GitHub issue comment with approval instructions.
+
+    Returns:
+        The comment ID (for checking reactions later), or 0 on failure.
+    """
+    body = format_plan_for_issue(plan_text)
+    return await add_issue_comment(repo_url, issue_number, body, return_id=True)
+
+
+@DBOS.step()
+async def check_plan_comment_reactions(
+    repo_url: str,
+    comment_id: int,
+) -> bool:
+    """Check if the plan comment has approval reactions (+1, rocket, heart, hooray).
+
+    Returns:
+        True if approval reaction found, False otherwise.
+    """
+    if not comment_id:
+        return False
+
+    reactions = await get_comment_reactions(repo_url, comment_id)
+
+    # Approval reactions
+    approval_reactions = {"+1", "rocket", "heart", "hooray"}
+    for reaction in reactions:
+        if reaction in approval_reactions:
+            logger.info(f"Found approval reaction on plan comment: {reaction}")
+            return True
+
+    return False
+
+
+@DBOS.step()
+async def check_issue_for_plan_approval(
+    repo_url: str,
+    issue_number: int,
+    since: datetime,
+) -> tuple[str, str | None] | None:
+    """Check issue comments for plan approval or revision request.
+
+    Returns:
+        Tuple of (action, text) where action is "approve" or "revise",
+        or None if no relevant comments found.
+    """
+    response = await get_issue_comments(repo_url, issue_number, since=since)
+
+    if response.not_modified or not response.data:
+        return None
+
+    # Check each comment (newest first)
+    sorted_comments = sorted(
+        response.data,
+        key=lambda c: c.get("created_at", ""),
+        reverse=True,
+    )
+
+    for comment in sorted_comments:
+        body = comment.get("body", "")
+        result = parse_plan_approval_from_comment(body)
+        if result:
+            if result == "approve":
+                logger.info("Found plan approval in issue comment")
+                return ("approve", None)
+            else:
+                logger.info(f"Found revision request in issue comment: {result[:50]}...")
+                return ("revise", result)
 
     return None
 
@@ -976,10 +1057,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 await update_github_issue_step(
                     task.repo_url, issue_number, body=updated_body
                 )
-                await add_issue_comment_step(
-                    task.repo_url, issue_number,
-                    "📋 **Plan ready for review.** Approve to proceed with implementation."
-                )
+
+                # Post plan as comment with approval instructions (get comment ID for reactions)
+                plan_comment_id = await post_plan_to_issue(task.repo_url, issue_number, plan_text)
 
                 # Update status to waiting for plan review
                 await update_worker_task_status(
@@ -1003,12 +1083,56 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     },
                 )
 
-                # Wait for user response in inbox (24 hour timeout)
-                logger.info(f"Waiting for plan approval via inbox...")
-                response = await DBOS.recv_async(
-                    topic=TOPIC_PLAN_RESPONSE,
-                    timeout_seconds=PLAN_REVIEW_TIMEOUT_SECONDS,
-                )
+                # Poll for approval with exponential backoff
+                # Check: 1) DBOS message from UI, 2) GitHub comments, 3) Reactions on plan comment
+                poll_interval = 10  # seconds
+                max_poll_interval = 300  # 5 minutes
+                plan_posted_at = datetime.now(timezone.utc)
+                total_wait = 0
+                response = None
+                approval_source = None
+
+                logger.info(f"Waiting for plan approval via UI, GitHub comment, or reaction...")
+
+                while total_wait < PLAN_REVIEW_TIMEOUT_SECONDS:
+                    # First, check for DBOS message (non-blocking with short timeout)
+                    response = await DBOS.recv_async(
+                        topic=TOPIC_PLAN_RESPONSE,
+                        timeout_seconds=poll_interval,
+                    )
+
+                    if response is not None:
+                        approval_source = "ui"
+                        logger.info("Received plan response via UI")
+                        break
+
+                    # Check for approval reaction (👍, 🚀, etc.) on plan comment
+                    if plan_comment_id:
+                        has_approval_reaction = await check_plan_comment_reactions(
+                            task.repo_url, plan_comment_id
+                        )
+                        if has_approval_reaction:
+                            response = {"action": "approve", "text": ""}
+                            approval_source = "github_reaction"
+                            logger.info("Found approval reaction on plan comment")
+                            break
+
+                    # No UI response - check GitHub issue comments
+                    gh_response = await check_issue_for_plan_approval(
+                        task.repo_url, issue_number, plan_posted_at
+                    )
+
+                    if gh_response:
+                        action, text = gh_response
+                        response = {"action": action, "text": text or ""}
+                        approval_source = "github"
+                        logger.info(f"Found plan response in GitHub comment: {action}")
+                        break
+
+                    # No response yet - increase poll interval (exponential backoff)
+                    total_wait += poll_interval
+                    poll_interval = min(poll_interval * 1.5, max_poll_interval)
+                    logger.debug(f"No plan response yet, next poll in {poll_interval:.0f}s")
 
                 if response is None:
                     raise RuntimeError("Plan review timed out after 24 hours")
@@ -1017,7 +1141,12 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 response_text = response.get("text", "")
 
                 if response_action == "approve" or response_action.lower() in ["approve", "lgtm", "looks good"]:
-                    logger.info("Plan approved! Waiting for user to start implementation...")
+                    logger.info(f"Plan approved via {approval_source}! Waiting for user to start implementation...")
+                    if approval_source in ("github", "github_reaction"):
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            "✅ Got it! Plan approved."
+                        )
                     break
                 elif response_action == "cancel":
                     logger.info("Plan cancelled by user")
@@ -1037,11 +1166,17 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 else:
                     # User provided feedback - re-run plan with feedback
                     feedback = response_text or response_action
-                    logger.info(f"User requested plan revision: {feedback}")
-                    await add_issue_comment_step(
-                        task.repo_url, issue_number,
-                        f"📝 **Revision requested:**\n> {feedback}\n\nRegenerating plan..."
-                    )
+                    logger.info(f"User requested plan revision via {approval_source}: {feedback}")
+                    if approval_source == "github":
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            f"📝 Got your feedback. Regenerating plan..."
+                        )
+                    else:
+                        await add_issue_comment_step(
+                            task.repo_url, issue_number,
+                            f"📝 **Revision requested:**\n> {feedback}\n\nRegenerating plan..."
+                        )
                     plan_text = feedback  # Pass feedback to next iteration
                     user_answers = {}  # Clear answers for new iteration
                     continue

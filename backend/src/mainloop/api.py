@@ -35,6 +35,7 @@ from mainloop.workflows.main_thread import (
 )
 from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
 from mainloop.services.chat_handler import process_message
+from mainloop.services.github_pr import update_github_issue, add_issue_comment
 
 app = FastAPI(
     title="Mainloop API",
@@ -486,7 +487,7 @@ async def cancel_task(
     task_id: str,
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
-    """Cancel a running task."""
+    """Cancel a running task and close associated GitHub issue/PR."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
@@ -501,6 +502,26 @@ async def cancel_task(
     DBOS.cancel_workflow(task_id)
 
     await db.update_worker_task(task_id, status=TaskStatus.CANCELLED)
+
+    # Close GitHub issue if exists
+    if task.repo_url and task.issue_number:
+        await add_issue_comment(
+            task.repo_url, task.issue_number,
+            "❌ Task cancelled by user."
+        )
+        await update_github_issue(
+            task.repo_url, task.issue_number, state="closed"
+        )
+
+    # Close GitHub PR if exists (PRs are also issues in GitHub API)
+    if task.repo_url and task.pr_number and task.pr_number != task.issue_number:
+        await add_issue_comment(
+            task.repo_url, task.pr_number,
+            "❌ Task cancelled by user."
+        )
+        await update_github_issue(
+            task.repo_url, task.pr_number, state="closed"
+        )
 
     return {"status": "cancelled"}
 
