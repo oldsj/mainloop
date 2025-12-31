@@ -505,6 +505,98 @@ async def cancel_task(
     return {"status": "cancelled"}
 
 
+class AnswerQuestionsRequest(BaseModel):
+    """Request to answer task questions."""
+
+    answers: dict[str, str]  # question_id -> answer text
+    action: str = "answer"  # "answer" or "cancel"
+
+
+@app.post("/tasks/{task_id}/answer-questions")
+async def answer_task_questions(
+    task_id: str,
+    body: AnswerQuestionsRequest,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Answer questions asked by an agent during planning.
+
+    The agent can ask questions via AskUserQuestion tool during plan mode.
+    These questions are stored on the task and surfaced in the UI.
+    This endpoint sends the user's answers back to the waiting worker workflow.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    if task.status != TaskStatus.WAITING_QUESTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not waiting for questions (status: {task.status})"
+        )
+
+    # Send answers to the worker workflow
+    from mainloop.workflows.worker import TOPIC_QUESTION_RESPONSE
+
+    DBOS.send(
+        task_id,  # Worker workflow ID is the task ID
+        {
+            "action": body.action,
+            "answers": body.answers,
+        },
+        topic=TOPIC_QUESTION_RESPONSE,
+    )
+
+    return {"status": "ok", "message": f"Sent {len(body.answers)} answer(s) to task"}
+
+
+@app.post("/tasks/{task_id}/approve-plan")
+async def approve_task_plan(
+    task_id: str,
+    action: str = "approve",
+    revision_text: str | None = None,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Approve or revise a plan shown in the task UI.
+
+    This replaces the queue-item-based plan approval for the embedded task UI flow.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    if task.status != TaskStatus.WAITING_PLAN_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task is not waiting for plan review (status: {task.status})"
+        )
+
+    # Send response to the worker workflow
+    from mainloop.workflows.worker import TOPIC_PLAN_RESPONSE
+
+    DBOS.send(
+        task_id,
+        {
+            "action": action,  # "approve", "cancel", or revision text
+            "text": revision_text or "",
+        },
+        topic=TOPIC_PLAN_RESPONSE,
+    )
+
+    return {"status": "ok", "action": action}
+
+
 # ============= Internal Endpoints (for K8s Jobs) =============
 
 

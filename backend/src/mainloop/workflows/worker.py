@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # Topics for DBOS messaging
 TOPIC_JOB_RESULT = "job_result"  # Results from K8s Jobs
 TOPIC_PLAN_RESPONSE = "plan_response"  # User approval/revision of plan from inbox
+TOPIC_QUESTION_RESPONSE = "question_response"  # User answers to agent questions
 
 # Polling intervals (seconds)
 ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
@@ -67,6 +68,8 @@ async def update_worker_task_status(
     pr_number: int | None = None,
     branch_name: str | None = None,
     error: str | None = None,
+    pending_questions: list[dict] | None = None,
+    plan_text: str | None = None,
 ) -> None:
     """Update task status in database."""
     await db.update_worker_task(
@@ -78,6 +81,8 @@ async def update_worker_task_status(
         pr_number=pr_number,
         branch_name=branch_name,
         error=error,
+        pending_questions=pending_questions,
+        plan_text=plan_text,
     )
 
 
@@ -606,40 +611,114 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         # ============================================================
         # PHASE 1: PLANNING (unless skip_plan is True)
         # Interactive plan review in inbox, then creates GitHub issue on approval
+        # Handles questions from agent before plan approval
         # ============================================================
         if not task.skip_plan:
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
             plan_iteration = 0
             plan_text: str | None = None
             suggested_options: list[str] = []
+            user_answers: dict[str, str] = {}  # Accumulated answers to questions
 
             while True:
                 plan_iteration += 1
 
-                # Run plan job with retry - now returns plan content, not GitHub issue
+                # Build feedback context from previous iteration or user answers
+                feedback_context = None
+                if plan_iteration > 1 and plan_text:
+                    feedback_context = plan_text
+                if user_answers:
+                    # Format answers as context for the agent
+                    answers_text = "\n".join([f"- {k}: {v}" for k, v in user_answers.items()])
+                    if feedback_context:
+                        feedback_context = f"{feedback_context}\n\nUser answered your questions:\n{answers_text}"
+                    else:
+                        feedback_context = f"User answered your questions:\n{answers_text}"
+
+                # Run plan job with retry - returns plan content and any questions
                 result = await run_job_with_retry(
                     lambda iteration=plan_iteration: spawn_plan_job(
                         task_id, namespace, task,
-                        feedback=plan_text if plan_iteration > 1 else None,
+                        feedback=feedback_context,
                         iteration=iteration
                     ),
                     f"plan job (iteration {plan_iteration})",
                 )
 
-                # Extract plan content from result
+                # Extract plan content and questions from result
                 plan_result = result.get("result", {})
                 plan_text = plan_result.get("plan_text")
+                questions = plan_result.get("questions", [])
                 suggested_options = plan_result.get("suggested_options", [])
 
                 if not plan_text:
                     raise RuntimeError("Plan job did not return plan content")
 
-                logger.info(f"Plan ready with {len(suggested_options)} suggested options")
+                logger.info(f"Plan ready with {len(questions)} questions, {len(suggested_options)} options")
 
+                # PHASE 1a: If agent asked questions, get user answers first
+                if questions:
+                    logger.info(f"Agent asked {len(questions)} questions - waiting for user answers")
+
+                    # Update task with questions
+                    await update_worker_task_status(
+                        task_id, TaskStatus.WAITING_QUESTIONS,
+                        pending_questions=questions,
+                        plan_text=plan_text,
+                    )
+
+                    # Notify main thread about questions (task UI will show them)
+                    notify_main_thread(
+                        task.user_id,
+                        task_id,
+                        "worker_result",
+                        {
+                            "status": "questions",
+                            "result": {
+                                "questions": questions,
+                                "plan_text": plan_text,
+                                "message": "Please answer these questions to continue",
+                            },
+                        },
+                    )
+
+                    # Wait for user to answer questions (24 hour timeout)
+                    response = await DBOS.recv_async(
+                        topic=TOPIC_QUESTION_RESPONSE,
+                        timeout_seconds=PLAN_REVIEW_TIMEOUT_SECONDS,
+                    )
+
+                    if response is None:
+                        raise RuntimeError("Question response timed out after 24 hours")
+
+                    if response.get("action") == "cancel":
+                        logger.info("Task cancelled by user during questions")
+                        await update_worker_task_status(task_id, TaskStatus.CANCELLED)
+                        notify_main_thread(
+                            task.user_id, task_id, "worker_result",
+                            {"status": "cancelled", "result": {"message": "Cancelled by user"}},
+                        )
+                        return {"status": "cancelled", "message": "Cancelled by user"}
+
+                    # Store answers and re-run plan job with answers as context
+                    user_answers = response.get("answers", {})
+                    logger.info(f"User answered {len(user_answers)} questions, re-running plan...")
+
+                    # Clear questions from task since they've been answered
+                    await update_worker_task_status(
+                        task_id, TaskStatus.PLANNING,
+                        pending_questions=[],  # Empty list clears questions
+                    )
+                    continue  # Re-run plan job with answers
+
+                # PHASE 1b: No questions - proceed to plan review
                 # Update status to waiting for plan review
-                await update_worker_task_status(task_id, TaskStatus.WAITING_PLAN_REVIEW)
+                await update_worker_task_status(
+                    task_id, TaskStatus.WAITING_PLAN_REVIEW,
+                    plan_text=plan_text,
+                )
 
-                # Notify main thread to create PLAN_REVIEW queue item
+                # Notify main thread - task UI will show plan for review
                 notify_main_thread(
                     task.user_id,
                     task_id,
@@ -683,6 +762,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     feedback = response_text or response_action
                     logger.info(f"User requested plan revision: {feedback}")
                     plan_text = feedback  # Pass feedback to next iteration
+                    user_answers = {}  # Clear answers for new iteration
                     continue
 
             # Create GitHub issue from approved plan

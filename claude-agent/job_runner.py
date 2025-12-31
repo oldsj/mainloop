@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -350,9 +351,11 @@ async def execute_task() -> dict:
     )
 
     collected_text: list[str] = []
+    collected_questions: list[dict] = []  # Questions from AskUserQuestion tool
     plan_content: str | None = None
     session_id: str | None = None
     cost_usd: float | None = None
+    should_stop_for_questions = False  # Flag to break cleanly
 
     async for message in query(prompt=prompt, options=options):
         if isinstance(message, AssistantMessage):
@@ -365,11 +368,44 @@ async def execute_task() -> dict:
                     if block.name == "ExitPlanMode":
                         plan_content = block.input.get("plan", "")
                         print(f"[claude] ExitPlanMode called with plan ({len(plan_content)} chars)")
+
+                    # Capture questions from AskUserQuestion tool call
+                    elif block.name == "AskUserQuestion":
+                        questions = block.input.get("questions", [])
+                        print(f"[claude] AskUserQuestion called with {len(questions)} question(s)")
+                        for q in questions:
+                            collected_questions.append({
+                                "id": str(uuid.uuid4()),
+                                "header": q.get("header", ""),
+                                "question": q.get("question", ""),
+                                "options": [
+                                    {"label": opt.get("label", ""), "description": opt.get("description")}
+                                    for opt in q.get("options", [])
+                                ],
+                                "multi_select": q.get("multiSelect", False),
+                            })
+                        # In plan mode, flag to stop after this message
+                        if MODE == "plan" and collected_questions:
+                            print(f"[job_runner] Will stop after this message to get user answers for {len(collected_questions)} question(s)")
+                            should_stop_for_questions = True
         elif isinstance(message, ResultMessage):
             session_id = message.session_id
             cost_usd = message.total_cost_usd
             if message.is_error:
                 raise RuntimeError(message.result or "Claude execution failed")
+
+    # If we collected questions in plan mode, return early with questions
+    if should_stop_for_questions and collected_questions:
+        print(f"[job_runner] Returning {len(collected_questions)} question(s) for user answers")
+        plan_text = "\n".join(collected_text) if collected_text else "Plan in progress - answering questions first"
+        return {
+            "output": plan_text,
+            "plan_text": plan_text,
+            "questions": collected_questions,
+            "suggested_options": [],
+            "session_id": session_id,
+            "cost_usd": cost_usd,
+        }
 
     # Use plan content if available (from plan mode), otherwise use collected text
     output = plan_content if plan_content else "\n".join(collected_text)
@@ -378,7 +414,7 @@ async def execute_task() -> dict:
     pr_url = extract_pr_url(output)
     issue_url = extract_issue_url(output)
 
-    # For plan mode: return plan content for inbox review (don't create GitHub issue)
+    # For plan mode: return plan content and questions for inbox review
     if MODE == "plan" and output:
         # Use the last substantial text block as the plan (skip short exploration messages)
         plan_text = None
@@ -389,6 +425,7 @@ async def execute_task() -> dict:
 
         plan_text = plan_text or output
         print(f"[job_runner] Returning plan for inbox review ({len(plan_text)} chars)")
+        print(f"[job_runner] Collected {len(collected_questions)} question(s)")
 
         # Extract suggested options from the plan
         suggested_options = extract_plan_options(plan_text)
@@ -397,6 +434,7 @@ async def execute_task() -> dict:
         return {
             "output": output,
             "plan_text": plan_text,
+            "questions": collected_questions,  # Questions from AskUserQuestion
             "suggested_options": suggested_options,
             "session_id": session_id,
             "cost_usd": cost_usd,

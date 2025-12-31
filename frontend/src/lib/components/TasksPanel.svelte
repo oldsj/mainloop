@@ -1,15 +1,117 @@
 <script lang="ts">
   import { tasks, tasksList, isTasksOpen, activeTasksCount } from '$lib/stores/tasks';
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
-  import type { QueueItem, WorkerTask } from '$lib/api';
+  import type { QueueItem, WorkerTask, TaskQuestion } from '$lib/api';
   import LogViewer from './LogViewer.svelte';
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
 
-  let expandedTaskId = $state<string | null>(null);
+  let expandedTaskIds = $state<Set<string>>(new Set());
   let respondingItemId = $state<string | null>(null);
   let customResponses = $state<Record<string, string>>({});
   let showRecent = $state(false);
+
+  // State for task interactions (questions and plan reviews)
+  let selectedAnswers = $state<Record<string, Record<string, string>>>({});  // taskId -> questionId -> answer
+  let customQuestionInputs = $state<Record<string, Record<string, string>>>({});  // taskId -> questionId -> custom text
+  let planRevisionText = $state<Record<string, string>>({});  // taskId -> revision text
+  let submittingTaskId = $state<string | null>(null);
+
+  // Helper to check if task needs attention (questions or plan review)
+  function needsAttention(task: WorkerTask): boolean {
+    return task.status === 'waiting_questions' || task.status === 'waiting_plan_review';
+  }
+
+  // Get answer for a question
+  function getAnswer(taskId: string, questionId: string): string | null {
+    return selectedAnswers[taskId]?.[questionId] || customQuestionInputs[taskId]?.[questionId] || null;
+  }
+
+  // Select an option for a question
+  function selectOption(taskId: string, questionId: string, option: string) {
+    if (!selectedAnswers[taskId]) {
+      selectedAnswers[taskId] = {};
+    }
+    selectedAnswers[taskId][questionId] = option;
+    // Clear custom input when selecting option
+    if (customQuestionInputs[taskId]?.[questionId]) {
+      customQuestionInputs[taskId][questionId] = '';
+    }
+  }
+
+  // Set custom answer for a question
+  function setCustomAnswer(taskId: string, questionId: string, text: string) {
+    if (!customQuestionInputs[taskId]) {
+      customQuestionInputs[taskId] = {};
+    }
+    customQuestionInputs[taskId][questionId] = text;
+    // Clear selected option when typing custom
+    if (text && selectedAnswers[taskId]?.[questionId]) {
+      delete selectedAnswers[taskId][questionId];
+    }
+  }
+
+  // Check if all questions have answers
+  function allQuestionsAnswered(task: WorkerTask): boolean {
+    if (!task.pending_questions) return false;
+    return task.pending_questions.every((q) => getAnswer(task.id, q.id));
+  }
+
+  // Submit all answers for a task
+  async function submitAnswers(taskId: string) {
+    submittingTaskId = taskId;
+    try {
+      const answers: Record<string, string> = {};
+      const taskAnswers = selectedAnswers[taskId] || {};
+      const taskCustom = customQuestionInputs[taskId] || {};
+
+      // Merge selected options and custom inputs
+      for (const [qId, answer] of Object.entries(taskAnswers)) {
+        answers[qId] = answer;
+      }
+      for (const [qId, answer] of Object.entries(taskCustom)) {
+        if (answer) answers[qId] = answer;
+      }
+
+      await tasks.answerQuestions(taskId, answers);
+      // Clear local state
+      delete selectedAnswers[taskId];
+      delete customQuestionInputs[taskId];
+    } catch (e) {
+      console.error('Failed to submit answers:', e);
+    } finally {
+      submittingTaskId = null;
+    }
+  }
+
+  // Approve plan
+  async function handleApprovePlan(taskId: string) {
+    submittingTaskId = taskId;
+    try {
+      await tasks.approvePlan(taskId);
+      delete planRevisionText[taskId];
+    } catch (e) {
+      console.error('Failed to approve plan:', e);
+    } finally {
+      submittingTaskId = null;
+    }
+  }
+
+  // Revise plan
+  async function handleRevisePlan(taskId: string) {
+    const feedback = planRevisionText[taskId]?.trim();
+    if (!feedback) return;
+
+    submittingTaskId = taskId;
+    try {
+      await tasks.revisePlan(taskId, feedback);
+      delete planRevisionText[taskId];
+    } catch (e) {
+      console.error('Failed to revise plan:', e);
+    } finally {
+      submittingTaskId = null;
+    }
+  }
 
   // Split tasks into active vs terminal
   const activeTasks = $derived(
@@ -75,6 +177,8 @@
       case 'planning':
       case 'implementing':
         return 'border-term-info text-term-info';
+      case 'waiting_questions':
+        return 'border-term-warning text-term-warning animate-pulse';
       case 'waiting_plan_review':
       case 'under_review':
         return 'border-term-accent text-term-accent';
@@ -95,6 +199,8 @@
         return 'PENDING';
       case 'planning':
         return 'PLANNING';
+      case 'waiting_questions':
+        return 'QUESTIONS';
       case 'waiting_plan_review':
         return 'PLAN_REVIEW';
       case 'implementing':
@@ -140,7 +246,27 @@
     const terminalStatuses = ['completed', 'failed', 'cancelled'];
     if (terminalStatuses.includes(status)) return;
 
-    expandedTaskId = expandedTaskId === taskId ? null : taskId;
+    const newSet = new Set(expandedTaskIds);
+    if (newSet.has(taskId)) {
+      newSet.delete(taskId);
+    } else {
+      newSet.add(taskId);
+    }
+    expandedTaskIds = newSet;
+  }
+
+  function expandAll() {
+    const newSet = new Set<string>();
+    for (const task of $tasksList) {
+      if (isExpandable(task.status)) {
+        newSet.add(task.id);
+      }
+    }
+    expandedTaskIds = newSet;
+  }
+
+  function collapseAll() {
+    expandedTaskIds = new Set();
   }
 
   function isExpandable(status: string): boolean {
@@ -235,24 +361,49 @@
           </span>
         {/if}
       </div>
-      {#if !desktop && !mobile}
-        <button
-          onclick={handleClose}
-          class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
-          aria-label="Close panel"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="1.5"
-            stroke="currentColor"
-            class="h-6 w-6"
+      <div class="flex items-center gap-1">
+        <!-- Expand/Collapse all buttons (VSCode style) -->
+        {#if activeTasks.length > 0}
+          <button
+            onclick={expandAll}
+            class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
+            aria-label="Expand all"
+            title="Expand all"
           >
-            <path stroke-linecap="square" stroke-linejoin="miter" d="M6 18 18 6M6 6l12 12" />
-          </svg>
-        </button>
-      {/if}
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+            </svg>
+          </button>
+          <button
+            onclick={collapseAll}
+            class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
+            aria-label="Collapse all"
+            title="Collapse all"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+            </svg>
+          </button>
+        {/if}
+        {#if !desktop && !mobile}
+          <button
+            onclick={handleClose}
+            class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
+            aria-label="Close panel"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="1.5"
+              stroke="currentColor"
+              class="h-6 w-6"
+            >
+              <path stroke-linecap="square" stroke-linejoin="miter" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        {/if}
+      </div>
     </header>
 
     <div class="flex-1 overflow-y-auto">
@@ -495,7 +646,7 @@
                       viewBox="0 0 24 24"
                       stroke-width="1.5"
                       stroke="currentColor"
-                      class="h-4 w-4 text-term-fg-muted transition-transform {expandedTaskId === task.id
+                      class="h-4 w-4 text-term-fg-muted transition-transform {expandedTaskIds.has(task.id)
                         ? 'rotate-180'
                         : ''}"
                     >
@@ -509,9 +660,109 @@
                 </div>
               </div>
 
-              {#if expandedTaskId === task.id}
+              {#if expandedTaskIds.has(task.id) || needsAttention(task)}
                 <div class="border-t border-term-border bg-term-bg-secondary">
-                  <LogViewer taskId={task.id} taskStatus={task.status} />
+                  <!-- Questions UI -->
+                  {#if task.status === 'waiting_questions' && task.pending_questions}
+                    <div class="p-4 space-y-4">
+                      <div class="text-xs text-term-fg-muted uppercase tracking-wide">Answer these questions to continue</div>
+                      {#each task.pending_questions as question (question.id)}
+                        <div class="space-y-2">
+                          <div class="flex items-center gap-2">
+                            <span class="px-2 py-0.5 text-xs border border-term-accent text-term-accent">{question.header}</span>
+                          </div>
+                          <p class="text-sm text-term-fg">{question.question}</p>
+                          <div class="flex flex-wrap gap-2">
+                            {#each question.options as opt}
+                              <button
+                                onclick={() => selectOption(task.id, question.id, opt.label)}
+                                disabled={submittingTaskId === task.id}
+                                class="border px-3 py-1.5 text-sm transition-colors disabled:opacity-50
+                                  {selectedAnswers[task.id]?.[question.id] === opt.label
+                                    ? 'border-term-accent bg-term-accent/10 text-term-accent'
+                                    : 'border-term-border text-term-fg hover:border-term-accent hover:text-term-accent'}"
+                                title={opt.description || ''}
+                              >
+                                {opt.label}
+                              </button>
+                            {/each}
+                          </div>
+                          <!-- Custom input -->
+                          <div class="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Or type a custom answer..."
+                              value={customQuestionInputs[task.id]?.[question.id] || ''}
+                              oninput={(e) => setCustomAnswer(task.id, question.id, (e.target as HTMLInputElement).value)}
+                              disabled={submittingTaskId === task.id}
+                              class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
+                            />
+                          </div>
+                        </div>
+                      {/each}
+                      <!-- Submit button -->
+                      <div class="flex gap-2 pt-2 border-t border-term-border">
+                        <button
+                          onclick={() => submitAnswers(task.id)}
+                          disabled={submittingTaskId === task.id || !allQuestionsAnswered(task)}
+                          class="border border-term-accent bg-term-accent/10 px-4 py-2 text-sm text-term-accent transition-colors hover:bg-term-accent/20 disabled:opacity-50"
+                        >
+                          {submittingTaskId === task.id ? 'Submitting...' : 'Submit Answers'}
+                        </button>
+                        <button
+                          onclick={() => tasks.cancelQuestions(task.id)}
+                          disabled={submittingTaskId === task.id}
+                          class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  {:else if task.status === 'waiting_plan_review' && task.plan_text}
+                    <!-- Plan Review UI -->
+                    <div class="p-4 space-y-4">
+                      <div class="text-xs text-term-fg-muted uppercase tracking-wide">Review Implementation Plan</div>
+                      <div class="max-h-96 overflow-y-auto rounded border border-term-border bg-term-bg p-3">
+                        <pre class="whitespace-pre-wrap text-xs text-term-fg">{task.plan_text}</pre>
+                      </div>
+                      <!-- Approve/Revise buttons -->
+                      <div class="flex gap-2">
+                        <button
+                          onclick={() => handleApprovePlan(task.id)}
+                          disabled={submittingTaskId === task.id}
+                          class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
+                        >
+                          {submittingTaskId === task.id ? 'Approving...' : 'Approve Plan'}
+                        </button>
+                        <button
+                          onclick={() => tasks.cancelTask(task.id)}
+                          disabled={submittingTaskId === task.id}
+                          class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <!-- Revision input -->
+                      <div class="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Request changes..."
+                          bind:value={planRevisionText[task.id]}
+                          disabled={submittingTaskId === task.id}
+                          class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
+                        />
+                        <button
+                          onclick={() => handleRevisePlan(task.id)}
+                          disabled={submittingTaskId === task.id || !planRevisionText[task.id]?.trim()}
+                          class="border border-term-border px-4 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
+                        >
+                          Revise
+                        </button>
+                      </div>
+                    </div>
+                  {:else}
+                    <LogViewer taskId={task.id} taskStatus={task.status} />
+                  {/if}
                 </div>
               {/if}
             </div>

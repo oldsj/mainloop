@@ -62,6 +62,20 @@ export interface QueueItem {
   expires_at: string | null;
 }
 
+export interface QuestionOption {
+  label: string;
+  description: string | null;
+}
+
+export interface TaskQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: QuestionOption[];
+  multi_select: boolean;
+  response: string | null;
+}
+
 export interface WorkerTask {
   id: string;
   main_thread_id: string;
@@ -92,6 +106,9 @@ export interface WorkerTask {
   message_id: string | null;
   keywords: string[];
   skip_plan: boolean;
+  // Interactive planning state
+  pending_questions: TaskQuestion[] | null;
+  plan_text: string | null;
 }
 
 export interface TaskContext {
@@ -225,5 +242,34 @@ export const api = {
     const response = await fetch(`${API_URL}/tasks/${taskId}/logs?tail=${tail}`);
     if (!response.ok) throw new Error('Failed to get task logs');
     return response.json();
+  },
+
+  async answerTaskQuestions(
+    taskId: string,
+    answers: Record<string, string>,
+    action: 'answer' | 'cancel' = 'answer'
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/tasks/${taskId}/answer-questions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ answers, action })
+    });
+    if (!response.ok) throw new Error('Failed to answer questions');
+  },
+
+  async approveTaskPlan(
+    taskId: string,
+    action: 'approve' | 'cancel' | 'revise' = 'approve',
+    revisionText?: string
+  ): Promise<void> {
+    const params = new URLSearchParams({ action });
+    if (revisionText) params.set('revision_text', revisionText);
+
+    const response = await fetch(`${API_URL}/tasks/${taskId}/approve-plan?${params}`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to approve plan');
   }
 };

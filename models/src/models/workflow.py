@@ -16,12 +16,31 @@ class TaskStatus(str, Enum):
 
     PENDING = "pending"
     PLANNING = "planning"  # Creating implementation plan
+    WAITING_QUESTIONS = "waiting_questions"  # Agent asked questions, needs answers
     WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
     IMPLEMENTING = "implementing"  # Writing code per approved plan
     UNDER_REVIEW = "under_review"  # PR created, awaiting review/merge
     COMPLETED = "completed"  # PR merged
     FAILED = "failed"
     CANCELLED = "cancelled"  # PR closed without merge
+
+
+class QuestionOption(BaseModel):
+    """An option for a task question."""
+
+    label: str = Field(..., description="Display text for the option")
+    description: str | None = Field(None, description="Explanation of this option")
+
+
+class TaskQuestion(BaseModel):
+    """A question asked by an agent that needs user input."""
+
+    id: str = Field(default_factory=_uuid, description="Unique question ID")
+    header: str = Field(..., description="Short label/category for the question")
+    question: str = Field(..., description="Full question text")
+    options: list[QuestionOption] = Field(default_factory=list, description="Available options")
+    multi_select: bool = Field(default=False, description="Allow selecting multiple options")
+    response: str | None = Field(None, description="User's answer")
 
 
 class QueueItemType(str, Enum):
@@ -130,6 +149,10 @@ class WorkerTask(BaseModel):
     message_id: str | None = Field(None, description="Originating message ID")
     keywords: list[str] = Field(default_factory=list, description="Keywords for task routing")
     skip_plan: bool = Field(default=False, description="Skip plan phase if user said 'just do it'")
+
+    # Interactive planning state
+    pending_questions: list[TaskQuestion] | None = Field(None, description="Questions awaiting user answers")
+    plan_text: str | None = Field(None, description="Current plan text for review")
 
 
 class WorkerTaskCreate(BaseModel):

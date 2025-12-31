@@ -19,6 +19,20 @@ from models import (
 from mainloop.config import settings
 
 
+def _parse_json_field(value: Any) -> list | dict | None:
+    """Parse a JSON field that might be a string or already parsed."""
+    if value is None:
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 # SQL schema for workflow tables
 SCHEMA_SQL = """
 -- Main threads (eternal per-user workflows)
@@ -61,7 +75,10 @@ CREATE TABLE IF NOT EXISTS worker_tasks (
     conversation_id TEXT,
     message_id TEXT,
     keywords TEXT[] DEFAULT '{}',
-    skip_plan BOOLEAN DEFAULT FALSE
+    skip_plan BOOLEAN DEFAULT FALSE,
+    -- Interactive planning state
+    pending_questions JSONB,
+    plan_text TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_main_thread ON worker_tasks(main_thread_id);
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_user_id ON worker_tasks(user_id);
@@ -156,6 +173,13 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_last_modified') THEN
         ALTER TABLE worker_tasks ADD COLUMN pr_last_modified TIMESTAMPTZ;
+    END IF;
+    -- Interactive planning columns
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pending_questions') THEN
+        ALTER TABLE worker_tasks ADD COLUMN pending_questions JSONB;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='plan_text') THEN
+        ALTER TABLE worker_tasks ADD COLUMN plan_text TEXT;
     END IF;
     -- Add read_at to queue_items
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
@@ -512,6 +536,9 @@ class Database:
         pr_last_modified: datetime | None = None,
         commit_sha: str | None = None,
         branch_name: str | None = None,
+        # Interactive planning fields
+        pending_questions: list[dict] | None = None,
+        plan_text: str | None = None,
     ):
         """Update worker task fields."""
         if not self._pool:
@@ -588,6 +615,18 @@ class Database:
             updates.append(f"pr_last_modified = ${param_idx}")
             params.append(pr_last_modified)
             param_idx += 1
+        # pending_questions: empty list [] means clear, list with items means set
+        # None means don't update (standard pattern)
+        if pending_questions is not None:
+            updates.append(f"pending_questions = ${param_idx}")
+            # Empty list clears (stores null), non-empty stores as JSON string
+            # asyncpg requires explicit JSON serialization for JSONB columns
+            params.append(json.dumps(pending_questions) if pending_questions else None)
+            param_idx += 1
+        if plan_text is not None:
+            updates.append(f"plan_text = ${param_idx}")
+            params.append(plan_text)
+            param_idx += 1
 
         params.append(task_id)
 
@@ -633,6 +672,10 @@ class Database:
             message_id=row.get("message_id"),
             keywords=list(row["keywords"]) if row.get("keywords") else [],
             skip_plan=row.get("skip_plan", False),
+            # Interactive planning state
+            # Handle both JSONB (returns list) and legacy string data
+            pending_questions=_parse_json_field(row.get("pending_questions")),
+            plan_text=row.get("plan_text"),
         )
 
     # ============= Queue Item Operations =============

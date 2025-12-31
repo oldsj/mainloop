@@ -71,6 +71,74 @@ function createTasksStore() {
       }
     },
 
+    async answerQuestions(taskId: string, answers: Record<string, string>) {
+      try {
+        await api.answerTaskQuestions(taskId, answers);
+        // Optimistically update task status
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId
+              ? { ...task, status: 'planning', pending_questions: null }
+              : task
+          )
+        }));
+        // Refetch to get updated state
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to answer questions:', e);
+        throw e;
+      }
+    },
+
+    async cancelQuestions(taskId: string) {
+      try {
+        await api.answerTaskQuestions(taskId, {}, 'cancel');
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'cancelled' } : task
+          )
+        }));
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to cancel task:', e);
+        throw e;
+      }
+    },
+
+    async approvePlan(taskId: string) {
+      try {
+        await api.approveTaskPlan(taskId, 'approve');
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'implementing', plan_text: null } : task
+          )
+        }));
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to approve plan:', e);
+        throw e;
+      }
+    },
+
+    async revisePlan(taskId: string, feedback: string) {
+      try {
+        await api.approveTaskPlan(taskId, 'revise', feedback);
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === taskId ? { ...task, status: 'planning' } : task
+          )
+        }));
+        this.fetchTasks();
+      } catch (e) {
+        console.error('Failed to revise plan:', e);
+        throw e;
+      }
+    },
+
     open() {
       update((s) => ({ ...s, isOpen: true }));
       this.fetchTasks();
