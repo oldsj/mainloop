@@ -5,6 +5,7 @@
   import { inbox } from '$lib/stores/inbox';
   import { tasks } from '$lib/stores/tasks';
   import { themeStore } from '$lib/stores/theme';
+  import { connectSSE, disconnectSSE } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
@@ -17,11 +18,18 @@
 
   onMount(() => {
     themeStore.initialize();
-    inbox.startPolling(30000);
-    tasks.startPolling(10000);
+
+    // Connect SSE for real-time updates
+    connectSSE();
+
+    // Start listening for SSE events
+    inbox.startListening();
+    tasks.startListening();
+
     return () => {
-      inbox.stopPolling();
-      tasks.stopPolling();
+      inbox.stopListening();
+      tasks.stopListening();
+      disconnectSSE();
     };
   });
 </script>

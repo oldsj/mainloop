@@ -1,9 +1,12 @@
 /**
  * Tasks store for managing active worker tasks
+ *
+ * Uses SSE for real-time updates instead of polling.
  */
 
 import { writable, derived } from 'svelte/store';
 import { api, type WorkerTask } from '$lib/api';
+import { getSSEClient, type SSEEvent } from '$lib/sse';
 
 interface TasksState {
   tasks: WorkerTask[];
@@ -22,7 +25,7 @@ const initialState: TasksState = {
 function createTasksStore() {
   const { subscribe, set, update } = writable<TasksState>(initialState);
 
-  let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let sseUnsubscribe: (() => void) | null = null;
 
   return {
     subscribe,
@@ -175,19 +178,51 @@ function createTasksStore() {
       }
     },
 
-    startPolling(intervalMs = 10000) {
-      this.stopPolling();
-      this.fetchTasks();
-      pollInterval = setInterval(() => {
+    /**
+     * Start listening for SSE updates.
+     * Replaces polling with real-time event-driven updates.
+     */
+    startListening() {
+      this.stopListening();
+      this.fetchTasks(); // Initial fetch
+
+      const client = getSSEClient();
+
+      // Handle task updates from SSE
+      sseUnsubscribe = client.on('task:updated', (event: SSEEvent) => {
+        const { task_id, status } = event.data as { task_id: string; status: string };
+
+        // Update the task in our local state
+        update((s) => ({
+          ...s,
+          tasks: s.tasks.map((task) =>
+            task.id === task_id ? { ...task, status } : task
+          )
+        }));
+
+        // Refetch to get full task details (status change might include other fields)
         this.fetchTasks();
-      }, intervalMs);
+      });
+    },
+
+    /**
+     * Stop listening for SSE updates.
+     */
+    stopListening() {
+      if (sseUnsubscribe) {
+        sseUnsubscribe();
+        sseUnsubscribe = null;
+      }
+    },
+
+    // Legacy methods for backwards compatibility
+    startPolling(intervalMs = 10000) {
+      // Now just starts SSE listening
+      this.startListening();
     },
 
     stopPolling() {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
+      this.stopListening();
     }
   };
 }

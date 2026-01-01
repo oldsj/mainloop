@@ -1,7 +1,7 @@
 """FastAPI application with DBOS durable workflows."""
 
 import uuid
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from dbos import DBOS
 
@@ -23,6 +23,13 @@ from models import (
 from pydantic import BaseModel
 from typing import Any
 from datetime import datetime
+from mainloop.sse import (
+    event_stream,
+    task_log_stream,
+    create_sse_response,
+    notify_task_updated,
+    notify_inbox_updated,
+)
 
 # Import DBOS config to initialize DBOS before defining workflows
 from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
@@ -95,6 +102,58 @@ async def root():
 async def health():
     """Health check endpoint."""
     return {"status": "healthy", "dbos": "active"}
+
+
+# ============= SSE Endpoints =============
+
+
+@app.get("/events")
+async def sse_events(
+    request: Request,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """SSE endpoint for real-time updates.
+
+    Streams events for:
+    - task:updated - when a task status changes
+    - inbox:updated - when inbox items change
+    - heartbeat - periodic keepalive (every 30s)
+
+    The client should reconnect automatically on disconnect.
+    EventSource handles this natively.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    return create_sse_response(event_stream(user_id, request))
+
+
+@app.get("/tasks/{task_id}/logs/stream")
+async def sse_task_logs(
+    task_id: str,
+    request: Request,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """SSE endpoint for streaming task logs.
+
+    Streams events for:
+    - log - new log lines from the K8s pod
+    - status - task status changes
+    - end - stream is ending (task completed/failed)
+
+    Polls K8s logs every 2 seconds and streams new content.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    # Verify task exists and belongs to user
+    task = await db.get_worker_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    return create_sse_response(task_log_stream(task_id, user_id, request))
 
 
 # ============= Main Thread Endpoints =============
@@ -306,6 +365,11 @@ async def mark_queue_item_read(
         raise HTTPException(status_code=403, detail="Not your queue item")
 
     await db.mark_queue_item_read(item_id)
+
+    # Notify SSE clients of unread count change
+    unread_count = await db.count_unread_queue_items(user_id)
+    await notify_inbox_updated(user_id, item_id=item_id, unread_count=unread_count)
+
     return {"status": "ok"}
 
 
@@ -318,6 +382,10 @@ async def mark_all_queue_items_read(
         user_id = get_user_id_from_cf_header()
 
     await db.mark_all_queue_items_read(user_id)
+
+    # Notify SSE clients
+    await notify_inbox_updated(user_id, unread_count=0)
+
     return {"status": "ok"}
 
 
@@ -358,6 +426,10 @@ async def respond_to_queue_item(
             },
         },
     )
+
+    # Notify SSE clients
+    unread_count = await db.count_unread_queue_items(user_id)
+    await notify_inbox_updated(user_id, item_id=item_id, unread_count=unread_count)
 
     return {"status": "ok", "message": "Response sent"}
 
@@ -523,6 +595,9 @@ async def cancel_task(
             task.repo_url, task.pr_number, state="closed"
         )
 
+    # Notify SSE clients
+    await notify_task_updated(user_id, task_id, "cancelled")
+
     return {"status": "cancelled"}
 
 
@@ -581,8 +656,10 @@ async def answer_task_questions(
         if task.repo_url and task.issue_number:
             await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
             await update_github_issue(task.repo_url, task.issue_number, state="closed")
+        await notify_task_updated(user_id, task_id, "cancelled")
     else:
         await db.update_worker_task(task_id, status=TaskStatus.PLANNING, pending_questions=[])
+        await notify_task_updated(user_id, task_id, "planning")
 
     return {"status": "ok", "message": f"Sent {len(body.answers)} answer(s) to task"}
 
@@ -633,11 +710,14 @@ async def approve_task_plan(
         if task.repo_url and task.issue_number:
             await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
             await update_github_issue(task.repo_url, task.issue_number, state="closed")
+        await notify_task_updated(user_id, task_id, "cancelled")
     elif action == "approve":
         await db.update_worker_task(task_id, status=TaskStatus.READY_TO_IMPLEMENT)
+        await notify_task_updated(user_id, task_id, "ready_to_implement")
     else:
         # Revision - back to planning
         await db.update_worker_task(task_id, status=TaskStatus.PLANNING)
+        await notify_task_updated(user_id, task_id, "planning")
 
     return {"status": "ok", "action": action}
 
@@ -678,6 +758,9 @@ async def start_task_implementation(
 
     # Update task status immediately so frontend sees correct state on refetch
     await db.update_worker_task(task_id, status=TaskStatus.IMPLEMENTING)
+
+    # Notify SSE clients
+    await notify_task_updated(user_id, task_id, "implementing")
 
     return {"status": "ok", "message": "Implementation started"}
 

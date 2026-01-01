@@ -1,9 +1,12 @@
 /**
  * Inbox store for managing queue items and unread state
+ *
+ * Uses SSE for real-time updates instead of polling.
  */
 
 import { writable, derived } from 'svelte/store';
 import { api, type QueueItem } from '$lib/api';
+import { getSSEClient, type SSEEvent } from '$lib/sse';
 
 interface InboxState {
   items: QueueItem[];
@@ -24,7 +27,7 @@ const initialState: InboxState = {
 function createInboxStore() {
   const { subscribe, set, update } = writable<InboxState>(initialState);
 
-  let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let sseUnsubscribe: (() => void) | null = null;
 
   return {
     subscribe,
@@ -116,19 +119,53 @@ function createInboxStore() {
       }
     },
 
+    /**
+     * Start listening for SSE updates.
+     * Replaces polling with real-time event-driven updates.
+     */
+    startListening() {
+      this.stopListening();
+      this.fetchUnreadCount(); // Initial fetch
+
+      const client = getSSEClient();
+
+      // Handle inbox updates from SSE
+      sseUnsubscribe = client.on('inbox:updated', (event: SSEEvent) => {
+        const { unread_count, item_id } = event.data as {
+          unread_count?: number;
+          item_id?: string;
+        };
+
+        // Update unread count if provided
+        if (unread_count !== undefined) {
+          update((s) => ({ ...s, unreadCount: unread_count }));
+        }
+
+        // If a specific item was updated, refetch the items list
+        if (item_id) {
+          this.fetchItems();
+        }
+      });
+    },
+
+    /**
+     * Stop listening for SSE updates.
+     */
+    stopListening() {
+      if (sseUnsubscribe) {
+        sseUnsubscribe();
+        sseUnsubscribe = null;
+      }
+    },
+
+    // Legacy methods for backwards compatibility
     startPolling(intervalMs = 30000) {
-      this.stopPolling();
-      this.fetchUnreadCount();
-      pollInterval = setInterval(() => {
-        this.fetchUnreadCount();
-      }, intervalMs);
+      // Now just starts SSE listening
+      this.startListening();
     },
 
     stopPolling() {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
+      this.stopListening();
     }
   };
 }

@@ -278,5 +278,20 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to start implementation');
+  },
+
+  /**
+   * Get the SSE endpoint URL for streaming task logs.
+   * Use with EventSource or the SSE client.
+   */
+  getTaskLogsStreamUrl(taskId: string): string {
+    return `${API_URL}/tasks/${taskId}/logs/stream`;
+  },
+
+  /**
+   * Get the SSE endpoint URL for the global event stream.
+   */
+  getEventsStreamUrl(): string {
+    return `${API_URL}/events`;
   }
 };
