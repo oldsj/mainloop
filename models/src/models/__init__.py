@@ -17,6 +17,7 @@ from models.workflow import (
     EventTypes,
     GitHubRepo,
     GitHubPR,
+    Project,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "EventTypes",
     "GitHubRepo",
     "GitHubPR",
+    "Project",
 ]

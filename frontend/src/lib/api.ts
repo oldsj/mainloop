@@ -85,6 +85,7 @@ export interface WorkerTask {
   prompt: string;
   model: string | null;
   repo_url: string | null;
+  project_id: string | null;
   branch_name: string | null;
   base_branch: string;
   status: string;
@@ -120,6 +121,49 @@ export interface TaskLogsResponse {
   logs: string;
   source: 'k8s' | 'none';
   task_status: string;
+}
+
+export interface Project {
+  id: string;
+  user_id: string;
+  owner: string;
+  name: string;
+  full_name: string;
+  description: string | null;
+  default_branch: string;
+  avatar_url: string | null;
+  html_url: string;
+  created_at: string;
+  last_used_at: string;
+  metadata_updated_at: string | null;
+  open_pr_count: number;
+  open_issue_count: number;
+}
+
+export interface ProjectPRSummary {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  created_at: string;
+  updated_at: string;
+  url: string;
+  is_mainloop: boolean;
+}
+
+export interface CommitSummary {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  url: string;
+}
+
+export interface ProjectDetail {
+  project: Project;
+  open_prs: ProjectPRSummary[];
+  recent_commits: CommitSummary[];
+  tasks: WorkerTask[];
 }
 
 export const api = {
@@ -204,9 +248,39 @@ export const api = {
     if (!response.ok) throw new Error('Failed to respond to queue item');
   },
 
+  // Project endpoints
+  async listProjects(limit?: number): Promise<Project[]> {
+    const params = limit ? `?limit=${limit}` : '';
+    const response = await fetch(`${API_URL}/projects${params}`);
+    if (!response.ok) throw new Error('Failed to list projects');
+    return response.json();
+  },
+
+  async getProject(projectId: string): Promise<Project> {
+    const response = await fetch(`${API_URL}/projects/${projectId}`);
+    if (!response.ok) throw new Error('Failed to get project');
+    return response.json();
+  },
+
+  async getProjectDetail(projectId: string): Promise<ProjectDetail> {
+    const response = await fetch(`${API_URL}/projects/${projectId}/detail`);
+    if (!response.ok) throw new Error('Failed to get project detail');
+    return response.json();
+  },
+
+  async refreshProject(projectId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/projects/${projectId}/refresh`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to refresh project');
+  },
+
   // Task endpoints
-  async listTasks(status?: string): Promise<WorkerTask[]> {
-    const url = status ? `${API_URL}/tasks?status=${status}` : `${API_URL}/tasks`;
+  async listTasks(options?: { status?: string; projectId?: string }): Promise<WorkerTask[]> {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.projectId) params.set('project_id', options.projectId);
+    const url = params.toString() ? `${API_URL}/tasks?${params}` : `${API_URL}/tasks`;
     const response = await fetch(url);
     if (!response.ok) throw new Error('Failed to list tasks');
     return response.json();

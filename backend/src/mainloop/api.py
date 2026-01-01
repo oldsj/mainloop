@@ -19,6 +19,7 @@ from models import (
     QueueItemResponse,
     WorkerTask,
     TaskStatus,
+    Project,
 )
 from pydantic import BaseModel
 from typing import Any
@@ -42,7 +43,15 @@ from mainloop.workflows.main_thread import (
 )
 from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
 from mainloop.services.chat_handler import process_message
-from mainloop.services.github_pr import update_github_issue, add_issue_comment
+from mainloop.services.github_pr import (
+    update_github_issue,
+    add_issue_comment,
+    get_repo_metadata,
+    list_open_prs,
+    list_recent_commits,
+    ProjectPRSummary,
+    CommitSummary,
+)
 
 app = FastAPI(
     title="Mainloop API",
@@ -434,6 +443,90 @@ async def respond_to_queue_item(
     return {"status": "ok", "message": "Response sent"}
 
 
+# ============= Project Endpoints =============
+
+
+@app.get("/projects", response_model=list[Project])
+async def list_projects(
+    user_id: str = Header(alias="X-User-ID", default=None),
+    limit: int = 20,
+):
+    """List user's projects ordered by last used."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    projects = await db.list_projects(user_id=user_id, limit=limit)
+    return projects
+
+
+@app.get("/projects/{project_id}", response_model=Project)
+async def get_project(project_id: str):
+    """Get a project by ID."""
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+class ProjectDetail(BaseModel):
+    """Detailed project info including GitHub data."""
+
+    project: Project
+    open_prs: list[ProjectPRSummary]
+    recent_commits: list[CommitSummary]
+    tasks: list[WorkerTask]
+
+
+@app.get("/projects/{project_id}/detail", response_model=ProjectDetail)
+async def get_project_detail(
+    project_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Get project with GitHub data (PRs, commits, tasks)."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Fetch GitHub data in parallel
+    open_prs = await list_open_prs(project.html_url, limit=10)
+    recent_commits = await list_recent_commits(
+        project.html_url, branch=project.default_branch, limit=10
+    )
+
+    # Fetch tasks for this project
+    tasks = await db.list_worker_tasks(user_id=user_id, project_id=project_id, limit=50)
+
+    return ProjectDetail(
+        project=project,
+        open_prs=open_prs,
+        recent_commits=recent_commits,
+        tasks=tasks,
+    )
+
+
+@app.post("/projects/{project_id}/refresh")
+async def refresh_project_metadata(project_id: str):
+    """Force refresh GitHub metadata for a project."""
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Fetch fresh metadata from GitHub
+    metadata = await get_repo_metadata(project.html_url)
+    if metadata:
+        await db.update_project_metadata(
+            project_id,
+            description=metadata.description,
+            avatar_url=metadata.avatar_url,
+            open_issue_count=metadata.open_issues_count,
+        )
+
+    return {"status": "ok", "message": "Project metadata refreshed"}
+
+
 # ============= Task Endpoints =============
 
 
@@ -441,12 +534,13 @@ async def respond_to_queue_item(
 async def list_tasks(
     user_id: str = Header(alias="X-User-ID", default=None),
     status: str | None = None,
+    project_id: str | None = None,
 ):
-    """List worker tasks for the user."""
+    """List worker tasks for the user, optionally filtered by project."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
-    tasks = await db.list_worker_tasks(user_id=user_id, status=status)
+    tasks = await db.list_worker_tasks(user_id=user_id, status=status, project_id=project_id)
     return tasks
 
 

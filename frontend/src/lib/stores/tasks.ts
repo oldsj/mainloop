@@ -30,10 +30,11 @@ function createTasksStore() {
   return {
     subscribe,
 
-    async fetchTasks() {
+    async fetchTasks(projectId?: string | null) {
       update((s) => ({ ...s, isLoading: true, error: null }));
       try {
-        const tasks = await api.listTasks();
+        const options = projectId ? { projectId } : undefined;
+        const tasks = await api.listTasks(options);
         update((s) => ({ ...s, tasks, isLoading: false }));
       } catch (e) {
         update((s) => ({ ...s, error: 'Failed to load tasks', isLoading: false }));

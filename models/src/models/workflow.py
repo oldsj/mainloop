@@ -109,6 +109,7 @@ class WorkerTask(BaseModel):
 
     # Repository context
     repo_url: str | None = Field(None, description="GitHub repository URL")
+    project_id: str | None = Field(None, description="Associated project ID")
     branch_name: str | None = Field(None, description="Branch to create/work on")
     base_branch: str = Field(default="main", description="Base branch")
 
@@ -282,3 +283,36 @@ class GitHubPR(BaseModel):
     state: Literal["open", "closed", "merged"] = Field(..., description="PR state")
     head_branch: str = Field(..., description="Head branch name")
     base_branch: str = Field(..., description="Base branch name")
+
+
+class Project(BaseModel):
+    """A GitHub repository project tracked by the user."""
+
+    id: str = Field(default_factory=_uuid, description="Unique project ID")
+    user_id: str = Field(..., description="User who owns this project")
+
+    # GitHub identifiers
+    owner: str = Field(..., description="GitHub owner/org")
+    name: str = Field(..., description="Repository name")
+    full_name: str = Field(..., description="owner/name")
+
+    # GitHub metadata (cached)
+    description: str | None = Field(None, description="Repo description")
+    default_branch: str = Field(default="main", description="Default branch")
+    avatar_url: str | None = Field(None, description="Owner avatar URL")
+    html_url: str = Field(..., description="GitHub repo URL")
+
+    # Tracking
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    last_used_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Last used timestamp"
+    )
+    metadata_updated_at: datetime | None = Field(
+        None, description="When GitHub data was refreshed"
+    )
+
+    # Stats (cached, refreshed periodically)
+    open_pr_count: int = Field(default=0, description="Cached open PR count")
+    open_issue_count: int = Field(default=0, description="Cached open issue count")

@@ -8,6 +8,7 @@
   import { connectSSE, disconnectSSE } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
+  import ProjectList from '$lib/components/ProjectList.svelte';
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
   import ThemeSelector from '$lib/components/ThemeSelector.svelte';
 
@@ -52,8 +53,11 @@
     </main>
 
     <!-- Desktop: Always visible side panels -->
-    <div class="w-full max-w-md border-l border-term-border bg-term-bg">
-      <TasksPanel desktop={true} />
+    <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
+      <div class="flex-1 overflow-hidden">
+        <TasksPanel desktop={true} />
+      </div>
+      <ProjectList />
     </div>
   </div>
 </div>

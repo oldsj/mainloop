@@ -1,8 +1,10 @@
 <script lang="ts">
   import { tasks, tasksList, isTasksOpen, activeTasksCount } from '$lib/stores/tasks';
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
+  import { selectedProjectId } from '$lib/stores/projects';
   import type { QueueItem, WorkerTask, TaskQuestion } from '$lib/api';
   import LogViewer from './LogViewer.svelte';
+  import ProjectFilter from './ProjectFilter.svelte';
   import { marked } from 'marked';
 
   // Configure marked for terminal aesthetic
@@ -33,6 +35,11 @@
         autoExpandedTaskIds = new Set([...autoExpandedTaskIds, task.id]);
       }
     }
+  });
+
+  // Watch for project filter changes and refetch tasks
+  $effect(() => {
+    tasks.fetchTasks($selectedProjectId);
   });
 
   // State for task interactions (questions and plan reviews)
@@ -425,7 +432,10 @@
           </span>
         {/if}
       </div>
-      <div class="flex items-center gap-1">
+      <div class="flex items-center gap-2">
+        <!-- Project filter -->
+        <ProjectFilter />
+
         <!-- Expand/Collapse all buttons (VSCode style) -->
         {#if activeTasks.length > 0}
           <button

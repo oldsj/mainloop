@@ -1321,3 +1321,142 @@ def _resolve_answer(
     if resolved_parts:
         return ", ".join(resolved_parts)
     return None
+
+
+# ============= Project/Repo Metadata Functions =============
+
+
+class RepoMetadata(BaseModel):
+    """GitHub repository metadata."""
+
+    owner: str
+    name: str
+    full_name: str
+    description: str | None
+    default_branch: str
+    avatar_url: str
+    html_url: str
+    open_issues_count: int
+
+
+async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
+    """Fetch repository metadata from GitHub API.
+
+    Args:
+        repo_url: GitHub repository URL
+
+    Returns:
+        RepoMetadata or None if not found
+    """
+    owner, repo = _parse_repo(repo_url)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}",
+            headers=_get_headers(),
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        data = response.json()
+        return RepoMetadata(
+            owner=data["owner"]["login"],
+            name=data["name"],
+            full_name=data["full_name"],
+            description=data.get("description"),
+            default_branch=data.get("default_branch", "main"),
+            avatar_url=data["owner"]["avatar_url"],
+            html_url=data["html_url"],
+            open_issues_count=data.get("open_issues_count", 0),
+        )
+
+
+class ProjectPRSummary(BaseModel):
+    """Summary of a PR for a project."""
+
+    number: int
+    title: str
+    state: str
+    author: str
+    created_at: datetime
+    updated_at: datetime
+    url: str
+    is_mainloop: bool  # Created by mainloop worker
+
+
+async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary]:
+    """List open PRs for a repository.
+
+    Args:
+        repo_url: GitHub repository URL
+        limit: Maximum number of PRs to return
+
+    Returns:
+        List of ProjectPRSummary objects
+    """
+    owner, repo = _parse_repo(repo_url)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls",
+            headers=_get_headers(),
+            params={"state": "open", "per_page": limit},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            ProjectPRSummary(
+                number=pr["number"],
+                title=pr["title"],
+                state=pr["state"],
+                author=pr["user"]["login"],
+                created_at=datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00")),
+                updated_at=datetime.fromisoformat(pr["updated_at"].replace("Z", "+00:00")),
+                url=pr["html_url"],
+                # Check if created by our worker (has mainloop in branch name or by our bot user)
+                is_mainloop="mainloop" in pr["head"]["ref"].lower() or "feature/" in pr["head"]["ref"],
+            )
+            for pr in data
+        ]
+
+
+class CommitSummary(BaseModel):
+    """Summary of a commit."""
+
+    sha: str
+    message: str
+    author: str
+    date: datetime
+    url: str
+
+
+async def list_recent_commits(
+    repo_url: str, branch: str = "main", limit: int = 10
+) -> list[CommitSummary]:
+    """List recent commits on a branch.
+
+    Args:
+        repo_url: GitHub repository URL
+        branch: Branch name (default: main)
+        limit: Maximum number of commits to return
+
+    Returns:
+        List of CommitSummary objects
+    """
+    owner, repo = _parse_repo(repo_url)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits",
+            headers=_get_headers(),
+            params={"sha": branch, "per_page": limit},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            CommitSummary(
+                sha=commit["sha"][:7],  # Short SHA
+                message=commit["commit"]["message"].split("\n")[0],  # First line only
+                author=commit["commit"]["author"]["name"],
+                date=datetime.fromisoformat(commit["commit"]["author"]["date"].replace("Z", "+00:00")),
+                url=commit["html_url"],
+            )
+            for commit in data
+        ]

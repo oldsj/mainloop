@@ -15,6 +15,7 @@ from models import (
     QueueItem,
     QueueItemType,
     QueueItemPriority,
+    Project,
 )
 from mainloop.config import settings
 
@@ -129,6 +130,27 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+
+-- Projects
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    description TEXT,
+    default_branch TEXT DEFAULT 'main',
+    avatar_url TEXT,
+    html_url TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata_updated_at TIMESTAMPTZ,
+    open_pr_count INTEGER DEFAULT 0,
+    open_issue_count INTEGER DEFAULT 0,
+    UNIQUE(user_id, full_name)
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used_at DESC);
 """
 
 # Migration SQL for adding new columns to existing tables
@@ -199,10 +221,70 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='claude_session_id') THEN
         ALTER TABLE conversations DROP COLUMN claude_session_id;
     END IF;
+    -- Add project_id to worker_tasks
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='project_id') THEN
+        ALTER TABLE worker_tasks ADD COLUMN project_id TEXT REFERENCES projects(id);
+    END IF;
+END $$;
+
+-- Migrate existing repo URLs to projects and link tasks
+DO $$
+DECLARE
+    task_record RECORD;
+    v_project_id TEXT;
+    repo_owner TEXT;
+    repo_name TEXT;
+    v_full_name TEXT;
+BEGIN
+    -- Only run if projects table is empty (first migration)
+    IF NOT EXISTS (SELECT 1 FROM projects LIMIT 1) THEN
+        FOR task_record IN
+            SELECT DISTINCT user_id, repo_url
+            FROM worker_tasks
+            WHERE repo_url IS NOT NULL
+        LOOP
+            -- Parse owner/name from URL (handles both https://github.com/owner/repo and https://github.com/owner/repo.git)
+            repo_owner := split_part(
+                replace(replace(task_record.repo_url, 'https://github.com/', ''), '.git', ''),
+                '/', 1
+            );
+            repo_name := split_part(
+                replace(replace(task_record.repo_url, 'https://github.com/', ''), '.git', ''),
+                '/', 2
+            );
+            v_full_name := repo_owner || '/' || repo_name;
+
+            -- Check if project already exists for this user
+            SELECT id INTO v_project_id
+            FROM projects
+            WHERE projects.user_id = task_record.user_id AND projects.full_name = v_full_name;
+
+            IF v_project_id IS NULL THEN
+                v_project_id := gen_random_uuid()::TEXT;
+                INSERT INTO projects (id, user_id, owner, name, full_name, html_url, created_at, last_used_at)
+                VALUES (
+                    v_project_id,
+                    task_record.user_id,
+                    repo_owner,
+                    repo_name,
+                    v_full_name,
+                    task_record.repo_url,
+                    NOW(),
+                    NOW()
+                );
+            END IF;
+
+            -- Update tasks to reference the project
+            UPDATE worker_tasks
+            SET project_id = v_project_id
+            WHERE worker_tasks.repo_url = task_record.repo_url AND worker_tasks.user_id = task_record.user_id;
+        END LOOP;
+    END IF;
 END $$;
 
 -- Create indexes if they don't exist
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_keywords ON worker_tasks USING GIN(keywords);
+CREATE INDEX IF NOT EXISTS idx_worker_tasks_project ON worker_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
 """
 
@@ -494,6 +576,7 @@ class Database:
         self,
         user_id: str,
         status: str | None = None,
+        project_id: str | None = None,
         limit: int = 50,
     ) -> list[WorkerTask]:
         """List worker tasks for a user."""
@@ -504,8 +587,12 @@ class Database:
         params: list[Any] = [user_id]
 
         if status:
-            query += " AND status = $2"
+            query += f" AND status = ${len(params) + 1}"
             params.append(status)
+
+        if project_id:
+            query += f" AND project_id = ${len(params) + 1}"
+            params.append(project_id)
 
         query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
         params.append(limit)
@@ -524,6 +611,7 @@ class Database:
         completed_at: datetime | None = None,
         result: dict | None = None,
         error: str | None = None,
+        project_id: str | None = None,
         # Issue fields (plan phase)
         issue_url: str | None = None,
         issue_number: int | None = None,
@@ -574,6 +662,10 @@ class Database:
         if error is not None:
             updates.append(f"error = ${param_idx}")
             params.append(error)
+            param_idx += 1
+        if project_id is not None:
+            updates.append(f"project_id = ${param_idx}")
+            params.append(project_id)
             param_idx += 1
         if pr_url is not None:
             updates.append(f"pr_url = ${param_idx}")
@@ -647,6 +739,7 @@ class Database:
             prompt=row["prompt"],
             model=row.get("model"),
             repo_url=row["repo_url"],
+            project_id=row.get("project_id"),
             branch_name=row["branch_name"],
             base_branch=row["base_branch"],
             status=TaskStatus(row["status"]),
@@ -677,6 +770,214 @@ class Database:
             pending_questions=_parse_json_field(row.get("pending_questions")),
             plan_text=row.get("plan_text"),
         )
+
+    # ============= Project Operations =============
+
+    async def create_project(self, project: Project) -> Project:
+        """Create a new project."""
+        if not self._pool:
+            return project
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO projects
+                (id, user_id, owner, name, full_name, description, default_branch,
+                 avatar_url, html_url, created_at, last_used_at, metadata_updated_at,
+                 open_pr_count, open_issue_count)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                """,
+                project.id,
+                project.user_id,
+                project.owner,
+                project.name,
+                project.full_name,
+                project.description,
+                project.default_branch,
+                project.avatar_url,
+                project.html_url,
+                project.created_at,
+                project.last_used_at,
+                project.metadata_updated_at,
+                project.open_pr_count,
+                project.open_issue_count,
+            )
+        return project
+
+    async def get_project(self, project_id: str) -> Project | None:
+        """Get a project by ID."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM projects WHERE id = $1", project_id
+            )
+        if not row:
+            return None
+        return Project(
+            id=row["id"],
+            user_id=row["user_id"],
+            owner=row["owner"],
+            name=row["name"],
+            full_name=row["full_name"],
+            description=row.get("description"),
+            default_branch=row.get("default_branch", "main"),
+            avatar_url=row.get("avatar_url"),
+            html_url=row["html_url"],
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+            metadata_updated_at=row.get("metadata_updated_at"),
+            open_pr_count=row.get("open_pr_count", 0),
+            open_issue_count=row.get("open_issue_count", 0),
+        )
+
+    async def get_project_by_repo(
+        self, user_id: str, full_name: str
+    ) -> Project | None:
+        """Get a project by GitHub full_name (owner/repo)."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM projects WHERE user_id = $1 AND full_name = $2",
+                user_id,
+                full_name,
+            )
+        if not row:
+            return None
+        return Project(
+            id=row["id"],
+            user_id=row["user_id"],
+            owner=row["owner"],
+            name=row["name"],
+            full_name=row["full_name"],
+            description=row.get("description"),
+            default_branch=row.get("default_branch", "main"),
+            avatar_url=row.get("avatar_url"),
+            html_url=row["html_url"],
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+            metadata_updated_at=row.get("metadata_updated_at"),
+            open_pr_count=row.get("open_pr_count", 0),
+            open_issue_count=row.get("open_issue_count", 0),
+        )
+
+    async def list_projects(
+        self, user_id: str, limit: int = 20
+    ) -> list[Project]:
+        """List user's projects ordered by last_used_at."""
+        if not self._pool:
+            return []
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM projects WHERE user_id = $1 ORDER BY last_used_at DESC LIMIT $2",
+                user_id,
+                limit,
+            )
+        return [
+            Project(
+                id=row["id"],
+                user_id=row["user_id"],
+                owner=row["owner"],
+                name=row["name"],
+                full_name=row["full_name"],
+                description=row.get("description"),
+                default_branch=row.get("default_branch", "main"),
+                avatar_url=row.get("avatar_url"),
+                html_url=row["html_url"],
+                created_at=row["created_at"],
+                last_used_at=row["last_used_at"],
+                metadata_updated_at=row.get("metadata_updated_at"),
+                open_pr_count=row.get("open_pr_count", 0),
+                open_issue_count=row.get("open_issue_count", 0),
+            )
+            for row in rows
+        ]
+
+    async def update_project_metadata(
+        self,
+        project_id: str,
+        description: str | None = None,
+        avatar_url: str | None = None,
+        open_pr_count: int | None = None,
+        open_issue_count: int | None = None,
+    ):
+        """Update cached GitHub metadata for a project."""
+        if not self._pool:
+            return
+        updates = []
+        params = []
+        param_idx = 1
+
+        if description is not None:
+            updates.append(f"description = ${param_idx}")
+            params.append(description)
+            param_idx += 1
+        if avatar_url is not None:
+            updates.append(f"avatar_url = ${param_idx}")
+            params.append(avatar_url)
+            param_idx += 1
+        if open_pr_count is not None:
+            updates.append(f"open_pr_count = ${param_idx}")
+            params.append(open_pr_count)
+            param_idx += 1
+        if open_issue_count is not None:
+            updates.append(f"open_issue_count = ${param_idx}")
+            params.append(open_issue_count)
+            param_idx += 1
+
+        if updates:
+            updates.append(f"metadata_updated_at = ${param_idx}")
+            params.append(datetime.now(timezone.utc))
+            param_idx += 1
+
+            params.append(project_id)
+            async with self.connection() as conn:
+                await conn.execute(
+                    f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
+                    *params,
+                )
+
+    async def touch_project(self, project_id: str):
+        """Update last_used_at timestamp."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                "UPDATE projects SET last_used_at = $1 WHERE id = $2",
+                datetime.now(timezone.utc),
+                project_id,
+            )
+
+    async def get_or_create_project_from_url(
+        self, user_id: str, repo_url: str
+    ) -> Project:
+        """Get or create a project from a GitHub URL."""
+        # Parse owner/repo from URL
+        repo_url_clean = repo_url.replace("https://github.com/", "").replace(".git", "")
+        parts = repo_url_clean.split("/")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid GitHub URL: {repo_url}")
+
+        owner = parts[0]
+        name = parts[1]
+        full_name = f"{owner}/{name}"
+
+        # Try to get existing project
+        project = await self.get_project_by_repo(user_id, full_name)
+        if project:
+            # Touch to update last_used_at
+            await self.touch_project(project.id)
+            return project
+
+        # Create new project
+        project = Project(
+            user_id=user_id,
+            owner=owner,
+            name=name,
+            full_name=full_name,
+            html_url=repo_url,
+        )
+        return await self.create_project(project)
 
     # ============= Queue Item Operations =============
 
