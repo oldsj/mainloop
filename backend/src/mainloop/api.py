@@ -577,6 +577,10 @@ async def answer_task_questions(
     # The workflow will also update this, but we do it here to prevent race conditions
     if body.action == "cancel":
         await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, pending_questions=[])
+        # Close GitHub issue if exists
+        if task.repo_url and task.issue_number:
+            await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
+            await update_github_issue(task.repo_url, task.issue_number, state="closed")
     else:
         await db.update_worker_task(task_id, status=TaskStatus.PLANNING, pending_questions=[])
 
@@ -625,6 +629,10 @@ async def approve_task_plan(
     # Update task status immediately so frontend sees correct state on refetch
     if action == "cancel":
         await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, plan_text=None)
+        # Close GitHub issue if exists
+        if task.repo_url and task.issue_number:
+            await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
+            await update_github_issue(task.repo_url, task.issue_number, state="closed")
     elif action == "approve":
         await db.update_worker_task(task_id, status=TaskStatus.READY_TO_IMPLEMENT)
     else:

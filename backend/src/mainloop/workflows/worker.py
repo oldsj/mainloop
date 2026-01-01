@@ -1272,18 +1272,19 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 f"implement job (issue #{issue_number})",
             )
 
-        # If we skipped planning, extract PR URL now
-        if task.skip_plan:
-            pr_url = impl_result.get("result", {}).get("pr_url")
-            if not pr_url:
-                # No PR created - task is done
-                logger.info("Task completed without PR")
-                notify_main_thread(
-                    task.user_id, task_id, "worker_result",
-                    {"status": "completed", "result": impl_result.get("result")},
-                )
-                return {"status": "completed", "result": impl_result.get("result")}
-            pr_number = int(pr_url.split("/")[-1])
+        # Extract PR URL from implementation result
+        pr_url = impl_result.get("result", {}).get("pr_url")
+        if not pr_url:
+            # No PR created - task is done (only expected in skip_plan mode)
+            logger.info("Task completed without PR")
+            await update_worker_task_status(task_id, TaskStatus.COMPLETED)
+            notify_main_thread(
+                task.user_id, task_id, "worker_result",
+                {"status": "completed", "result": impl_result.get("result")},
+            )
+            return {"status": "completed", "result": impl_result.get("result")}
+        pr_number = int(pr_url.split("/")[-1])
+        logger.info(f"Implementation created PR #{pr_number}: {pr_url}")
 
         # ============================================================
         # PHASE 2.5: CI VERIFICATION LOOP
