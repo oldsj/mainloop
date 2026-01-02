@@ -3,11 +3,11 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 # Install system dependencies including Node.js for Claude CLI and GitHub CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl=7.88.1-10+deb12u5 \
-    git=1:2.39.2-1.1 \
-    nodejs=18.19.0+dfsg-6~deb12u1 \
-    npm=9.6.7~ds1-1 \
-    gnupg=2.2.40-1.1 \
+    curl \
+    git \
+    nodejs \
+    npm \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (gh)
@@ -16,7 +16,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gh=2.42.0 \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI and create non-root user

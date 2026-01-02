@@ -31,9 +31,9 @@ FROM python:3.13-slim
 
 # Install Node.js and Claude CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl=7.88.1-10+deb12u5 \
-    nodejs=18.19.0+dfsg-6~deb12u1 \
-    npm=9.6.7~ds1-1 \
+    curl \
+    nodejs \
+    npm \
     && npm install -g @anthropic-ai/claude-code@latest \
     && rm -rf /var/lib/apt/lists/*
 

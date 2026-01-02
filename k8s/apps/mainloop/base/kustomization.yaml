@@ -6,7 +6,7 @@ namespace: mainloop
 resources:
   - namespace.yaml
   - rbac-backend.yaml
-  # - networkpolicy.yaml  # Temporarily disabled - needs K8s API access for pooler
+  - networkpolicy.yaml
   - deployment-backend.yaml
   - deployment-agent-controller.yaml
   - deployment-frontend.yaml

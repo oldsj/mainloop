@@ -1,0 +1,32 @@
+---
+# Restrict agent-controller to internet-only access (no internal cluster access)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-agent-controller
+  namespace: mainloop
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-agent-controller
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow internet only (block private IP ranges)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8      # Private class A
+              - 172.16.0.0/12   # Private class B
+              - 192.168.0.0/16  # Private class C
