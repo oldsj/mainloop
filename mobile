@@ -7,23 +7,23 @@ SESSION_NAME="claude-mobile"
 WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Check if tmux is installed
-if ! command -v tmux &> /dev/null; then
-    echo "Error: tmux is not installed. Install it with: brew install tmux"
-    exit 1
+if ! command -v tmux &>/dev/null; then
+	echo "Error: tmux is not installed. Install it with: brew install tmux"
+	exit 1
 fi
 
 # Check if claude CLI is installed
-if ! command -v claude &> /dev/null; then
-    echo "Error: claude CLI is not installed"
-    exit 1
+if ! command -v claude &>/dev/null; then
+	echo "Error: claude CLI is not installed"
+	exit 1
 fi
 
 # Check if session already exists
-if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-    echo "Attaching to existing tmux session: $SESSION_NAME"
-    tmux attach-session -t "$SESSION_NAME"
+if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
+	echo "Attaching to existing tmux session: ${SESSION_NAME}"
+	tmux attach-session -t "${SESSION_NAME}"
 else
-    echo "Creating new tmux session: $SESSION_NAME"
-    # Create new session, change to work directory, and launch claude
-    tmux new-session -s "$SESSION_NAME" -c "$WORK_DIR" "claude"
+	echo "Creating new tmux session: ${SESSION_NAME}"
+	# Create new session, change to work directory, and launch claude
+	tmux new-session -s "${SESSION_NAME}" -c "${WORK_DIR}" "claude"
 fi

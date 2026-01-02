@@ -4,12 +4,10 @@ version = "0.1.0"
 description = "Shared Pydantic models for mainloop"
 readme = "README.md"
 authors = [
-    { name = "James Olds", email = "12104969+oldsj@users.noreply.github.com" }
+  { name = "James Olds", email = "12104969+oldsj@users.noreply.github.com" },
 ]
 requires-python = ">=3.13"
-dependencies = [
-    "pydantic>=2.12.5",
-]
+dependencies = ["pydantic>=2.12.5"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,10 +1,11 @@
 """Durable workflow models for absurd-based orchestration."""
 
+import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
+
 from pydantic import BaseModel, Field
-import uuid
 
 
 def _uuid() -> str:
@@ -18,7 +19,9 @@ class TaskStatus(str, Enum):
     PLANNING = "planning"  # Creating implementation plan
     WAITING_QUESTIONS = "waiting_questions"  # Agent asked questions, needs answers
     WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
-    READY_TO_IMPLEMENT = "ready_to_implement"  # Plan approved, waiting for user to start implementation
+    READY_TO_IMPLEMENT = (
+        "ready_to_implement"  # Plan approved, waiting for user to start implementation
+    )
     IMPLEMENTING = "implementing"  # Writing code per approved plan
     UNDER_REVIEW = "under_review"  # PR created, awaiting review/merge
     COMPLETED = "completed"  # PR merged
@@ -39,8 +42,12 @@ class TaskQuestion(BaseModel):
     id: str = Field(default_factory=_uuid, description="Unique question ID")
     header: str = Field(..., description="Short label/category for the question")
     question: str = Field(..., description="Full question text")
-    options: list[QuestionOption] = Field(default_factory=list, description="Available options")
-    multi_select: bool = Field(default=False, description="Allow selecting multiple options")
+    options: list[QuestionOption] = Field(
+        default_factory=list, description="Available options"
+    )
+    multi_select: bool = Field(
+        default=False, description="Allow selecting multiple options"
+    )
     response: str | None = Field(None, description="User's answer")
 
 
@@ -54,7 +61,9 @@ class QueueItemType(str, Enum):
     NOTIFICATION = "notification"
     # Plan-first workflow types
     PLAN_READY = "plan_ready"  # Legacy: Plan ready as GitHub issue
-    PLAN_REVIEW = "plan_review"  # Interactive plan review in inbox (with options + text input)
+    PLAN_REVIEW = (
+        "plan_review"  # Interactive plan review in inbox (with options + text input)
+    )
     CODE_READY = "code_ready"  # Code is ready for review
     FEEDBACK_ADDRESSED = "feedback_addressed"  # Worker addressed feedback
     ROUTING_SUGGESTION = "routing_suggestion"  # Suggesting to route to existing task
@@ -105,7 +114,9 @@ class WorkerTask(BaseModel):
     )
     description: str = Field(..., description="Human-readable task description")
     prompt: str = Field(..., description="Full prompt for Claude")
-    model: str | None = Field(None, description="Claude model to use (haiku, sonnet, opus)")
+    model: str | None = Field(
+        None, description="Claude model to use (haiku, sonnet, opus)"
+    )
 
     # Repository context
     repo_url: str | None = Field(None, description="GitHub repository URL")
@@ -118,9 +129,7 @@ class WorkerTask(BaseModel):
     workflow_run_id: str | None = Field(
         None, description="Absurd workflow run ID for this task"
     )
-    worker_pod_name: str | None = Field(
-        None, description="K8s pod running this task"
-    )
+    worker_pod_name: str | None = Field(None, description="K8s pod running this task")
 
     # Timestamps
     created_at: datetime = Field(
@@ -137,23 +146,33 @@ class WorkerTask(BaseModel):
     issue_url: str | None = Field(None, description="Plan issue URL")
     issue_number: int | None = Field(None, description="Plan issue number")
     issue_etag: str | None = Field(None, description="ETag for conditional polling")
-    issue_last_modified: datetime | None = Field(None, description="Last-Modified for polling")
+    issue_last_modified: datetime | None = Field(
+        None, description="Last-Modified for polling"
+    )
 
     # GitHub integration - Implementation phase (PR)
     pr_url: str | None = Field(None, description="Implementation PR URL")
     pr_number: int | None = Field(None, description="PR number")
     pr_etag: str | None = Field(None, description="ETag for conditional PR polling")
-    pr_last_modified: datetime | None = Field(None, description="Last-Modified for PR polling")
+    pr_last_modified: datetime | None = Field(
+        None, description="Last-Modified for PR polling"
+    )
     commit_sha: str | None = Field(None, description="Final commit SHA")
 
     # Conversation linking (for routing)
     conversation_id: str | None = Field(None, description="Originating conversation ID")
     message_id: str | None = Field(None, description="Originating message ID")
-    keywords: list[str] = Field(default_factory=list, description="Keywords for task routing")
-    skip_plan: bool = Field(default=False, description="Skip plan phase if user said 'just do it'")
+    keywords: list[str] = Field(
+        default_factory=list, description="Keywords for task routing"
+    )
+    skip_plan: bool = Field(
+        default=False, description="Skip plan phase if user said 'just do it'"
+    )
 
     # Interactive planning state
-    pending_questions: list[TaskQuestion] | None = Field(None, description="Questions awaiting user answers")
+    pending_questions: list[TaskQuestion] | None = Field(
+        None, description="Questions awaiting user answers"
+    )
     plan_text: str | None = Field(None, description="Current plan text for review")
 
 
@@ -198,15 +217,15 @@ class QueueItem(BaseModel):
     )
     response: str | None = Field(None, description="Human response")
     responded_at: datetime | None = Field(None, description="Response timestamp")
-    read_at: datetime | None = Field(None, description="When item was read/acknowledged")
+    read_at: datetime | None = Field(
+        None, description="When item was read/acknowledged"
+    )
 
     # Timestamps
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="Creation timestamp"
     )
-    expires_at: datetime | None = Field(
-        None, description="When this item expires"
-    )
+    expires_at: datetime | None = Field(None, description="When this item expires")
 
 
 class QueueItemResponse(BaseModel):
@@ -223,9 +242,7 @@ class WorkflowEvent(BaseModel):
 
     id: str = Field(default_factory=_uuid, description="Unique event ID")
     event_type: str = Field(..., description="Event type for routing")
-    source_workflow_id: str = Field(
-        ..., description="Workflow that emitted this event"
-    )
+    source_workflow_id: str = Field(..., description="Workflow that emitted this event")
     target_workflow_id: str | None = Field(
         None, description="Target workflow if specific"
     )

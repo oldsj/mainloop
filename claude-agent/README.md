@@ -5,6 +5,7 @@ This container runs the Claude Code CLI for the mainloop backend.
 ## Current State
 
 The container currently just keeps running. In the future, this will:
+
 1. Accept HTTP requests from the backend
 2. Execute Claude Code CLI commands
 3. Stream responses back to the backend

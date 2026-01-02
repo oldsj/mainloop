@@ -9,7 +9,9 @@
     "./theme.css": "./src/theme.css",
     "./tailwind.preset": "./src/tailwind.preset.ts"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "peerDependencies": {
     "svelte": "^5.0.0",
     "tailwindcss": "^4.1.0"

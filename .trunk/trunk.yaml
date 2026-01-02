@@ -1,0 +1,64 @@
+# This file controls the behavior of Trunk: https://docs.trunk.io/cli
+# To learn more about the format of this file, see https://docs.trunk.io/reference/trunk-yaml
+version: 0.1
+cli:
+  version: 1.25.0
+# Many linters and tools depend on runtimes - configure them here. (https://docs.trunk.io/runtimes)
+runtimes:
+  enabled:
+    - go@1.21.0
+    - node@22.16.0
+    - python@3.10.8
+# This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
+lint:
+  ignore:
+    # K8s security best practices - remaining issues are acceptable for internal Tailscale-only services
+    # Fixed: container security contexts, health probes, RBAC over-permissions
+    # Remaining: image tags/digests, readOnlyRootFilesystem, NetworkPolicy, etc.
+    - linters: [checkov, trivy]
+      paths:
+        - k8s/**
+    # B104: Binding to 0.0.0.0 is intentional for containerized services
+    # B608: False positives - SQL uses parameterized queries, column names are from internal code
+    # B110: Intentional silent failure for optional API features
+    - linters: [bandit]
+      paths:
+        - backend/src/mainloop/config.py
+        - backend/src/mainloop/db/postgres.py
+        - backend/src/mainloop/services/github_pr.py
+        - claude-agent/server.py
+    # DL3008: Pinning apt versions causes build failures when versions are removed from repos
+    - linters: [hadolint]
+      paths:
+        - '**/*Dockerfile*'
+  enabled:
+    - bandit@1.9.2
+    - black@25.12.0
+    - checkov@3.2.497
+    - git-diff-check
+    - hadolint@2.14.0
+    - isort@7.0.0
+    - markdownlint@0.47.0
+    - osv-scanner@2.3.1
+    - oxipng@10.0.0
+    - prettier@3.7.4
+    - ruff@0.14.10
+    - shellcheck@0.11.0
+    - shfmt@3.6.0
+    - taplo@0.10.0
+    - terrascan@1.19.9
+    - trivy@0.68.2
+    - trufflehog@3.92.4
+    - yamllint@1.37.1
+actions:
+  disabled:
+    - trunk-announce
+    - trunk-check-pre-push
+    - trunk-fmt-pre-commit
+  enabled:
+    - trunk-upgrade-available
+plugins:
+  sources:
+    - id: trunk
+      ref: v1.7.4
+      uri: https://github.com/trunk-io/plugins

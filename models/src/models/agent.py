@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -12,7 +13,9 @@ class AgentTask(BaseModel):
     conversation_id: str = Field(..., description="Parent conversation ID")
     prompt: str = Field(..., description="Task prompt for Claude")
     context: dict[str, Any] | None = Field(None, description="Additional context")
-    created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="Creation timestamp"
+    )
 
 
 class AgentResponse(BaseModel):
@@ -20,5 +23,9 @@ class AgentResponse(BaseModel):
 
     task_id: str = Field(..., description="Parent task ID")
     content: str = Field(..., description="Response content")
-    tool_uses: list[dict[str, Any]] | None = Field(None, description="Tool uses during execution")
-    created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
+    tool_uses: list[dict[str, Any]] | None = Field(
+        None, description="Tool uses during execution"
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="Creation timestamp"
+    )

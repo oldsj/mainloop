@@ -3,6 +3,7 @@
 ## Problem
 
 The main thread conversation will accumulate thousands of messages over time. Loading the entire history into context for every request:
+
 - Exceeds context window limits (200K tokens)
 - Wastes tokens on irrelevant old details
 - Slows down response time
@@ -12,7 +13,7 @@ The main thread conversation will accumulate thousands of messages over time. Lo
 
 Keep detailed memory fresh, compress older memories into summaries at increasing time granularity.
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │  Last 24 hours: FULL DETAIL             │  ← All messages
 │  - Every message preserved              │
@@ -59,10 +60,12 @@ When loading conversation context, include:
 ## Summary Generation
 
 ### Daily Summary (End of Day)
+
 Generated at midnight UTC or when 24 hours have passed since last summary.
 
 **Prompt template**:
-```
+
+```text
 Summarize today's work in 500 tokens or less:
 
 1. **What was accomplished**
@@ -87,10 +90,12 @@ Summarize today's work in 500 tokens or less:
 ```
 
 ### Weekly Summary (End of Week)
+
 Generated every Sunday or after 7 daily summaries exist.
 
 **Prompt template**:
-```
+
+```text
 Summarize this week's progress in 1000 tokens or less:
 
 Given these 7 daily summaries, extract:
@@ -117,10 +122,12 @@ Given these 7 daily summaries, extract:
 ```
 
 ### Monthly Summary (End of Month)
+
 Generated on the 1st of each month or after 4 weekly summaries.
 
 **Prompt template**:
-```
+
+```text
 Summarize this month's progress in 2000 tokens or less:
 
 Given these 4 weekly summaries, extract:
@@ -144,12 +151,14 @@ Given these 4 weekly summaries, extract:
 ## Zoom-In Capability
 
 When the user asks about a specific date or event:
+
 1. Check if it's within the 24-hour window (return full messages)
 2. Check if it's within 7 days (load that day's full messages from BigQuery)
 3. Check if it's within 30 days (load that week's full messages)
 4. For older dates, load the full monthly detail
 
 **Query pattern**:
+
 ```sql
 -- User asks: "What did we do on Tuesday?"
 SELECT * FROM messages
@@ -164,11 +173,13 @@ ORDER BY created_at ASC
 ### BigQuery Tables
 
 **messages** (existing)
+
 - Full detail forever
 - Never deleted
 - Queryable for zoom-in
 
 **memory_summaries** (new)
+
 ```sql
 CREATE TABLE mainloop.memory_summaries (
   id STRING NOT NULL,
@@ -185,6 +196,7 @@ CREATE TABLE mainloop.memory_summaries (
 ## Implementation Phases
 
 ### Phase 1: Basic Compression (MVP)
+
 - ✅ Store all messages in BigQuery
 - ✅ Load last 24 hours for context
 - ⬜ Generate daily summaries (cron job at midnight)
@@ -192,17 +204,20 @@ CREATE TABLE mainloop.memory_summaries (
 - ⬜ Load daily summaries for days 2-7 in context
 
 ### Phase 2: Multi-Level Pyramid
+
 - ⬜ Weekly summary generation (every Sunday)
 - ⬜ Monthly summary generation (1st of month)
 - ⬜ Smart context assembly (pyramid loading)
 
 ### Phase 3: Semantic Search
+
 - ⬜ Embed summaries for semantic search
 - ⬜ "What did we do with authentication?" → search summaries
 - ⬜ Zoom to relevant time period
 - ⬜ Load full detail for that period
 
 ### Phase 4: Adaptive Compression
+
 - ⬜ Detect important events (deployments, major decisions)
 - ⬜ Keep important days at higher detail
 - ⬜ Compress mundane days more aggressively

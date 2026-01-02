@@ -1,8 +1,7 @@
 """Configuration management."""
 
-import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -21,10 +20,6 @@ class Settings(BaseSettings):
         """Construct database URL from parts."""
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
-    # Google Cloud (legacy - being migrated to PostgreSQL)
-    google_cloud_project: str = ""
-    bigquery_dataset: str = "mainloop"
-
     # Claude
     claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
     claude_agent_url: str = "http://claude-agent:8001"
@@ -38,9 +33,18 @@ class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
+    frontend_domain: str = "mainloop.example.com"  # Frontend domain for CORS
+
+    @computed_field
+    @property
+    def frontend_origin(self) -> str:
+        """Construct frontend origin URL from domain."""
+        return f"https://{self.frontend_domain}"
 
     # K8s Job callback URL (internal service URL for Jobs to call back)
-    backend_internal_url: str = "http://mainloop-backend.mainloop.svc.cluster.local:8000"
+    backend_internal_url: str = (
+        "http://mainloop-backend.mainloop.svc.cluster.local:8000"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -7,11 +7,17 @@ Runs asynchronously to avoid blocking the main chat flow.
 import asyncio
 import logging
 
-from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock, ResultMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    query,
+)
+from mainloop.config import settings
+from mainloop.db import db
 
 from models import Message
-from mainloop.db import db
-from mainloop.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +108,9 @@ async def compact_conversation(conversation_id: str) -> None:
         if existing_summary:
             # Append new messages to existing summary context
             summary_prompt_messages = messages_to_summarize
-            existing_context = f"Previous summary:\n{existing_summary}\n\nNew messages to incorporate:"
+            existing_context = (
+                f"Previous summary:\n{existing_summary}\n\nNew messages to incorporate:"
+            )
         else:
             existing_context = ""
             summary_prompt_messages = messages_to_summarize
@@ -111,7 +119,9 @@ async def compact_conversation(conversation_id: str) -> None:
         new_summary = await summarize_messages(summary_prompt_messages)
 
         if not new_summary:
-            logger.warning(f"Failed to generate summary for conversation {conversation_id}")
+            logger.warning(
+                f"Failed to generate summary for conversation {conversation_id}"
+            )
             return
 
         # Combine with existing summary if present

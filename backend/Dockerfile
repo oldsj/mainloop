@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     nodejs \
     npm \
-    && npm install -g @anthropic-ai/claude-code \
+    && npm install -g @anthropic-ai/claude-code@latest \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for Claude and workspace directory
@@ -64,6 +64,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 USER claude
 
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000"]

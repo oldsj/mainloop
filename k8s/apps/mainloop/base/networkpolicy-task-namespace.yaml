@@ -1,0 +1,60 @@
+# Network policies for task namespaces (worker agents)
+# These should be applied when creating a new task namespace
+# Workers get minimal network access: DNS + internet only, no cluster internal
+---
+# Default deny-all for task namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  # namespace: <task-namespace> - set dynamically when creating namespace
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow DNS queries (required for internet access)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  # namespace: <task-namespace> - set dynamically when creating namespace
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Allow egress to internet ONLY (block all cluster internal)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internet-only
+  # namespace: <task-namespace> - set dynamically when creating namespace
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow to public internet only (block RFC1918 private networks)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block all private/internal networks
+              - 10.0.0.0/8 # Private class A
+              - 172.16.0.0/12 # Private class B
+              - 192.168.0.0/16 # Private class C
+              - 169.254.0.0/16 # Link-local
+              - 127.0.0.0/8 # Loopback
+              - fc00::/7 # IPv6 private
+              - fe80::/10 # IPv6 link-local
+              - ::1/128 # IPv6 loopback

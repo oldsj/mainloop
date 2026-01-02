@@ -4,33 +4,33 @@ import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-from dbos import SetWorkflowID
 from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     SystemMessage,
     TextBlock,
-    tool,
     create_sdk_mcp_server,
+    query,
+    tool,
 )
-
-from models import (
-    WorkerTask,
-    Message,
-    QueueItem,
-    QueueItemType,
-    QueueItemPriority,
-    TaskStatus,
-)
-from mainloop.db import db
+from dbos import SetWorkflowID
 from mainloop.config import settings
+from mainloop.db import db
 from mainloop.services.task_router import (
-    find_matching_tasks,
     extract_keywords,
+    find_matching_tasks,
 )
 from mainloop.workflows.dbos_config import worker_queue
+
+from models import (
+    Message,
+    QueueItem,
+    QueueItemPriority,
+    QueueItemType,
+    TaskStatus,
+    WorkerTask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,20 +107,32 @@ def create_spawn_task_tool(
 
         if not task_description:
             return {
-                "content": [{"type": "text", "text": "Error: task_description is required"}],
+                "content": [
+                    {"type": "text", "text": "Error: task_description is required"}
+                ],
                 "is_error": True,
             }
 
         if not repo_url:
             return {
-                "content": [{"type": "text", "text": "Error: repo_url is required. Ask the user for the GitHub repository URL."}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: repo_url is required. Ask the user for the GitHub repository URL.",
+                    }
+                ],
                 "is_error": True,
             }
 
         # Validate repo URL format
         if not repo_url.startswith("https://github.com/"):
             return {
-                "content": [{"type": "text", "text": f"Error: Invalid repo URL format. Expected https://github.com/owner/repo, got: {repo_url}"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Error: Invalid repo URL format. Expected https://github.com/owner/repo, got: {repo_url}",
+                    }
+                ],
                 "is_error": True,
             }
 
@@ -147,21 +159,25 @@ def create_spawn_task_tool(
             with SetWorkflowID(task.id):
                 worker_queue.enqueue(worker_task_workflow, task.id)
 
-            logger.info(f"Spawned worker task via tool: {task.id} (skip_plan={skip_planning})")
+            logger.info(
+                f"Spawned worker task via tool: {task.id} (skip_plan={skip_planning})"
+            )
 
             # Record this repo as recently used
             await db.add_recent_repo(main_thread_id, repo_url)
 
             return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Worker task spawned successfully!\n"
-                           f"Task ID: {task.id[:8]}\n"
-                           f"Repository: {repo_url}\n"
-                           f"Description: {task_description}\n"
-                           f"Skip planning: {skip_planning}\n\n"
-                           f"The agent will start working and update the user via their inbox."
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Worker task spawned successfully!\n"
+                        f"Task ID: {task.id[:8]}\n"
+                        f"Repository: {repo_url}\n"
+                        f"Description: {task_description}\n"
+                        f"Skip planning: {skip_planning}\n\n"
+                        f"The agent will start working and update the user via their inbox.",
+                    }
+                ]
             }
         except Exception as e:
             logger.error(f"Failed to spawn task: {e}")
@@ -288,7 +304,9 @@ async def get_claude_response(
         system_prompt = None
 
         if user_id and main_thread_id and conversation_id:
-            spawn_task_tool = create_spawn_task_tool(user_id, main_thread_id, conversation_id)
+            spawn_task_tool = create_spawn_task_tool(
+                user_id, main_thread_id, conversation_id
+            )
             mcp_server = create_sdk_mcp_server(
                 name="mainloop",
                 version="1.0.0",
@@ -339,10 +357,16 @@ async def get_claude_response(
                     data = msg.data or {}
                     pre_tokens = data.get("pre_tokens", 0)
                     trigger = data.get("trigger", "unknown")
-                    logger.info(f"Context compacted ({trigger}): {pre_tokens} tokens summarized")
+                    logger.info(
+                        f"Context compacted ({trigger}): {pre_tokens} tokens summarized"
+                    )
 
         return ClaudeResponse(
-            text="\n".join(collected_text) if collected_text else "No response generated.",
+            text=(
+                "\n".join(collected_text)
+                if collected_text
+                else "No response generated."
+            ),
             compacted=compaction_count > 0,
             compaction_count=compaction_count,
         )
@@ -366,8 +390,13 @@ async def process_message(
     - Claude response with spawn_task tool (Claude decides when to spawn workers)
 
     Args:
+        user_id: The user's unique identifier.
+        message: The user's message text.
+        conversation_id: The conversation's unique identifier.
+        main_thread_id: The main thread workflow ID.
         summary: Compacted summary of older messages.
         recent_messages: Recent unsummarized messages for context.
+
     """
     # Check for routing to existing tasks first
     matches = await find_matching_tasks(user_id, message)

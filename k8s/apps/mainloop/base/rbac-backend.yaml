@@ -11,41 +11,41 @@ metadata:
   name: mainloop-backend-cluster-role
 rules:
   # Namespace management - create/delete task namespaces
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: ['']
+    resources: [namespaces]
+    verbs: [create, delete, get, list, watch]
 
   # Secret management - read secrets from mainloop, create in task namespaces
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [create, get, list, delete]
 
   # ServiceAccount management - create worker service accounts in task namespaces
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["create", "get", "delete"]
+  - apiGroups: ['']
+    resources: [serviceaccounts]
+    verbs: [create, get, delete]
 
   # RoleBinding management - bind worker role in task namespaces
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["rolebindings"]
-    verbs: ["create", "get", "delete"]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [create, get, delete]
 
   # ClusterRole binding - allow binding the worker-role to service accounts
   # This is required for RBAC escalation prevention - we must explicitly allow binding this role
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles"]
-    resourceNames: ["mainloop-worker-role"]
-    verbs: ["bind"]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [mainloop-worker-role]
+    verbs: [bind]
 
   # Job management - create/monitor/delete worker jobs
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
 
   # Pod management - for job monitoring
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list", "watch"]
+  - apiGroups: ['']
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -60,59 +60,61 @@ roleRef:
   name: mainloop-backend-cluster-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# ClusterRole for worker jobs - grants broad permissions within a namespace
+# ClusterRole for worker jobs - grants permissions needed for Claude Code agents
 # This is bound to the worker ServiceAccount via RoleBinding in each task namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: mainloop-worker-role
 rules:
-  # Core resources - pods, services, configmaps, secrets, etc.
-  - apiGroups: [""]
+  # Core resources - pods, services, configmaps, etc.
+  - apiGroups: ['']
     resources:
       - pods
-      - pods/log
-      - pods/exec
       - services
       - configmaps
-      - secrets
       - persistentvolumeclaims
       - serviceaccounts
       - endpoints
-    verbs: ["*"]
+    verbs: [create, get, list, watch, update, patch, delete]
+
+  # Pod logs - read only
+  - apiGroups: ['']
+    resources:
+      - pods/log
+    verbs: [get, list, watch]
+
+  # Secrets - full access for app credentials
+  - apiGroups: ['']
+    resources:
+      - secrets
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Apps - deployments, replicasets, statefulsets, daemonsets
-  - apiGroups: ["apps"]
+  - apiGroups: [apps]
     resources:
       - deployments
       - replicasets
       - statefulsets
       - daemonsets
-    verbs: ["*"]
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Batch - jobs, cronjobs
-  - apiGroups: ["batch"]
+  - apiGroups: [batch]
     resources:
       - jobs
       - cronjobs
-    verbs: ["*"]
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Networking - ingresses, networkpolicies
-  - apiGroups: ["networking.k8s.io"]
+  - apiGroups: [networking.k8s.io]
     resources:
       - ingresses
       - networkpolicies
-    verbs: ["*"]
-
-  # RBAC within namespace - roles, rolebindings
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources:
-      - roles
-      - rolebindings
-    verbs: ["*"]
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Events - for debugging
-  - apiGroups: [""]
+  - apiGroups: ['']
     resources:
       - events
-    verbs: ["get", "list", "watch"]
+    verbs: [get, list, watch]

@@ -6,6 +6,7 @@ namespace: mainloop
 resources:
   - namespace.yaml
   - rbac-backend.yaml
+  - networkpolicy.yaml
   - deployment-backend.yaml
   - deployment-agent-controller.yaml
   - deployment-frontend.yaml

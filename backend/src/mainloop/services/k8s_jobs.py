@@ -5,9 +5,8 @@ from typing import Literal
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
-
-from mainloop.services.k8s_namespace import get_k8s_client, WORKER_SERVICE_ACCOUNT
 from mainloop.config import settings
+from mainloop.services.k8s_namespace import WORKER_SERVICE_ACCOUNT, get_k8s_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,7 @@ async def create_worker_job(
 
     Returns:
         The Job name
+
     """
     _, batch_v1 = get_k8s_client()
 
@@ -61,7 +61,9 @@ async def create_worker_job(
     try:
         existing_job = batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
         status = existing_job.status
-        if (status.succeeded and status.succeeded > 0) or (status.failed and status.failed > 0):
+        if (status.succeeded and status.succeeded > 0) or (
+            status.failed and status.failed > 0
+        ):
             # Job completed, delete it to allow re-creation
             logger.info(f"Deleting completed job {job_name} for retry")
             batch_v1.delete_namespaced_job(
@@ -71,6 +73,7 @@ async def create_worker_job(
             )
             # Brief wait for deletion to propagate
             import asyncio
+
             await asyncio.sleep(1)
     except ApiException as e:
         if e.status != 404:
@@ -118,7 +121,9 @@ async def create_worker_job(
     if branch_name:
         env_vars.append(client.V1EnvVar(name="BRANCH_NAME", value=branch_name))
     if feedback_context:
-        env_vars.append(client.V1EnvVar(name="FEEDBACK_CONTEXT", value=feedback_context))
+        env_vars.append(
+            client.V1EnvVar(name="FEEDBACK_CONTEXT", value=feedback_context)
+        )
 
     # Job spec
     job = client.V1Job(
@@ -197,6 +202,7 @@ async def get_job_status(task_id: str, namespace: str) -> dict | None:
 
     Returns:
         Job status dict or None if not found
+
     """
     _, batch_v1 = get_k8s_client()
 
@@ -218,7 +224,9 @@ async def get_job_status(task_id: str, namespace: str) -> dict | None:
             "succeeded": status.succeeded or 0,
             "failed": status.failed or 0,
             "start_time": status.start_time.isoformat() if status.start_time else None,
-            "completion_time": status.completion_time.isoformat() if status.completion_time else None,
+            "completion_time": (
+                status.completion_time.isoformat() if status.completion_time else None
+            ),
         }
 
     except ApiException as e:
@@ -233,6 +241,7 @@ async def delete_job(task_id: str, namespace: str) -> None:
     Args:
         task_id: The task ID
         namespace: Namespace where the Job is running
+
     """
     _, batch_v1 = get_k8s_client()
 
@@ -268,6 +277,7 @@ async def get_job_logs(task_id: str, namespace: str) -> str | None:
 
     Returns:
         Pod logs as string or None if not found
+
     """
     core_v1, _ = get_k8s_client()
 

@@ -82,9 +82,7 @@ function createTasksStore() {
         update((s) => ({
           ...s,
           tasks: s.tasks.map((task) =>
-            task.id === taskId
-              ? { ...task, status: 'planning', pending_questions: null }
-              : task
+            task.id === taskId ? { ...task, status: 'planning', pending_questions: null } : task
           )
         }));
         // Refetch to get updated state
@@ -196,9 +194,7 @@ function createTasksStore() {
         // Update the task in our local state
         update((s) => ({
           ...s,
-          tasks: s.tasks.map((task) =>
-            task.id === task_id ? { ...task, status } : task
-          )
+          tasks: s.tasks.map((task) => (task.id === task_id ? { ...task, status } : task))
         }));
 
         // Refetch to get full task details (status change might include other fields)
@@ -233,6 +229,8 @@ export const tasks = createTasksStore();
 // Derived stores for convenience
 export const tasksList = derived(tasks, ($tasks) => $tasks.tasks);
 export const isTasksOpen = derived(tasks, ($tasks) => $tasks.isOpen);
-export const activeTasksCount = derived(tasks, ($tasks) =>
-  $tasks.tasks.filter((t) => !['completed', 'failed', 'cancelled'].includes(t.status)).length
+export const activeTasksCount = derived(
+  tasks,
+  ($tasks) =>
+    $tasks.tasks.filter((t) => !['completed', 'failed', 'cancelled'].includes(t.status)).length
 );
