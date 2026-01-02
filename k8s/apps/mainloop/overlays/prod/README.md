@@ -5,6 +5,7 @@ This overlay contains production-specific configuration.
 ## Setup
 
 1. **Copy the example personal config:**
+
    ```bash
    cp personal-config-patch.yaml.example personal-config-patch.yaml
    ```
@@ -34,6 +35,7 @@ kubectl apply -k k8s/apps/mainloop/overlays/prod
 ```
 
 Or use the auto-deploy loop:
+
 ```bash
 make deploy-loop
 ```

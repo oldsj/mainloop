@@ -9,4 +9,4 @@ data:
   DB_HOST: mainloop-db-pooler.mainloop
   DB_PORT: '5432'
   DB_NAME: mainloop
-  FRONTEND_DOMAIN: mainloop.example.com  # Override in kustomize overlay
+  FRONTEND_DOMAIN: mainloop.example.com # Override in kustomize overlay

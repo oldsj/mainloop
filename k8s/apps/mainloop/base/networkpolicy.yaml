@@ -27,6 +27,6 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - 10.0.0.0/8      # Private class A
-              - 172.16.0.0/12   # Private class B
-              - 192.168.0.0/16  # Private class C
+              - 10.0.0.0/8 # Private class A
+              - 172.16.0.0/12 # Private class B
+              - 192.168.0.0/16 # Private class C
