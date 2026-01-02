@@ -17,7 +17,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: agent-controller
-          image: ghcr.io/oldsj/mainloop-agent-controller:latest
+          image: ghcr.io/yourusername/mainloop-agent-controller:latest  # Set via kustomize overlay
           env:
             - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom:

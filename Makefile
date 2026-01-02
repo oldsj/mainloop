@@ -1,8 +1,13 @@
 .PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
 
+# Load .env file if it exists
+-include .env
+export
+
 # Configuration
+# Set GHCR_USER in .env file (see .env.example)
 GHCR_REGISTRY := ghcr.io
-GHCR_USER := oldsj
+GHCR_USER ?= yourusername
 IMAGE_TAG ?= latest
 BACKEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-backend:$(IMAGE_TAG)
 FRONTEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-frontend:$(IMAGE_TAG)
@@ -140,9 +145,6 @@ push-all-parallel: build-all-parallel ## Build and push all images in parallel
 	@echo "All pushes complete"
 
 # Deployment
-deploy-frontend: ## Deploy frontend to Cloudflare Pages
-	cd frontend && pnpm build && npx wrangler deploy --env production
-
 deploy: push-all-parallel ## Full deployment to k8s (parallel builds + pushes)
 	@echo "Applying Kubernetes manifests..."
 	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
@@ -216,14 +218,17 @@ test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
 # Debugging commands
+# Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com
+API_URL ?= https://mainloop-api.example.com
+
 debug-tasks: ## Show all tasks with workflow status
-	@curl -s https://mainloop-api.olds.network/debug/tasks | jq '.[] | {id: .task.id, status: .task.status, workflow: .workflow_status, error: .workflow_error, namespace: .namespace_exists, pr: .task.pr_url}'
+	@curl -s $(API_URL)/debug/tasks | jq '.[] | {id: .task.id, status: .task.status, workflow: .workflow_status, error: .workflow_error, namespace: .namespace_exists, pr: .task.pr_url}'
 
 debug-task: ## Show detailed info for a specific task (usage: make debug-task TASK_ID=xxx)
-	@curl -s https://mainloop-api.olds.network/debug/tasks | jq '.[] | select(.task.id | startswith("$(TASK_ID)"))'
+	@curl -s $(API_URL)/debug/tasks | jq '.[] | select(.task.id | startswith("$(TASK_ID)"))'
 
 debug-retry: ## Retry a failed task (usage: make debug-retry TASK_ID=xxx)
-	@curl -s -X POST https://mainloop-api.olds.network/debug/tasks/$(TASK_ID)/retry | jq
+	@curl -s -X POST $(API_URL)/debug/tasks/$(TASK_ID)/retry | jq
 
 debug-logs: ## Show backend logs
 	kubectl logs -n mainloop deployment/mainloop-backend --tail=100 -f

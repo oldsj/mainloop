@@ -33,14 +33,14 @@ All production traffic routes through Tailscale Gateway - no public ingress. HTT
 
 | Service | Hostname | Port |
 |---------|----------|------|
-| Frontend | `mainloop.olds.network` | 3000 |
-| Backend API | `mainloop-api.olds.network` | 8000 |
+| Frontend | `mainloop.example.com` | 3000 |
+| Backend API | `mainloop-api.example.com` | 8000 |
 
-Frontend must have `VITE_API_URL=https://mainloop-api.olds.network` configured.
+Frontend must have `VITE_API_URL=https://mainloop-api.example.com` configured (set via FRONTEND_DOMAIN and API_DOMAIN env vars).
 
 ### Data Flow
 1. **User** -> Tailscale -> Frontend (SvelteKit)
-2. **Frontend** -> Backend API (FastAPI) via `mainloop-api.olds.network`
+2. **Frontend** -> Backend API (FastAPI) via configured API domain
 3. **Backend** -> Claude with `spawn_task` MCP tool
 4. **Claude** -> Spawns K8s worker jobs when user confirms
 5. **Backend** <-> PostgreSQL (conversation memory + compaction)

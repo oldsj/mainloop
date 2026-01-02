@@ -17,12 +17,12 @@ spec:
         - name: ghcr-secret
       containers:
         - name: frontend
-          image: ghcr.io/oldsj/mainloop-frontend:latest
+          image: ghcr.io/yourusername/mainloop-frontend:latest  # Set via kustomize overlay
           ports:
             - containerPort: 3000
           env:
             - name: ORIGIN
-              value: "https://mainloop.olds.network"
+              value: "https://mainloop.example.com"  # Configure your domain
           resources:
             requests:
               memory: "128Mi"

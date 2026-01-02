@@ -10,3 +10,6 @@ patches:
     target:
       kind: Cluster
       name: mainloop-db
+
+patchesStrategicMerge:
+  - personal-config-patch.yaml

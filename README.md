@@ -35,7 +35,11 @@ You (phone/laptop)
 ## Quick Start
 
 ```bash
-# Setup credentials (macOS - extracts from Keychain)
+# Copy example environment file and configure
+cp .env.example .env
+# Edit .env with your GitHub username (GHCR_USER) and domains
+
+# Setup Claude credentials (Linux - interactive login)
 make setup-claude-creds
 
 # Start all services
@@ -111,3 +115,8 @@ Agents use these tools to verify work before marking ready:
 - [Architecture](docs/architecture.md) - System design and data flow
 - [Development](docs/development.md) - Local setup and commands
 - [DBOS Workflows](docs/DBOS.md) - Durable task orchestration
+- [Contributing](CONTRIBUTING.md) - How to contribute to mainloop
+
+## License
+
+This project is licensed under the [Sustainable Use License v1.0](LICENSE.md) - a source-available license that allows free use for internal business, non-commercial, and personal purposes.

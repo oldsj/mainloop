@@ -39,10 +39,12 @@ secrets.yaml
 1password-credentials.json
 gcp-credentials.json
 
+# Personal k8s config (for open source - keeps your domains private)
+k8s/apps/mainloop/overlays/*/personal-config-patch.yaml
+
 # Build outputs
 /frontend/.svelte-kit/
 /frontend/build/
-/frontend/.cloudflare/
 /frontend/dist/
 
 # Logs
