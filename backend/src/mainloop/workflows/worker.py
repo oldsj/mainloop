@@ -733,6 +733,11 @@ async def _run_code_review_loop(
     that already has a PR.
 
     Args:
+        task_id: The unique identifier of the task.
+        task: The worker task object.
+        namespace: The Kubernetes namespace for the job.
+        pr_url: The URL of the pull request.
+        pr_number: The pull request number.
         since: Check for comments from this time. If None, uses task.created_at
                for resumed tasks, or now for new PRs.
 
@@ -801,14 +806,14 @@ async def _run_code_review_loop(
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
                     await run_job_with_retry(
-                        lambda: spawn_feedback_job(
+                        lambda fb=feedback, fi=feedback_iteration: spawn_feedback_job(
                             task_id,
                             namespace,
                             task,
                             pr_number,
-                            feedback,
+                            fb,
                             task.branch_name,
-                            feedback_iteration,
+                            fi,
                         ),
                         f"feedback job (iteration {feedback_iteration})",
                     )
@@ -978,11 +983,11 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
                 # Run plan job with retry - returns plan content and any questions
                 result = await run_job_with_retry(
-                    lambda iteration=plan_iteration: spawn_plan_job(
+                    lambda iteration=plan_iteration, fc=feedback_context: spawn_plan_job(
                         task_id,
                         namespace,
                         task,
-                        feedback=feedback_context,
+                        feedback=fc,
                         iteration=iteration,
                     ),
                     f"plan job (iteration {plan_iteration})",
@@ -1456,14 +1461,14 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     task.repo_url, pr_number
                 )
                 await run_job_with_retry(
-                    lambda: spawn_fix_job(
+                    lambda fl=failure_logs, ci=ci_iteration: spawn_fix_job(
                         task_id,
                         namespace,
                         task,
                         pr_number,
-                        failure_logs,
+                        fl,
                         branch_name,
-                        ci_iteration,
+                        ci,
                     ),
                     f"fix job (CI iteration {ci_iteration})",
                 )
@@ -1559,14 +1564,14 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
                     await run_job_with_retry(
-                        lambda: spawn_feedback_job(
+                        lambda fb=feedback, fi=feedback_iteration: spawn_feedback_job(
                             task_id,
                             namespace,
                             task,
                             pr_number,
-                            feedback,
+                            fb,
                             branch_name,
-                            feedback_iteration,
+                            fi,
                         ),
                         f"feedback job (iteration {feedback_iteration})",
                     )

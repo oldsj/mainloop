@@ -11,7 +11,7 @@ COPY packages ./packages
 COPY frontend ./frontend
 
 # Install pnpm and dependencies
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
+RUN npm install -g pnpm@9 && pnpm install --frozen-lockfile
 
 # Build frontend
 WORKDIR /app/frontend
@@ -35,10 +35,21 @@ COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/frontend ./frontend
 
 # Install pnpm and production dependencies
-RUN npm install -g pnpm && pnpm install --frozen-lockfile --prod
+RUN npm install -g pnpm@9 && pnpm install --frozen-lockfile --prod
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
 WORKDIR /app/frontend
 
+# Change ownership to non-root user
+RUN chown -R nextjs:nodejs /app
+
+USER nextjs
+
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
 
 CMD ["node", "build"]

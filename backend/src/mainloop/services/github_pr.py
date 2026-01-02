@@ -4,13 +4,11 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-import httpx
+from githubkit import GitHub
 from mainloop.config import settings
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
-
-GITHUB_API_BASE = "https://api.github.com"
 
 
 class PRComment(BaseModel):
@@ -53,15 +51,14 @@ class PRStatus(BaseModel):
     review_decision: str | None  # APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, etc.
 
 
-def _get_headers() -> dict:
-    """Get headers for GitHub API requests."""
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
-    return headers
+def _get_github() -> GitHub:
+    """Get a GitHub client instance.
+
+    Returns:
+        GitHub client configured with the token from settings
+
+    """
+    return GitHub(settings.github_token) if settings.github_token else GitHub()
 
 
 def _parse_repo(repo_url: str) -> tuple[str, str]:
@@ -95,38 +92,33 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}",
-            headers=_get_headers(),
+    try:
+        response = await gh.rest.pulls.async_get(
+            owner=owner,
+            repo=repo,
+            pull_number=pr_number,
         )
-
-        if response.status_code == 404:
-            return None
-
-        response.raise_for_status()
-        data = response.json()
+        data = response.parsed_data
 
         return PRStatus(
-            number=data["number"],
-            state=data["state"],
-            merged=data.get("merged", False),
-            title=data["title"],
-            body=data.get("body"),
-            head_branch=data["head"]["ref"],
-            head_sha=data["head"]["sha"],
-            base_branch=data["base"]["ref"],
-            url=data["html_url"],
-            created_at=datetime.fromisoformat(
-                data["created_at"].replace("Z", "+00:00")
-            ),
-            updated_at=datetime.fromisoformat(
-                data["updated_at"].replace("Z", "+00:00")
-            ),
-            mergeable=data.get("mergeable"),
-            review_decision=data.get("review_decision"),
+            number=data.number,
+            state=data.state,
+            merged=data.merged or False,
+            title=data.title,
+            body=data.body,
+            head_branch=data.head.ref,
+            head_sha=data.head.sha,
+            base_branch=data.base.ref,
+            url=data.html_url,
+            created_at=data.created_at,
+            updated_at=data.updated_at,
+            mergeable=data.mergeable,
+            review_decision=data.review_decision,
         )
+    except Exception:
+        return None
 
 
 async def get_pr_comments(
@@ -147,61 +139,48 @@ async def get_pr_comments(
     """
     owner, repo = _parse_repo(repo_url)
     comments = []
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
+    try:
         # Get issue comments (general PR comments)
-        params = {}
-        if since:
-            params["since"] = since.isoformat()
-
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{pr_number}/comments",
-            headers=_get_headers(),
-            params=params,
+        response = await gh.rest.issues.async_list_comments(
+            owner=owner,
+            repo=repo,
+            issue_number=pr_number,
         )
-        response.raise_for_status()
-
-        for c in response.json():
+        for c in response.parsed_data:
             comments.append(
                 PRComment(
-                    id=c["id"],
-                    body=c["body"],
-                    user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(
-                        c["created_at"].replace("Z", "+00:00")
-                    ),
-                    updated_at=datetime.fromisoformat(
-                        c["updated_at"].replace("Z", "+00:00")
-                    ),
-                    url=c["html_url"],
+                    id=c.id,
+                    body=c.body,
+                    user=c.user.login,
+                    created_at=c.created_at,
+                    updated_at=c.updated_at,
+                    url=c.html_url,
                     is_review_comment=False,
                 )
             )
 
         # Get review comments (inline code comments)
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/comments",
-            headers=_get_headers(),
-            params=params,
+        response = await gh.rest.pulls.async_list_comments(
+            owner=owner,
+            repo=repo,
+            pull_number=pr_number,
         )
-        response.raise_for_status()
-
-        for c in response.json():
+        for c in response.parsed_data:
             comments.append(
                 PRComment(
-                    id=c["id"],
-                    body=c["body"],
-                    user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(
-                        c["created_at"].replace("Z", "+00:00")
-                    ),
-                    updated_at=datetime.fromisoformat(
-                        c["updated_at"].replace("Z", "+00:00")
-                    ),
-                    url=c["html_url"],
+                    id=c.id,
+                    body=c.body,
+                    user=c.user.login,
+                    created_at=c.created_at,
+                    updated_at=c.updated_at,
+                    url=c.html_url,
                     is_review_comment=True,
                 )
             )
+    except Exception:
+        pass
 
     # Sort by created_at
     comments.sort(key=lambda c: c.created_at)
@@ -228,29 +207,30 @@ async def get_pr_reviews(
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
-            headers=_get_headers(),
+    try:
+        response = await gh.rest.pulls.async_list_reviews(
+            owner=owner,
+            repo=repo,
+            pull_number=pr_number,
         )
-        response.raise_for_status()
 
         reviews = []
-        for r in response.json():
+        for r in response.parsed_data:
             reviews.append(
                 PRReview(
-                    id=r["id"],
-                    user=r["user"]["login"],
-                    state=r["state"],
-                    body=r.get("body"),
-                    submitted_at=datetime.fromisoformat(
-                        r["submitted_at"].replace("Z", "+00:00")
-                    ),
+                    id=r.id,
+                    user=r.user.login,
+                    state=r.state,
+                    body=r.body,
+                    submitted_at=r.submitted_at,
                 )
             )
 
         return reviews
+    except Exception:
+        return []
 
 
 async def is_pr_merged(repo_url: str, pr_number: int) -> bool:
@@ -347,25 +327,33 @@ async def get_check_status(repo_url: str, pr_number: int) -> CombinedCheckStatus
         )
 
     head_sha = pr_status.head_sha
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits/{head_sha}/check-runs",
-            headers=_get_headers(),
+    try:
+        response = await gh.rest.checks.async_list_for_ref(
+            owner=owner,
+            repo=repo,
+            ref=head_sha,
         )
-        response.raise_for_status()
-        data = response.json()
+        data = response.parsed_data
+    except Exception:
+        return CombinedCheckStatus(
+            status="pending",
+            total_count=0,
+            check_runs=[],
+            failed_runs=[],
+        )
 
     check_runs = []
-    for run in data.get("check_runs", []):
+    for run in data.check_runs:
         check_runs.append(
             CheckRunStatus(
-                name=run["name"],
-                status=run["status"],
-                conclusion=run.get("conclusion"),
-                details_url=run.get("details_url"),
-                output_title=run.get("output", {}).get("title"),
-                output_summary=run.get("output", {}).get("summary"),
+                name=run.name,
+                status=run.status,
+                conclusion=run.conclusion,
+                details_url=run.details_url,
+                output_title=run.output.title if run.output else None,
+                output_summary=run.output.summary if run.output else None,
             )
         )
 
@@ -535,25 +523,29 @@ async def add_reaction_to_comment(
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    # Different endpoints for issue comments vs review comments
-    if is_review_comment:
-        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions"
-    else:
-        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions"
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                url,
-                headers=_get_headers(),
-                json={"content": reaction},
+    try:
+        if is_review_comment:
+            # For review comments on PR code
+            await gh.rest.reactions.async_create_for_pull_request_review_comment(
+                owner=owner,
+                repo=repo,
+                comment_id=comment_id,
+                content=reaction,
             )
-            # 201 = created, 200 = already exists
-            return response.status_code in (200, 201)
-        except Exception as e:
-            logger.warning(f"Failed to add reaction to comment {comment_id}: {e}")
-            return False
+        else:
+            # For issue comments
+            await gh.rest.reactions.async_create_for_issue_comment(
+                owner=owner,
+                repo=repo,
+                comment_id=comment_id,
+                content=reaction,
+            )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to add reaction to comment {comment_id}: {e}")
+        return False
 
 
 async def acknowledge_comments(
@@ -728,57 +720,36 @@ async def get_issue_status(
 
     """
     owner, repo = _parse_repo(repo_url)
-    headers = _get_headers()
+    gh = _get_github()
 
-    if etag:
-        headers["If-None-Match"] = etag
-    if if_modified_since:
-        headers["If-Modified-Since"] = if_modified_since.strftime(
-            "%a, %d %b %Y %H:%M:%S GMT"
+    try:
+        response = await gh.rest.issues.async_get(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
         )
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}",
-            headers=headers,
-        )
-
-        # 304 = Not Modified (content unchanged, doesn't count against rate limit)
-        if response.status_code == 304:
-            return ConditionalResponse(
-                not_modified=True,
-                etag=response.headers.get("ETag"),
-                last_modified=_parse_last_modified(
-                    response.headers.get("Last-Modified")
-                ),
-            )
-
-        if response.status_code == 404:
-            return ConditionalResponse(data={"state": "not_found"})
-
-        response.raise_for_status()
-        data = response.json()
+        data = response.parsed_data
 
         issue = IssueStatus(
-            number=data["number"],
-            state=data["state"],
-            title=data["title"],
-            body=data.get("body"),
-            url=data["html_url"],
-            created_at=datetime.fromisoformat(
-                data["created_at"].replace("Z", "+00:00")
-            ),
-            updated_at=datetime.fromisoformat(
-                data["updated_at"].replace("Z", "+00:00")
-            ),
-            labels=[label["name"] for label in data.get("labels", [])],
+            number=data.number,
+            state=data.state,
+            title=data.title,
+            body=data.body,
+            url=data.html_url,
+            created_at=data.created_at,
+            updated_at=data.updated_at,
+            labels=[label.name for label in data.labels] if data.labels else [],
         )
 
         return ConditionalResponse(
             data=issue.model_dump(),
-            etag=response.headers.get("ETag"),
-            last_modified=_parse_last_modified(response.headers.get("Last-Modified")),
+            etag=response.headers.get("etag") if hasattr(response, "headers") else None,
+            last_modified=_parse_last_modified(
+                response.headers.get("last-modified") if hasattr(response, "headers") else None
+            ),
         )
+    except Exception:
+        return ConditionalResponse(data={"state": "not_found"})
 
 
 async def get_issue_comments(
@@ -800,51 +771,36 @@ async def get_issue_comments(
 
     """
     owner, repo = _parse_repo(repo_url)
-    headers = _get_headers()
+    gh = _get_github()
 
-    if etag:
-        headers["If-None-Match"] = etag
-
-    params = {}
-    if since:
-        params["since"] = since.isoformat()
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments",
-            headers=headers,
-            params=params,
+    try:
+        response = await gh.rest.issues.async_list_comments(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
         )
 
-        if response.status_code == 304:
-            return ConditionalResponse(
-                not_modified=True,
-                etag=response.headers.get("ETag"),
-            )
-
-        response.raise_for_status()
-        data = response.json()
-
         comments = []
-        for c in data:
+        for c in response.parsed_data:
             comments.append(
                 IssueComment(
-                    id=c["id"],
-                    body=c["body"],
-                    user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(
-                        c["created_at"].replace("Z", "+00:00")
-                    ),
-                    updated_at=datetime.fromisoformat(
-                        c["updated_at"].replace("Z", "+00:00")
-                    ),
-                    url=c["html_url"],
+                    id=c.id,
+                    body=c.body,
+                    user=c.user.login,
+                    created_at=c.created_at,
+                    updated_at=c.updated_at,
+                    url=c.html_url,
                 ).model_dump()
             )
 
         return ConditionalResponse(
             data=comments,
-            etag=response.headers.get("ETag"),
+            etag=response.headers.get("etag") if hasattr(response, "headers") else None,
+        )
+    except Exception:
+        return ConditionalResponse(
+            data=[],
+            etag=None,
         )
 
 
@@ -985,32 +941,26 @@ async def create_github_issue(
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    payload = {
-        "title": title,
-        "body": body,
-    }
-    if labels:
-        payload["labels"] = labels
+    try:
+        response = await gh.rest.issues.async_create(
+            owner=owner,
+            repo=repo,
+            title=title,
+            body=body,
+            labels=labels or [],
+        )
+        data = response.parsed_data
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues",
-                headers=_get_headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            return CreatedIssue(
-                number=data["number"],
-                url=data["html_url"],
-                title=data["title"],
-            )
-        except Exception as e:
-            logger.error(f"Failed to create GitHub issue: {e}")
-            return None
+        return CreatedIssue(
+            number=data.number,
+            url=data.html_url,
+            title=data.title,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create GitHub issue: {e}")
+        return None
 
 
 async def update_github_issue(
@@ -1037,32 +987,27 @@ async def update_github_issue(
     """
     owner, repo = _parse_repo(repo_url)
 
-    payload = {}
-    if title is not None:
-        payload["title"] = title
-    if body is not None:
-        payload["body"] = body
-    if state is not None:
-        payload["state"] = state
-    if labels is not None:
-        payload["labels"] = labels
-
-    if not payload:
+    # Check if there's anything to update
+    if all(v is None for v in [title, body, state, labels]):
         return True  # Nothing to update
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.patch(
-                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}",
-                headers=_get_headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            logger.info(f"Updated issue #{issue_number} in {owner}/{repo}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update GitHub issue #{issue_number}: {e}")
-            return False
+    gh = _get_github()
+
+    try:
+        await gh.rest.issues.async_update(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            title=title,
+            body=body,
+            state=state,
+            labels=labels,
+        )
+        logger.info(f"Updated issue #{issue_number} in {owner}/{repo}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update GitHub issue #{issue_number}: {e}")
+        return False
 
 
 async def add_issue_comment(
@@ -1084,22 +1029,22 @@ async def add_issue_comment(
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments",
-                headers=_get_headers(),
-                json={"body": body},
-            )
-            response.raise_for_status()
-            logger.info(f"Added comment to issue #{issue_number} in {owner}/{repo}")
-            if return_id:
-                return response.json().get("id", 0)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
-            return 0 if return_id else False
+    try:
+        response = await gh.rest.issues.async_create_comment(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            body=body,
+        )
+        logger.info(f"Added comment to issue #{issue_number} in {owner}/{repo}")
+        if return_id:
+            return response.parsed_data.id
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
+        return 0 if return_id else False
 
 
 async def get_comment_reactions(
@@ -1117,22 +1062,18 @@ async def get_comment_reactions(
 
     """
     owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
-                headers={
-                    **_get_headers(),
-                    "Accept": "application/vnd.github+json",
-                },
-            )
-            response.raise_for_status()
-            reactions = response.json()
-            return [r.get("content", "") for r in reactions]
-        except Exception as e:
-            logger.error(f"Failed to get reactions for comment {comment_id}: {e}")
-            return []
+    try:
+        response = await gh.rest.reactions.async_list_for_issue_comment(
+            owner=owner,
+            repo=repo,
+            comment_id=comment_id,
+        )
+        return [r.content for r in response.parsed_data]
+    except Exception as e:
+        logger.error(f"Failed to get reactions for comment {comment_id}: {e}")
+        return []
 
 
 def format_plan_for_issue(plan_text: str) -> str:
@@ -1449,25 +1390,26 @@ async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
 
     """
     owner, repo = _parse_repo(repo_url)
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}",
-            headers=_get_headers(),
+    gh = _get_github()
+
+    try:
+        response = await gh.rest.repos.async_get(
+            owner=owner,
+            repo=repo,
         )
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        data = response.json()
+        data = response.parsed_data
         return RepoMetadata(
-            owner=data["owner"]["login"],
-            name=data["name"],
-            full_name=data["full_name"],
-            description=data.get("description"),
-            default_branch=data.get("default_branch", "main"),
-            avatar_url=data["owner"]["avatar_url"],
-            html_url=data["html_url"],
-            open_issues_count=data.get("open_issues_count", 0),
+            owner=data.owner.login,
+            name=data.name,
+            full_name=data.full_name,
+            description=data.description,
+            default_branch=data.default_branch or "main",
+            avatar_url=data.owner.avatar_url,
+            html_url=data.html_url,
+            open_issues_count=data.open_issues_count or 0,
         )
+    except Exception:
+        return None
 
 
 class ProjectPRSummary(BaseModel):
@@ -1495,33 +1437,32 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
 
     """
     owner, repo = _parse_repo(repo_url)
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls",
-            headers=_get_headers(),
-            params={"state": "open", "per_page": limit},
+    gh = _get_github()
+
+    try:
+        response = await gh.rest.pulls.async_list(
+            owner=owner,
+            repo=repo,
+            state="open",
+            per_page=limit,
         )
-        response.raise_for_status()
-        data = response.json()
         return [
             ProjectPRSummary(
-                number=pr["number"],
-                title=pr["title"],
-                state=pr["state"],
-                author=pr["user"]["login"],
-                created_at=datetime.fromisoformat(
-                    pr["created_at"].replace("Z", "+00:00")
-                ),
-                updated_at=datetime.fromisoformat(
-                    pr["updated_at"].replace("Z", "+00:00")
-                ),
-                url=pr["html_url"],
+                number=pr.number,
+                title=pr.title,
+                state=pr.state,
+                author=pr.user.login,
+                created_at=pr.created_at,
+                updated_at=pr.updated_at,
+                url=pr.html_url,
                 # Check if created by our worker (has mainloop in branch name or by our bot user)
-                is_mainloop="mainloop" in pr["head"]["ref"].lower()
-                or "feature/" in pr["head"]["ref"],
+                is_mainloop="mainloop" in pr.head.ref.lower()
+                or "feature/" in pr.head.ref,
             )
-            for pr in data
+            for pr in response.parsed_data
         ]
+    except Exception:
+        return []
 
 
 class CommitSummary(BaseModel):
@@ -1549,23 +1490,24 @@ async def list_recent_commits(
 
     """
     owner, repo = _parse_repo(repo_url)
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits",
-            headers=_get_headers(),
-            params={"sha": branch, "per_page": limit},
+    gh = _get_github()
+
+    try:
+        response = await gh.rest.repos.async_list_commits(
+            owner=owner,
+            repo=repo,
+            sha=branch,
+            per_page=limit,
         )
-        response.raise_for_status()
-        data = response.json()
         return [
             CommitSummary(
-                sha=commit["sha"][:7],  # Short SHA
-                message=commit["commit"]["message"].split("\n")[0],  # First line only
-                author=commit["commit"]["author"]["name"],
-                date=datetime.fromisoformat(
-                    commit["commit"]["author"]["date"].replace("Z", "+00:00")
-                ),
-                url=commit["html_url"],
+                sha=commit.sha[:7],  # Short SHA
+                message=commit.commit.message.split("\n")[0],  # First line only
+                author=commit.commit.author.name,
+                date=commit.commit.author.date,
+                url=commit.html_url,
             )
-            for commit in data
+            for commit in response.parsed_data
         ]
+    except Exception:
+        return []

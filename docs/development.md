@@ -65,7 +65,7 @@ pnpm build
 
 ## Project Layout
 
-```
+```text
 mainloop/
 ├── backend/           # FastAPI + DBOS
 │   └── src/mainloop/

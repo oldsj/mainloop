@@ -12,40 +12,40 @@ metadata:
 rules:
   # Namespace management - create/delete task namespaces
   - apiGroups: ['']
-    resources: ['namespaces']
-    verbs: ['create', 'delete', 'get', 'list', 'watch']
+    resources: [namespaces]
+    verbs: [create, delete, get, list, watch]
 
   # Secret management - read secrets from mainloop, create in task namespaces
   - apiGroups: ['']
-    resources: ['secrets']
-    verbs: ['create', 'get', 'list', 'delete']
+    resources: [secrets]
+    verbs: [create, get, list, delete]
 
   # ServiceAccount management - create worker service accounts in task namespaces
   - apiGroups: ['']
-    resources: ['serviceaccounts']
-    verbs: ['create', 'get', 'delete']
+    resources: [serviceaccounts]
+    verbs: [create, get, delete]
 
   # RoleBinding management - bind worker role in task namespaces
-  - apiGroups: ['rbac.authorization.k8s.io']
-    resources: ['rolebindings']
-    verbs: ['create', 'get', 'delete']
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [create, get, delete]
 
   # ClusterRole binding - allow binding the worker-role to service accounts
   # This is required for RBAC escalation prevention - we must explicitly allow binding this role
-  - apiGroups: ['rbac.authorization.k8s.io']
-    resources: ['clusterroles']
-    resourceNames: ['mainloop-worker-role']
-    verbs: ['bind']
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [mainloop-worker-role]
+    verbs: [bind]
 
   # Job management - create/monitor/delete worker jobs
-  - apiGroups: ['batch']
-    resources: ['jobs']
-    verbs: ['create', 'get', 'list', 'watch', 'delete']
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
 
   # Pod management - for job monitoring
   - apiGroups: ['']
-    resources: ['pods', 'pods/log']
-    verbs: ['get', 'list', 'watch']
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -82,7 +82,7 @@ rules:
     verbs: ['*']
 
   # Apps - deployments, replicasets, statefulsets, daemonsets
-  - apiGroups: ['apps']
+  - apiGroups: [apps]
     resources:
       - deployments
       - replicasets
@@ -91,21 +91,21 @@ rules:
     verbs: ['*']
 
   # Batch - jobs, cronjobs
-  - apiGroups: ['batch']
+  - apiGroups: [batch]
     resources:
       - jobs
       - cronjobs
     verbs: ['*']
 
   # Networking - ingresses, networkpolicies
-  - apiGroups: ['networking.k8s.io']
+  - apiGroups: [networking.k8s.io]
     resources:
       - ingresses
       - networkpolicies
     verbs: ['*']
 
   # RBAC within namespace - roles, rolebindings
-  - apiGroups: ['rbac.authorization.k8s.io']
+  - apiGroups: [rbac.authorization.k8s.io]
     resources:
       - roles
       - rolebindings
@@ -115,4 +115,4 @@ rules:
   - apiGroups: ['']
     resources:
       - events
-    verbs: ['get', 'list', 'watch']
+    verbs: [get, list, watch]

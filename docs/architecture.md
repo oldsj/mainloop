@@ -4,7 +4,7 @@
 
 Mainloop uses a coordinator/worker pattern where a fast main thread agent delegates complex tasks to more capable worker agents.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                      User Devices                           │
 │                  (phone, laptop, etc.)                      │

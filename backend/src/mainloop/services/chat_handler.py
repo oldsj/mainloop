@@ -390,6 +390,10 @@ async def process_message(
     - Claude response with spawn_task tool (Claude decides when to spawn workers)
 
     Args:
+        user_id: The user's unique identifier.
+        message: The user's message text.
+        conversation_id: The conversation's unique identifier.
+        main_thread_id: The main thread workflow ID.
         summary: Compacted summary of older messages.
         recent_messages: Recent unsummarized messages for context.
 

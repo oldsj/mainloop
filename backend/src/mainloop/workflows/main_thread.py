@@ -79,8 +79,7 @@ async def update_task_status(
 
 @DBOS.workflow()  # v2: Added plan_review handling
 async def main_thread_workflow(user_id: str) -> None:
-    """
-    Main thread workflow for a user.
+    """Run the main thread workflow for a user.
 
     This workflow runs as long as needed, processing user messages
     and coordinating worker agents. It uses DBOS.recv() to wait for

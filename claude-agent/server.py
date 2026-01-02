@@ -156,7 +156,7 @@ async def execute_claude(request: ExecuteRequest):
 
     except Exception as e:
         logger.exception(f"Execute failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/execute/stream")

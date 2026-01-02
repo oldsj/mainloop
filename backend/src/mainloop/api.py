@@ -1038,7 +1038,7 @@ async def debug_list_tasks(
                     jobs = batch_v1.list_namespaced_job(namespace=namespace_name)
                     k8s_jobs = [j.metadata.name for j in jobs.items]
             except Exception:
-                pass
+                pass  # nosec B110
 
             results.append(
                 DebugTaskInfo(

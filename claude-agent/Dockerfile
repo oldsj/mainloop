@@ -11,22 +11,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (gh)
-RUN set -o pipefail && \
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh=2.42.0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code@latest
-
-# Create non-root user
-RUN useradd -m -s /bin/bash claude
-
-# Create .claude directory with proper permissions
-RUN mkdir -p /home/claude/.claude && chown -R claude:claude /home/claude/.claude
+# Install Claude Code CLI and create non-root user
+RUN npm install -g @anthropic-ai/claude-code@latest \
+    && useradd -m -s /bin/bash claude \
+    && mkdir -p /home/claude/.claude \
+    && chown -R claude:claude /home/claude/.claude
 
 # Set up working directory
 WORKDIR /app

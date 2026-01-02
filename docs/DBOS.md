@@ -206,7 +206,7 @@ def run_every_minute(scheduled_time, actual_time):
 - A scheduled workflow MUST specify a crontab schedule.
 - It MUST take in two arguments, scheduled and actual time. Both are datetime.datetimes of when the workflow started.
 
-## Workflow Documentation:
+## Workflow Documentation
 
 ---
 
@@ -641,7 +641,7 @@ def checkout_endpoint(idempotency_key: str) -> Response:
     return Response(payment_id)
 ```
 
-### Reliability Guarantees
+### Events Reliability Guarantees
 
 All events are persisted to the database, so the latest version of an event is always retrievable.
 Additionally, if `get_event` is called in a workflow, the retrieved value is persisted in the database so workflow recovery can use that value, even if the event is later updated.
@@ -909,7 +909,7 @@ Essentially, you can think of each partition as a "subqueue" you dynamically cre
 For example, suppose you want your users to each be able to run at most one task at a time.
 You can do this with a partitioned queue with a maximum concurrency limit of 1 where the partition key is user ID.
 
-**Example Syntax**
+### Example Syntax
 
 ```python
 queue = Queue("partitioned_queue", partition_queue=True, concurrency=1)
@@ -1034,7 +1034,7 @@ def reset_dbos():
 
 DBOS.start_workflow, DBOS.retrieve_workflow, and enqueue return workflow handles.
 
-#### get_workflow_id
+### get_workflow_id
 
 ```python
 handle.get_workflow_id() -> str
@@ -1231,9 +1231,9 @@ class WorkflowStatus:
     app_version: Optional[str]
 ```
 
-Retrieve the workflow status:
+Retrieve the workflow status.
 
-### Configuring DBOS
+## Configuring DBOS
 
 To configure DBOS, pass a `DBOSConfig` object to its constructor.
 For example:
@@ -1284,13 +1284,13 @@ class DBOSConfig(TypedDict):
   DBOS uses this connection string, unmodified, to create a SQLAlchemy Engine
   A valid connection string looks like:
 
-```
+```text
 postgresql://[username]:[password]@[hostname]:[port]/[database name]
 ```
 
 Or with SQLite:
 
-```
+```text
 sqlite:///[path to database file]
 ```
 
@@ -1334,7 +1334,7 @@ sqlite:///[application_name].sqlite
 - **executor_id**: Executor ID, used to identify the application instance in distributed environments. It is also useful for distributed workflow recovery
 - **serializer**: A custom serializer for the system database.
 
-#### Custom Serialization
+### Custom Serialization
 
 DBOS must serialize data such as workflow inputs and outputs and step outputs to store it in the system database.
 By default, data is serialized with `pickle` then Base64-encoded, but you can optionally supply a custom serializer through DBOS configuration.

@@ -602,19 +602,24 @@ def extract_plan_options(plan_text: str) -> list[str]:
 
 
 def create_github_issue_from_plan(plan_content: str) -> str | None:
-    """Create a GitHub issue from plan content using gh CLI."""
-    import subprocess
+    """Create a GitHub issue from plan content using githubkit."""
+    from githubkit import GitHub
 
     if not REPO_URL:
         print("[job_runner] No REPO_URL, cannot create issue")
         return None
 
-    # Generate issue title from task
-    title = (
-        f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
-    )
+    gh_token = os.environ.get("GH_TOKEN")
+    if not gh_token:
+        print("[job_runner] No GH_TOKEN, cannot create issue")
+        return None
 
-    # Build issue body with plan and commands
+    # Parse owner/repo from URL
+    parts = REPO_URL.rstrip("/").replace(".git", "").split("/")
+    owner, repo_name = parts[-2], parts[-1]
+
+    title = f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+
     body = f"""{plan_content}
 
 ---
@@ -626,32 +631,18 @@ Reply with:
 """
 
     try:
-        # Create issue using gh CLI
-        result = subprocess.run(
-            ["gh", "issue", "create", "--title", title, "--body", body],
-            capture_output=True,
-            text=True,
-            cwd=WORKSPACE,
+        gh = GitHub(gh_token)
+        # Create issue
+        response = gh.rest.issues.create(
+            owner=owner,
+            repo=repo_name,
+            title=title,
+            body=body,
+            labels=["mainloop-plan"]
         )
-
-        if result.returncode != 0:
-            print(f"[job_runner] Failed to create issue: {result.stderr}")
-            return None
-
-        issue_url = result.stdout.strip()
+        issue_url = response.parsed_data.html_url
         print(f"[job_runner] Created issue: {issue_url}")
-
-        # Add mainloop-plan label
-        issue_number = issue_url.split("/")[-1]
-        subprocess.run(
-            ["gh", "issue", "edit", issue_number, "--add-label", "mainloop-plan"],
-            capture_output=True,
-            text=True,
-            cwd=WORKSPACE,
-        )
-
         return issue_url
-
     except Exception as e:
         print(f"[job_runner] Error creating issue: {e}")
         return None

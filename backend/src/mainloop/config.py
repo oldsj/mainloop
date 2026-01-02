@@ -20,10 +20,6 @@ class Settings(BaseSettings):
         """Construct database URL from parts."""
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
-    # Google Cloud (legacy - being migrated to PostgreSQL)
-    google_cloud_project: str = ""
-    bigquery_dataset: str = "mainloop"
-
     # Claude
     claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
     claude_agent_url: str = "http://claude-agent:8001"
