@@ -3,6 +3,7 @@
 Shared Pydantic models for the mainloop project.
 
 This package contains all shared data models used across:
+
 - Backend API
 - Claude agent integration
 - BigQuery schemas

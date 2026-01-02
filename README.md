@@ -8,7 +8,7 @@ Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-th
 
 ## How It Works
 
-```
+```text
 You (phone/laptop)
     │
     ▼
@@ -51,7 +51,7 @@ make dev
 
 ## Project Structure
 
-```
+```text
 mainloop/
 ├── backend/       # Python FastAPI + DBOS workflows
 ├── frontend/      # SvelteKit + Tailwind v4 (mobile-first responsive)
@@ -67,6 +67,7 @@ mainloop/
 - **Desktop**: Chat with always-visible Inbox sidebar
 
 **Inbox** — a unified view of everything that needs your attention:
+
 1. Questions and approvals from workers
 2. Active tasks (with expandable live logs)
 3. Recent failures (always visible, one-click retry)
@@ -77,7 +78,7 @@ mainloop/
 
 Agents follow a structured workflow: **plan in issue → implement in draft PR → iterate until CI green → ready for human review**.
 
-```
+```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │   Planning  │────►│    Draft    │────►│  Iteration  │────►│   Review    │
 │  (GH Issue) │     │    (PR)     │     │  (CI Loop)  │     │   (Human)   │
@@ -97,18 +98,19 @@ Agents follow a structured workflow: **plan in issue → implement in draft PR �
 ### Verification
 
 Agents use these tools to verify work before marking ready:
+
 - **LSP server integration** - Real-time type/lint errors
 - **`trunk` CLI** - Unified super-linter
 - **Project test suites** - Via GitHub Actions
 
 ### Project Template (Future)
 
-| Component | Purpose |
-|-----------|---------|
+| Component      | Purpose                              |
+| -------------- | ------------------------------------ |
 | GitHub Actions | CI pipeline (lint, type-check, test) |
-| K8s/Helm | Preview environments per PR |
-| CNPG operator | Dynamic test databases |
-| trunk.yaml | Unified linter config |
+| K8s/Helm       | Preview environments per PR          |
+| CNPG operator  | Dynamic test databases               |
+| trunk.yaml     | Unified linter config                |
 
 ## Documentation
 

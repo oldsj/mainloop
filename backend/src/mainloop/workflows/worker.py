@@ -5,41 +5,37 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dbos import DBOS
-
-from models import WorkerTask, TaskStatus
-from mainloop.db import db
 from mainloop.config import settings
-from mainloop.services.k8s_namespace import (
-    create_task_namespace,
-    copy_secrets_to_namespace,
-    setup_worker_rbac,
-    delete_task_namespace,
+from mainloop.db import db
+from mainloop.services.github_pr import (  # Issue support; Question/plan approval support
+    acknowledge_comments,
+    add_issue_comment,
+    create_github_issue,
+    format_feedback_for_agent,
+    format_issue_feedback_for_agent,
+    format_plan_for_issue,
+    format_questions_for_issue,
+    generate_branch_name,
+    get_check_failure_logs,
+    get_check_status,
+    get_comment_reactions,
+    get_issue_comments,
+    get_issue_status,
+    get_pr_comments,
+    get_pr_status,
+    parse_plan_approval_from_comment,
+    parse_question_answers_from_comment,
+    update_github_issue,
 )
 from mainloop.services.k8s_jobs import create_worker_job
-from mainloop.services.github_pr import (
-    get_pr_status,
-    get_pr_comments,
-    format_feedback_for_agent,
-    is_pr_merged,
-    get_check_status,
-    get_check_failure_logs,
-    acknowledge_comments,
-    # Issue support
-    get_issue_status,
-    get_issue_comments,
-    format_issue_feedback_for_agent,
-    generate_branch_name,
-    parse_comments_for_command,
-    create_github_issue,
-    update_github_issue,
-    add_issue_comment,
-    get_comment_reactions,
-    # Question/plan approval support
-    format_questions_for_issue,
-    format_plan_for_issue,
-    parse_question_answers_from_comment,
-    parse_plan_approval_from_comment,
+from mainloop.services.k8s_namespace import (
+    copy_secrets_to_namespace,
+    create_task_namespace,
+    delete_task_namespace,
+    setup_worker_rbac,
 )
+
+from models import TaskStatus, WorkerTask
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +43,13 @@ logger = logging.getLogger(__name__)
 TOPIC_JOB_RESULT = "job_result"  # Results from K8s Jobs
 TOPIC_PLAN_RESPONSE = "plan_response"  # User approval/revision of plan from inbox
 TOPIC_QUESTION_RESPONSE = "question_response"  # User answers to agent questions
-TOPIC_START_IMPLEMENTATION = "start_implementation"  # User triggers implementation after plan approval
+TOPIC_START_IMPLEMENTATION = (
+    "start_implementation"  # User triggers implementation after plan approval
+)
 
 # Polling intervals (seconds)
 ISSUE_POLL_INTERVAL = 60  # Plan issues - less urgent, rate-limit friendly
-PR_POLL_INTERVAL = 30     # Implementation PRs - more urgent during CI
+PR_POLL_INTERVAL = 30  # Implementation PRs - more urgent during CI
 
 # Plan review timeout (wait for user to approve/revise plan)
 PLAN_REVIEW_TIMEOUT_SECONDS = 86400  # 24 hours
@@ -76,32 +74,40 @@ def _build_issue_body(
     sections = []
 
     # Original request section
-    sections.append(f"""## Original Request
+    sections.append(
+        f"""## Original Request
 
 > {original_prompt}
-""")
+"""
+    )
 
     # Requirements section (filled in after questions are answered)
     if requirements:
         req_lines = "\n".join([f"- **{k}**: {v}" for k, v in requirements.items()])
-        sections.append(f"""## Requirements
+        sections.append(
+            f"""## Requirements
 
 {req_lines}
-""")
+"""
+        )
 
     # Plan section (filled in when plan is ready)
     if plan_text:
-        sections.append(f"""## Implementation Plan
+        sections.append(
+            f"""## Implementation Plan
 
 {plan_text}
-""")
+"""
+        )
 
     # Footer
-    sections.append(f"""---
+    sections.append(
+        f"""---
 
 _Task ID: `{task_id}`_ | _Status: {status}_
 _Managed by [Mainloop](https://github.com/oldsj/mainloop)_
-""")
+"""
+    )
 
     return "\n".join(sections)
 
@@ -116,13 +122,21 @@ def _generate_issue_title(description: str, max_length: int = 70) -> str:
 
     # Remove common prefixes that add noise
     prefixes_to_remove = [
-        "please ", "can you ", "could you ", "i want to ", "i need to ",
-        "help me ", "i'd like to ", "let's ", "we should ", "we need to ",
+        "please ",
+        "can you ",
+        "could you ",
+        "i want to ",
+        "i need to ",
+        "help me ",
+        "i'd like to ",
+        "let's ",
+        "we should ",
+        "we need to ",
     ]
     lower = first_line.lower()
     for prefix in prefixes_to_remove:
         if lower.startswith(prefix):
-            first_line = first_line[len(prefix):]
+            first_line = first_line[len(prefix) :]
             break
 
     # Capitalize first letter
@@ -390,6 +404,7 @@ async def check_issue_for_question_answers(
 
     Returns:
         Dict mapping question ID to answer, or None if no answers found.
+
     """
     response = await get_issue_comments(repo_url, issue_number, since=since)
 
@@ -423,6 +438,7 @@ async def post_plan_to_issue(
 
     Returns:
         The comment ID (for checking reactions later), or 0 on failure.
+
     """
     body = format_plan_for_issue(plan_text)
     return await add_issue_comment(repo_url, issue_number, body, return_id=True)
@@ -437,6 +453,7 @@ async def check_plan_comment_reactions(
 
     Returns:
         True if approval reaction found, False otherwise.
+
     """
     if not comment_id:
         return False
@@ -464,6 +481,7 @@ async def check_issue_for_plan_approval(
     Returns:
         Tuple of (action, text) where action is "approve" or "revise",
         or None if no relevant comments found.
+
     """
     response = await get_issue_comments(repo_url, issue_number, since=since)
 
@@ -485,7 +503,9 @@ async def check_issue_for_plan_approval(
                 logger.info("Found plan approval in issue comment")
                 return ("approve", None)
             else:
-                logger.info(f"Found revision request in issue comment: {result[:50]}...")
+                logger.info(
+                    f"Found revision request in issue comment: {result[:50]}..."
+                )
                 return ("revise", result)
 
     return None
@@ -508,6 +528,7 @@ async def create_github_issue_step(
 
     Returns:
         Dict with issue number, url, and title, or None if failed
+
     """
     result = await create_github_issue(repo_url, title, body, labels)
     if result:
@@ -560,7 +581,10 @@ async def get_feedback_context(
 ) -> str:
     """Get formatted feedback for the agent and acknowledge comments."""
     # Get comments first to acknowledge them
-    from mainloop.services.github_pr import get_pr_comments, _should_agent_act_on_comment
+    from mainloop.services.github_pr import (
+        _should_agent_act_on_comment,
+        get_pr_comments,
+    )
 
     comments = await get_pr_comments(repo_url, pr_number, since=since)
     actionable_comments = [c for c in comments if _should_agent_act_on_comment(c)]
@@ -660,6 +684,7 @@ async def run_job_with_retry(
 
     Raises:
         RuntimeError: If all retries are exhausted
+
     """
     last_error = None
 
@@ -668,21 +693,25 @@ async def run_job_with_retry(
         await spawn_fn()
 
         # Wait for job result
-        result = await DBOS.recv_async(topic=TOPIC_JOB_RESULT, timeout_seconds=JOB_TIMEOUT_SECONDS)
+        result = await DBOS.recv_async(
+            topic=TOPIC_JOB_RESULT, timeout_seconds=JOB_TIMEOUT_SECONDS
+        )
 
         if result is None:
             last_error = f"Timed out waiting for {job_name} to complete"
             logger.warning(f"{last_error} (attempt {attempt}/{max_retries})")
         elif result.get("status") == "failed":
             last_error = result.get("error", f"{job_name} failed")
-            logger.warning(f"{job_name} failed: {last_error} (attempt {attempt}/{max_retries})")
+            logger.warning(
+                f"{job_name} failed: {last_error} (attempt {attempt}/{max_retries})"
+            )
         else:
             # Success!
             return result
 
         # If we have more retries, wait with exponential backoff
         if attempt < max_retries:
-            backoff_seconds = 2 ** attempt  # 2, 4, 8, 16, 32 seconds
+            backoff_seconds = 2**attempt  # 2, 4, 8, 16, 32 seconds
             logger.info(f"Retrying {job_name} in {backoff_seconds}s...")
             await DBOS.sleep_async(backoff_seconds)
 
@@ -706,6 +735,7 @@ async def _run_code_review_loop(
     Args:
         since: Check for comments from this time. If None, uses task.created_at
                for resumed tasks, or now for new PRs.
+
     """
     try:
         logger.info(f"Starting code review loop for PR #{pr_number}")
@@ -727,8 +757,13 @@ async def _run_code_review_loop(
                 logger.info(f"PR #{pr_number} has been merged")
                 await update_worker_task_status(task_id, TaskStatus.COMPLETED)
                 notify_main_thread(
-                    task.user_id, task_id, "worker_result",
-                    {"status": "completed", "result": {"pr_url": pr_url, "merged": True}},
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "completed",
+                        "result": {"pr_url": pr_url, "merged": True},
+                    },
                 )
                 return {"status": "completed", "pr_url": pr_url, "merged": True}
 
@@ -736,17 +771,28 @@ async def _run_code_review_loop(
                 logger.info(f"PR #{pr_number} was closed without merge")
                 await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                 notify_main_thread(
-                    task.user_id, task_id, "worker_result",
-                    {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "cancelled",
+                        "result": {"pr_url": pr_url, "closed": True},
+                    },
                 )
                 return {"status": "cancelled", "pr_url": pr_url}
 
             # Check for new comments
-            new_comments = await check_for_new_comments(task.repo_url, pr_number, last_check)
+            new_comments = await check_for_new_comments(
+                task.repo_url, pr_number, last_check
+            )
 
             if new_comments:
-                logger.info(f"Found {len(new_comments)} new comments on PR #{pr_number}")
-                feedback = await get_feedback_context(task.repo_url, pr_number, last_check)
+                logger.info(
+                    f"Found {len(new_comments)} new comments on PR #{pr_number}"
+                )
+                feedback = await get_feedback_context(
+                    task.repo_url, pr_number, last_check
+                )
 
                 if feedback:
                     feedback_iteration += 1
@@ -755,14 +801,29 @@ async def _run_code_review_loop(
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
                     await run_job_with_retry(
-                        lambda: spawn_feedback_job(task_id, namespace, task, pr_number, feedback, task.branch_name, feedback_iteration),
+                        lambda: spawn_feedback_job(
+                            task_id,
+                            namespace,
+                            task,
+                            pr_number,
+                            feedback,
+                            task.branch_name,
+                            feedback_iteration,
+                        ),
                         f"feedback job (iteration {feedback_iteration})",
                     )
 
                     # Set status back to under_review after job completes
-                    await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+                    await update_worker_task_status(
+                        task_id,
+                        TaskStatus.UNDER_REVIEW,
+                        pr_url=pr_url,
+                        pr_number=pr_number,
+                    )
                     notify_main_thread(
-                        task.user_id, task_id, "worker_result",
+                        task.user_id,
+                        task_id,
+                        "worker_result",
                         {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
                     )
 
@@ -774,7 +835,9 @@ async def _run_code_review_loop(
         logger.error(f"Code review loop failed: {e}")
         await update_worker_task_status(task_id, TaskStatus.FAILED, error=str(e))
         notify_main_thread(
-            task.user_id, task_id, "worker_result",
+            task.user_id,
+            task_id,
+            "worker_result",
             {"status": "failed", "error": str(e)},
         )
         return {"status": "failed", "error": str(e)}
@@ -823,7 +886,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
         try:
             # Jump directly to code review loop
-            await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+            await update_worker_task_status(
+                task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number
+            )
         except Exception as e:
             logger.error(f"Failed to resume task: {e}")
             await cleanup_namespace(task_id)
@@ -879,14 +944,17 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
             # Store issue info immediately
             await update_worker_task_status(
-                task_id, TaskStatus.PLANNING,
-                issue_url=issue_url, issue_number=issue_number,
+                task_id,
+                TaskStatus.PLANNING,
+                issue_url=issue_url,
+                issue_number=issue_number,
             )
 
             # Add comment that we're starting to explore
             await add_issue_comment_step(
-                task.repo_url, issue_number,
-                "🤖 Starting to explore the codebase and gather requirements..."
+                task.repo_url,
+                issue_number,
+                "🤖 Starting to explore the codebase and gather requirements...",
             )
 
             while True:
@@ -898,18 +966,24 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     feedback_context = plan_text
                 if user_answers:
                     # Format answers as context for the agent
-                    answers_text = "\n".join([f"- {k}: {v}" for k, v in user_answers.items()])
+                    answers_text = "\n".join(
+                        [f"- {k}: {v}" for k, v in user_answers.items()]
+                    )
                     if feedback_context:
                         feedback_context = f"{feedback_context}\n\nUser answered your questions:\n{answers_text}"
                     else:
-                        feedback_context = f"User answered your questions:\n{answers_text}"
+                        feedback_context = (
+                            f"User answered your questions:\n{answers_text}"
+                        )
 
                 # Run plan job with retry - returns plan content and any questions
                 result = await run_job_with_retry(
                     lambda iteration=plan_iteration: spawn_plan_job(
-                        task_id, namespace, task,
+                        task_id,
+                        namespace,
+                        task,
                         feedback=feedback_context,
-                        iteration=iteration
+                        iteration=iteration,
                     ),
                     f"plan job (iteration {plan_iteration})",
                 )
@@ -923,21 +997,28 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 if not plan_text:
                     raise RuntimeError("Plan job did not return plan content")
 
-                logger.info(f"Plan ready with {len(questions)} questions, {len(suggested_options)} options")
+                logger.info(
+                    f"Plan ready with {len(questions)} questions, {len(suggested_options)} options"
+                )
 
                 # PHASE 1a: If agent asked questions, get user answers first
                 if questions:
-                    logger.info(f"Agent asked {len(questions)} questions - waiting for user answers")
+                    logger.info(
+                        f"Agent asked {len(questions)} questions - waiting for user answers"
+                    )
 
                     # Update task with questions
                     await update_worker_task_status(
-                        task_id, TaskStatus.WAITING_QUESTIONS,
+                        task_id,
+                        TaskStatus.WAITING_QUESTIONS,
                         pending_questions=questions,
                         plan_text=plan_text,
                     )
 
                     # Post formatted questions to GitHub issue
-                    await post_questions_to_issue(task.repo_url, issue_number, questions)
+                    await post_questions_to_issue(
+                        task.repo_url, issue_number, questions
+                    )
 
                     # Notify main thread about questions (task UI will show them)
                     notify_main_thread(
@@ -986,13 +1067,17 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                             # Found answers in GitHub comments!
                             response = {"answers": gh_answers, "action": "answer"}
                             answer_source = "github"
-                            logger.info(f"Found answers in GitHub issue comment: {gh_answers}")
+                            logger.info(
+                                f"Found answers in GitHub issue comment: {gh_answers}"
+                            )
                             break
 
                         # No answers yet - increase poll interval (exponential backoff)
                         total_wait += poll_interval
                         poll_interval = min(poll_interval * 1.5, max_poll_interval)
-                        logger.debug(f"No answers yet, next poll in {poll_interval:.0f}s (total wait: {total_wait}s)")
+                        logger.debug(
+                            f"No answers yet, next poll in {poll_interval:.0f}s (total wait: {total_wait}s)"
+                        )
 
                     if response is None:
                         raise RuntimeError("Question response timed out after 24 hours")
@@ -1001,21 +1086,27 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                         logger.info("Task cancelled by user during questions")
                         await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            "❌ Task cancelled by user."
+                            task.repo_url, issue_number, "❌ Task cancelled by user."
                         )
                         await update_github_issue_step(
                             task.repo_url, issue_number, state="closed"
                         )
                         notify_main_thread(
-                            task.user_id, task_id, "worker_result",
-                            {"status": "cancelled", "result": {"message": "Cancelled by user"}},
+                            task.user_id,
+                            task_id,
+                            "worker_result",
+                            {
+                                "status": "cancelled",
+                                "result": {"message": "Cancelled by user"},
+                            },
                         )
                         return {"status": "cancelled", "message": "Cancelled by user"}
 
                     # Store answers and update issue with Q&A
                     user_answers = response.get("answers", {})
-                    logger.info(f"User answered {len(user_answers)} questions via {answer_source}, re-running plan...")
+                    logger.info(
+                        f"User answered {len(user_answers)} questions via {answer_source}, re-running plan..."
+                    )
 
                     # Update issue body with requirements
                     updated_body = _build_issue_body(
@@ -1030,18 +1121,21 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     # Post confirmation comment (mention source if from GitHub)
                     if answer_source == "github":
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            "✅ Got your answers! Generating implementation plan..."
+                            task.repo_url,
+                            issue_number,
+                            "✅ Got your answers! Generating implementation plan...",
                         )
                     else:
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            "✅ Requirements gathered. Generating implementation plan..."
+                            task.repo_url,
+                            issue_number,
+                            "✅ Requirements gathered. Generating implementation plan...",
                         )
 
                     # Clear questions from task since they've been answered
                     await update_worker_task_status(
-                        task_id, TaskStatus.PLANNING,
+                        task_id,
+                        TaskStatus.PLANNING,
                         pending_questions=[],  # Empty list clears questions
                     )
                     continue  # Re-run plan job with answers
@@ -1059,11 +1153,14 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 )
 
                 # Post plan as comment with approval instructions (get comment ID for reactions)
-                plan_comment_id = await post_plan_to_issue(task.repo_url, issue_number, plan_text)
+                plan_comment_id = await post_plan_to_issue(
+                    task.repo_url, issue_number, plan_text
+                )
 
                 # Update status to waiting for plan review
                 await update_worker_task_status(
-                    task_id, TaskStatus.WAITING_PLAN_REVIEW,
+                    task_id,
+                    TaskStatus.WAITING_PLAN_REVIEW,
                     plan_text=plan_text,
                 )
 
@@ -1092,7 +1189,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 response = None
                 approval_source = None
 
-                logger.info(f"Waiting for plan approval via UI, GitHub comment, or reaction...")
+                logger.info(
+                    "Waiting for plan approval via UI, GitHub comment, or reaction..."
+                )
 
                 while total_wait < PLAN_REVIEW_TIMEOUT_SECONDS:
                     # First, check for DBOS message (non-blocking with short timeout)
@@ -1132,7 +1231,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     # No response yet - increase poll interval (exponential backoff)
                     total_wait += poll_interval
                     poll_interval = min(poll_interval * 1.5, max_poll_interval)
-                    logger.debug(f"No plan response yet, next poll in {poll_interval:.0f}s")
+                    logger.debug(
+                        f"No plan response yet, next poll in {poll_interval:.0f}s"
+                    )
 
                 if response is None:
                     raise RuntimeError("Plan review timed out after 24 hours")
@@ -1140,42 +1241,55 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 response_action = response.get("action", "")
                 response_text = response.get("text", "")
 
-                if response_action == "approve" or response_action.lower() in ["approve", "lgtm", "looks good"]:
-                    logger.info(f"Plan approved via {approval_source}! Waiting for user to start implementation...")
+                if response_action == "approve" or response_action.lower() in [
+                    "approve",
+                    "lgtm",
+                    "looks good",
+                ]:
+                    logger.info(
+                        f"Plan approved via {approval_source}! Waiting for user to start implementation..."
+                    )
                     if approval_source in ("github", "github_reaction"):
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            "✅ Got it! Plan approved."
+                            task.repo_url, issue_number, "✅ Got it! Plan approved."
                         )
                     break
                 elif response_action == "cancel":
                     logger.info("Plan cancelled by user")
                     await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                     await add_issue_comment_step(
-                        task.repo_url, issue_number,
-                        "❌ Plan cancelled by user."
+                        task.repo_url, issue_number, "❌ Plan cancelled by user."
                     )
                     await update_github_issue_step(
                         task.repo_url, issue_number, state="closed"
                     )
                     notify_main_thread(
-                        task.user_id, task_id, "worker_result",
-                        {"status": "cancelled", "result": {"message": "Plan cancelled by user"}},
+                        task.user_id,
+                        task_id,
+                        "worker_result",
+                        {
+                            "status": "cancelled",
+                            "result": {"message": "Plan cancelled by user"},
+                        },
                     )
                     return {"status": "cancelled", "message": "Plan cancelled by user"}
                 else:
                     # User provided feedback - re-run plan with feedback
                     feedback = response_text or response_action
-                    logger.info(f"User requested plan revision via {approval_source}: {feedback}")
+                    logger.info(
+                        f"User requested plan revision via {approval_source}: {feedback}"
+                    )
                     if approval_source == "github":
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            f"📝 Got your feedback. Regenerating plan..."
+                            task.repo_url,
+                            issue_number,
+                            "📝 Got your feedback. Regenerating plan...",
                         )
                     else:
                         await add_issue_comment_step(
-                            task.repo_url, issue_number,
-                            f"📝 **Revision requested:**\n> {feedback}\n\nRegenerating plan..."
+                            task.repo_url,
+                            issue_number,
+                            f"📝 **Revision requested:**\n> {feedback}\n\nRegenerating plan...",
                         )
                     plan_text = feedback  # Pass feedback to next iteration
                     user_answers = {}  # Clear answers for new iteration
@@ -1183,13 +1297,15 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
             # Plan approved - update issue and pause for implementation trigger
             await add_issue_comment_step(
-                task.repo_url, issue_number,
-                "✅ **Plan approved!** Ready to start implementation when triggered."
+                task.repo_url,
+                issue_number,
+                "✅ **Plan approved!** Ready to start implementation when triggered.",
             )
 
             # Update issue labels
             await update_github_issue_step(
-                task.repo_url, issue_number,
+                task.repo_url,
+                issue_number,
                 labels=["mainloop-plan", "approved"],
             )
 
@@ -1201,9 +1317,12 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
 
             # Set status to ready_to_implement and PAUSE
             await update_worker_task_status(
-                task_id, TaskStatus.READY_TO_IMPLEMENT,
-                issue_url=issue_url, issue_number=issue_number,
-                branch_name=branch_name, plan_text=plan_text,
+                task_id,
+                TaskStatus.READY_TO_IMPLEMENT,
+                issue_url=issue_url,
+                issue_number=issue_number,
+                branch_name=branch_name,
+                plan_text=plan_text,
             )
 
             # Notify that plan is approved and waiting for implementation trigger
@@ -1235,22 +1354,22 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 logger.info("Implementation cancelled by user")
                 await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                 await add_issue_comment_step(
-                    task.repo_url, issue_number,
-                    "❌ Implementation cancelled by user."
+                    task.repo_url, issue_number, "❌ Implementation cancelled by user."
                 )
                 await update_github_issue_step(
                     task.repo_url, issue_number, state="closed"
                 )
                 notify_main_thread(
-                    task.user_id, task_id, "worker_result",
+                    task.user_id,
+                    task_id,
+                    "worker_result",
                     {"status": "cancelled", "result": {"message": "Cancelled by user"}},
                 )
                 return {"status": "cancelled", "message": "Cancelled by user"}
 
             logger.info("Implementation triggered! Proceeding to Phase 2...")
             await add_issue_comment_step(
-                task.repo_url, issue_number,
-                "🚀 **Starting implementation...**"
+                task.repo_url, issue_number, "🚀 **Starting implementation...**"
             )
 
         # ============================================================
@@ -1268,7 +1387,13 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         else:
             # Normal mode: implement the approved plan
             impl_result = await run_job_with_retry(
-                lambda: spawn_implement_job(task_id, namespace, task, issue_number=issue_number, branch_name=branch_name),
+                lambda: spawn_implement_job(
+                    task_id,
+                    namespace,
+                    task,
+                    issue_number=issue_number,
+                    branch_name=branch_name,
+                ),
                 f"implement job (issue #{issue_number})",
             )
 
@@ -1279,7 +1404,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
             logger.info("Task completed without PR")
             await update_worker_task_status(task_id, TaskStatus.COMPLETED)
             notify_main_thread(
-                task.user_id, task_id, "worker_result",
+                task.user_id,
+                task_id,
+                "worker_result",
                 {"status": "completed", "result": impl_result.get("result")},
             )
             return {"status": "completed", "result": impl_result.get("result")}
@@ -1325,9 +1452,19 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     },
                 )
 
-                failure_logs = await get_check_failure_logs_step(task.repo_url, pr_number)
+                failure_logs = await get_check_failure_logs_step(
+                    task.repo_url, pr_number
+                )
                 await run_job_with_retry(
-                    lambda: spawn_fix_job(task_id, namespace, task, pr_number, failure_logs, branch_name, ci_iteration),
+                    lambda: spawn_fix_job(
+                        task_id,
+                        namespace,
+                        task,
+                        pr_number,
+                        failure_logs,
+                        branch_name,
+                        ci_iteration,
+                    ),
                     f"fix job (CI iteration {ci_iteration})",
                 )
 
@@ -1338,9 +1475,13 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 continue
 
         if ci_iteration >= MAX_CI_ITERATIONS:
-            raise RuntimeError(f"CI checks still failing after {MAX_CI_ITERATIONS} fix attempts")
+            raise RuntimeError(
+                f"CI checks still failing after {MAX_CI_ITERATIONS} fix attempts"
+            )
 
-        await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+        await update_worker_task_status(
+            task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number
+        )
 
         # Notify human that code is ready for review
         notify_main_thread(
@@ -1374,8 +1515,13 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 logger.info(f"PR #{pr_number} has been merged")
                 await update_worker_task_status(task_id, TaskStatus.COMPLETED)
                 notify_main_thread(
-                    task.user_id, task_id, "worker_result",
-                    {"status": "completed", "result": {"pr_url": pr_url, "merged": True}},
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "completed",
+                        "result": {"pr_url": pr_url, "merged": True},
+                    },
                 )
                 break
 
@@ -1383,17 +1529,28 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 logger.info(f"PR #{pr_number} was closed without merge")
                 await update_worker_task_status(task_id, TaskStatus.CANCELLED)
                 notify_main_thread(
-                    task.user_id, task_id, "worker_result",
-                    {"status": "cancelled", "result": {"pr_url": pr_url, "closed": True}},
+                    task.user_id,
+                    task_id,
+                    "worker_result",
+                    {
+                        "status": "cancelled",
+                        "result": {"pr_url": pr_url, "closed": True},
+                    },
                 )
                 break
 
             # Check for new comments
-            new_comments = await check_for_new_comments(task.repo_url, pr_number, last_check)
+            new_comments = await check_for_new_comments(
+                task.repo_url, pr_number, last_check
+            )
 
             if new_comments:
-                logger.info(f"Found {len(new_comments)} new comments on PR #{pr_number}")
-                feedback = await get_feedback_context(task.repo_url, pr_number, last_check)
+                logger.info(
+                    f"Found {len(new_comments)} new comments on PR #{pr_number}"
+                )
+                feedback = await get_feedback_context(
+                    task.repo_url, pr_number, last_check
+                )
 
                 if feedback:
                     feedback_iteration += 1
@@ -1402,14 +1559,29 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                     await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
                     await run_job_with_retry(
-                        lambda: spawn_feedback_job(task_id, namespace, task, pr_number, feedback, branch_name, feedback_iteration),
+                        lambda: spawn_feedback_job(
+                            task_id,
+                            namespace,
+                            task,
+                            pr_number,
+                            feedback,
+                            branch_name,
+                            feedback_iteration,
+                        ),
                         f"feedback job (iteration {feedback_iteration})",
                     )
 
                     # Set status back to under_review after job completes
-                    await update_worker_task_status(task_id, TaskStatus.UNDER_REVIEW, pr_url=pr_url, pr_number=pr_number)
+                    await update_worker_task_status(
+                        task_id,
+                        TaskStatus.UNDER_REVIEW,
+                        pr_url=pr_url,
+                        pr_number=pr_number,
+                    )
                     notify_main_thread(
-                        task.user_id, task_id, "worker_result",
+                        task.user_id,
+                        task_id,
+                        "worker_result",
                         {"status": "feedback_addressed", "result": {"pr_url": pr_url}},
                     )
 
@@ -1421,7 +1593,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         logger.error(f"Worker task failed: {e}")
         await update_worker_task_status(task_id, TaskStatus.FAILED, error=str(e))
         notify_main_thread(
-            task.user_id, task_id, "worker_result",
+            task.user_id,
+            task_id,
+            "worker_result",
             {"status": "failed", "error": str(e)},
         )
         return {"status": "failed", "error": str(e)}
@@ -1437,8 +1611,13 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
                 break
             except Exception as e:
                 if attempt < cleanup_attempts:
-                    logger.warning(f"Cleanup attempt {attempt} failed: {e}, retrying...")
+                    logger.warning(
+                        f"Cleanup attempt {attempt} failed: {e}, retrying..."
+                    )
                     import asyncio
-                    await asyncio.sleep(2 ** attempt)
+
+                    await asyncio.sleep(2**attempt)
                 else:
-                    logger.error(f"Failed to cleanup namespace after {cleanup_attempts} attempts: {e}")
+                    logger.error(
+                        f"Failed to cleanup namespace after {cleanup_attempts} attempts: {e}"
+                    )

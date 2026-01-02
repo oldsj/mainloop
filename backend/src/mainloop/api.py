@@ -1,35 +1,35 @@
 """FastAPI application with DBOS durable workflows."""
 
-import uuid
-from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.middleware.cors import CORSMiddleware
-from dbos import DBOS
+from datetime import datetime
+from typing import Any
 
+from dbos import DBOS
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.models import (
-    ConversationListResponse,
-    ConversationResponse,
     ChatRequest,
     ChatResponse,
+    ConversationListResponse,
+    ConversationResponse,
 )
-from models import (
-    MainThread,
-    QueueItem,
-    QueueItemResponse,
-    WorkerTask,
-    TaskStatus,
-    Project,
+from mainloop.services.chat_handler import process_message
+from mainloop.services.github_pr import (
+    CommitSummary,
+    ProjectPRSummary,
+    add_issue_comment,
+    get_repo_metadata,
+    list_open_prs,
+    list_recent_commits,
+    update_github_issue,
 )
-from pydantic import BaseModel
-from typing import Any
-from datetime import datetime
 from mainloop.sse import (
-    event_stream,
-    task_log_stream,
     create_sse_response,
-    notify_task_updated,
+    event_stream,
     notify_inbox_updated,
+    notify_task_updated,
+    task_log_stream,
 )
 
 # Import DBOS config to initialize DBOS before defining workflows
@@ -38,19 +38,17 @@ from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 # Import workflows so they are registered with DBOS
 from mainloop.workflows.main_thread import (
     get_or_start_main_thread,
-    send_user_message,
-    send_queue_response,
 )
 from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
-from mainloop.services.chat_handler import process_message
-from mainloop.services.github_pr import (
-    update_github_issue,
-    add_issue_comment,
-    get_repo_metadata,
-    list_open_prs,
-    list_recent_commits,
-    ProjectPRSummary,
-    CommitSummary,
+from pydantic import BaseModel
+
+from models import (
+    MainThread,
+    Project,
+    QueueItem,
+    QueueItemResponse,
+    TaskStatus,
+    WorkerTask,
 )
 
 app = FastAPI(
@@ -90,7 +88,9 @@ async def shutdown_event():
     await db.disconnect()
 
 
-def get_user_id_from_cf_header(cf_access_jwt_assertion: str | None = Header(None)) -> str:
+def get_user_id_from_cf_header(
+    cf_access_jwt_assertion: str | None = Header(None),
+) -> str:
     """Extract user ID from Cloudflare Access JWT header."""
     if not cf_access_jwt_assertion:
         return "local-dev-user"
@@ -320,9 +320,11 @@ async def list_queue_items(
     """List queue items for the user.
 
     Args:
+        user_id: User ID from X-User-ID header
         status: Filter by status (default: "pending")
         unread_only: Only return unread items
         task_id: Filter by task ID
+
     """
     if not user_id:
         user_id = get_user_id_from_cf_header()
@@ -540,7 +542,9 @@ async def list_tasks(
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
-    tasks = await db.list_worker_tasks(user_id=user_id, status=status, project_id=project_id)
+    tasks = await db.list_worker_tasks(
+        user_id=user_id, status=status, project_id=project_id
+    )
     return tasks
 
 
@@ -605,6 +609,8 @@ async def get_task_logs(
     Args:
         task_id: The task ID
         tail: Number of lines to return from the end (default 100)
+        user_id: User ID from X-User-ID header
+
     """
     if not user_id:
         user_id = get_user_id_from_cf_header()
@@ -617,8 +623,9 @@ async def get_task_logs(
         raise HTTPException(status_code=403, detail="Not your task")
 
     # Try to get live logs from K8s
-    from mainloop.services.k8s_jobs import get_job_logs
     import logging
+
+    from mainloop.services.k8s_jobs import get_job_logs
 
     logger = logging.getLogger(__name__)
     namespace = f"task-{task_id[:8]}"
@@ -672,22 +679,16 @@ async def cancel_task(
     # Close GitHub issue if exists
     if task.repo_url and task.issue_number:
         await add_issue_comment(
-            task.repo_url, task.issue_number,
-            "❌ Task cancelled by user."
+            task.repo_url, task.issue_number, "❌ Task cancelled by user."
         )
-        await update_github_issue(
-            task.repo_url, task.issue_number, state="closed"
-        )
+        await update_github_issue(task.repo_url, task.issue_number, state="closed")
 
     # Close GitHub PR if exists (PRs are also issues in GitHub API)
     if task.repo_url and task.pr_number and task.pr_number != task.issue_number:
         await add_issue_comment(
-            task.repo_url, task.pr_number,
-            "❌ Task cancelled by user."
+            task.repo_url, task.pr_number, "❌ Task cancelled by user."
         )
-        await update_github_issue(
-            task.repo_url, task.pr_number, state="closed"
-        )
+        await update_github_issue(task.repo_url, task.pr_number, state="closed")
 
     # Notify SSE clients
     await notify_task_updated(user_id, task_id, "cancelled")
@@ -727,7 +728,7 @@ async def answer_task_questions(
     if task.status != TaskStatus.WAITING_QUESTIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not waiting for questions (status: {task.status})"
+            detail=f"Task is not waiting for questions (status: {task.status})",
         )
 
     # Send answers to the worker workflow
@@ -745,14 +746,20 @@ async def answer_task_questions(
     # Update task status immediately so frontend sees correct state on refetch
     # The workflow will also update this, but we do it here to prevent race conditions
     if body.action == "cancel":
-        await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, pending_questions=[])
+        await db.update_worker_task(
+            task_id, status=TaskStatus.CANCELLED, pending_questions=[]
+        )
         # Close GitHub issue if exists
         if task.repo_url and task.issue_number:
-            await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
+            await add_issue_comment(
+                task.repo_url, task.issue_number, "❌ Task cancelled by user."
+            )
             await update_github_issue(task.repo_url, task.issue_number, state="closed")
         await notify_task_updated(user_id, task_id, "cancelled")
     else:
-        await db.update_worker_task(task_id, status=TaskStatus.PLANNING, pending_questions=[])
+        await db.update_worker_task(
+            task_id, status=TaskStatus.PLANNING, pending_questions=[]
+        )
         await notify_task_updated(user_id, task_id, "planning")
 
     return {"status": "ok", "message": f"Sent {len(body.answers)} answer(s) to task"}
@@ -782,7 +789,7 @@ async def approve_task_plan(
     if task.status != TaskStatus.WAITING_PLAN_REVIEW:
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not waiting for plan review (status: {task.status})"
+            detail=f"Task is not waiting for plan review (status: {task.status})",
         )
 
     # Send response to the worker workflow
@@ -799,10 +806,14 @@ async def approve_task_plan(
 
     # Update task status immediately so frontend sees correct state on refetch
     if action == "cancel":
-        await db.update_worker_task(task_id, status=TaskStatus.CANCELLED, plan_text=None)
+        await db.update_worker_task(
+            task_id, status=TaskStatus.CANCELLED, plan_text=None
+        )
         # Close GitHub issue if exists
         if task.repo_url and task.issue_number:
-            await add_issue_comment(task.repo_url, task.issue_number, "❌ Task cancelled by user.")
+            await add_issue_comment(
+                task.repo_url, task.issue_number, "❌ Task cancelled by user."
+            )
             await update_github_issue(task.repo_url, task.issue_number, state="closed")
         await notify_task_updated(user_id, task_id, "cancelled")
     elif action == "approve":
@@ -838,7 +849,7 @@ async def start_task_implementation(
     if task.status != TaskStatus.READY_TO_IMPLEMENT:
         raise HTTPException(
             status_code=400,
-            detail=f"Task is not ready for implementation (status: {task.status})"
+            detail=f"Task is not ready for implementation (status: {task.status})",
         )
 
     # Send implementation trigger to the worker workflow
@@ -874,7 +885,7 @@ class TaskResult(BaseModel):
 
 @app.post("/internal/tasks/{task_id}/complete")
 async def task_complete(task_id: str, result: TaskResult):
-    """Callback endpoint for K8s Jobs to report completion.
+    """Handle K8s Job completion callbacks.
 
     This is called by the job_runner when a worker Job finishes.
     It updates the task status and notifies the main thread workflow.
@@ -970,7 +981,8 @@ async def debug_list_tasks(
 ):
     """List all tasks with debug info (no auth required for debugging)."""
     from datetime import timezone
-    from mainloop.services.k8s_namespace import namespace_exists, get_k8s_client
+
+    from mainloop.services.k8s_namespace import get_k8s_client, namespace_exists
 
     # Get all tasks (bypass user filter for debugging)
     async with db.connection() as conn:
@@ -1048,7 +1060,6 @@ async def retry_task(task_id: str):
     """Retry a failed task by resetting its status and re-enqueueing."""
     from dbos import SetWorkflowID
     from mainloop.workflows.dbos_config import worker_queue
-    from mainloop.workflows.worker import worker_task_workflow
 
     task = await db.get_worker_task(task_id)
     if not task:

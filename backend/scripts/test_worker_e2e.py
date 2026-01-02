@@ -26,16 +26,16 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from dbos import DBOS, SetWorkflowID
-from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 from mainloop.db import db
-from models import WorkerTask, TaskStatus
+from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 
+from models import TaskStatus, WorkerTask
 
 # Test configuration
 TEST_REPO_URL = os.environ.get("REPO_URL", "https://github.com/oldsj/mainloop")
 TEST_TASK_DESCRIPTION = os.environ.get(
     "TASK_DESCRIPTION",
-    "Create a file called test-worker-output.txt in the root directory with the current timestamp and a message saying 'E2E test successful'"
+    "Create a file called test-worker-output.txt in the root directory with the current timestamp and a message saying 'E2E test successful'",
 )
 
 
@@ -57,6 +57,7 @@ async def run_test():
 
     # Create a test main thread first (required for FK)
     from models import MainThread
+
     test_user_id = f"test-user-{uuid.uuid4().hex[:8]}"
     main_thread = MainThread(user_id=test_user_id, workflow_run_id="test-workflow")
     main_thread = await db.create_main_thread(main_thread)
@@ -82,11 +83,11 @@ async def run_test():
     # Import and start the workflow
     from mainloop.workflows.worker import worker_task_workflow
 
-    print(f"Starting worker workflow...")
+    print("Starting worker workflow...")
     print()
     print("Watch the workflow with:")
-    print(f"  kubectl get ns -w | grep task-")
-    print(f"  kubectl get jobs -A -w | grep worker")
+    print("  kubectl get ns -w | grep task-")
+    print("  kubectl get jobs -A -w | grep worker")
     print()
 
     # Start workflow with task_id as workflow ID (for callback routing)

@@ -4,9 +4,9 @@ metadata:
   name: mainloop-config
   namespace: mainloop
 data:
-  BIGQUERY_DATASET: "mainloop"
-  HOST: "0.0.0.0"
-  PORT: "8000"
-  DB_HOST: "mainloop-db-pooler.mainloop"
-  DB_PORT: "5432"
-  DB_NAME: "mainloop"
+  BIGQUERY_DATASET: 'mainloop'
+  HOST: '0.0.0.0'
+  PORT: '8000'
+  DB_HOST: 'mainloop-db-pooler.mainloop'
+  DB_PORT: '5432'
+  DB_NAME: 'mainloop'

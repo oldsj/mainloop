@@ -1,14 +1,15 @@
 """Claude agent orchestration using the Agent SDK."""
 
 from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    query,
 )
-from models import AgentTask, AgentResponse
 from mainloop.config import settings
+
+from models import AgentResponse, AgentTask
 
 
 class ClaudeAgent:
@@ -38,19 +39,16 @@ class ClaudeAgent:
                     if message.is_error:
                         return AgentResponse(
                             task_id=task.id,
-                            content=f"Error: {message.result or 'Unknown error'}"
+                            content=f"Error: {message.result or 'Unknown error'}",
                         )
 
             return AgentResponse(
                 task_id=task.id,
-                content="\n".join(collected_text) if collected_text else "No response"
+                content="\n".join(collected_text) if collected_text else "No response",
             )
 
         except Exception as e:
-            return AgentResponse(
-                task_id=task.id,
-                content=f"Claude SDK error: {str(e)}"
-            )
+            return AgentResponse(task_id=task.id, content=f"Claude SDK error: {str(e)}")
 
     async def stream_task(self, task: AgentTask):
         """Stream task execution results."""

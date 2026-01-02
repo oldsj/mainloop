@@ -1,8 +1,7 @@
 """Configuration management."""
 
-import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -40,7 +39,9 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # K8s Job callback URL (internal service URL for Jobs to call back)
-    backend_internal_url: str = "http://mainloop-backend.mainloop.svc.cluster.local:8000"
+    backend_internal_url: str = (
+        "http://mainloop-backend.mainloop.svc.cluster.local:8000"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

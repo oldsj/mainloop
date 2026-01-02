@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -29,6 +29,20 @@ clean: ## Clean build artifacts
 	rm -rf frontend/.svelte-kit frontend/build
 	rm -rf backend/.venv models/.venv
 	find . -type d -name "__pycache__" -exec rm -rf {} +
+
+lint: ## Lint staged files
+	trunk check
+
+lint-all: ## Lint all files
+	trunk check -a
+
+fmt: ## Format and fix staged files
+	trunk fmt
+	trunk check -y
+
+fmt-all: ## Format and fix all files
+	trunk fmt -a
+	trunk check -a -y
 
 setup-claude-creds: ## Login to Claude inside Linux container, credentials saved to shared volume
 	@echo "=== Claude Container Login ==="

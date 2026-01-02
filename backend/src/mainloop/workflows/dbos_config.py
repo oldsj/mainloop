@@ -1,18 +1,21 @@
 """DBOS configuration and initialization."""
 
 import os
-from dbos import DBOS, DBOSConfig, Queue
 
+from dbos import DBOS, DBOSConfig, Queue
 from mainloop.config import settings
 
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = "7"  # v7: Fix PR URL extraction after implement job (was only in skip_plan mode)
+WORKFLOW_VERSION = (
+    "7"  # v7: Fix PR URL extraction after implement job (was only in skip_plan mode)
+)
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",
-    "system_database_url": settings.database_url or os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
+    "system_database_url": settings.database_url
+    or os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
     "application_version": WORKFLOW_VERSION,
 }
 

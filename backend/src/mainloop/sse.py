@@ -3,12 +3,12 @@
 import asyncio
 import json
 import logging
+import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import AsyncGenerator, Any
-from collections import defaultdict
-import uuid
+from typing import Any, AsyncGenerator
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 class EventType(str, Enum):
     """SSE event types."""
+
     # Global events
     TASK_UPDATED = "task:updated"
     INBOX_UPDATED = "inbox:updated"
@@ -32,6 +33,7 @@ class EventType(str, Enum):
 @dataclass
 class SSEEvent:
     """An SSE event to send to clients."""
+
     event: str
     data: dict[str, Any]
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -176,8 +178,8 @@ async def task_log_stream(
     Polls K8s logs and streams them to the client.
     Also listens for task status changes.
     """
-    from mainloop.services.k8s_jobs import get_job_logs
     from mainloop.db import db
+    from mainloop.services.k8s_jobs import get_job_logs
 
     queue = await event_bus.subscribe_task(task_id)
     last_log_length = 0
@@ -251,6 +253,7 @@ def create_sse_response(generator: AsyncGenerator[str, None]) -> StreamingRespon
 
 # Helper functions to publish events from other parts of the app
 
+
 async def notify_task_updated(user_id: str, task_id: str, status: str, **extra):
     """Notify user that a task was updated."""
     await event_bus.publish_to_user(
@@ -270,7 +273,9 @@ async def notify_task_updated(user_id: str, task_id: str, status: str, **extra):
     )
 
 
-async def notify_inbox_updated(user_id: str, item_id: str | None = None, unread_count: int | None = None):
+async def notify_inbox_updated(
+    user_id: str, item_id: str | None = None, unread_count: int | None = None
+):
     """Notify user that inbox was updated."""
     data: dict[str, Any] = {}
     if item_id:

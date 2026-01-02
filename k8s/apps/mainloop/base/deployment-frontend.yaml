@@ -17,16 +17,16 @@ spec:
         - name: ghcr-secret
       containers:
         - name: frontend
-          image: ghcr.io/yourusername/mainloop-frontend:latest  # Set via kustomize overlay
+          image: ghcr.io/yourusername/mainloop-frontend:latest # Set via kustomize overlay
           ports:
             - containerPort: 3000
           env:
             - name: ORIGIN
-              value: "https://mainloop.example.com"  # Configure your domain
+              value: 'https://mainloop.example.com' # Configure your domain
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
+              memory: '128Mi'
+              cpu: '100m'
             limits:
-              memory: "256Mi"
-              cpu: "250m"
+              memory: '256Mi'
+              cpu: '250m'

@@ -1,20 +1,19 @@
 """Main thread workflow - per-user conversation orchestrator using DBOS."""
 
 import logging
-from typing import Any
 
-from dbos import DBOS, SetWorkflowID, SetEnqueueOptions
+from dbos import DBOS, SetWorkflowID
+from mainloop.db import db
+from mainloop.workflows.dbos_config import worker_queue
 
 from models import (
     MainThread,
-    WorkerTask,
     QueueItem,
-    QueueItemType,
     QueueItemPriority,
+    QueueItemType,
     TaskStatus,
+    WorkerTask,
 )
-from mainloop.db import db
-from mainloop.workflows.dbos_config import worker_queue
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +145,8 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
 
     # Import routing service
     from mainloop.services.task_router import (
-        find_matching_tasks,
         extract_keywords,
+        find_matching_tasks,
         should_skip_plan,
     )
 
@@ -160,7 +159,9 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
 
             if best_match.confidence >= 0.7:
                 # High confidence - suggest routing with confirmation
-                logger.info(f"High confidence match ({best_match.confidence:.2f}): {best_match.task.id}")
+                logger.info(
+                    f"High confidence match ({best_match.confidence:.2f}): {best_match.task.id}"
+                )
 
                 # Save response to conversation for chat UI
                 response_content = f"This looks related to an existing task: {best_match.task.description[:100]}. Check your inbox to confirm routing."
@@ -187,12 +188,14 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
                 return
             elif len(matches) > 1 and matches[0].confidence >= 0.4:
                 # Multiple possible matches - ask user to choose
-                logger.info(f"Multiple matches found, asking user to choose")
+                logger.info("Multiple matches found, asking user to choose")
                 task_options = [f"{m.task.description[:50]}..." for m in matches[:3]]
                 task_options.append("Create new task")
 
                 # Save response to conversation for chat UI
-                response_content = f"Multiple active tasks might match. Check your inbox to choose one."
+                response_content = (
+                    "Multiple active tasks might match. Check your inbox to choose one."
+                )
                 if conversation_id:
                     await save_assistant_message(conversation_id, response_content)
 
@@ -218,7 +221,16 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
     # No match or low confidence - check if message needs worker
     needs_worker = any(
         keyword in message.lower()
-        for keyword in ["build", "fix", "create", "update", "implement", "add", "remove", "change"]
+        for keyword in [
+            "build",
+            "fix",
+            "create",
+            "update",
+            "implement",
+            "add",
+            "remove",
+            "change",
+        ]
     )
 
     if needs_worker:
@@ -242,6 +254,7 @@ async def handle_user_message(thread: MainThread, payload: dict) -> None:
 
         # Enqueue the worker task
         from mainloop.workflows.worker import worker_task_workflow
+
         with SetWorkflowID(task.id):
             worker_queue.enqueue(worker_task_workflow, task.id)
 
@@ -366,7 +379,9 @@ async def handle_queue_response(thread: MainThread, payload: dict) -> None:
                 # Response might be the task description or an index
                 matches = item_context["matches"]
                 for i, match in enumerate(matches):
-                    if response.startswith(f"{i+1}.") or response == match.get("task_id"):
+                    if response.startswith(f"{i+1}.") or response == match.get(
+                        "task_id"
+                    ):
                         target_task_id = match["task_id"]
                         DBOS.send(
                             target_task_id,
@@ -380,7 +395,7 @@ async def handle_queue_response(thread: MainThread, payload: dict) -> None:
                             task_id=target_task_id,
                             item_type=QueueItemType.NOTIFICATION,
                             title="Message routed",
-                            content=f"Added context to selected task",
+                            content="Added context to selected task",
                             priority=QueueItemPriority.LOW,
                         )
                         break
@@ -409,7 +424,11 @@ async def handle_worker_result(thread: MainThread, payload: dict) -> None:
         suggested_options = result.get("suggested_options", [])
 
         # Use suggested options directly (already includes "Approve" from job_runner)
-        options = list(suggested_options) if suggested_options else ["Approve", "Request changes"]
+        options = (
+            list(suggested_options)
+            if suggested_options
+            else ["Approve", "Request changes"]
+        )
 
         await add_to_queue(
             thread,
@@ -612,7 +631,9 @@ def get_or_start_main_thread(user_id: str) -> str:
         return handle.get_workflow_id()
 
 
-def send_user_message(user_id: str, message: str, conversation_id: str | None = None) -> None:
+def send_user_message(
+    user_id: str, message: str, conversation_id: str | None = None
+) -> None:
     """Send a user message to the main thread workflow."""
     workflow_id = f"main-thread-{user_id}"
     DBOS.send(

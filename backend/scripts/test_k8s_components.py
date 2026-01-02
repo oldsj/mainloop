@@ -26,10 +26,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 async def test_namespace():
     """Test namespace creation and deletion."""
     from mainloop.services.k8s_namespace import (
-        create_task_namespace,
         copy_secrets_to_namespace,
-        setup_worker_rbac,
+        create_task_namespace,
         delete_task_namespace,
+        setup_worker_rbac,
     )
 
     task_id = f"test-{uuid.uuid4().hex[:8]}"
@@ -50,7 +50,7 @@ async def test_namespace():
     print("2. Copying secrets...")
     try:
         await copy_secrets_to_namespace(task_id, namespace)
-        print(f"   ✓ Secrets copied")
+        print("   ✓ Secrets copied")
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
@@ -58,13 +58,14 @@ async def test_namespace():
     print("3. Setting up worker RBAC...")
     try:
         await setup_worker_rbac(task_id, namespace)
-        print(f"   ✓ Worker RBAC configured")
+        print("   ✓ Worker RBAC configured")
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
     # Test 4: Verify namespace exists
     print("4. Verifying namespace...")
     from mainloop.services.k8s_namespace import get_k8s_client
+
     core_v1, _ = get_k8s_client()
     try:
         ns = core_v1.read_namespace(namespace)
@@ -76,7 +77,11 @@ async def test_namespace():
     print("5. Checking secrets...")
     try:
         secrets = core_v1.list_namespaced_secret(namespace)
-        secret_names = [s.metadata.name for s in secrets.items if not s.metadata.name.startswith("default")]
+        secret_names = [
+            s.metadata.name
+            for s in secrets.items
+            if not s.metadata.name.startswith("default")
+        ]
         print(f"   ✓ Found secrets: {secret_names}")
     except Exception as e:
         print(f"   ✗ Failed: {e}")
@@ -85,7 +90,7 @@ async def test_namespace():
     print("6. Deleting namespace...")
     try:
         await delete_task_namespace(task_id)
-        print(f"   ✓ Deletion initiated")
+        print("   ✓ Deletion initiated")
     except Exception as e:
         print(f"   ✗ Failed: {e}")
 
@@ -95,13 +100,16 @@ async def test_namespace():
 
 async def test_job():
     """Test job creation in a namespace."""
-    from mainloop.services.k8s_namespace import (
-        create_task_namespace,
-        copy_secrets_to_namespace,
-        setup_worker_rbac,
-        delete_task_namespace,
+    from mainloop.services.k8s_jobs import (
+        create_worker_job,
+        get_job_status,
     )
-    from mainloop.services.k8s_jobs import create_worker_job, get_job_status, get_job_logs
+    from mainloop.services.k8s_namespace import (
+        copy_secrets_to_namespace,
+        create_task_namespace,
+        delete_task_namespace,
+        setup_worker_rbac,
+    )
 
     task_id = f"test-{uuid.uuid4().hex[:8]}"
 
@@ -137,7 +145,9 @@ async def test_job():
 
     status = await get_job_status(task_id, namespace)
     if status:
-        print(f"   Active: {status['active']}, Succeeded: {status['succeeded']}, Failed: {status['failed']}")
+        print(
+            f"   Active: {status['active']}, Succeeded: {status['succeeded']}, Failed: {status['failed']}"
+        )
     else:
         print("   No status yet")
 
@@ -147,12 +157,12 @@ async def test_job():
     print(f"  kubectl get pods -n {namespace} -w")
     print(f"  kubectl logs -n {namespace} -l mainloop.dev/task-id={task_id} -f")
     print()
-    print(f"Cleanup with:")
+    print("Cleanup with:")
     print(f"  kubectl delete ns {namespace}")
 
 
 async def main():
-    """Main entry point."""
+    """Parse arguments and run tests."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Test K8s components")

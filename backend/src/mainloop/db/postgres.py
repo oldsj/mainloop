@@ -1,23 +1,24 @@
 """PostgreSQL client for durable workflow persistence."""
 
 import json
-import asyncpg
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
-from contextlib import asynccontextmanager
+
+import asyncpg
+from mainloop.config import settings
 
 from models import (
     Conversation,
-    Message,
     MainThread,
-    WorkerTask,
-    TaskStatus,
-    QueueItem,
-    QueueItemType,
-    QueueItemPriority,
+    Message,
     Project,
+    QueueItem,
+    QueueItemPriority,
+    QueueItemType,
+    TaskStatus,
+    WorkerTask,
 )
-from mainloop.config import settings
 
 
 def _parse_json_field(value: Any) -> list | dict | None:
@@ -523,7 +524,11 @@ class Database:
             created_at=row["created_at"],
             last_activity_at=row["last_activity_at"],
             active_tasks=list(row["active_tasks"]) if row["active_tasks"] else [],
-            context=row["context"] if isinstance(row["context"], dict) else (json.loads(row["context"]) if row["context"] else {}),
+            context=(
+                row["context"]
+                if isinstance(row["context"], dict)
+                else (json.loads(row["context"]) if row["context"] else {})
+            ),
         )
 
     # ============= Worker Task Operations =============
@@ -748,7 +753,11 @@ class Database:
             created_at=row["created_at"],
             started_at=row["started_at"],
             completed_at=row["completed_at"],
-            result=row["result"] if isinstance(row["result"], dict) else (json.loads(row["result"]) if row["result"] else None),
+            result=(
+                row["result"]
+                if isinstance(row["result"], dict)
+                else (json.loads(row["result"]) if row["result"] else None)
+            ),
             error=row["error"],
             # Issue fields (plan phase)
             issue_url=row.get("issue_url"),
@@ -830,9 +839,7 @@ class Database:
             open_issue_count=row.get("open_issue_count", 0),
         )
 
-    async def get_project_by_repo(
-        self, user_id: str, full_name: str
-    ) -> Project | None:
+    async def get_project_by_repo(self, user_id: str, full_name: str) -> Project | None:
         """Get a project by GitHub full_name (owner/repo)."""
         if not self._pool:
             return None
@@ -861,9 +868,7 @@ class Database:
             open_issue_count=row.get("open_issue_count", 0),
         )
 
-    async def list_projects(
-        self, user_id: str, limit: int = 20
-    ) -> list[Project]:
+    async def list_projects(self, user_id: str, limit: int = 20) -> list[Project]:
         """List user's projects ordered by last_used_at."""
         if not self._pool:
             return []
@@ -1037,6 +1042,7 @@ class Database:
             limit: Max items to return
             unread_only: Only return unread items
             task_id: Filter by task ID
+
         """
         if not self._pool:
             return []
@@ -1160,7 +1166,11 @@ class Database:
             priority=QueueItemPriority(row["priority"]),
             title=row["title"],
             content=row["content"],
-            context=row["context"] if isinstance(row["context"], dict) else (json.loads(row["context"]) if row["context"] else {}),
+            context=(
+                row["context"]
+                if isinstance(row["context"], dict)
+                else (json.loads(row["context"]) if row["context"] else {})
+            ),
             options=list(row["options"]) if row["options"] else None,
             status=row["status"],
             response=row["response"],
@@ -1445,7 +1455,6 @@ class Database:
             content=row["content"],
             created_at=row["created_at"],
         )
-
 
 
 # Global database instance

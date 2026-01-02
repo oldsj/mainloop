@@ -1,6 +1,7 @@
 """Kubernetes namespace management for task isolation."""
 
 import logging
+
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
@@ -58,6 +59,7 @@ async def create_task_namespace(task_id: str) -> str:
 
     Returns:
         The namespace name that was created
+
     """
     core_v1, _ = get_k8s_client()
     namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
@@ -95,6 +97,7 @@ async def copy_secrets_to_namespace(
         task_id: The task ID
         namespace: Target namespace to copy secrets to
         secrets: List of secret names to copy (defaults to DEFAULT_SECRETS_TO_COPY)
+
     """
     core_v1, _ = get_k8s_client()
     secrets_to_copy = secrets or DEFAULT_SECRETS_TO_COPY
@@ -133,7 +136,9 @@ async def copy_secrets_to_namespace(
 
         except ApiException as e:
             if e.status == 404:
-                logger.warning(f"Secret {secret_name} not found in {SOURCE_NAMESPACE}, skipping")
+                logger.warning(
+                    f"Secret {secret_name} not found in {SOURCE_NAMESPACE}, skipping"
+                )
             else:
                 raise
 
@@ -146,6 +151,7 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
     Args:
         task_id: The task ID
         namespace: Target namespace
+
     """
     core_v1, _ = get_k8s_client()
     rbac_v1 = get_rbac_client()
@@ -163,11 +169,15 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
     )
 
     try:
-        core_v1.create_namespaced_service_account(namespace=namespace, body=service_account)
+        core_v1.create_namespaced_service_account(
+            namespace=namespace, body=service_account
+        )
         logger.info(f"Created ServiceAccount {WORKER_SERVICE_ACCOUNT} in {namespace}")
     except ApiException as e:
         if e.status == 409:
-            logger.info(f"ServiceAccount {WORKER_SERVICE_ACCOUNT} already exists in {namespace}")
+            logger.info(
+                f"ServiceAccount {WORKER_SERVICE_ACCOUNT} already exists in {namespace}"
+            )
         else:
             raise
 
@@ -210,6 +220,7 @@ async def delete_task_namespace(task_id: str) -> None:
 
     Args:
         task_id: The task ID (used to construct namespace name)
+
     """
     core_v1, _ = get_k8s_client()
     namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
@@ -237,6 +248,7 @@ async def namespace_exists(task_id: str) -> bool:
 
     Returns:
         True if namespace exists, False otherwise
+
     """
     core_v1, _ = get_k8s_client()
     namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
@@ -255,6 +267,7 @@ async def list_task_namespaces() -> list[str]:
 
     Returns:
         List of namespace names
+
     """
     core_v1, _ = get_k8s_client()
 

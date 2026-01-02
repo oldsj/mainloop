@@ -192,9 +192,6 @@ export function disconnectSSE(): void {
 /**
  * Create an SSE client for streaming task logs.
  */
-export function createTaskLogClient(
-  taskId: string,
-  options: SSEClientOptions = {}
-): SSEClient {
+export function createTaskLogClient(taskId: string, options: SSEClientOptions = {}): SSEClient {
   return new SSEClient(`${API_URL}/tasks/${taskId}/logs/stream`, options);
 }

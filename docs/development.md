@@ -27,11 +27,11 @@ make dev
 docker compose up --watch
 ```
 
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:3000 |
-| Backend API | http://localhost:8000 |
-| API Docs | http://localhost:8000/docs |
+| Service     | URL                        |
+| ----------- | -------------------------- |
+| Frontend    | http://localhost:3000      |
+| Backend API | http://localhost:8000      |
+| API Docs    | http://localhost:8000/docs |
 
 ## Backend Development
 

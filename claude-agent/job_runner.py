@@ -13,7 +13,6 @@ Modes:
 """
 
 import asyncio
-import json
 import os
 import sys
 import uuid
@@ -22,14 +21,13 @@ from pathlib import Path
 
 import httpx
 from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
+    query,
 )
-
 
 # Environment variables
 TASK_ID = os.environ.get("TASK_ID", "")
@@ -101,14 +99,16 @@ def pre_clone_repo() -> str | None:
     gh_token = os.environ.get("GH_TOKEN")
     if gh_token and "github.com" in REPO_URL:
         # Insert token into URL: https://x-access-token:{token}@github.com/...
-        clone_url = REPO_URL.replace("https://github.com", f"https://x-access-token:{gh_token}@github.com")
-        print(f"[job_runner] Using authenticated clone URL")
+        clone_url = REPO_URL.replace(
+            "https://github.com", f"https://x-access-token:{gh_token}@github.com"
+        )
+        print("[job_runner] Using authenticated clone URL")
 
     # Build clone command - shallow for plan mode, full for others
     if MODE == "plan":
         # Shallow clone for plan mode - fast (2-5 seconds)
         cmd = ["git", "clone", "--depth=1", clone_url, target_dir]
-        print(f"[job_runner] Shallow cloning for plan mode...")
+        print("[job_runner] Shallow cloning for plan mode...")
     else:
         # Full clone for implement/feedback/fix modes
         cmd = ["git", "clone", clone_url, target_dir]
@@ -133,7 +133,7 @@ def pre_clone_repo() -> str | None:
         return target_dir
 
     except subprocess.TimeoutExpired:
-        print(f"[job_runner] Clone timed out")
+        print("[job_runner] Clone timed out")
         return None
     except Exception as e:
         print(f"[job_runner] Clone error: {e}")
@@ -165,43 +165,49 @@ def build_plan_prompt() -> str:
     if REPO_URL:
         parts.append(f"Repository: {REPO_URL}")
         parts.append("")
-        parts.extend([
-            "The repository is already cloned and you are in its directory.",
-            "Explore the codebase to understand the structure and patterns used.",
-            "",
-            "Create a detailed implementation plan that includes:",
-            "- **Summary**: Brief overview of the approach",
-            "- **Files to modify**: List each file and describe the changes",
-            "- **Files to create**: Any new files needed and their purpose",
-            "- **Considerations**: Risks, edge cases, or decisions needing confirmation",
-            "",
-            "If there are multiple valid approaches, present them as options:",
-            "- **Option A**: [approach name] - [brief description]",
-            "- **Option B**: [approach name] - [brief description]",
-            "And recommend which option you prefer.",
-            "",
-            "IMPORTANT: Your final output should be ONLY the plan in clean markdown.",
-            "The plan will be shown to the user for approval before implementation.",
-            "",
-        ])
+        parts.extend(
+            [
+                "The repository is already cloned and you are in its directory.",
+                "Explore the codebase to understand the structure and patterns used.",
+                "",
+                "Create a detailed implementation plan that includes:",
+                "- **Summary**: Brief overview of the approach",
+                "- **Files to modify**: List each file and describe the changes",
+                "- **Files to create**: Any new files needed and their purpose",
+                "- **Considerations**: Risks, edge cases, or decisions needing confirmation",
+                "",
+                "If there are multiple valid approaches, present them as options:",
+                "- **Option A**: [approach name] - [brief description]",
+                "- **Option B**: [approach name] - [brief description]",
+                "And recommend which option you prefer.",
+                "",
+                "IMPORTANT: Your final output should be ONLY the plan in clean markdown.",
+                "The plan will be shown to the user for approval before implementation.",
+                "",
+            ]
+        )
     else:
-        parts.extend([
-            "Create an implementation plan for this task.",
-            "If there are multiple approaches, present them as options.",
-            "Output your plan as clean markdown.",
-            "",
-        ])
+        parts.extend(
+            [
+                "Create an implementation plan for this task.",
+                "If there are multiple approaches, present them as options.",
+                "Output your plan as clean markdown.",
+                "",
+            ]
+        )
 
     # Add feedback context if this is a plan revision
     if FEEDBACK_CONTEXT:
-        parts.extend([
-            "Feedback on your previous plan:",
-            "---",
-            FEEDBACK_CONTEXT,
-            "---",
-            "",
-            "Update your plan to address this feedback.",
-        ])
+        parts.extend(
+            [
+                "Feedback on your previous plan:",
+                "---",
+                FEEDBACK_CONTEXT,
+                "---",
+                "",
+                "Update your plan to address this feedback.",
+            ]
+        )
 
     return "\n".join(parts)
 
@@ -218,51 +224,65 @@ def build_implement_prompt() -> str:
     ]
 
     if REPO_URL:
-        parts.extend([
-            f"Repository: {REPO_URL}",
-            f"Branch to create: {branch_name}",
-        ])
+        parts.extend(
+            [
+                f"Repository: {REPO_URL}",
+                f"Branch to create: {branch_name}",
+            ]
+        )
         if ISSUE_NUMBER:
             parts.append(f"Plan issue: #{ISSUE_NUMBER}")
-        parts.extend([
-            "",
-            "Your implementation plan has been approved. Now implement it:",
-            "",
-            "Instructions:",
-            "1. The repository is already cloned and you are in its directory",
-            f"2. Create and checkout a new branch: `git checkout -b {branch_name}`",
-        ])
+        parts.extend(
+            [
+                "",
+                "Your implementation plan has been approved. Now implement it:",
+                "",
+                "Instructions:",
+                "1. The repository is already cloned and you are in its directory",
+                f"2. Create and checkout a new branch: `git checkout -b {branch_name}`",
+            ]
+        )
         if ISSUE_NUMBER:
             parts.append(f"3. Read your approved plan from issue #{ISSUE_NUMBER}")
-        parts.extend([
-            "4. Implement the code according to your approved plan",
-            "5. Commit your changes with clear commit messages",
-            "6. Push the branch",
-        ])
+        parts.extend(
+            [
+                "4. Implement the code according to your approved plan",
+                "5. Commit your changes with clear commit messages",
+                "6. Push the branch",
+            ]
+        )
         if ISSUE_NUMBER:
-            parts.extend([
-                f"7. Create a pull request that links to and auto-closes the plan issue:",
-                f"   The PR body MUST start with 'Closes #{ISSUE_NUMBER}' - this auto-closes the issue on merge.",
-                f"   Example: gh pr create --title \"...\" --body \"Closes #{ISSUE_NUMBER} - <summary of changes>\"",
-            ])
+            parts.extend(
+                [
+                    "7. Create a pull request that links to and auto-closes the plan issue:",
+                    f"   The PR body MUST start with 'Closes #{ISSUE_NUMBER}' - this auto-closes the issue on merge.",
+                    f'   Example: gh pr create --title "..." --body "Closes #{ISSUE_NUMBER} - <summary of changes>"',
+                ]
+            )
         else:
-            parts.extend([
-                "7. Create a pull request: `gh pr create --title \"...\" --body \"...\"`",
-            ])
-        parts.extend([
-            "",
-            "Follow your plan carefully. If you discover issues during implementation,",
-            "add a comment to the PR explaining any deviations from the plan.",
-            "",
-        ])
+            parts.extend(
+                [
+                    '7. Create a pull request: `gh pr create --title "..." --body "..."`',
+                ]
+            )
+        parts.extend(
+            [
+                "",
+                "Follow your plan carefully. If you discover issues during implementation,",
+                "add a comment to the PR explaining any deviations from the plan.",
+                "",
+            ]
+        )
     else:
-        parts.extend([
-            "Instructions:",
-            "1. Implement the task as planned",
-            "2. Create any necessary files in /workspace",
-            "3. Summarize what you accomplished",
-            "",
-        ])
+        parts.extend(
+            [
+                "Instructions:",
+                "1. Implement the task as planned",
+                "2. Create any necessary files in /workspace",
+                "3. Summarize what you accomplished",
+                "",
+            ]
+        )
 
     return "\n".join(parts)
 
@@ -280,31 +300,37 @@ def build_feedback_prompt() -> str:
     ]
 
     if REPO_URL:
-        parts.extend([
-            f"Repository: {REPO_URL}",
-            f"Branch: {branch_name}",
-            "",
-        ])
+        parts.extend(
+            [
+                f"Repository: {REPO_URL}",
+                f"Branch: {branch_name}",
+                "",
+            ]
+        )
 
     if FEEDBACK_CONTEXT:
-        parts.extend([
-            "Feedback to address:",
-            "---",
-            FEEDBACK_CONTEXT,
-            "---",
-            "",
-        ])
+        parts.extend(
+            [
+                "Feedback to address:",
+                "---",
+                FEEDBACK_CONTEXT,
+                "---",
+                "",
+            ]
+        )
 
-    parts.extend([
-        "Instructions:",
-        f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
-        "2. Review the feedback above",
-        "3. Make the necessary changes to address the feedback",
-        "4. Commit your changes with a clear message referencing the feedback",
-        "5. Push the updated branch",
-        "",
-        "Be thorough in addressing all points raised in the feedback.",
-    ])
+    parts.extend(
+        [
+            "Instructions:",
+            f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
+            "2. Review the feedback above",
+            "3. Make the necessary changes to address the feedback",
+            "4. Commit your changes with a clear message referencing the feedback",
+            "5. Push the updated branch",
+            "",
+            "Be thorough in addressing all points raised in the feedback.",
+        ]
+    )
 
     return "\n".join(parts)
 
@@ -322,40 +348,48 @@ def build_fix_prompt() -> str:
     ]
 
     if REPO_URL:
-        parts.extend([
-            f"Repository: {REPO_URL}",
-            f"Branch: {branch_name}",
-            "",
-        ])
+        parts.extend(
+            [
+                f"Repository: {REPO_URL}",
+                f"Branch: {branch_name}",
+                "",
+            ]
+        )
 
-    parts.extend([
-        "GitHub Actions checks have FAILED. You must fix them.",
-        "",
-    ])
+    parts.extend(
+        [
+            "GitHub Actions checks have FAILED. You must fix them.",
+            "",
+        ]
+    )
 
     if FEEDBACK_CONTEXT:
-        parts.extend([
-            "Failed checks and logs:",
-            "---",
-            FEEDBACK_CONTEXT,
-            "---",
-            "",
-        ])
+        parts.extend(
+            [
+                "Failed checks and logs:",
+                "---",
+                FEEDBACK_CONTEXT,
+                "---",
+                "",
+            ]
+        )
 
-    parts.extend([
-        "Instructions:",
-        f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
-        "2. Analyze the failure logs above carefully",
-        "3. Identify the root cause of each failure",
-        "4. Fix the issues (lint errors, test failures, type errors, build errors)",
-        "5. Run `trunk check` locally if available to verify before pushing",
-        "6. Commit and push your fix with a clear message",
-        "",
-        "IMPORTANT:",
-        "- Focus ONLY on fixing the specific failures shown above",
-        "- Do NOT refactor or change unrelated code",
-        "- Do NOT mark the PR ready - the workflow will re-check Actions after you push",
-    ])
+    parts.extend(
+        [
+            "Instructions:",
+            f"1. The repository is already cloned. Checkout the branch: `git checkout {branch_name}`",
+            "2. Analyze the failure logs above carefully",
+            "3. Identify the root cause of each failure",
+            "4. Fix the issues (lint errors, test failures, type errors, build errors)",
+            "5. Run `trunk check` locally if available to verify before pushing",
+            "6. Commit and push your fix with a clear message",
+            "",
+            "IMPORTANT:",
+            "- Focus ONLY on fixing the specific failures shown above",
+            "- Do NOT refactor or change unrelated code",
+            "- Do NOT mark the PR ready - the workflow will re-check Actions after you push",
+        ]
+    )
 
     return "\n".join(parts)
 
@@ -398,14 +432,18 @@ async def execute_task() -> dict:
                         plan_file_path = find_plan_file()
                         if plan_file_path:
                             plan_content = read_plan_file(plan_file_path)
-                            print(f"[claude] ExitPlanMode - read plan from {plan_file_path} ({len(plan_content)} chars)")
+                            print(
+                                f"[claude] ExitPlanMode - read plan from {plan_file_path} ({len(plan_content)} chars)"
+                            )
                         else:
                             print("[claude] ExitPlanMode called but no plan file found")
 
                     # Capture questions from AskUserQuestion tool call
                     elif block.name == "AskUserQuestion":
                         questions = block.input.get("questions", [])
-                        print(f"[claude] AskUserQuestion called with {len(questions)} question(s)")
+                        print(
+                            f"[claude] AskUserQuestion called with {len(questions)} question(s)"
+                        )
                         # Deduplicate by header to avoid repeats from multiple AskUserQuestion calls
                         existing_headers = {q["header"] for q in collected_questions}
                         for q in questions:
@@ -414,19 +452,26 @@ async def execute_task() -> dict:
                                 print(f"[claude] Skipping duplicate question: {header}")
                                 continue
                             existing_headers.add(header)
-                            collected_questions.append({
-                                "id": str(uuid.uuid4()),
-                                "header": header,
-                                "question": q.get("question", ""),
-                                "options": [
-                                    {"label": opt.get("label", ""), "description": opt.get("description")}
-                                    for opt in q.get("options", [])
-                                ],
-                                "multi_select": q.get("multiSelect", False),
-                            })
+                            collected_questions.append(
+                                {
+                                    "id": str(uuid.uuid4()),
+                                    "header": header,
+                                    "question": q.get("question", ""),
+                                    "options": [
+                                        {
+                                            "label": opt.get("label", ""),
+                                            "description": opt.get("description"),
+                                        }
+                                        for opt in q.get("options", [])
+                                    ],
+                                    "multi_select": q.get("multiSelect", False),
+                                }
+                            )
                         # In plan mode, flag to stop after this message
                         if MODE == "plan" and collected_questions:
-                            print(f"[job_runner] Will stop after this message to get user answers for {len(collected_questions)} question(s)")
+                            print(
+                                f"[job_runner] Will stop after this message to get user answers for {len(collected_questions)} question(s)"
+                            )
                             should_stop_for_questions = True
         elif isinstance(message, ResultMessage):
             session_id = message.session_id
@@ -436,8 +481,14 @@ async def execute_task() -> dict:
 
     # If we collected questions in plan mode, return early with questions
     if should_stop_for_questions and collected_questions:
-        print(f"[job_runner] Returning {len(collected_questions)} question(s) for user answers")
-        plan_text = "\n".join(collected_text) if collected_text else "Plan in progress - answering questions first"
+        print(
+            f"[job_runner] Returning {len(collected_questions)} question(s) for user answers"
+        )
+        plan_text = (
+            "\n".join(collected_text)
+            if collected_text
+            else "Plan in progress - answering questions first"
+        )
         return {
             "output": plan_text,
             "plan_text": plan_text,
@@ -559,7 +610,9 @@ def create_github_issue_from_plan(plan_content: str) -> str | None:
         return None
 
     # Generate issue title from task
-    title = f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+    title = (
+        f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+    )
 
     # Build issue body with plan and commands
     body = f"""{plan_content}
@@ -604,7 +657,9 @@ Reply with:
         return None
 
 
-async def send_result(status: str, result: dict | None = None, error: str | None = None):
+async def send_result(
+    status: str, result: dict | None = None, error: str | None = None
+):
     """Send the result back to the backend via HTTP callback."""
     if not CALLBACK_URL:
         print("[job_runner] No callback URL, skipping result POST")
@@ -630,19 +685,19 @@ async def send_result(status: str, result: dict | None = None, error: str | None
                     headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
-                print(f"[job_runner] Result sent successfully")
+                print("[job_runner] Result sent successfully")
                 return
             except httpx.RequestError as e:
                 print(f"[job_runner] Attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
                 else:
-                    print(f"[job_runner] Failed to send result after 3 attempts")
+                    print("[job_runner] Failed to send result after 3 attempts")
                     raise
 
 
 async def main():
-    """Main entry point."""
+    """Execute the job runner workflow."""
     print(f"[job_runner] Starting job for task {TASK_ID}")
     print(f"[job_runner] Working directory: {WORKSPACE}")
 

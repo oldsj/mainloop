@@ -7,17 +7,17 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from claude_agent_sdk import (
-    query,
-    ClaudeAgentOptions,
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     SystemMessage,
     TextBlock,
+    query,
 )
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 
 class ExecuteRequest(BaseModel):
     """Request to execute Claude Code."""
+
     prompt: str
     workspace: str = "/workspace"
     model: str = "haiku"
@@ -38,6 +39,7 @@ class ExecuteRequest(BaseModel):
 
 class ExecuteResponse(BaseModel):
     """Response from Claude Code execution."""
+
     output: str
     session_id: str | None = None
     cost_usd: float | None = None
@@ -48,6 +50,7 @@ class ExecuteResponse(BaseModel):
 
 class AuthStatus(BaseModel):
     """Authentication status."""
+
     authenticated: bool
     expires_at: int | None = None
     subscription_type: str | None = None
@@ -139,7 +142,9 @@ async def execute_claude(request: ExecuteRequest):
                     data = message.data or {}
                     pre_tokens = data.get("pre_tokens", 0)
                     trigger = data.get("trigger", "unknown")
-                    logger.info(f"Context compacted ({trigger}): {pre_tokens} tokens summarized")
+                    logger.info(
+                        f"Context compacted ({trigger}): {pre_tokens} tokens summarized"
+                    )
 
         return ExecuteResponse(
             output="\n".join(collected_text) if collected_text else "",
@@ -190,4 +195,5 @@ async def execute_claude_stream(request: ExecuteRequest):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)

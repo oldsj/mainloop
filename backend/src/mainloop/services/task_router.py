@@ -1,11 +1,12 @@
 """Task routing service - matches user messages to active tasks."""
 
-import re
 import logging
+import re
 from dataclasses import dataclass
 
-from models import WorkerTask, TaskStatus
 from mainloop.db import db
+
+from models import TaskStatus, WorkerTask
 
 logger = logging.getLogger(__name__)
 

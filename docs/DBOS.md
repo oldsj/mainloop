@@ -13,7 +13,7 @@
 
 Workflows provide durable execution so you can write programs that are resilient to any failure.
 Workflows are comprised of steps, which are ordinary Python functions annotated with @DBOS.step().
-When using DBOS workflows, you should annotate any function that performs complex operations or accesses external APIs or services as a step. 
+When using DBOS workflows, you should annotate any function that performs complex operations or accesses external APIs or services as a step.
 You can turn any Python function into a step by annotating it with the @DBOS.step decorator. The only requirement is that its inputs and outputs should be serializable.
 
 If a workflow is interrupted for any reason (e.g., an executor restarts or crashes), when your program restarts the workflow automatically resumes execution from the last completed step.
@@ -87,11 +87,9 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-
 ## Workflow and Steps Examples
 
 Simple example:
-
 
 ```python
 import os
@@ -208,13 +206,14 @@ def run_every_minute(scheduled_time, actual_time):
 - A scheduled workflow MUST specify a crontab schedule.
 - It MUST take in two arguments, scheduled and actual time. Both are datetime.datetimes of when the workflow started.
 
-
 ## Workflow Documentation:
 
 ---
+
 sidebar_position: 10
 title: Workflows
 toc_max_heading_level: 3
+
 ---
 
 Workflows provide **durable execution** so you can write programs that are **resilient to any failure**.
@@ -323,7 +322,6 @@ def example_workflow(friend: str):
         step_two()
 ```
 
-
 ## Workflow Timeouts
 
 You can set a timeout for a workflow with `SetWorkflowTimeout`.
@@ -380,6 +378,7 @@ Debouncer.create(
 ```
 
 **Parameters:**
+
 - `workflow`: The workflow to debounce.
 - `debounce_key`: The debounce key for this debouncer. Used to group workflow executions that will be debounced. For example, if the debounce key is set to customer ID, each customer's workflows would be debounced separately.
 - `debounce_timeout_sec`: After this time elapses since the first time a workflow is submitted from this debouncer, the workflow is started regardless of the debounce period.
@@ -404,6 +403,7 @@ When the workflow eventually executes, it uses the **last** set of inputs passed
 After the workflow begins execution, the next call to `debounce` starts the debouncing process again for a new workflow execution.
 
 **Parameters:**
+
 - `debounce_key`: A key used to group workflow executions that will be debounced together. For example, if the debounce key is set to customer ID, each customer's workflows would be debounced separately.
 - `debounce_period_sec`: Delay this workflow's execution by this period.
 - `*args`: Variadic workflow arguments.
@@ -436,6 +436,7 @@ Debouncer.create_async(
     queue: Optional[Queue] = None,
 ) -> Debouncer[P, R]
 ```
+
 Async version of `Debouncer.create`.
 
 ### debounce_async
@@ -458,7 +459,6 @@ Coroutine workflows may invoke coroutine steps via await expressions.
 You should start coroutine workflows using `DBOS.start_workflow_async` and enqueue them using `enqueue_async`.
 Calling a coroutine workflow or starting it with `DBOS.start_workflow_async` always runs it in the same event loop as its caller, but enqueueing it with `enqueue_async` starts the workflow in a different event loop.
 Additionally, coroutine workflows should use the asynchronous versions of the workflow communication context methods.
-
 
 :::tip
 
@@ -502,8 +502,8 @@ You can:
 - Publish events from workflows for clients to read
 - Stream values from workflows to clients
 
-
 ## Workflow Messaging and Notifications
+
 You can send messages to a specific workflow.
 This is useful for signaling a workflow or sending notifications to it while it's running.
 
@@ -657,7 +657,7 @@ This is useful for streaming results from a long-running workflow or LLM call or
 
 ```python
 DBOS.write_stream(
-    key: str, 
+    key: str,
     value: Any
 ) -> None:
 ```
@@ -850,7 +850,7 @@ You can use a queue with `concurrency=1` to guarantee sequential, in-order proce
 Only a single event will be processed at a time.
 For example, this app processes events sequentially in the order of their arrival:
 
- ```python
+```python
 from fastapi import FastAPI
 from dbos import DBOS, Queue
 
@@ -858,11 +858,11 @@ queue = Queue("in_order_queue", concurrency=1)
 
 @DBOS.step()
 def process_event(event: str):
-    ...
+   ...
 
 def event_endpoint(event: str):
-    queue.enqueue(process_event, event)
- ```
+   queue.enqueue(process_event, event)
+```
 
 ### Rate Limiting
 
@@ -875,7 +875,6 @@ queue = Queue("example_queue", limiter={"limit": 50, "period": 30})
 ```
 
 Rate limits are especially useful when working with a rate-limited API, such as many LLM APIs.
-
 
 ## Setting Timeouts
 
@@ -978,7 +977,6 @@ with SetEnqueueOptions(priority=1):
     queue.enqueue(first_workflow)
 ```
 
-
 ## Python Classes
 
 You can add DBOS decorators to your Python class instance methods.
@@ -999,12 +997,12 @@ class URLFetcher(DBOSConfiguredInstance):
     @DBOS.step()
     def fetch_url(self):
         return requests.get(self.url).text
-    
+
 example_fetcher = URLFetcher("https://example.com")
 print(example_fetcher.fetch_workflow())
 ```
 
-When you create a new instance of a DBOS class,  `DBOSConfiguredInstance` must be instantiated with a `config_name`.
+When you create a new instance of a DBOS class, `DBOSConfiguredInstance` must be instantiated with a `config_name`.
 This `config_name` should be a unique identifier of the instance.
 Additionally, all DBOS-decorated classes must be instantiated before `DBOS.launch()` is called.
 
@@ -1012,7 +1010,6 @@ The reason for these requirements is to enable workflow recovery.
 When you create a new instance of a DBOS class, DBOS stores it in a global registry indexed by `config_name`.
 When DBOS needs to recover a workflow belonging to that class, it looks up the class instance using `config_name` so it can run the workflow using the right instance of its class.
 If `config_name` is not supplied, or if DBOS classes are dynamically instantiated after `DBOS.launch()`, then DBOS may not find the class instance it needs to recover a workflow.
-
 
 ### Testing DBOS Functions
 
@@ -1062,6 +1059,7 @@ handle.get_status() -> WorkflowStatus
 ## Workflow Management Methods
 
 ### list_workflows
+
 ```python
 def list_workflows(
     *,
@@ -1082,6 +1080,7 @@ def list_workflows(
 Retrieve a list of `WorkflowStatus` of all workflows matching specified criteria.
 
 **Parameters:**
+
 - **workflow_ids**: Retrieve workflows with these IDs.
 - **workflow_id_prefix**: Retrieve workflows whose IDs start with the specified string.
 - **status**: Retrieve workflows with this status (or one of these statuses) (Must be `ENQUEUED`, `PENDING`, `SUCCESS`, `ERROR`, `CANCELLED`, or `MAX_RECOVERY_ATTEMPTS_EXCEEDED`)
@@ -1095,6 +1094,7 @@ Retrieve a list of `WorkflowStatus` of all workflows matching specified criteria
 - **sort_desc**: Whether to sort the results in descending (`True`) or ascending (`False`) order by workflow start time.
 
 ### list_queued_workflows
+
 ```python
 def list_queued_workflows(
     *,
@@ -1112,6 +1112,7 @@ def list_queued_workflows(
 Retrieve a list of `WorkflowStatus` of all **currently enqueued** workflows matching specified criteria.
 
 **Parameters:**
+
 - **queue_name**: Retrieve workflows running on this queue.
 - **status**: Retrieve workflows with this status (or one of these statuses) (Must be `ENQUEUED` or `PENDING`)
 - **start_time**: Retrieve workflows enqueued after this (RFC 3339-compliant) timestamp.
@@ -1121,6 +1122,7 @@ Retrieve a list of `WorkflowStatus` of all **currently enqueued** workflows matc
 - **offset**: Skip this many workflows from the results returned (for pagination).
 
 ### list_workflow_steps
+
 ```python
 def list_workflow_steps(
     workflow_id: str,
@@ -1231,7 +1233,6 @@ class WorkflowStatus:
 
 Retrieve the workflow status:
 
-
 ### Configuring DBOS
 
 To configure DBOS, pass a `DBOSConfig` object to its constructor.
@@ -1278,10 +1279,10 @@ class DBOSConfig(TypedDict):
 
 - **name**: Your application's name.
 - **system_database_url**: A connection string to your system database.
-This is the database in which DBOS stores workflow and step state.
-This may be either Postgres or SQLite, though Postgres is recommended for production.
-DBOS uses this connection string, unmodified, to create a SQLAlchemy Engine
-A valid connection string looks like:
+  This is the database in which DBOS stores workflow and step state.
+  This may be either Postgres or SQLite, though Postgres is recommended for production.
+  DBOS uses this connection string, unmodified, to create a SQLAlchemy Engine
+  A valid connection string looks like:
 
 ```
 postgresql://[username]:[password]@[hostname]:[port]/[database name]
@@ -1302,12 +1303,13 @@ If no connection string is provided, DBOS uses a SQLite database:
 ```shell
 sqlite:///[application_name].sqlite
 ```
+
 - **application_database_url**: A connection string to your application database.
-This is the database in which DBOS executes `@DBOS.transaction` functions.
-This parameter has the same format and default as `system_database_url`.
-If you are not using `@DBOS.transaction`, you do not need to supply this parameter.
+  This is the database in which DBOS executes `@DBOS.transaction` functions.
+  This parameter has the same format and default as `system_database_url`.
+  If you are not using `@DBOS.transaction`, you do not need to supply this parameter.
 - **db_engine_kwargs**: Additional keyword arguments passed to SQLAlchemy’s `create_engine()`.
-Defaults to:
+  Defaults to:
 
 ```python
 {
@@ -1316,6 +1318,7 @@ Defaults to:
   "pool_timeout": 30,
 }
 ```
+
 - **sys_db_pool_size**: The size of the connection pool used for the DBOS system database. Defaults to 20.
 - **dbos_system_schema**: Postgres schema name for DBOS system tables. Defaults to "dbos".
 - **system_database_engine**: A custom SQLAlchemy engine to use to connect to your system database. If provided, DBOS will not create an engine but use this instead.
@@ -1387,14 +1390,13 @@ To make a Python function a transaction, annotate it with the DBOS.transaction d
 Then, access the database using the DBOS.sql_session client, which is a SQLAlchemy client DBOS automatically connects to your database.
 Here are some examples:
 
-
 #### SQLAlchemy
 
 ```python
 greetings = Table(
-    "greetings", 
-    MetaData(), 
-    Column("name", String), 
+    "greetings",
+    MetaData(),
+    Column("name", String),
     Column("note", String)
 )
 

@@ -8,7 +8,7 @@ spec:
     - name: tailscale-gateway
       namespace: tailscale
   hostnames:
-    - "mainloop.example.com"  # Configure your Tailscale MagicDNS or custom domain
+    - 'mainloop.example.com' # Configure your Tailscale MagicDNS or custom domain
   rules:
     - backendRefs:
         - name: mainloop-frontend
@@ -24,7 +24,7 @@ spec:
     - name: tailscale-gateway
       namespace: tailscale
   hostnames:
-    - "mainloop-api.example.com"  # Configure your Tailscale MagicDNS or custom domain
+    - 'mainloop-api.example.com' # Configure your Tailscale MagicDNS or custom domain
   rules:
     - backendRefs:
         - name: mainloop-backend

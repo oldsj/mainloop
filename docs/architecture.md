@@ -41,18 +41,21 @@ Mainloop uses a coordinator/worker pattern where a fast main thread agent delega
 ## Components
 
 ### Frontend (SvelteKit)
+
 - Mobile-first responsive UI
 - Real-time chat interface
 - Human review queue for worker questions/approvals
 - Tailwind v4 styling
 
 ### Backend (FastAPI + DBOS)
+
 - **Main Thread Workflow**: Per-user coordinator that runs on Haiku (fast, cheap)
 - **Worker Workflows**: Task executors that run on Opus (capable, thorough)
 - **PostgreSQL**: Durable workflow state and conversation history
 - **Task Queue**: DBOS-managed queue for worker distribution
 
 ### Claude Agent Container
+
 - Runs Claude Code CLI with Max subscription
 - Each worker gets isolated workspace
 - Handles git operations, file editing, PR creation
@@ -68,10 +71,10 @@ Mainloop uses a coordinator/worker pattern where a fast main thread agent delega
 
 ## Model Configuration
 
-| Component | Model | Purpose |
-|-----------|-------|---------|
-| Main thread | Haiku | Fast coordination, intent analysis |
-| Workers | Opus (default) | Complex tasks, code generation |
-| Workers | Sonnet/Haiku | Can be overridden per-task |
+| Component   | Model          | Purpose                            |
+| ----------- | -------------- | ---------------------------------- |
+| Main thread | Haiku          | Fast coordination, intent analysis |
+| Workers     | Opus (default) | Complex tasks, code generation     |
+| Workers     | Sonnet/Haiku   | Can be overridden per-task         |
 
 The main thread can dynamically choose which model a worker uses based on task complexity.

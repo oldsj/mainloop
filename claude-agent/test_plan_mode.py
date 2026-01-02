@@ -6,9 +6,8 @@ Unit tests that can run without K8s or Claude credentials.
 """
 
 import os
-import sys
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import MagicMock, patch
 
 # Set up environment before importing job_runner
 os.environ.setdefault("TASK_ID", "test-task-123")
@@ -61,7 +60,11 @@ class TestPlanPrompt(unittest.TestCase):
         with patch.object(job_runner, "REPO_URL", "https://github.com/test/repo"):
             with patch.object(job_runner, "TASK_PROMPT", "Add feature"):
                 with patch.object(job_runner, "TASK_ID", "rev123"):
-                    with patch.object(job_runner, "FEEDBACK_CONTEXT", "Please add more detail about error handling"):
+                    with patch.object(
+                        job_runner,
+                        "FEEDBACK_CONTEXT",
+                        "Please add more detail about error handling",
+                    ):
                         prompt = job_runner.build_plan_prompt()
 
         self.assertIn("Feedback on your previous plan", prompt)
@@ -82,7 +85,11 @@ class TestPermissionMode(unittest.TestCase):
             with patch.object(job_runner, "MODE", mode):
                 # This mirrors the actual logic in execute_task()
                 perm_mode = "bypassPermissions"
-            self.assertEqual(perm_mode, "bypassPermissions", f"Mode {mode} should use bypassPermissions")
+            self.assertEqual(
+                perm_mode,
+                "bypassPermissions",
+                f"Mode {mode} should use bypassPermissions",
+            )
 
 
 class TestGitHubIssueCreation(unittest.TestCase):
@@ -101,7 +108,9 @@ class TestGitHubIssueCreation(unittest.TestCase):
         with patch.object(job_runner, "REPO_URL", "https://github.com/test/repo"):
             with patch.object(job_runner, "TASK_PROMPT", "Add authentication"):
                 with patch.object(job_runner, "WORKSPACE", "/workspace"):
-                    result = job_runner.create_github_issue_from_plan("## Plan content here")
+                    result = job_runner.create_github_issue_from_plan(
+                        "## Plan content here"
+                    )
 
         self.assertEqual(result, "https://github.com/test/repo/issues/42")
 

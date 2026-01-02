@@ -4,15 +4,15 @@ import logging
 from typing import AsyncGenerator
 
 import httpx
-from pydantic import BaseModel
-
 from mainloop.config import settings
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 
 class ExecuteResponse(BaseModel):
     """Response from Claude Agent execution."""
+
     output: str
     session_id: str | None = None
     cost_usd: float | None = None
@@ -23,7 +23,9 @@ class ClaudeAgentClient:
     """HTTP client for the Claude Agent container."""
 
     def __init__(self, base_url: str | None = None):
-        self.base_url = base_url or settings.claude_agent_url or "http://claude-agent:8001"
+        self.base_url = (
+            base_url or settings.claude_agent_url or "http://claude-agent:8001"
+        )
 
     async def execute(
         self,
@@ -43,6 +45,7 @@ class ClaudeAgentClient:
 
         Returns:
             ExecuteResponse with output or error
+
         """
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -79,6 +82,7 @@ class ClaudeAgentClient:
 
         Yields:
             Dict events with type: 'text', 'result', or 'error'
+
         """
         import json
 

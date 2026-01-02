@@ -17,7 +17,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: agent-controller
-          image: ghcr.io/yourusername/mainloop-agent-controller:latest  # Set via kustomize overlay
+          image: ghcr.io/yourusername/mainloop-agent-controller:latest # Set via kustomize overlay
           env:
             - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom:
@@ -34,11 +34,11 @@ spec:
               mountPath: /workspace
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "500m"
+              memory: '512Mi'
+              cpu: '500m'
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: '1Gi'
+              cpu: '1000m'
       volumes:
         - name: workspace
           emptyDir: {}

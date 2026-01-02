@@ -3,10 +3,12 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
+
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
-from models import Conversation, Message
 from mainloop.config import settings
+
+from models import Conversation, Message
 
 
 class BigQueryClient:
@@ -14,7 +16,11 @@ class BigQueryClient:
 
     def __init__(self):
         """Initialize BigQuery client."""
-        self.client = bigquery.Client(project=settings.google_cloud_project) if settings.google_cloud_project else None
+        self.client = (
+            bigquery.Client(project=settings.google_cloud_project)
+            if settings.google_cloud_project
+            else None
+        )
         self.dataset_id = settings.bigquery_dataset
         self.conversations_table = "conversations"
         self.messages_table = "messages"
@@ -70,14 +76,16 @@ class BigQueryClient:
             table = bigquery.Table(table_ref, schema=schema)
             self.client.create_table(table)
 
-    async def create_conversation(self, user_id: str, title: str | None = None) -> Conversation:
+    async def create_conversation(
+        self, user_id: str, title: str | None = None
+    ) -> Conversation:
         """Create a new conversation."""
         conversation = Conversation(
             id=str(uuid.uuid4()),
             user_id=user_id,
             title=title or "New Conversation",
             created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+            updated_at=datetime.now(timezone.utc),
         )
 
         if self.client:
@@ -88,13 +96,15 @@ class BigQueryClient:
     def _insert_conversation_sync(self, conversation: Conversation):
         """Insert conversation into BigQuery (synchronous)."""
         table_ref = self._get_table_ref(self.conversations_table)
-        rows_to_insert = [{
-            "id": conversation.id,
-            "user_id": conversation.user_id,
-            "title": conversation.title,
-            "created_at": conversation.created_at.isoformat(),
-            "updated_at": conversation.updated_at.isoformat(),
-        }]
+        rows_to_insert = [
+            {
+                "id": conversation.id,
+                "user_id": conversation.user_id,
+                "title": conversation.title,
+                "created_at": conversation.created_at.isoformat(),
+                "updated_at": conversation.updated_at.isoformat(),
+            }
+        ]
         self.client.insert_rows_json(table_ref, rows_to_insert)
 
     async def get_conversation(self, conversation_id: str) -> Conversation | None:
@@ -110,7 +120,9 @@ class BigQueryClient:
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("conversation_id", "STRING", conversation_id)
+                bigquery.ScalarQueryParameter(
+                    "conversation_id", "STRING", conversation_id
+                )
             ]
         )
 
@@ -127,10 +139,12 @@ class BigQueryClient:
             user_id=row.user_id,
             title=row.title,
             created_at=row.created_at,
-            updated_at=row.updated_at
+            updated_at=row.updated_at,
         )
 
-    async def list_conversations(self, user_id: str, limit: int = 50) -> list[Conversation]:
+    async def list_conversations(
+        self, user_id: str, limit: int = 50
+    ) -> list[Conversation]:
         """List conversations for a user."""
         if not self.client:
             return []
@@ -145,7 +159,7 @@ class BigQueryClient:
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
-                bigquery.ScalarQueryParameter("limit", "INT64", limit)
+                bigquery.ScalarQueryParameter("limit", "INT64", limit),
             ]
         )
 
@@ -159,16 +173,13 @@ class BigQueryClient:
                 user_id=row.user_id,
                 title=row.title,
                 created_at=row.created_at,
-                updated_at=row.updated_at
+                updated_at=row.updated_at,
             )
             for row in results
         ]
 
     async def create_message(
-        self,
-        conversation_id: str,
-        role: str,
-        content: str
+        self, conversation_id: str, role: str, content: str
     ) -> Message:
         """Create a new message in a conversation."""
         message = Message(
@@ -176,7 +187,7 @@ class BigQueryClient:
             conversation_id=conversation_id,
             role=role,  # type: ignore
             content=content,
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
         )
 
         if self.client:
@@ -187,13 +198,15 @@ class BigQueryClient:
     def _insert_message_sync(self, message: Message):
         """Insert message into BigQuery (synchronous)."""
         table_ref = self._get_table_ref(self.messages_table)
-        rows_to_insert = [{
-            "id": message.id,
-            "conversation_id": message.conversation_id,
-            "role": message.role,
-            "content": message.content,
-            "created_at": message.created_at.isoformat(),
-        }]
+        rows_to_insert = [
+            {
+                "id": message.id,
+                "conversation_id": message.conversation_id,
+                "role": message.role,
+                "content": message.content,
+                "created_at": message.created_at.isoformat(),
+            }
+        ]
         self.client.insert_rows_json(table_ref, rows_to_insert)
 
     async def get_messages(self, conversation_id: str) -> list[Message]:
@@ -209,7 +222,9 @@ class BigQueryClient:
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("conversation_id", "STRING", conversation_id)
+                bigquery.ScalarQueryParameter(
+                    "conversation_id", "STRING", conversation_id
+                )
             ]
         )
 
@@ -223,7 +238,7 @@ class BigQueryClient:
                 conversation_id=row.conversation_id,
                 role=row.role,  # type: ignore
                 content=row.content,
-                created_at=row.created_at
+                created_at=row.created_at,
             )
             for row in results
         ]

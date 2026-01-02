@@ -1,23 +1,23 @@
 """Shared Pydantic models for mainloop."""
 
+from models.agent import AgentResponse, AgentTask
 from models.conversation import Conversation, Message
-from models.agent import AgentTask, AgentResponse
 from models.workflow import (
+    EventTypes,
+    GitHubPR,
+    GitHubRepo,
     MainThread,
-    WorkerTask,
-    WorkerTaskCreate,
-    TaskStatus,
-    TaskQuestion,
+    Project,
     QuestionOption,
     QueueItem,
+    QueueItemPriority,
     QueueItemResponse,
     QueueItemType,
-    QueueItemPriority,
+    TaskQuestion,
+    TaskStatus,
+    WorkerTask,
+    WorkerTaskCreate,
     WorkflowEvent,
-    EventTypes,
-    GitHubRepo,
-    GitHubPR,
-    Project,
 )
 
 __all__ = [

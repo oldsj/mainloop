@@ -5,9 +5,8 @@ from datetime import datetime
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel
-
 from mainloop.config import settings
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +72,7 @@ def _parse_repo(repo_url: str) -> tuple[str, str]:
 
     Returns:
         Tuple of (owner, repo)
+
     """
     # Handle various GitHub URL formats
     url = repo_url.rstrip("/")
@@ -92,6 +92,7 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
 
     Returns:
         PRStatus or None if not found
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -117,8 +118,12 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
             head_sha=data["head"]["sha"],
             base_branch=data["base"]["ref"],
             url=data["html_url"],
-            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
-            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
+            created_at=datetime.fromisoformat(
+                data["created_at"].replace("Z", "+00:00")
+            ),
+            updated_at=datetime.fromisoformat(
+                data["updated_at"].replace("Z", "+00:00")
+            ),
             mergeable=data.get("mergeable"),
             review_decision=data.get("review_decision"),
         )
@@ -138,6 +143,7 @@ async def get_pr_comments(
 
     Returns:
         List of comments
+
     """
     owner, repo = _parse_repo(repo_url)
     comments = []
@@ -161,8 +167,12 @@ async def get_pr_comments(
                     id=c["id"],
                     body=c["body"],
                     user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")),
-                    updated_at=datetime.fromisoformat(c["updated_at"].replace("Z", "+00:00")),
+                    created_at=datetime.fromisoformat(
+                        c["created_at"].replace("Z", "+00:00")
+                    ),
+                    updated_at=datetime.fromisoformat(
+                        c["updated_at"].replace("Z", "+00:00")
+                    ),
                     url=c["html_url"],
                     is_review_comment=False,
                 )
@@ -182,8 +192,12 @@ async def get_pr_comments(
                     id=c["id"],
                     body=c["body"],
                     user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")),
-                    updated_at=datetime.fromisoformat(c["updated_at"].replace("Z", "+00:00")),
+                    created_at=datetime.fromisoformat(
+                        c["created_at"].replace("Z", "+00:00")
+                    ),
+                    updated_at=datetime.fromisoformat(
+                        c["updated_at"].replace("Z", "+00:00")
+                    ),
                     url=c["html_url"],
                     is_review_comment=True,
                 )
@@ -211,6 +225,7 @@ async def get_pr_reviews(
 
     Returns:
         List of reviews
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -229,7 +244,9 @@ async def get_pr_reviews(
                     user=r["user"]["login"],
                     state=r["state"],
                     body=r.get("body"),
-                    submitted_at=datetime.fromisoformat(r["submitted_at"].replace("Z", "+00:00")),
+                    submitted_at=datetime.fromisoformat(
+                        r["submitted_at"].replace("Z", "+00:00")
+                    ),
                 )
             )
 
@@ -245,6 +262,7 @@ async def is_pr_merged(repo_url: str, pr_number: int) -> bool:
 
     Returns:
         True if merged, False otherwise
+
     """
     status = await get_pr_status(repo_url, pr_number)
     return status.merged if status else False
@@ -259,6 +277,7 @@ async def is_pr_approved(repo_url: str, pr_number: int) -> bool:
 
     Returns:
         True if approved, False otherwise
+
     """
     reviews = await get_pr_reviews(repo_url, pr_number)
 
@@ -278,9 +297,18 @@ class CheckRunStatus(BaseModel):
 
     name: str
     status: Literal["queued", "in_progress", "completed"]
-    conclusion: Literal[
-        "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
-    ] | None
+    conclusion: (
+        Literal[
+            "success",
+            "failure",
+            "neutral",
+            "cancelled",
+            "skipped",
+            "timed_out",
+            "action_required",
+        ]
+        | None
+    )
     details_url: str | None
     output_title: str | None = None
     output_summary: str | None = None
@@ -304,6 +332,7 @@ async def get_check_status(repo_url: str, pr_number: int) -> CombinedCheckStatus
 
     Returns:
         CombinedCheckStatus with overall status and individual check runs
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -370,6 +399,7 @@ async def get_check_failure_logs(repo_url: str, pr_number: int) -> str:
 
     Returns:
         Formatted string of failure context for the agent
+
     """
     check_status = await get_check_status(repo_url, pr_number)
 
@@ -452,6 +482,7 @@ async def format_feedback_for_agent(
 
     Returns:
         Formatted string of feedback
+
     """
     comments = await get_pr_comments(repo_url, pr_number, since=since)
     reviews = await get_pr_reviews(repo_url, pr_number)
@@ -465,7 +496,9 @@ async def format_feedback_for_agent(
     # Add review feedback (only if agent should act on it)
     for review in reviews:
         if _should_agent_act_on_review(review) and review.body:
-            parts.append(f"## Review from @{review.user} ({review.state})\n{review.body}")
+            parts.append(
+                f"## Review from @{review.user} ({review.state})\n{review.body}"
+            )
 
     # Add comments (only if agent should act on them)
     for comment in comments:
@@ -499,6 +532,7 @@ async def add_reaction_to_comment(
 
     Returns:
         True if successful, False otherwise
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -531,6 +565,7 @@ async def acknowledge_comments(
     Args:
         repo_url: GitHub repository URL
         comments: List of comments to acknowledge
+
     """
     for comment in comments:
         await add_reaction_to_comment(
@@ -542,6 +577,7 @@ async def acknowledge_comments(
 
 
 # ============= GitHub Issue Support =============
+
 
 class IssueStatus(BaseModel):
     """Status of a GitHub issue."""
@@ -585,7 +621,9 @@ class IssueCommand(BaseModel):
     user: str | None = None  # User who issued the command
 
 
-def parse_issue_command(comment_body: str) -> tuple[Literal["implement", "revise", "none"], str | None]:
+def parse_issue_command(
+    comment_body: str,
+) -> tuple[Literal["implement", "revise", "none"], str | None]:
     """Parse a slash command from an issue comment.
 
     Supported commands:
@@ -600,6 +638,7 @@ def parse_issue_command(comment_body: str) -> tuple[Literal["implement", "revise
         - ("implement", None) for /implement
         - ("revise", "feedback text") for /revise
         - ("none", None) for no recognized command
+
     """
     import re
 
@@ -633,6 +672,7 @@ def parse_comments_for_command(comments: list[dict]) -> IssueCommand:
 
     Returns:
         IssueCommand with the most recent command found, or command="none" if no command
+
     """
     # Sort by created_at descending (most recent first)
     sorted_comments = sorted(
@@ -660,6 +700,7 @@ def _parse_last_modified(header: str | None) -> datetime | None:
         return None
     try:
         from email.utils import parsedate_to_datetime
+
         return parsedate_to_datetime(header)
     except (ValueError, TypeError):
         return None
@@ -684,6 +725,7 @@ async def get_issue_status(
 
     Returns:
         ConditionalResponse with issue data or not_modified=True
+
     """
     owner, repo = _parse_repo(repo_url)
     headers = _get_headers()
@@ -706,7 +748,9 @@ async def get_issue_status(
             return ConditionalResponse(
                 not_modified=True,
                 etag=response.headers.get("ETag"),
-                last_modified=_parse_last_modified(response.headers.get("Last-Modified")),
+                last_modified=_parse_last_modified(
+                    response.headers.get("Last-Modified")
+                ),
             )
 
         if response.status_code == 404:
@@ -721,8 +765,12 @@ async def get_issue_status(
             title=data["title"],
             body=data.get("body"),
             url=data["html_url"],
-            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
-            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
+            created_at=datetime.fromisoformat(
+                data["created_at"].replace("Z", "+00:00")
+            ),
+            updated_at=datetime.fromisoformat(
+                data["updated_at"].replace("Z", "+00:00")
+            ),
             labels=[label["name"] for label in data.get("labels", [])],
         )
 
@@ -749,6 +797,7 @@ async def get_issue_comments(
 
     Returns:
         ConditionalResponse with list of IssueComment data or not_modified=True
+
     """
     owner, repo = _parse_repo(repo_url)
     headers = _get_headers()
@@ -783,8 +832,12 @@ async def get_issue_comments(
                     id=c["id"],
                     body=c["body"],
                     user=c["user"]["login"],
-                    created_at=datetime.fromisoformat(c["created_at"].replace("Z", "+00:00")),
-                    updated_at=datetime.fromisoformat(c["updated_at"].replace("Z", "+00:00")),
+                    created_at=datetime.fromisoformat(
+                        c["created_at"].replace("Z", "+00:00")
+                    ),
+                    updated_at=datetime.fromisoformat(
+                        c["updated_at"].replace("Z", "+00:00")
+                    ),
                     url=c["html_url"],
                 ).model_dump()
             )
@@ -815,6 +868,7 @@ def generate_branch_name(
 
     Returns:
         Branch name like "feature/42-add-dark-mode"
+
     """
     import re
 
@@ -834,12 +888,31 @@ def generate_branch_name(
     # Slugify title
     slug = title.lower()
     slug = re.sub(r"[^\w\s-]", "", slug)  # Remove special chars
-    slug = re.sub(r"[\s_]+", "-", slug)   # Spaces/underscores to hyphens
-    slug = re.sub(r"-+", "-", slug)        # Collapse multiple hyphens
+    slug = re.sub(r"[\s_]+", "-", slug)  # Spaces/underscores to hyphens
+    slug = re.sub(r"-+", "-", slug)  # Collapse multiple hyphens
     slug = slug.strip("-")
 
     # Remove stop words
-    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are", "was", "were"}
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "is",
+        "are",
+        "was",
+        "were",
+    }
     words = [w for w in slug.split("-") if w and w not in stop_words]
     slug = "-".join(words[:8])  # Max 8 words
 
@@ -864,6 +937,7 @@ async def format_issue_feedback_for_agent(
 
     Returns:
         Formatted string of feedback
+
     """
     response = await get_issue_comments(repo_url, issue_number, since=since)
 
@@ -872,7 +946,7 @@ async def format_issue_feedback_for_agent(
 
     parts = []
     for comment in response.data:
-        body = comment['body']
+        body = comment["body"]
 
         # Extract feedback from /revise command if present
         command, feedback = parse_issue_command(body)
@@ -908,6 +982,7 @@ async def create_github_issue(
 
     Returns:
         CreatedIssue with number and URL, or None if creation failed
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -958,6 +1033,7 @@ async def update_github_issue(
 
     Returns:
         True if update succeeded, False otherwise
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -1005,6 +1081,7 @@ async def add_issue_comment(
 
     Returns:
         True/False if return_id=False, or comment ID (int) if return_id=True
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -1037,6 +1114,7 @@ async def get_comment_reactions(
 
     Returns:
         List of reaction types (e.g., ["+1", "rocket", "heart"])
+
     """
     owner, repo = _parse_repo(repo_url)
 
@@ -1065,6 +1143,7 @@ def format_plan_for_issue(plan_text: str) -> str:
 
     Returns:
         Markdown-formatted comment body with approval instructions
+
     """
     lines = [
         "## 📋 Implementation Plan",
@@ -1090,6 +1169,7 @@ def format_questions_for_issue(questions: list[dict]) -> str:
 
     Returns:
         Markdown-formatted comment body
+
     """
     lines = [
         "## ❓ Questions",
@@ -1111,7 +1191,7 @@ def format_questions_for_issue(questions: list[dict]) -> str:
         lines.append("")
 
         for j, opt in enumerate(options):
-            letter = chr(ord('A') + j)
+            letter = chr(ord("A") + j)
             label = opt.get("label", "")
             desc = opt.get("description", "")
             if desc:
@@ -1122,20 +1202,24 @@ def format_questions_for_issue(questions: list[dict]) -> str:
         lines.append("")
 
     # Add instructions for responding
-    lines.extend([
-        "---",
-        "",
-        "**To answer**, reply to this issue with your choices:",
-        "```",
-    ])
+    lines.extend(
+        [
+            "---",
+            "",
+            "**To answer**, reply to this issue with your choices:",
+            "```",
+        ]
+    )
     for i in range(1, len(questions) + 1):
         lines.append(f"{i}. A")
-    lines.extend([
-        "```",
-        "Or answer using the option label: `1. JWT tokens`",
-        "",
-        "_You can also answer in the [Mainloop app](https://mainloop.olds.network)._",
-    ])
+    lines.extend(
+        [
+            "```",
+            "Or answer using the option label: `1. JWT tokens`",
+            "",
+            "_You can also answer in the [Mainloop app](https://mainloop.olds.network)._",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -1147,12 +1231,18 @@ def parse_plan_approval_from_comment(comment_body: str) -> str | None:
         - "approve" if the comment approves the plan
         - The revision text if requesting changes
         - None if no approval/revision detected
+
     """
     body = comment_body.strip()
     body_lower = body.lower()
 
     # Skip bot comments
-    if body_lower.startswith("🤖") or body_lower.startswith("##") or body_lower.startswith("❓") or body_lower.startswith("📋"):
+    if (
+        body_lower.startswith("🤖")
+        or body_lower.startswith("##")
+        or body_lower.startswith("❓")
+        or body_lower.startswith("📋")
+    ):
         return None
 
     # Approval keywords (case-insensitive)
@@ -1202,6 +1292,7 @@ def parse_question_answers_from_comment(
 
     Returns:
         Dict mapping question ID to answer string, or None if no valid answers found
+
     """
     import re
 
@@ -1222,7 +1313,7 @@ def parse_question_answers_from_comment(
         option_by_letter: dict[str, str] = {}
         option_by_label: dict[str, str] = {}
         for j, opt in enumerate(options):
-            letter = chr(ord('A') + j).upper()
+            letter = chr(ord("A") + j).upper()
             label = opt.get("label", "")
             option_by_letter[letter] = label
             option_by_label[label.lower().strip()] = label
@@ -1237,7 +1328,9 @@ def parse_question_answers_from_comment(
             match = re.search(pattern, body, re.MULTILINE | re.IGNORECASE)
             if match:
                 answer_text = match.group(1).strip()
-                resolved = _resolve_answer(answer_text, option_by_letter, option_by_label)
+                resolved = _resolve_answer(
+                    answer_text, option_by_letter, option_by_label
+                )
                 if resolved:
                     answers[q_id] = resolved
                     break
@@ -1248,7 +1341,9 @@ def parse_question_answers_from_comment(
             match = re.search(header_pattern, body, re.MULTILINE | re.IGNORECASE)
             if match:
                 answer_text = match.group(1).strip()
-                resolved = _resolve_answer(answer_text, option_by_letter, option_by_label)
+                resolved = _resolve_answer(
+                    answer_text, option_by_letter, option_by_label
+                )
                 if resolved:
                     answers[q_id] = resolved
 
@@ -1269,6 +1364,7 @@ def _resolve_answer(
 
     Returns:
         The resolved label(s) or None
+
     """
     import re
 
@@ -1282,7 +1378,10 @@ def _resolve_answer(
 
     # Try fuzzy match on whole string first (e.g., "JWT" matches "JWT tokens")
     for label_lower, label in option_by_label.items():
-        if label_lower.startswith(answer_text.lower()) or answer_text.lower() in label_lower:
+        if (
+            label_lower.startswith(answer_text.lower())
+            or answer_text.lower() in label_lower
+        ):
             return label
 
     # Handle multi-select: "A, B" or "A and B"
@@ -1347,6 +1446,7 @@ async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
 
     Returns:
         RepoMetadata or None if not found
+
     """
     owner, repo = _parse_repo(repo_url)
     async with httpx.AsyncClient() as client:
@@ -1392,6 +1492,7 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
 
     Returns:
         List of ProjectPRSummary objects
+
     """
     owner, repo = _parse_repo(repo_url)
     async with httpx.AsyncClient() as client:
@@ -1408,11 +1509,16 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
                 title=pr["title"],
                 state=pr["state"],
                 author=pr["user"]["login"],
-                created_at=datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00")),
-                updated_at=datetime.fromisoformat(pr["updated_at"].replace("Z", "+00:00")),
+                created_at=datetime.fromisoformat(
+                    pr["created_at"].replace("Z", "+00:00")
+                ),
+                updated_at=datetime.fromisoformat(
+                    pr["updated_at"].replace("Z", "+00:00")
+                ),
                 url=pr["html_url"],
                 # Check if created by our worker (has mainloop in branch name or by our bot user)
-                is_mainloop="mainloop" in pr["head"]["ref"].lower() or "feature/" in pr["head"]["ref"],
+                is_mainloop="mainloop" in pr["head"]["ref"].lower()
+                or "feature/" in pr["head"]["ref"],
             )
             for pr in data
         ]
@@ -1440,6 +1546,7 @@ async def list_recent_commits(
 
     Returns:
         List of CommitSummary objects
+
     """
     owner, repo = _parse_repo(repo_url)
     async with httpx.AsyncClient() as client:
@@ -1455,7 +1562,9 @@ async def list_recent_commits(
                 sha=commit["sha"][:7],  # Short SHA
                 message=commit["commit"]["message"].split("\n")[0],  # First line only
                 author=commit["commit"]["author"]["name"],
-                date=datetime.fromisoformat(commit["commit"]["author"]["date"].replace("Z", "+00:00")),
+                date=datetime.fromisoformat(
+                    commit["commit"]["author"]["date"].replace("Z", "+00:00")
+                ),
                 url=commit["html_url"],
             )
             for commit in data
