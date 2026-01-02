@@ -13,11 +13,30 @@ spec:
       labels:
         app: mainloop-agent-controller
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       imagePullSecrets:
         - name: ghcr-secret
       containers:
         - name: agent-controller
           image: ghcr.io/yourusername/mainloop-agent-controller:latest # Set via kustomize overlay
+          ports:
+            - containerPort: 8001
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           env:
             - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom:
@@ -39,6 +58,22 @@ spec:
             limits:
               memory: 1Gi
               cpu: 1000m
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
       volumes:
         - name: workspace
           emptyDir: {}

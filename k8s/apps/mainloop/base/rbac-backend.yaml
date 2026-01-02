@@ -60,26 +60,35 @@ roleRef:
   name: mainloop-backend-cluster-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# ClusterRole for worker jobs - grants broad permissions within a namespace
+# ClusterRole for worker jobs - grants permissions needed for Claude Code agents
 # This is bound to the worker ServiceAccount via RoleBinding in each task namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: mainloop-worker-role
 rules:
-  # Core resources - pods, services, configmaps, secrets, etc.
+  # Core resources - pods, services, configmaps, etc.
   - apiGroups: ['']
     resources:
       - pods
-      - pods/log
-      - pods/exec
       - services
       - configmaps
-      - secrets
       - persistentvolumeclaims
       - serviceaccounts
       - endpoints
-    verbs: ['*']
+    verbs: [create, get, list, watch, update, patch, delete]
+
+  # Pod logs - read only
+  - apiGroups: ['']
+    resources:
+      - pods/log
+    verbs: [get, list, watch]
+
+  # Secrets - full access for app credentials
+  - apiGroups: ['']
+    resources:
+      - secrets
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Apps - deployments, replicasets, statefulsets, daemonsets
   - apiGroups: [apps]
@@ -88,28 +97,21 @@ rules:
       - replicasets
       - statefulsets
       - daemonsets
-    verbs: ['*']
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Batch - jobs, cronjobs
   - apiGroups: [batch]
     resources:
       - jobs
       - cronjobs
-    verbs: ['*']
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Networking - ingresses, networkpolicies
   - apiGroups: [networking.k8s.io]
     resources:
       - ingresses
       - networkpolicies
-    verbs: ['*']
-
-  # RBAC within namespace - roles, rolebindings
-  - apiGroups: [rbac.authorization.k8s.io]
-    resources:
-      - roles
-      - rolebindings
-    verbs: ['*']
+    verbs: [create, get, list, watch, update, patch, delete]
 
   # Events - for debugging
   - apiGroups: ['']

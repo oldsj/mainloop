@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
+    frontend_domain: str = "mainloop.example.com"  # Frontend domain for CORS
+
+    @computed_field
+    @property
+    def frontend_origin(self) -> str:
+        """Construct frontend origin URL from domain."""
+        return f"https://{self.frontend_domain}"
 
     # K8s Job callback URL (internal service URL for Jobs to call back)
     backend_internal_url: str = (

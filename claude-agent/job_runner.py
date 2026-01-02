@@ -78,8 +78,9 @@ def pre_clone_repo() -> str | None:
     Returns the path to the cloned repo, or None if no repo URL.
     Uses shallow clone (depth=1) for plan mode for speed.
     """
-    import git
     from urllib.parse import urlparse
+
+    import git
 
     if not REPO_URL:
         return None

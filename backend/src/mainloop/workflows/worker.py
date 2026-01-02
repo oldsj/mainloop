@@ -29,6 +29,7 @@ from mainloop.services.github_pr import (  # Issue support; Question/plan approv
 )
 from mainloop.services.k8s_jobs import create_worker_job
 from mainloop.services.k8s_namespace import (
+    apply_task_namespace_network_policies,
     copy_secrets_to_namespace,
     create_task_namespace,
     delete_task_namespace,
@@ -192,10 +193,11 @@ async def update_worker_task_status(
 
 @DBOS.step()
 async def setup_namespace(task_id: str) -> str:
-    """Create namespace, copy secrets, and set up worker RBAC."""
+    """Create namespace, copy secrets, set up worker RBAC, and apply network policies."""
     namespace = await create_task_namespace(task_id)
     await copy_secrets_to_namespace(task_id, namespace)
     await setup_worker_rbac(task_id, namespace)
+    await apply_task_namespace_network_policies(task_id, namespace)
     return namespace
 
 

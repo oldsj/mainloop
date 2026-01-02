@@ -51,6 +51,16 @@ def get_rbac_client() -> client.RbacAuthorizationV1Api:
     return client.RbacAuthorizationV1Api()
 
 
+def get_networking_client() -> client.NetworkingV1Api:
+    """Get Kubernetes Networking API client."""
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    return client.NetworkingV1Api()
+
+
 async def create_task_namespace(task_id: str) -> str:
     """Create an isolated namespace for a task.
 
@@ -213,6 +223,120 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
             logger.info(f"RoleBinding already exists in {namespace}")
         else:
             raise
+
+
+async def apply_task_namespace_network_policies(task_id: str, namespace: str) -> None:
+    """Apply network policies to task namespace for security isolation.
+
+    Applies strict network policies:
+    - Default deny-all ingress and egress
+    - Allow DNS (required for internet access)
+    - Allow egress to internet ONLY (blocks all cluster internal communication)
+
+    This ensures worker agents can only communicate with external services,
+    not with other cluster resources or each other.
+
+    Args:
+        task_id: The task ID
+        namespace: Target namespace
+
+    """
+    networking_v1 = get_networking_client()
+
+    # Default deny-all policy
+    deny_all_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="default-deny-all",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/task-id": task_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Ingress", "Egress"],
+        ),
+    )
+
+    # Allow DNS policy
+    allow_dns_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="allow-dns",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/task-id": task_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Egress"],
+            egress=[
+                client.V1NetworkPolicyEgressRule(
+                    to=[
+                        client.V1NetworkPolicyPeer(
+                            namespace_selector=client.V1LabelSelector(
+                                match_labels={
+                                    "kubernetes.io/metadata.name": "kube-system"
+                                }
+                            )
+                        )
+                    ],
+                    ports=[client.V1NetworkPolicyPort(protocol="UDP", port=53)],
+                )
+            ],
+        ),
+    )
+
+    # Allow internet-only egress (block cluster internal)
+    allow_internet_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="allow-internet-only",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/task-id": task_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Egress"],
+            egress=[
+                client.V1NetworkPolicyEgressRule(
+                    to=[
+                        client.V1NetworkPolicyPeer(
+                            ip_block=client.V1IPBlock(
+                                cidr="0.0.0.0/0",
+                                _except=[
+                                    "10.0.0.0/8",  # Private class A
+                                    "172.16.0.0/12",  # Private class B
+                                    "192.168.0.0/16",  # Private class C
+                                    "169.254.0.0/16",  # Link-local
+                                    "127.0.0.0/8",  # Loopback
+                                ],
+                            )
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+
+    # Apply policies
+    for policy in [deny_all_policy, allow_dns_policy, allow_internet_policy]:
+        try:
+            networking_v1.create_namespaced_network_policy(
+                namespace=namespace, body=policy
+            )
+            logger.info(f"Applied NetworkPolicy {policy.metadata.name} to {namespace}")
+        except ApiException as e:
+            if e.status == 409:
+                logger.info(
+                    f"NetworkPolicy {policy.metadata.name} already exists in {namespace}"
+                )
+            else:
+                raise
 
 
 async def delete_task_namespace(task_id: str) -> None:
