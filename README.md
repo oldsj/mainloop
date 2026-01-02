@@ -49,6 +49,18 @@ make dev
 # Backend:  http://localhost:8000/docs
 ```
 
+## Production Deployment
+
+```bash
+# Copy and edit the production config example
+cp k8s/apps/mainloop/overlays/prod/personal-config-patch.yaml.example \
+   k8s/apps/mainloop/overlays/prod/personal-config-patch.yaml
+# Edit with your domains and GitHub username
+
+# Deploy to k8s
+kubectl apply -k k8s/apps/mainloop/overlays/prod
+```
+
 ## Project Structure
 
 ```text
