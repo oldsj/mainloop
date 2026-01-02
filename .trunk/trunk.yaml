@@ -27,6 +27,10 @@ lint:
         - backend/src/mainloop/db/postgres.py
         - backend/src/mainloop/services/github_pr.py
         - claude-agent/server.py
+    # DL3008: Pinning apt versions causes build failures when versions are removed from repos
+    - linters: [hadolint]
+      paths:
+        - '**/*Dockerfile*'
   enabled:
     - bandit@1.9.2
     - black@25.12.0
