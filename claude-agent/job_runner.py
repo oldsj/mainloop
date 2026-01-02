@@ -76,9 +76,9 @@ def pre_clone_repo() -> str | None:
     """Pre-clone the repo before Claude starts.
 
     Returns the path to the cloned repo, or None if no repo URL.
-    Uses shallow clone (--depth=1) for plan mode for speed.
+    Uses shallow clone (depth=1) for plan mode for speed.
     """
-    import subprocess
+    import git
     from urllib.parse import urlparse
 
     if not REPO_URL:
@@ -98,42 +98,27 @@ def pre_clone_repo() -> str | None:
     clone_url = REPO_URL
     gh_token = os.environ.get("GH_TOKEN")
     if gh_token and "github.com" in REPO_URL:
-        # Insert token into URL: https://x-access-token:{token}@github.com/...
         clone_url = REPO_URL.replace(
             "https://github.com", f"https://x-access-token:{gh_token}@github.com"
         )
         print("[job_runner] Using authenticated clone URL")
 
-    # Build clone command - shallow for plan mode, full for others
-    if MODE == "plan":
-        # Shallow clone for plan mode - fast (2-5 seconds)
-        cmd = ["git", "clone", "--depth=1", clone_url, target_dir]
-        print("[job_runner] Shallow cloning for plan mode...")
-    else:
-        # Full clone for implement/feedback/fix modes
-        cmd = ["git", "clone", clone_url, target_dir]
-        print(f"[job_runner] Full cloning for {MODE} mode...")
-
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            print(f"[job_runner] Clone failed: {result.stderr}")
-            return None
-
-        # For non-plan modes, fetch all refs for branch checkout
-        if MODE != "plan":
-            subprocess.run(
-                ["git", "fetch", "--all"],
-                cwd=target_dir,
-                capture_output=True,
-                timeout=120,
-            )
+        # Clone - shallow for plan mode, full for others
+        if MODE == "plan":
+            print("[job_runner] Shallow cloning for plan mode...")
+            repo = git.Repo.clone_from(clone_url, target_dir, depth=1)
+        else:
+            print(f"[job_runner] Full cloning for {MODE} mode...")
+            repo = git.Repo.clone_from(clone_url, target_dir)
+            # Fetch all refs for branch checkout
+            repo.remotes.origin.fetch()
 
         print(f"[job_runner] Repo cloned to {target_dir}")
         return target_dir
 
-    except subprocess.TimeoutExpired:
-        print("[job_runner] Clone timed out")
+    except git.GitCommandError as e:
+        print(f"[job_runner] Clone failed: {e}")
         return None
     except Exception as e:
         print(f"[job_runner] Clone error: {e}")
@@ -618,7 +603,9 @@ def create_github_issue_from_plan(plan_content: str) -> str | None:
     parts = REPO_URL.rstrip("/").replace(".git", "").split("/")
     owner, repo_name = parts[-2], parts[-1]
 
-    title = f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+    title = (
+        f"Plan: {TASK_PROMPT[:80]}" if len(TASK_PROMPT) > 80 else f"Plan: {TASK_PROMPT}"
+    )
 
     body = f"""{plan_content}
 
@@ -638,7 +625,7 @@ Reply with:
             repo=repo_name,
             title=title,
             body=body,
-            labels=["mainloop-plan"]
+            labels=["mainloop-plan"],
         )
         issue_url = response.parsed_data.html_url
         print(f"[job_runner] Created issue: {issue_url}")

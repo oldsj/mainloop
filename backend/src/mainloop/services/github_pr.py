@@ -745,7 +745,9 @@ async def get_issue_status(
             data=issue.model_dump(),
             etag=response.headers.get("etag") if hasattr(response, "headers") else None,
             last_modified=_parse_last_modified(
-                response.headers.get("last-modified") if hasattr(response, "headers") else None
+                response.headers.get("last-modified")
+                if hasattr(response, "headers")
+                else None
             ),
         )
     except Exception:
