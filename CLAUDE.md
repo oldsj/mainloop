@@ -104,6 +104,19 @@ docker compose up --watch
 # API Docs: http://localhost:8000/docs
 ```
 
+### Code Quality
+
+Uses [Trunk](https://trunk.io) for linting and formatting. Run from repo root:
+
+```bash
+make fmt           # Format and fix staged files
+make fmt-all       # Format and fix all files
+make lint          # Lint staged files
+make lint-all      # Lint all files
+```
+
+**Run `make fmt` before committing** to auto-fix formatting issues.
+
 ### Backend (Python + uv)
 
 ```bash
