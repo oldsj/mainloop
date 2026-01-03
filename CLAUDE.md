@@ -231,6 +231,36 @@ Layout modes:
 - **Desktop (≥768px)**: Chat + always-visible Inbox sidebar
 - **Mobile (<768px)**: Bottom tab bar (Chat / Inbox)
 
+### E2E Testing (Playwright)
+
+Tests live in `frontend/tests/` with an isolated test environment (separate DB + containers).
+
+```bash
+make test-env-watch   # Start test env with hot-reload (background)
+make test-run         # Reset DB and run tests (fast iteration)
+make test-env-down    # Stop test environment
+make test-e2e         # One-shot: start env, run tests, stop env
+```
+
+**Test structure** (runs sequentially with fail-fast):
+- `app.setup.ts` - Page loads, basic elements visible
+- `basic/` - Simple conversation flows
+- `context/` - Message history and context
+- `agents/` - Task/inbox management (desktop)
+- `mobile/` - Tab bar navigation (Pixel 5 viewport)
+
+**When modifying UI components**, check if tests need updates:
+- Tests use role-based selectors: `getByRole('button', { name: 'Chat' })`
+- Some tests check CSS classes for active states (e.g., `toHaveClass(/text-term-accent/)`)
+- Mobile tests use `.first()` or `.last()` to handle duplicate elements across viewports
+- Run `make test-run` after UI changes to catch breakage early
+
+**Key selectors used in tests:**
+- Header: `getByRole('heading', { name: '$ mainloop' })`
+- Input: `getByPlaceholder('Enter command...')`
+- Mobile tabs: `getByRole('button', { name: 'Chat' })`, `getByRole('button', { name: 'Inbox' })`
+- Inbox header: `locator('h2:has-text("[INBOX]")')`
+
 ## Important
 
 - Avoid creating markdown documentation unless explicitly asked

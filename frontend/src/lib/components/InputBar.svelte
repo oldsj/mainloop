@@ -22,9 +22,14 @@
   }
 </script>
 
-<form onsubmit={handleSubmit} class="flex items-center gap-2 border border-term-border bg-term-bg-secondary px-3 py-2">
+<form
+  data-testid="input-bar"
+  onsubmit={handleSubmit}
+  class="flex items-center gap-2 border border-term-border bg-term-bg-secondary px-3 py-2"
+>
   <span class="shrink-0 text-term-accent">$</span>
   <textarea
+    data-testid="command-input"
     bind:value={message}
     onkeydown={handleKeydown}
     {disabled}
@@ -33,6 +38,7 @@
     class="flex-1 resize-none border-none bg-transparent text-term-fg placeholder:text-term-fg-muted focus:outline-none disabled:opacity-50"
   ></textarea>
   <button
+    data-testid="exec-button"
     type="submit"
     {disabled}
     class="border border-term-border bg-term-bg px-4 py-1 text-term-fg hover:border-term-accent hover:text-term-accent disabled:opacity-50 disabled:hover:border-term-border disabled:hover:text-term-fg"
