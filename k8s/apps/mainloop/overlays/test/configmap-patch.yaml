@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  DB_HOST: mainloop-db-pooler.mainloop  # Points to our StatefulSet service
+  DB_PORT: "5432"
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: localhost:3000
+  # Backend internal URL for K8s Job callbacks
+  BACKEND_INTERNAL_URL: http://mainloop-backend.mainloop.svc.cluster.local:8000

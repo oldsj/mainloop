@@ -1,0 +1,17 @@
+# Patch backend deployment for local testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      # Remove GHCR image pull secrets (using local images)
+      imagePullSecrets: []
+      containers:
+        - name: backend
+          # Add IS_TEST_ENV for test endpoints
+          env:
+            - name: IS_TEST_ENV
+              value: "true"

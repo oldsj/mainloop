@@ -14,5 +14,3 @@ resources:
   - service-frontend.yaml
   - service-agent-controller.yaml
   - configmap.yaml
-  - httproute.yaml
-  - database.yaml

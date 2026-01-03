@@ -233,14 +233,27 @@ Layout modes:
 
 ### E2E Testing (Playwright)
 
-Tests live in `frontend/tests/` with an isolated test environment (separate DB + containers).
+Tests live in `frontend/tests/` and run against a Kind (Kubernetes in Docker) cluster that tests actual K8s job spawning.
 
 ```bash
-make test-env-watch   # Start test env with hot-reload (background)
-make test-run         # Reset DB and run tests (fast iteration)
-make test-env-down    # Stop test environment
-make test-e2e         # One-shot: start env, run tests, stop env
+make test-e2e         # Auto-setup Kind cluster, build/load images, run tests
+make test-e2e-ui      # Same setup, interactive UI mode
+make test-e2e-debug   # Same setup, debug mode
+make kind-delete      # Delete the Kind cluster when done
 ```
+
+**How it works:**
+- `make test-e2e` checks if Kind cluster exists (creates if needed)
+- Builds images using Docker cache from `make dev`/`make deploy`
+- Loads images into Kind
+- Deploys with test Kustomize overlay (simple Postgres StatefulSet)
+- Runs Playwright tests against http://localhost:3000
+- Cluster persists between runs for fast iteration
+
+**IMPORTANT:**
+- Never manually run `kubectl apply -k k8s/apps/mainloop/overlays/test` - always use `make test-e2e` or other make targets
+- Test scripts use `--context kind-mainloop-test` flag and won't change your shell's kubectl context
+- `make deploy` targets your production cluster based on current kubectl context
 
 **Test structure** (runs sequentially with fail-fast):
 - `app.setup.ts` - Page loads, basic elements visible
@@ -253,7 +266,7 @@ make test-e2e         # One-shot: start env, run tests, stop env
 - Tests use role-based selectors: `getByRole('button', { name: 'Chat' })`
 - Some tests check CSS classes for active states (e.g., `toHaveClass(/text-term-accent/)`)
 - Mobile tests use `.first()` or `.last()` to handle duplicate elements across viewports
-- Run `make test-run` after UI changes to catch breakage early
+- Run `make test-e2e` after UI changes to catch breakage early
 
 **Key selectors used in tests:**
 - Header: `getByRole('heading', { name: '$ mainloop' })`

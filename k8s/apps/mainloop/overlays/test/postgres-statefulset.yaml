@@ -1,0 +1,75 @@
+# Simple PostgreSQL StatefulSet (replaces CloudNativePG for local testing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-db-pooler  # Match the service name from base configmap
+  namespace: mainloop
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: mainloop
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: mainloop
+            - name: POSTGRES_PASSWORD
+              value: mainloop
+            - name: POSTGRES_DB
+              value: mainloop
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, mainloop]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Secret for backend to connect (matching mainloop-db-app from base deployment)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mainloop-db-app
+  namespace: mainloop
+type: Opaque
+stringData:
+  username: mainloop
+  password: mainloop

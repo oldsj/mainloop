@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db test-e2e test-e2e-ui test-e2e-debug test-e2e-dev test-e2e-report test-run test-run-ui test-env-up test-env-watch test-db-reset test-env-down
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-run test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report
 
 # Load .env file if it exists
 -include .env
@@ -221,8 +221,47 @@ k8s-apply: ## Apply K8s manifests locally
 k8s-delete: ## Delete K8s resources
 	kubectl delete -k k8s/apps/mainloop/overlays/prod
 
+# Kind (local Kubernetes testing)
+KIND_CLUSTER_NAME ?= mainloop-test
+
+kind-create: ## Create Kind cluster for local testing
+	@./scripts/kind/create-cluster.sh
+
+kind-delete: ## Delete Kind cluster
+	@kind delete cluster --name $(KIND_CLUSTER_NAME)
+
+kind-load: ## Build and load images into Kind
+	@./scripts/kind/load-images.sh
+
+kind-secrets: ## Create K8s secrets from .env
+	@./scripts/kind/create-secrets.sh
+
+kind-deploy: ## Deploy mainloop to Kind
+	@./scripts/kind/deploy.sh
+
+kind-reset: ## Reset data (DB + task namespaces) - keeps cluster
+	@./scripts/kind/reset-data.sh
+
+kind-logs: ## Tail backend logs
+	@kubectl logs -n mainloop deployment/mainloop-backend -f
+
+kind-shell: ## Open shell in backend pod
+	@kubectl exec -it -n mainloop deployment/mainloop-backend -- bash
+
+test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test environment
+	@echo ""
+	@echo "=== Local K8s environment ready ==="
+	@echo "Frontend: http://localhost:3000"
+	@echo "Backend:  http://localhost:8000"
+	@echo ""
+	@echo "Run 'make kind-logs' to tail backend logs"
+	@echo "Run 'make kind-reset' to reset data between tests"
+
+test-k8s-run: kind-reset ## Run Playwright tests against Kind cluster
+	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
+
 # E2E Testing
-test-k8s: ## Test K8s namespace/secret creation (quick)
+test-k8s-components: ## Test K8s namespace/secret creation (quick)
 	cd backend && uv run python scripts/test_k8s_components.py
 
 test-k8s-job: ## Test K8s job creation (creates a real job)
@@ -231,21 +270,55 @@ test-k8s-job: ## Test K8s job creation (creates a real job)
 test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
-# Frontend E2E Tests (Playwright)
-# Uses isolated test environment with ephemeral database
-test-e2e: test-env-up ## Run Playwright e2e tests (isolated environment, stops after)
-	@cd frontend && pnpm exec playwright test; \
-	EXIT_CODE=$$?; \
-	cd .. && $(MAKE) test-env-down; \
-	exit $$EXIT_CODE
+# Frontend E2E Tests (Playwright with Kind)
+test-e2e: ## Run Playwright e2e tests (Kind cluster, auto-setup)
+	@echo "Setting up Kind test environment..."
+	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		echo "Creating Kind cluster..."; \
+		$(MAKE) kind-create; \
+	else \
+		echo "Kind cluster already exists, skipping creation"; \
+	fi
+	@echo "Building and loading images (uses Docker cache)..."
+	@$(MAKE) kind-load
+	@echo "Creating/updating secrets..."
+	@$(MAKE) kind-secrets
+	@echo "Deploying to Kind..."
+	@$(MAKE) kind-deploy
+	@echo "Waiting for services..."
+	@sleep 5
+	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
+		echo "Waiting for backend..."; \
+		sleep 2; \
+	done
+	@echo "Running Playwright tests..."
+	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
 
-test-e2e-ui: test-env-up ## Run Playwright tests with interactive UI mode
-	@cd frontend && pnpm exec playwright test --ui; \
-	cd .. && $(MAKE) test-env-down
+test-e2e-ui: ## Run Playwright tests with interactive UI mode
+	@$(MAKE) test-e2e-setup
+	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --ui
 
-test-e2e-debug: test-env-up ## Run Playwright tests in debug mode
-	@cd frontend && pnpm exec playwright test --debug; \
-	cd .. && $(MAKE) test-env-down
+test-e2e-debug: ## Run Playwright tests in debug mode
+	@$(MAKE) test-e2e-setup
+	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --debug
+
+test-e2e-setup: ## Setup Kind environment (internal helper)
+	@echo "Setting up Kind test environment..."
+	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		echo "Creating Kind cluster..."; \
+		$(MAKE) kind-create; \
+	else \
+		echo "Kind cluster already exists, skipping creation"; \
+	fi
+	@$(MAKE) kind-load
+	@$(MAKE) kind-secrets
+	@$(MAKE) kind-deploy
+	@echo "Waiting for services..."
+	@sleep 5
+	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
+		echo "Waiting for backend..."; \
+		sleep 2; \
+	done
 
 test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
 	PLAYWRIGHT_BASE_URL=http://localhost:3030 cd frontend && pnpm exec playwright test
@@ -253,20 +326,13 @@ test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
 test-e2e-report: ## Show Playwright HTML test report
 	cd frontend && pnpm exec playwright show-report
 
-# Fast test iteration (use with test-env-watch)
-test-run: test-db-reset ## Clear DB and run tests (fast, requires test-env-watch)
-	@cd frontend && pnpm exec playwright test
-
-test-run-ui: test-db-reset ## Clear DB and run tests with UI (fast)
-	@cd frontend && pnpm exec playwright test --ui
-
-# Test environment management
-test-env-up: ## Start isolated test environment (one-shot)
+# Legacy Docker Compose test environment (deprecated - use test-e2e instead)
+test-env-up: ## Start isolated test environment (one-shot, deprecated)
 	@echo "Starting isolated test environment..."
 	@docker compose -f docker-compose.test.yml up -d --build --wait
 	@echo "Test environment ready at http://localhost:3031"
 
-test-env-watch: ## Start test environment with hot-reload (background)
+test-env-watch: ## Start test environment with hot-reload (deprecated)
 	@echo "Starting test environment with hot-reload..."
 	@docker compose -f docker-compose.test.yml up --build --watch &
 	@echo "Waiting for services to be healthy..."
@@ -277,13 +343,19 @@ test-env-watch: ## Start test environment with hot-reload (background)
 	@echo "  Run tests: make test-run"
 	@echo "  Stop:      make test-env-down"
 
-test-db-reset: ## Reset the test database (clear all data)
+test-db-reset: ## Reset the test database (deprecated)
 	@docker exec mainloop-postgres-test psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
 		(echo "Test environment not running. Start with: make test-env-watch" && exit 1)
 	@echo "Database reset complete"
 
-test-env-down: ## Stop isolated test environment
+test-env-down: ## Stop isolated test environment (deprecated)
 	@docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
+
+test-run: test-db-reset ## Clear DB and run tests (deprecated, use test-e2e)
+	@cd frontend && pnpm exec playwright test
+
+test-run-ui: test-db-reset ## Clear DB and run tests with UI (deprecated)
+	@cd frontend && pnpm exec playwright test --ui
 
 # Debugging commands
 # Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com

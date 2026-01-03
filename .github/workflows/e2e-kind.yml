@@ -1,0 +1,122 @@
+name: E2E Tests (Kind)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  KIND_CLUSTER_NAME: mainloop-test
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          pnpm install
+
+      - name: Install Playwright browsers
+        run: |
+          cd frontend
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Setup Kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+          config: ./scripts/kind/cluster-config.yaml
+
+      - name: Build Docker images
+        run: |
+          docker build -f backend/Dockerfile -t mainloop-backend:test .
+          docker build -f frontend/Dockerfile \
+            --build-arg VITE_API_URL=http://localhost:8000 \
+            -t mainloop-frontend:test .
+          docker build -f claude-agent/Dockerfile \
+            -t mainloop-agent-controller:test ./claude-agent
+
+      - name: Load images into Kind
+        run: |
+          kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }}
+          kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }}
+          kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }}
+
+      - name: Create secrets
+        env:
+          CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          kubectl create namespace mainloop
+          kubectl create secret generic mainloop-secrets \
+            --namespace mainloop \
+            --from-literal=claude-secret-token="${CLAUDE_TOKEN}" \
+            --from-literal=github-token="${GH_TOKEN}"
+
+      - name: Deploy to Kind
+        run: |
+          kubectl apply -k k8s/apps/mainloop/overlays/test --server-side
+          kubectl rollout status deployment/mainloop-backend -n mainloop --timeout=180s
+          kubectl rollout status deployment/mainloop-frontend -n mainloop --timeout=180s
+          kubectl rollout status statefulset/postgres -n mainloop --timeout=120s
+
+      - name: Wait for services
+        run: |
+          # Wait for backend health
+          for i in {1..30}; do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "Backend healthy"
+              break
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          # Wait for frontend
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "Frontend healthy"
+              break
+            fi
+            echo "Waiting for frontend... ($i/30)"
+            sleep 2
+          done
+
+      - name: Run Playwright tests
+        run: |
+          cd frontend
+          PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
+        env:
+          CI: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-screenshots
+          path: frontend/test-results/
+          retention-days: 7
