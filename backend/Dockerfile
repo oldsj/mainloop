@@ -26,16 +26,19 @@ COPY backend/src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
-# Runtime stage - includes Node.js for Claude CLI (required by SDK)
+# Runtime stage
 FROM python:3.13-slim
 
-# Install Node.js and Claude CLI
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    nodejs \
-    npm \
+# Install Node.js and Claude CLI (required by claude-agent-sdk)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code@latest \
-    && rm -rf /var/lib/apt/lists/*
+    && npm cache clean --force \
+    && apt-get purge -y --auto-remove ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm
 
 # Create non-root user for Claude and workspace directory
 RUN useradd -m -s /bin/bash claude \
