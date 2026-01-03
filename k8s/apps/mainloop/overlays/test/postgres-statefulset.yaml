@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: mainloop-db-pooler  # Match the service name from base configmap
+  name: mainloop-db-pooler # Match the service name from base configmap
   namespace: mainloop
 spec:
   selector:

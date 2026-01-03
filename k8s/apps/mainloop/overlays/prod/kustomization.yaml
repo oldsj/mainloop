@@ -5,9 +5,9 @@ namespace: mainloop
 
 resources:
   - ../../base
-  - httproute.yaml         # Tailscale Gateway routes (prod-only)
-  - database.yaml          # CloudNativePG (prod-only)
-  - 1password.yaml         # 1Password Connect integration
+  - httproute.yaml # Tailscale Gateway routes (prod-only)
+  - database.yaml # CloudNativePG (prod-only)
+  - 1password.yaml # 1Password Connect integration
 
 patches:
   # Patch CloudNativePG storage class

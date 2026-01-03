@@ -19,16 +19,16 @@ test.describe('Inbox Panel Visibility', () => {
     const inboxTab = page.getByRole('button', { name: 'Inbox' });
     await expect(chatTab).toBeVisible();
     await expect(inboxTab).toBeVisible();
-    
+
     // Verify [CHAT] tab is active by default
     await expect(chatTab).toHaveClass(/text-term-accent/);
 
     // 3. Tap the [INBOX] tab
     await inboxTab.click();
-    
+
     // Verify inbox panel is now visible
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
-    
+
     // Verify [INBOX] tab is now active
     await expect(inboxTab).toHaveClass(/text-term-accent/);
 

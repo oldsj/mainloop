@@ -21,10 +21,10 @@ test.describe('Tab Navigation', () => {
     // 2. Tap the [CHAT] tab
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await chatTab.click();
-    
+
     // Expected: [CHAT] tab becomes highlighted
     await expect(chatTab).toHaveClass(/text-term-accent/);
-    
+
     // Expected: [INBOX] tab becomes muted
     await expect(inboxTab).not.toHaveClass(/text-term-accent/);
 

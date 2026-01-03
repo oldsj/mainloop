@@ -5,8 +5,8 @@ namespace: mainloop
 
 resources:
   - ../../base
-  - postgres-statefulset.yaml  # Simple Postgres (replaces CloudNativePG)
-  - nodeport-services.yaml     # NodePort for local access
+  - postgres-statefulset.yaml # Simple Postgres (replaces CloudNativePG)
+  - nodeport-services.yaml # NodePort for local access
 
 patches:
   # Patch ConfigMap for local environment

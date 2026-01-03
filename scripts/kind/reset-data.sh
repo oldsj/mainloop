@@ -6,14 +6,14 @@ echo "=== Resetting data ==="
 
 # Delete all task namespaces (created by worker_task_workflow)
 echo "Deleting task namespaces..."
-kubectl get namespaces -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null | \
-    xargs -r kubectl delete --wait=false || true
+kubectl get namespaces -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null |
+  xargs -r kubectl delete --wait=false || true
 
 # Reset PostgreSQL database
 echo "Resetting PostgreSQL database..."
 kubectl exec -n mainloop statefulset/postgres -- \
-    psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
-    echo "PostgreSQL not ready or not running"
+  psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null ||
+  echo "PostgreSQL not ready or not running"
 
 # Restart backend to clear in-memory state and re-run migrations
 echo "Restarting backend..."

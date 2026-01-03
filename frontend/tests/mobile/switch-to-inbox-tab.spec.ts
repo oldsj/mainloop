@@ -24,13 +24,13 @@ test.describe('Tab Navigation', () => {
     // Expected: [CHAT] tab becomes muted
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await expect(chatTab).not.toHaveClass(/text-term-accent/);
-    
+
     // Expected: Inbox panel fills main content area
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
-    
+
     // Expected: Chat view hidden completely
     await expect(page.getByText('Start a conversation to begin')).not.toBeVisible();
-    
+
     // Expected: Input bar hidden (inbox has its own interactions)
     await expect(page.getByRole('textbox', { name: 'Enter command...' })).not.toBeVisible();
   });

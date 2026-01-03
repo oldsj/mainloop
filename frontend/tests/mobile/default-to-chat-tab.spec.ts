@@ -19,7 +19,7 @@ test.describe('Tab Navigation', () => {
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await expect(chatTab).toBeVisible();
     await expect(chatTab).toHaveClass(/text-term-accent/);
-    
+
     // Expected: Inbox view hidden
     const inboxHeading = page.getByRole('heading', { name: '[INBOX]' });
     await expect(inboxHeading).not.toBeVisible();

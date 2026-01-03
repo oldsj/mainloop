@@ -243,6 +243,7 @@ make kind-delete      # Delete the Kind cluster when done
 ```
 
 **How it works:**
+
 - `make test-e2e` checks if Kind cluster exists (creates if needed)
 - Builds images using Docker cache from `make dev`/`make deploy`
 - Loads images into Kind
@@ -251,11 +252,13 @@ make kind-delete      # Delete the Kind cluster when done
 - Cluster persists between runs for fast iteration
 
 **IMPORTANT:**
+
 - Never manually run `kubectl apply -k k8s/apps/mainloop/overlays/test` - always use `make test-e2e` or other make targets
 - Test scripts use `--context kind-mainloop-test` flag and won't change your shell's kubectl context
 - `make deploy` targets your production cluster based on current kubectl context
 
 **Test structure** (runs sequentially with fail-fast):
+
 - `app.setup.ts` - Page loads, basic elements visible
 - `basic/` - Simple conversation flows
 - `context/` - Message history and context
@@ -263,12 +266,14 @@ make kind-delete      # Delete the Kind cluster when done
 - `mobile/` - Tab bar navigation (Pixel 5 viewport)
 
 **When modifying UI components**, check if tests need updates:
+
 - Tests use role-based selectors: `getByRole('button', { name: 'Chat' })`
 - Some tests check CSS classes for active states (e.g., `toHaveClass(/text-term-accent/)`)
 - Mobile tests use `.first()` or `.last()` to handle duplicate elements across viewports
 - Run `make test-e2e` after UI changes to catch breakage early
 
 **Key selectors used in tests:**
+
 - Header: `getByRole('heading', { name: '$ mainloop' })`
 - Input: `getByPlaceholder('Enter command...')`
 - Mobile tabs: `getByRole('button', { name: 'Chat' })`, `getByRole('button', { name: 'Inbox' })`
