@@ -15,3 +15,6 @@ spec:
           env:
             - name: IS_TEST_ENV
               value: 'true'
+            # Use cheapest/fastest model for tests
+            - name: CLAUDE_MODEL
+              value: haiku
