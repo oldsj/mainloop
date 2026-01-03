@@ -28,10 +28,31 @@ jobs:
         with:
           version: 9
 
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
       - name: Install frontend dependencies
         run: |
           cd frontend
           pnpm install
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright browsers
         run: |
@@ -44,14 +65,46 @@ jobs:
           cluster_name: ${{ env.KIND_CLUSTER_NAME }}
           config: ./scripts/kind/cluster-config.yaml
 
-      - name: Build Docker images
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker images in parallel
         run: |
-          docker build -f backend/Dockerfile -t mainloop-backend:test .
-          docker build -f frontend/Dockerfile \
+          # Build all images in parallel using background jobs
+          docker buildx build \
+            --file backend/Dockerfile \
+            --tag mainloop-backend:test \
+            --load \
+            --cache-from type=gha,scope=backend \
+            --cache-to type=gha,mode=max,scope=backend \
+            . &
+          BACKEND_PID=$!
+
+          docker buildx build \
+            --file frontend/Dockerfile \
             --build-arg VITE_API_URL=http://localhost:8000 \
-            -t mainloop-frontend:test .
-          docker build -f claude-agent/Dockerfile \
-            -t mainloop-agent-controller:test ./claude-agent
+            --tag mainloop-frontend:test \
+            --load \
+            --cache-from type=gha,scope=frontend \
+            --cache-to type=gha,mode=max,scope=frontend \
+            . &
+          FRONTEND_PID=$!
+
+          docker buildx build \
+            --file claude-agent/Dockerfile \
+            --tag mainloop-agent-controller:test \
+            --load \
+            --cache-from type=gha,scope=agent \
+            --cache-to type=gha,mode=max,scope=agent \
+            ./claude-agent &
+          AGENT_PID=$!
+
+          # Wait for all builds to complete
+          wait $BACKEND_PID
+          wait $FRONTEND_PID
+          wait $AGENT_PID
+
+          echo "All images built successfully"
 
       - name: Load images into Kind
         run: |
