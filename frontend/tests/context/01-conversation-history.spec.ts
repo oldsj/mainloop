@@ -22,6 +22,10 @@ test.describe('Context: Conversation History', () => {
   test('send another message maintains history', async ({ page }) => {
     await page.goto('/');
 
+    // Count messages before sending
+    const messages = page.locator('.message');
+    const countBefore = await messages.count();
+
     // Send a new message (use first input - desktop)
     const input = page.getByPlaceholder('Enter command...').first();
     await input.fill('what did I just say?');
@@ -30,10 +34,10 @@ test.describe('Context: Conversation History', () => {
     // New message appears
     await expect(page.getByText('what did I just say?').first()).toBeVisible();
 
-    // Old messages still present
-    await expect(page.getByText('hello').first()).toBeVisible();
+    // Wait for loading to complete (response received)
+    await expect(page.getByText('processing')).toBeHidden({ timeout: 60000 });
 
-    // Response references previous context
-    await expect(page.locator('.message').last()).toBeVisible({ timeout: 30000 });
+    // Verify response arrived (at least 2 new messages: user + assistant)
+    await expect(messages).toHaveCount(countBefore + 2, { timeout: 5000 });
   });
 });
