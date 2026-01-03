@@ -1111,7 +1111,9 @@ async def seed_task_for_testing(request: SeedTaskRequest):
     WARNING: Only available in test environments. Do not use in production.
     """
     if not settings.is_test_env:
-        raise HTTPException(status_code=403, detail="Only available in test environment")
+        raise HTTPException(
+            status_code=403, detail="Only available in test environment"
+        )
 
     from uuid import uuid4
 

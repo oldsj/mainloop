@@ -15,6 +15,7 @@ Human-readable test plans for mainloop. The Playwright Generator agent transform
 # Feature Name Test Plan
 
 ## Application Overview
+
 Brief description of what this feature does.
 
 ## Test Scenarios
@@ -22,13 +23,16 @@ Brief description of what this feature does.
 ### 1. Scenario Category
 
 #### 1.1 Specific Test Case
+
 **Seed:** tests/seed.spec.ts
 
 **Steps:**
+
 1. Action to perform
 2. Another action
 
 **Expected:**
+
 - What should happen
 - Another expectation
 ```

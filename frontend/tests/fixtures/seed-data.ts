@@ -39,8 +39,8 @@ Add JWT-based authentication to the application.
 ## Files to modify
 - backend/models.py (new User model)
 - backend/api.py (new auth endpoints)
-- backend/middleware.py (new auth middleware)`,
-    },
+- backend/middleware.py (new auth middleware)`
+    }
   });
 
   if (!response.ok()) {
@@ -67,12 +67,12 @@ export async function seedQueueItemQuestions(page: Page) {
             question: 'Which authentication method should we use?',
             options: [
               { id: 'jwt', label: 'JWT tokens' },
-              { id: 'session', label: 'Server sessions' },
-            ],
-          },
-        ],
-      },
-    },
+              { id: 'session', label: 'Server sessions' }
+            ]
+          }
+        ]
+      }
+    }
   });
 
   if (!response.ok()) {

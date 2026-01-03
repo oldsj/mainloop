@@ -31,7 +31,7 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    video: 'retain-on-failure'
   },
 
   projects: [
@@ -41,8 +41,8 @@ export default defineConfig({
       testMatch: /seed\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+        viewport: { width: 1280, height: 720 }
+      }
     },
 
     // Stage 1: Setup - verify app loads and API is healthy
@@ -51,8 +51,8 @@ export default defineConfig({
       testMatch: /.*\.setup\.ts/,
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+        viewport: { width: 1280, height: 720 }
+      }
     },
 
     // Stage 2: Basic - simple conversation (depends on setup)
@@ -62,8 +62,8 @@ export default defineConfig({
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+        viewport: { width: 1280, height: 720 }
+      }
     },
 
     // Stage 3: Context - conversation history and compaction (depends on basic)
@@ -73,8 +73,8 @@ export default defineConfig({
       dependencies: ['basic'],
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+        viewport: { width: 1280, height: 720 }
+      }
     },
 
     // Stage 4: Agents - worker spawning and task management (depends on context)
@@ -84,8 +84,8 @@ export default defineConfig({
       dependencies: ['context'],
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+        viewport: { width: 1280, height: 720 }
+      }
     },
 
     // Mobile tests run after all desktop tests pass
@@ -95,15 +95,15 @@ export default defineConfig({
       dependencies: ['basic'],
       use: {
         ...devices['Pixel 5'],
-        viewport: { width: 393, height: 851 }, // Pixel 5 viewport
-      },
-    },
+        viewport: { width: 393, height: 851 } // Pixel 5 viewport
+      }
+    }
   ],
 
   webServer: {
     command: 'echo "Waiting for test environment..."',
     url: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
     reuseExistingServer: true,
-    timeout: 60000,
-  },
+    timeout: 60000
+  }
 });

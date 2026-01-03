@@ -14,7 +14,9 @@ test.describe('Setup: App Health', () => {
     await page.goto('/');
 
     // App shell loads - use heading role for specificity
-    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible({
+      timeout: 15000
+    });
 
     // Chat area present
     await expect(page.getByText('$ mainloop --help').first()).toBeVisible();

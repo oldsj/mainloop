@@ -15,7 +15,7 @@ export const test = base.extend<{
     // Wait for SSE connection
     await page.waitForTimeout(500);
     await use(page);
-  },
+  }
 });
 
 export { expect };
@@ -25,7 +25,9 @@ export { expect };
  */
 export async function sendMessage(page: Page, message: string): Promise<string> {
   // Find and fill the input
-  const input = page.locator('input[placeholder*="message"], textarea[placeholder*="message"]').first();
+  const input = page
+    .locator('input[placeholder*="message"], textarea[placeholder*="message"]')
+    .first();
   await input.fill(message);
   await input.press('Enter');
 
@@ -40,7 +42,7 @@ export async function sendMessage(page: Page, message: string): Promise<string> 
   if (count > 0) {
     const lastMessage = messages.nth(count - 1);
     await lastMessage.waitFor({ state: 'visible', timeout: 30000 });
-    return await lastMessage.textContent() || '';
+    return (await lastMessage.textContent()) || '';
   }
 
   return '';
@@ -50,6 +52,8 @@ export async function sendMessage(page: Page, message: string): Promise<string> 
  * Helper to check conversation has N messages.
  */
 export async function getMessageCount(page: Page): Promise<number> {
-  const messages = page.locator('[data-role="user"], [data-role="assistant"], .user-message, .assistant-message');
+  const messages = page.locator(
+    '[data-role="user"], [data-role="assistant"], .user-message, .assistant-message'
+  );
   return await messages.count();
 }

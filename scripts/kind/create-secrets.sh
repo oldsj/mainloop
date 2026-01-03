@@ -18,6 +18,7 @@ fi
 
 # Source the .env file
 set -a
+# shellcheck source=/dev/null
 source "${ENV_FILE}"
 set +a
 

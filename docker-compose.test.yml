@@ -16,7 +16,7 @@ services:
       POSTGRES_DB: mainloop
     # No volume - ephemeral database, fresh each run
     ports:
-      - "5433:5432"
+      - 5433:5432
     healthcheck:
       test: [CMD-SHELL, pg_isready -U mainloop]
       interval: 2s
@@ -29,7 +29,7 @@ services:
       dockerfile: backend/Dockerfile
     container_name: mainloop-backend-test
     ports:
-      - "8081:8000"
+      - 8081:8000
     environment:
       - PYTHONUNBUFFERED=1
       - DB_HOST=postgres-test
@@ -43,7 +43,7 @@ services:
       postgres-test:
         condition: service_healthy
     healthcheck:
-      test: [CMD, curl, -f, "http://localhost:8000/health"]
+      test: [CMD, curl, -f, http://localhost:8000/health]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -63,14 +63,18 @@ services:
         - VITE_API_URL=http://localhost:8081
     container_name: mainloop-frontend-test
     ports:
-      - "3031:3000"
+      - 3031:3000
     environment:
       - USE_NODE_ADAPTER=true
     depends_on:
       backend-test:
         condition: service_healthy
     healthcheck:
-      test: [CMD-SHELL, "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test:
+        [
+          CMD-SHELL,
+          'node -e "require(''http'').get(''http://localhost:3000'', r => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"'
+        ]
       interval: 3s
       timeout: 5s
       retries: 10

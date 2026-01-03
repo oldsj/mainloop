@@ -17,7 +17,9 @@ test.describe('Agents: Create Task (E2E)', () => {
 
     // Ask Claude to create a task (use first input - desktop)
     const input = page.getByPlaceholder('Enter command...').first();
-    await input.fill('can you implement a simple login feature for https://github.com/test/demo-repo?');
+    await input.fill(
+      'can you implement a simple login feature for https://github.com/test/demo-repo?'
+    );
     await input.press('Enter');
 
     // Message appears in chat
@@ -26,12 +28,18 @@ test.describe('Agents: Create Task (E2E)', () => {
     // Claude should ask for confirmation before spawning
     // Wait for response that includes spawn confirmation or question
     await expect(
-      page.locator('.message').filter({ hasText: /spawn|create|implement|task/i }).last()
+      page
+        .locator('.message')
+        .filter({ hasText: /spawn|create|implement|task/i })
+        .last()
     ).toBeVisible({ timeout: 30000 });
 
     // If Claude asks for confirmation, look for a confirm button or message
     // This is flexible - Claude might ask different ways
-    const hasConfirmButton = await page.locator('button:has-text("Confirm")').isVisible().catch(() => false);
+    const hasConfirmButton = await page
+      .locator('button:has-text("Confirm")')
+      .isVisible()
+      .catch(() => false);
 
     if (hasConfirmButton) {
       await page.locator('button:has-text("Confirm")').click();
@@ -44,9 +52,9 @@ test.describe('Agents: Create Task (E2E)', () => {
 
     // Wait for task to appear in inbox
     // Task should show in "PLANNING" or "REVIEW PLAN" state
-    await expect(
-      page.locator('text=PLANNING, text=REVIEW PLAN').first()
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.locator('text=PLANNING, text=REVIEW PLAN').first()).toBeVisible({
+      timeout: 60000
+    });
 
     // Verify task appears in inbox with description
     await expect(page.locator('text=login feature, text=authentication').first()).toBeVisible();
