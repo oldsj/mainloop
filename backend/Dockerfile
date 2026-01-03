@@ -10,7 +10,7 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
 # Copy dependency files first (for layer caching)
-COPY backend/pyproject.toml backend/.python-version backend/uv.lock backend/README.md ./
+COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
 
 # Copy shared models package
 COPY models ../models
