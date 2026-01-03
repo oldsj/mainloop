@@ -8,7 +8,7 @@ test.describe('Tab Navigation', () => {
     // Set mobile viewport (Pixel 5)
     await page.setViewportSize({ width: 393, height: 851 });
 
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();

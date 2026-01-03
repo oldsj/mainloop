@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Plan Review Flow', () => {
   test('View Plan Content', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Expand a task in "waiting_plan_review" status

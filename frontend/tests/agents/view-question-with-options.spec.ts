@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Question Answering Flow', () => {
   test('View Question with Options', async ({ page }) => {
     // 1. Expand a task in "waiting_questions" status (NEEDS INPUT badge)
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // Find task with NEEDS INPUT status

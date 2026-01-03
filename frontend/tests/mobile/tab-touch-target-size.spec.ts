@@ -9,7 +9,7 @@ test.describe('Touch Interactions', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. On mobile viewport with touch device
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();

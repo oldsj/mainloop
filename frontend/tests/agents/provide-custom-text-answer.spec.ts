@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Question Answering Flow', () => {
   test('Provide Custom Text Answer', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. View a question in expanded state

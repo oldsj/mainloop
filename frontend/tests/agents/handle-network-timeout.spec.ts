@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Error Handling', () => {
   test('Handle Network Timeout', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Submit action during slow network conditions

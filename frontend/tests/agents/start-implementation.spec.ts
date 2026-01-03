@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Start Implementation Flow', () => {
   test('Start Implementation', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Find task in "ready_to_implement" status

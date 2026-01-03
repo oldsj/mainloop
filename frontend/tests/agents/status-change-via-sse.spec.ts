@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Real-time Updates', () => {
   test('Status Change via SSE', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Have a task in active state

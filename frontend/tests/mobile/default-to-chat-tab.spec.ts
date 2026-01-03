@@ -9,7 +9,7 @@ test.describe('Tab Navigation', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. Load application fresh at mobile viewport
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Observe which view is active
     // Expected: Input bar at bottom (above tab bar)

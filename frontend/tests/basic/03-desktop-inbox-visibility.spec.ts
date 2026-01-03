@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Inbox Panel Visibility', () => {
   test('Desktop Inbox Always Visible', async ({ page }) => {
     // 1. Load application at desktop viewport (1280x720)
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Wait for app to fully load (header shows "$ mainloop")
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();

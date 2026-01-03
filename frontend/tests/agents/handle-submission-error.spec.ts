@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Error Handling', () => {
   test('Handle Submission Error', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Attempt to submit answers when backend is unreachable

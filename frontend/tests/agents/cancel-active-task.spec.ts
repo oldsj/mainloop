@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Task Cancellation', () => {
   test('Cancel Active Task', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
     
     // 1. Find an active task (any non-terminal status)

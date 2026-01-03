@@ -9,7 +9,7 @@ test.describe('Tab Bar Display', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. Load application at mobile viewport
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Wait for app to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();

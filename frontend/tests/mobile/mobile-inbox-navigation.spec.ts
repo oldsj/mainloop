@@ -9,7 +9,7 @@ test.describe('Inbox Panel Visibility', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. Load application at mobile viewport
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Wait for app to fully load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();

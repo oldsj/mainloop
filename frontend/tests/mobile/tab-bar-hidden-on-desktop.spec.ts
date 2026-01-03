@@ -9,7 +9,7 @@ test.describe('Tab Bar Display', () => {
     await page.setViewportSize({ width: 1280, height: 720 });
 
     // 1. Load application at desktop viewport (1280x720)
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Observe bottom of screen
     // Expected: Inbox panel always visible on desktop
