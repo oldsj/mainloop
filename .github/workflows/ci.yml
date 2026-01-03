@@ -22,6 +22,9 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      checks: write  # Required for trunk-action to post annotations
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: trunk-io/trunk-action@v1
