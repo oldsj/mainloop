@@ -9,9 +9,14 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "lint": "prettier --check . && eslint ."
+    "lint": "prettier --check . && eslint .",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@sveltejs/adapter-cloudflare": "^7.2.4",
     "@sveltejs/adapter-node": "^5.4.0",
     "@sveltejs/kit": "^2.47.1",

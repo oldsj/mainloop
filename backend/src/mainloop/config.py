@@ -46,6 +46,9 @@ class Settings(BaseSettings):
         "http://mainloop-backend.mainloop.svc.cluster.local:8000"
     )
 
+    # Test environment flag (enables test-only endpoints)
+    is_test_env: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

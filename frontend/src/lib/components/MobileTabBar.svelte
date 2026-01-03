@@ -9,14 +9,19 @@
   const totalCount = $derived($activeTasksCount + $unreadCount);
 </script>
 
-<nav class="fixed bottom-0 left-0 right-0 z-40 border-t border-term-border bg-term-bg md:hidden">
+<nav
+  data-testid="mobile-tab-bar"
+  class="fixed bottom-0 left-0 right-0 z-40 border-t border-term-border bg-term-bg md:hidden"
+>
   <div class="flex items-center justify-around">
     <button
+      data-testid="tab-chat"
       onclick={() => (activeTab = 'chat')}
       class="flex flex-1 flex-col items-center gap-1 py-3 transition-colors"
       class:text-term-accent={activeTab === 'chat'}
       class:text-term-fg-muted={activeTab !== 'chat'}
       aria-label="Chat"
+      aria-selected={activeTab === 'chat'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -36,11 +41,13 @@
     </button>
 
     <button
+      data-testid="tab-inbox"
       onclick={() => (activeTab = 'tasks')}
       class="relative flex flex-1 flex-col items-center gap-1 py-3 transition-colors"
       class:text-term-accent={activeTab === 'tasks'}
       class:text-term-fg-muted={activeTab !== 'tasks'}
       aria-label="Inbox"
+      aria-selected={activeTab === 'tasks'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -58,6 +65,7 @@
       </svg>
       {#if totalCount > 0}
         <span
+          data-testid="inbox-badge"
           class="absolute right-1/4 top-2 flex h-5 min-w-5 items-center justify-center border border-term-info bg-term-info px-1 text-xs text-term-bg"
         >
           {totalCount}

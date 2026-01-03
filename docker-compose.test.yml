@@ -1,0 +1,83 @@
+# Isolated environment for e2e tests
+# Uses different ports and ephemeral database
+#
+# Usage:
+#   make test-env-watch    # Start with hot-reload (background)
+#   make test-run          # Clear DB and run tests (fast)
+#   make test-env-down     # Stop environment
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: mainloop-postgres-test
+    environment:
+      POSTGRES_USER: mainloop
+      POSTGRES_PASSWORD: mainloop
+      POSTGRES_DB: mainloop
+    # No volume - ephemeral database, fresh each run
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U mainloop]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  backend-test:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: mainloop-backend-test
+    ports:
+      - "8081:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DB_HOST=postgres-test
+      - DB_PORT=5432
+      - DB_NAME=mainloop
+      - DB_USER=mainloop
+      - DB_PASSWORD=mainloop
+      - CLAUDE_AGENT_URL=http://claude-agent-test:8001
+      - IS_TEST_ENV=true
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, -f, "http://localhost:8000/health"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    develop:
+      watch:
+        - action: rebuild
+          path: backend/src
+        - action: rebuild
+          path: models
+
+  frontend-test:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8081
+    container_name: mainloop-frontend-test
+    ports:
+      - "3031:3000"
+    environment:
+      - USE_NODE_ADAPTER=true
+    depends_on:
+      backend-test:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    develop:
+      watch:
+        - action: rebuild
+          path: frontend/src
+        - action: rebuild
+          path: packages/ui

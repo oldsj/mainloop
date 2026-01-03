@@ -1091,6 +1091,72 @@ async def debug_delete_namespace(task_id: str):
     return {"status": "deleted", "namespace": f"task-{task_id[:8]}"}
 
 
+# ============= Test Helpers (E2E only) =============
+
+
+class SeedTaskRequest(BaseModel):
+    """Request to seed a task for testing."""
+
+    status: TaskStatus
+    task_type: str = "feature"
+    description: str = "Test task"
+    repo_url: str | None = None
+    plan: str | None = None
+
+
+@app.post("/internal/test/seed-task")
+async def seed_task_for_testing(request: SeedTaskRequest):
+    """Create a task in a specific state for E2E testing.
+
+    WARNING: Only available in test environments. Do not use in production.
+    """
+    if not settings.is_test_env:
+        raise HTTPException(status_code=403, detail="Only available in test environment")
+
+    from uuid import uuid4
+
+    # Get or create a test main thread
+    user_id = "test-user"
+    threads = await db.list_threads(user_id)
+    if threads:
+        thread_id = threads[0].id
+    else:
+        # Create test thread
+        thread = await get_or_start_main_thread(user_id)
+        thread_id = thread.id
+
+    # Create task
+    task = WorkerTask(
+        id=str(uuid4()),
+        main_thread_id=thread_id,
+        user_id=user_id,
+        task_type=request.task_type,
+        description=request.description,
+        prompt=f"Implement: {request.description}",
+        repo_url=request.repo_url,
+        status=request.status,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+
+    await db.create_worker_task(task)
+
+    # If task needs plan review, create a queue item
+    if request.status == TaskStatus.WAITING_PLAN_REVIEW and request.plan:
+        queue_item = QueueItem(
+            id=str(uuid4()),
+            main_thread_id=thread_id,
+            task_id=task.id,
+            user_id=user_id,
+            type="plan_review",
+            content={"plan": request.plan},
+            created_at=datetime.now(),
+        )
+        await db.create_queue_item(queue_item)
+
+    return {"task_id": task.id, "status": task.status}
+
+
 # ============= Run =============
 
 

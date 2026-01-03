@@ -63,5 +63,11 @@ yarn-error.log*
 /coverage
 /.nyc_output
 
+# Playwright
+/frontend/playwright-report/
+/frontend/test-results/
+/frontend/blob-report/
+/.playwright-mcp/
+
 # Misc
 .cache/

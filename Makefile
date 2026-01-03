@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db test-e2e test-e2e-ui test-e2e-debug test-e2e-dev test-e2e-report test-run test-run-ui test-env-up test-env-watch test-db-reset test-env-down
 
 # Load .env file if it exists
 -include .env
@@ -230,6 +230,60 @@ test-k8s-job: ## Test K8s job creation (creates a real job)
 
 test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
+
+# Frontend E2E Tests (Playwright)
+# Uses isolated test environment with ephemeral database
+test-e2e: test-env-up ## Run Playwright e2e tests (isolated environment, stops after)
+	@cd frontend && pnpm exec playwright test; \
+	EXIT_CODE=$$?; \
+	cd .. && $(MAKE) test-env-down; \
+	exit $$EXIT_CODE
+
+test-e2e-ui: test-env-up ## Run Playwright tests with interactive UI mode
+	@cd frontend && pnpm exec playwright test --ui; \
+	cd .. && $(MAKE) test-env-down
+
+test-e2e-debug: test-env-up ## Run Playwright tests in debug mode
+	@cd frontend && pnpm exec playwright test --debug; \
+	cd .. && $(MAKE) test-env-down
+
+test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
+	PLAYWRIGHT_BASE_URL=http://localhost:3030 cd frontend && pnpm exec playwright test
+
+test-e2e-report: ## Show Playwright HTML test report
+	cd frontend && pnpm exec playwright show-report
+
+# Fast test iteration (use with test-env-watch)
+test-run: test-db-reset ## Clear DB and run tests (fast, requires test-env-watch)
+	@cd frontend && pnpm exec playwright test
+
+test-run-ui: test-db-reset ## Clear DB and run tests with UI (fast)
+	@cd frontend && pnpm exec playwright test --ui
+
+# Test environment management
+test-env-up: ## Start isolated test environment (one-shot)
+	@echo "Starting isolated test environment..."
+	@docker compose -f docker-compose.test.yml up -d --build --wait
+	@echo "Test environment ready at http://localhost:3031"
+
+test-env-watch: ## Start test environment with hot-reload (background)
+	@echo "Starting test environment with hot-reload..."
+	@docker compose -f docker-compose.test.yml up --build --watch &
+	@echo "Waiting for services to be healthy..."
+	@sleep 5
+	@until curl -sf http://localhost:3031 > /dev/null 2>&1; do sleep 1; done
+	@echo ""
+	@echo "Test environment ready at http://localhost:3031"
+	@echo "  Run tests: make test-run"
+	@echo "  Stop:      make test-env-down"
+
+test-db-reset: ## Reset the test database (clear all data)
+	@docker exec mainloop-postgres-test psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
+		(echo "Test environment not running. Start with: make test-env-watch" && exit 1)
+	@echo "Database reset complete"
+
+test-env-down: ## Stop isolated test environment
+	@docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
 
 # Debugging commands
 # Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com
