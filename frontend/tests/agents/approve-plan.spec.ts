@@ -1,13 +1,20 @@
-// spec: frontend/specs/task-interactions.md
-// seed: frontend/tests/seed.spec.ts
-
 import { test, expect } from '@playwright/test';
+import { seedTaskWaitingPlanReview } from '../fixtures/seed-data';
+
+/**
+ * AGENTS STAGE - Plan approval (isolated test with seeded data)
+ *
+ * Uses seed fixture for fast, deterministic testing of UI interactions.
+ */
 
 test.describe('Plan Review Flow', () => {
   test('Approve Plan', async ({ page }) => {
-    await page.goto('http://localhost:3031');
+    // Seed a task in "waiting_plan_review" status
+    await seedTaskWaitingPlanReview(page);
+
+    await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
-    
+
     // 1. Review plan in "waiting_plan_review" status
     const reviewPlanBadge = page.locator('text=REVIEW PLAN').first();
     await expect(reviewPlanBadge).toBeVisible();

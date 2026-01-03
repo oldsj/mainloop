@@ -38,6 +38,7 @@ services:
       - DB_USER=mainloop
       - DB_PASSWORD=mainloop
       - CLAUDE_AGENT_URL=http://claude-agent-test:8001
+      - IS_TEST_ENV=true
     depends_on:
       postgres-test:
         condition: service_healthy
