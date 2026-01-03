@@ -130,28 +130,30 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: '*-image'
-          path: /tmp/images
+          path: /mnt/images
           merge-multiple: true
 
       - name: Load images into Docker and Kind
         run: |
-          # Load and transfer images one at a time to save space
-          # With merge-multiple, files are directly in /tmp/images/
-          docker load --input /tmp/images/backend.tar
-          kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }}
-          docker rmi mainloop-backend:test
-          rm /tmp/images/backend.tar
+          # Use /mnt for more disk space, load in parallel
+          echo "=== Disk space ==="
+          df -h /mnt
 
-          docker load --input /tmp/images/frontend.tar
-          kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }}
-          docker rmi mainloop-frontend:test
-          rm /tmp/images/frontend.tar
+          echo "=== Loading images into Docker (parallel) ==="
+          docker load --input /mnt/images/backend.tar &
+          docker load --input /mnt/images/frontend.tar &
+          docker load --input /mnt/images/agent.tar &
+          wait
+          rm -rf /mnt/images
 
-          docker load --input /tmp/images/agent.tar
-          kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }}
-          docker rmi mainloop-agent-controller:test
-          rm /tmp/images/agent.tar
+          echo "=== Loading images into Kind (parallel) ==="
+          kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          wait
 
+          echo "=== Cleanup Docker images ==="
+          docker rmi mainloop-backend:test mainloop-frontend:test mainloop-agent-controller:test || true
           df -h
 
       - name: Create secrets
