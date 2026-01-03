@@ -1,4 +1,4 @@
-name: E2E Tests (Kind)
+name: CI
 
 on:
   push:
@@ -6,15 +6,32 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
 env:
   KIND_CLUSTER_NAME: mainloop-test
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: trunk-io/trunk-action@v1
+
   build:
     name: Build ${{ matrix.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: backend
@@ -39,7 +56,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
@@ -58,7 +75,7 @@ jobs:
 
   e2e:
     name: E2E Tests
-    needs: build
+    needs: [lint, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -66,85 +83,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          pnpm install
+      - name: Install dependencies
+        run: pnpm install
 
       - name: Cache Playwright browsers
+        id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-playwright-
+            playwright-${{ runner.os }}-
 
       - name: Install Playwright browsers
-        run: |
-          cd frontend
-          pnpm exec playwright install --with-deps chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Install Playwright deps (if cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+        working-directory: frontend
 
       - name: Setup Kind
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@v1.12.0
         with:
           cluster_name: ${{ env.KIND_CLUSTER_NAME }}
           config: ./scripts/kind/cluster-config.yaml
 
-      - name: Free disk space
-        run: |
-          # Remove unnecessary files to free up space
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker system prune -af
-          df -h
-
       - name: Download all image artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: '*-image'
           path: /tmp/images
+          merge-multiple: true
 
       - name: Load images into Docker and Kind
         run: |
           # Load and transfer images one at a time to save space
-          docker load --input /tmp/images/backend-image/backend.tar
+          # With merge-multiple, files are directly in /tmp/images/
+          docker load --input /tmp/images/backend.tar
           kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }}
           docker rmi mainloop-backend:test
-          rm /tmp/images/backend-image/backend.tar
+          rm /tmp/images/backend.tar
 
-          docker load --input /tmp/images/frontend-image/frontend.tar
+          docker load --input /tmp/images/frontend.tar
           kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }}
           docker rmi mainloop-frontend:test
-          rm /tmp/images/frontend-image/frontend.tar
+          rm /tmp/images/frontend.tar
 
-          docker load --input /tmp/images/agent-image/agent.tar
+          docker load --input /tmp/images/agent.tar
           kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }}
           docker rmi mainloop-agent-controller:test
-          rm /tmp/images/agent-image/agent.tar
+          rm /tmp/images/agent.tar
 
           df -h
 
@@ -168,24 +171,28 @@ jobs:
 
       - name: Wait for services
         run: |
-          # Wait for backend health
-          for i in {1..30}; do
-            if curl -sf http://localhost:8000/health > /dev/null; then
-              echo "Backend healthy"
-              break
-            fi
-            echo "Waiting for backend... ($i/30)"
-            sleep 2
-          done
-          # Wait for frontend
-          for i in {1..30}; do
-            if curl -sf http://localhost:3000 > /dev/null; then
-              echo "Frontend healthy"
-              break
-            fi
-            echo "Waiting for frontend... ($i/30)"
-            sleep 2
-          done
+          # Wait for endpoints to be ready (more reliable than just pod ready)
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
+            endpoints/mainloop-backend -n mainloop --timeout=120s || true
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
+            endpoints/mainloop-frontend -n mainloop --timeout=120s || true
+
+          # Verify HTTP endpoints are responding
+          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8000/health || {
+            echo "Backend failed to start"
+            kubectl logs -n mainloop deployment/mainloop-backend --tail=50
+            exit 1
+          }
+          echo "Backend healthy"
+
+          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:3000 || {
+            echo "Frontend failed to start"
+            kubectl logs -n mainloop deployment/mainloop-frontend --tail=50
+            exit 1
+          }
+          echo "Frontend healthy"
 
       - name: Run Playwright tests
         run: |
