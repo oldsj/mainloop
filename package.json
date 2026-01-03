@@ -2,6 +2,11 @@
   "name": "mainloop",
   "private": true,
   "type": "module",
+  "pnpm": {
+    "overrides": {
+      "cookie": "^0.7.0"
+    }
+  },
   "scripts": {
     "dev": "docker compose up --watch",
     "build": "pnpm -r build",
