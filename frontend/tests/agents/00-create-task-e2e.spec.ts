@@ -22,8 +22,8 @@ test.describe('Agents: Create Task (E2E)', () => {
     );
     await input.press('Enter');
 
-    // Message appears in chat
-    await expect(page.getByText('can you implement a simple login feature')).toBeVisible();
+    // Message appears in chat (use .first() since DB may have history from previous runs)
+    await expect(page.getByText('can you implement a simple login feature').first()).toBeVisible();
 
     // Claude should ask for confirmation before spawning
     // Wait for response that includes spawn confirmation or question

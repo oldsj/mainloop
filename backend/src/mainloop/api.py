@@ -1119,13 +1119,11 @@ async def seed_task_for_testing(request: SeedTaskRequest):
 
     # Get or create a test main thread
     user_id = "test-user"
-    threads = await db.list_threads(user_id)
-    if threads:
-        thread_id = threads[0].id
-    else:
+    thread = await db.get_main_thread_by_user(user_id)
+    if not thread:
         # Create test thread
         thread = await get_or_start_main_thread(user_id)
-        thread_id = thread.id
+    thread_id = thread.id
 
     # Create task
     task = WorkerTask(

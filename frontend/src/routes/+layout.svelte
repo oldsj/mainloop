@@ -16,15 +16,8 @@
 
   let { children, data }: { children: any; data: LayoutData } = $props();
 
-  // Local state that syncs with store for reliable reactivity
-  let activeTab = $state<MobileTab>('chat');
-
-  $effect(() => {
-    const unsubscribe = mobileTab.subscribe(value => {
-      activeTab = value;
-    });
-    return unsubscribe;
-  });
+  // Derive activeTab directly from store for reliable reactivity
+  let activeTab = $derived($mobileTab);
 
   // Reset mobile tab to chat on navigation
   beforeNavigate(() => {
