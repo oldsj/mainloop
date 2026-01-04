@@ -16,8 +16,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests',
 
-  // Fail fast - stop on first failure
-  maxFailures: process.env.CI ? 5 : 1,
+  // Fail fast in CI, run all in dev
+  maxFailures: process.env.CI ? 5 : 0,
 
   // Sequential by default for state-dependent tests
   fullyParallel: false,
@@ -28,82 +28,30 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
 
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
   },
 
   projects: [
-    // Agents project - for test-agents MCP server
     {
-      name: 'agents',
-      testMatch: /seed\.spec\.ts/,
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 }
-      }
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] }
     },
-
-    // Stage 1: Setup - verify app loads and API is healthy
-    {
-      name: 'setup',
-      testMatch: /.*\.setup\.ts/,
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 }
-      }
-    },
-
-    // Stage 2: Basic - simple conversation (depends on setup)
-    {
-      name: 'basic',
-      testMatch: /basic\/.*\.spec\.ts/,
-      dependencies: ['setup'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 }
-      }
-    },
-
-    // Stage 3: Context - conversation history and compaction (depends on basic)
-    {
-      name: 'context',
-      testMatch: /context\/.*\.spec\.ts/,
-      dependencies: ['basic'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 }
-      }
-    },
-
-    // Stage 4: Agents - worker spawning and task management (depends on context)
-    {
-      name: 'agents',
-      testMatch: /agents\/.*\.spec\.ts/,
-      dependencies: ['context'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 }
-      }
-    },
-
-    // Mobile tests run after all desktop tests pass
     {
       name: 'mobile',
       testMatch: /mobile\/.*\.spec\.ts/,
-      dependencies: ['basic'],
-      use: {
-        ...devices['Pixel 5'],
-        viewport: { width: 393, height: 851 } // Pixel 5 viewport
-      }
+      use: { ...devices['Pixel 5'] }
     }
   ],
 
   webServer: {
-    command: 'echo "Waiting for test environment..."',
-    url: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
-    reuseExistingServer: true,
-    timeout: 60000
+    command: 'VITE_API_URL=http://localhost:8081 pnpm dev --port 5173',
+    url: 'http://localhost:5173',
+    reuseExistingServer: !process.env.CI,
+    timeout: 60000,
+    stdout: 'ignore',
+    stderr: 'pipe'
   }
 });

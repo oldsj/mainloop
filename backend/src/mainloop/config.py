@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False
 
+    # Mock Claude for fast testing (no API calls)
+    use_mock_claude: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-run test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-run test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run
 
 # Load .env file if it exists
 -include .env
@@ -270,9 +270,6 @@ test-loop: ## Watch for changes and auto-redeploy to Kind
 		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
 	wait
 
-test-k8s-run: kind-reset ## Run Playwright tests against Kind cluster
-	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
-
 # E2E Testing
 test-k8s-components: ## Test K8s namespace/secret creation (quick)
 	cd backend && uv run python scripts/test_k8s_components.py
@@ -339,36 +336,23 @@ test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
 test-e2e-report: ## Show Playwright HTML test report
 	cd frontend && pnpm exec playwright show-report
 
-# Legacy Docker Compose test environment (deprecated - use test-e2e instead)
-test-env-up: ## Start isolated test environment (one-shot, deprecated)
-	@echo "Starting isolated test environment..."
+# Fast Testing (Docker backend + Local Vite + Playwright UI)
+test: ## Playwright UI with hot reload (backend Docker, frontend local)
+	@echo "Starting backend (Docker) + frontend (local Vite)..."
 	@docker compose -f docker-compose.test.yml up -d --build --wait
-	@echo "Test environment ready at http://localhost:3031"
-
-test-env-watch: ## Start test environment with hot-reload (deprecated)
-	@echo "Starting test environment with hot-reload..."
-	@docker compose -f docker-compose.test.yml up --build --watch &
-	@echo "Waiting for services to be healthy..."
-	@sleep 5
-	@until curl -sf http://localhost:3031 > /dev/null 2>&1; do sleep 1; done
 	@echo ""
-	@echo "Test environment ready at http://localhost:3031"
-	@echo "  Run tests: make test-run"
-	@echo "  Stop:      make test-env-down"
+	@echo "=== Playwright UI ==="
+	@echo "Backend: http://localhost:8081 (Docker, hot reload)"
+	@echo "Frontend: http://localhost:5173 (Vite, started by Playwright)"
+	@echo ""
+	@(cd frontend && pnpm exec playwright test --ui) || true
+	@docker compose -f docker-compose.test.yml down -v
 
-test-db-reset: ## Reset the test database (deprecated)
-	@docker exec mainloop-postgres-test psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null || \
-		(echo "Test environment not running. Start with: make test-env-watch" && exit 1)
-	@echo "Database reset complete"
-
-test-env-down: ## Stop isolated test environment (deprecated)
-	@docker compose -f docker-compose.test.yml down -v 2>/dev/null || true
-
-test-run: test-db-reset ## Clear DB and run tests (deprecated, use test-e2e)
-	@cd frontend && pnpm exec playwright test
-
-test-run-ui: test-db-reset ## Clear DB and run tests with UI (deprecated)
-	@cd frontend && pnpm exec playwright test --ui
+test-run: ## Run tests once (CI mode)
+	@docker compose -f docker-compose.test.yml up -d --build --wait
+	@(cd frontend && pnpm exec playwright test) || EXIT_CODE=$$?; \
+	docker compose -f docker-compose.test.yml down -v; \
+	exit $${EXIT_CODE:-0}
 
 # Debugging commands
 # Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com
