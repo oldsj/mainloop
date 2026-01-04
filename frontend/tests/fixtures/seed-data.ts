@@ -13,9 +13,12 @@ import type { Page } from '@playwright/test';
  * when Claude finishes planning and needs human approval.
  */
 export async function seedTaskWaitingPlanReview(page: Page) {
-  // Get the base URL from the page
+  // Get the base URL from the page and derive API URL
   const baseURL = new URL(page.url()).origin;
-  const apiURL = baseURL.replace('3031', '8031'); // Test API on port 8031
+  // Map frontend port to backend port:
+  // - CI Kind: 3000 -> 8000
+  // - Local docker-compose: 3031 -> 8081
+  const apiURL = baseURL.replace(':3031', ':8081').replace(':3000', ':8000');
 
   // Directly insert task into database via internal API
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
@@ -55,7 +58,8 @@ Add JWT-based authentication to the application.
  */
 export async function seedQueueItemQuestions(page: Page) {
   const baseURL = new URL(page.url()).origin;
-  const apiURL = baseURL.replace('3031', '8031');
+  // Map frontend port to backend port (same as seedTaskWaitingPlanReview)
+  const apiURL = baseURL.replace(':3031', ':8081').replace(':3000', ':8000');
 
   const response = await page.request.post(`${apiURL}/internal/test/seed-queue-item`, {
     data: {
