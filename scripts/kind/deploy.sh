@@ -10,10 +10,10 @@ KIND_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 echo "=== Deploying to Kind cluster ==="
 echo "Using context: ${KIND_CONTEXT}"
 
-# Delete old deployments to avoid waiting for termination
+# Delete old deployments and wait for pods to terminate
 echo "Cleaning up old deployments..."
-kubectl --context="${KIND_CONTEXT}" delete deployment --all -n mainloop --ignore-not-found=true --wait=false
-kubectl --context="${KIND_CONTEXT}" delete pod --all -n mainloop --ignore-not-found=true --wait=false --force --grace-period=0
+kubectl --context="${KIND_CONTEXT}" delete deployment mainloop-frontend mainloop-backend mainloop-agent-controller -n mainloop --ignore-not-found=true --wait=true
+kubectl --context="${KIND_CONTEXT}" wait --for=delete pod -l 'app in (mainloop-frontend, mainloop-backend, mainloop-agent-controller)' -n mainloop --timeout=60s 2>/dev/null || true
 
 # Apply test overlay
 echo "Applying manifests..."

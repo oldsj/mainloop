@@ -22,8 +22,11 @@ test.describe('Context: Conversation History', () => {
   test('send another message maintains history', async ({ page }) => {
     await page.goto('/');
 
-    // Count messages before sending
-    const messages = page.locator('.message');
+    // Wait for conversation history to load (the "hello" from basic stage)
+    await expect(page.getByText('hello').first()).toBeVisible();
+
+    // Count messages before sending (scope to main to avoid counting mobile layout)
+    const messages = page.getByRole('main').locator('.message');
     const countBefore = await messages.count();
 
     // Send a new message (use first input - desktop)
@@ -35,7 +38,8 @@ test.describe('Context: Conversation History', () => {
     await expect(page.getByText('what did I just say?').first()).toBeVisible();
 
     // Wait for loading to complete (response received)
-    await expect(page.getByText('processing')).toBeHidden({ timeout: 60000 });
+    // Use getByRole('main') to target only the desktop layout (mobile is hidden but still in DOM)
+    await expect(page.getByRole('main').getByText('processing')).toBeHidden({ timeout: 60000 });
 
     // Verify response arrived (at least 2 new messages: user + assistant)
     await expect(messages).toHaveCount(countBefore + 2, { timeout: 5000 });

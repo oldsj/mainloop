@@ -256,6 +256,19 @@ test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test
 	@echo ""
 	@echo "Run 'make kind-logs' to tail backend logs"
 	@echo "Run 'make kind-reset' to reset data between tests"
+	@echo "Run 'make test-loop' for auto-redeploy on changes"
+
+test-loop: ## Watch for changes and auto-redeploy to Kind
+	@echo "Starting Kind deploy loop (Ctrl+C to stop)..."
+	@echo "Watching: backend/, frontend/src/, claude-agent/"
+	@trap 'kill 0' INT; \
+	watchexec -w backend/src -w models -e py \
+		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
+	watchexec -w frontend/src -e ts,svelte,css \
+		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
+	watchexec -w claude-agent -e py \
+		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
+	wait
 
 test-k8s-run: kind-reset ## Run Playwright tests against Kind cluster
 	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test

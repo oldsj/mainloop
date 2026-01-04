@@ -5,17 +5,31 @@
   import { inbox } from '$lib/stores/inbox';
   import { tasks } from '$lib/stores/tasks';
   import { themeStore } from '$lib/stores/theme';
+  import { mobileTab, type MobileTab } from '$lib/stores/mobileTab';
   import { connectSSE, disconnectSSE } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
   import ProjectList from '$lib/components/ProjectList.svelte';
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
   import ThemeSelector from '$lib/components/ThemeSelector.svelte';
+  import { beforeNavigate } from '$app/navigation';
 
   let { children, data }: { children: any; data: LayoutData } = $props();
 
-  type Tab = 'chat' | 'tasks';
-  let activeTab = $state<Tab>('chat');
+  // Local state that syncs with store for reliable reactivity
+  let activeTab = $state<MobileTab>('chat');
+
+  $effect(() => {
+    const unsubscribe = mobileTab.subscribe(value => {
+      activeTab = value;
+    });
+    return unsubscribe;
+  });
+
+  // Reset mobile tab to chat on navigation
+  beforeNavigate(() => {
+    mobileTab.set('chat');
+  });
 
   onMount(() => {
     themeStore.initialize();
@@ -83,5 +97,5 @@
     {/if}
   </div>
 
-  <MobileTabBar bind:activeTab />
+  <MobileTabBar />
 </div>
