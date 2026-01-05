@@ -171,7 +171,7 @@ export async function setupConversation(page: Page): Promise<void> {
   // Wait for message to appear in chat
   await expect(page.getByText('hello').first()).toBeVisible({ timeout: 10000 });
 
-  // Wait for assistant response (mock claude should respond quickly)
+  // Wait for assistant response from Claude API
   // Assistant messages have bg-term-bg-secondary class
   const assistantMessage = page.locator('.message.bg-term-bg-secondary').first();
   await expect(assistantMessage).toBeVisible({ timeout: 30000 });

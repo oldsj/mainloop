@@ -21,13 +21,13 @@ const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : !!proc
 export default defineConfig({
   testDir: './tests',
 
-  // Fail fast - stop on first failure
-  maxFailures: 1,
+  // Run all tests - don't stop on first failure (see all issues)
+  maxFailures: undefined,
 
   // Tests run sequentially by default (state-dependent)
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: 0,  // No retries - fail fast, don't hide flakiness
   workers: 1,
 
   reporter: process.env.CI

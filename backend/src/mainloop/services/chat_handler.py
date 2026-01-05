@@ -83,7 +83,7 @@ def create_spawn_task_callable(
     main_thread_id: str,
     conversation_id: str,
 ):
-    """Create a raw spawn_task callable for mock Claude to use.
+    """Create a raw spawn_task callable for Claude to use.
 
     This returns an async function that can be called directly with a dict of args.
     """
@@ -331,8 +331,6 @@ async def get_claude_response(
     will have access to the spawn_task tool to spawn autonomous worker agents.
 
     This ensures continuity across sessions, pod restarts, and deployments.
-
-    If USE_MOCK_CLAUDE=true, returns canned responses without API calls.
     """
     try:
         # Build prompt with summary and recent messages
