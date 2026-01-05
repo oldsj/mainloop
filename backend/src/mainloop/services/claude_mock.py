@@ -112,6 +112,7 @@ class MockClaudeResponse:
             prompt: The user's message
             spawn_task_tool: Optional spawn_task function to actually create tasks
             **kwargs: Additional arguments (ignored, for API compatibility)
+
         """
         intent = cls._detect_intent(prompt)
         logger.info(f"Mock Claude: detected intent '{intent}' from prompt")
