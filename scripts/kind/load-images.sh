@@ -11,8 +11,9 @@ echo "=== Building and loading images into Kind cluster ==="
 cd "${REPO_ROOT}"
 
 # Build images with test tag
-echo "Building backend..."
-docker build -f backend/Dockerfile -t mainloop-backend:test .
+# Use --no-cache for backend to ensure code changes are picked up
+echo "Building backend (no-cache for source changes)..."
+docker build --no-cache -f backend/Dockerfile -t mainloop-backend:test .
 
 echo "Building frontend..."
 docker build -f frontend/Dockerfile \

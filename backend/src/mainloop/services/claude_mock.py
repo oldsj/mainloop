@@ -2,12 +2,15 @@
 
 This module provides canned responses that simulate Claude's behavior,
 including spawn_task tool calls when appropriate.
+
+When spawn_task_tool is provided, the mock will actually call it
+to create real tasks, enabling full E2E testing without Claude API costs.
 """
 
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +98,20 @@ class MockClaudeResponse:
     async def query_mock(
         cls,
         prompt: str,
-        mcp_servers: dict | None = None,
+        spawn_task_tool: Callable | None = None,
         **kwargs,
     ) -> AsyncIterator[MockAssistantMessage | MockResultMessage]:
         """Mock query() that returns canned responses.
 
         Simulates Claude behavior including:
         - Greeting responses
-        - Task spawning confirmations
+        - Task spawning (actually calls spawn_task_tool if provided)
         - General conversation
+
+        Args:
+            prompt: The user's message
+            spawn_task_tool: Optional spawn_task function to actually create tasks
+            **kwargs: Additional arguments (ignored, for API compatibility)
         """
         intent = cls._detect_intent(prompt)
         logger.info(f"Mock Claude: detected intent '{intent}' from prompt")
@@ -127,19 +135,47 @@ class MockClaudeResponse:
                 yield MockResultMessage(result=text, is_error=False)
                 return
 
-            # If we have MCP servers with spawn_task, simulate the tool call
-            if mcp_servers and "mainloop" in mcp_servers:
-                # First, acknowledge
-                text = (
-                    f"I'll spawn a worker agent to work on this. Repository: {repo_url}"
-                )
-                yield MockAssistantMessage(content=[MockTextBlock(text=text)])
+            # Actually call spawn_task_tool if available
+            if spawn_task_tool:
+                logger.info(f"Mock Claude: calling spawn_task_tool for {repo_url}")
 
-                # The actual spawn happens through the real MCP tool
-                # We just simulate Claude's response here
-                text += "\n\nI'm starting the task now. You can monitor progress in your inbox."
-                yield MockResultMessage(result=text, is_error=False)
+                # Call the real spawn_task tool
+                try:
+                    result = await spawn_task_tool(
+                        {
+                            "task_description": task_desc,
+                            "repo_url": repo_url,
+                            "skip_planning": False,
+                        }
+                    )
+
+                    # Check if tool call succeeded
+                    if result.get("is_error"):
+                        error_text = result.get("content", [{}])[0].get(
+                            "text", "Unknown error"
+                        )
+                        text = f"I tried to spawn a task but encountered an error: {error_text}"
+                        yield MockAssistantMessage(content=[MockTextBlock(text=text)])
+                        yield MockResultMessage(result=text, is_error=False)
+                        return
+
+                    # Success - extract task info from result
+                    result_text = result.get("content", [{}])[0].get("text", "")
+                    text = (
+                        f"I've spawned a worker agent to work on this.\n\n{result_text}"
+                    )
+                    yield MockAssistantMessage(content=[MockTextBlock(text=text)])
+                    yield MockResultMessage(result=text, is_error=False)
+                    return
+
+                except Exception as e:
+                    logger.error(f"Mock Claude: spawn_task_tool error: {e}")
+                    text = f"I tried to spawn a task but encountered an error: {e}"
+                    yield MockAssistantMessage(content=[MockTextBlock(text=text)])
+                    yield MockResultMessage(result=text, is_error=False)
+                    return
             else:
+                # No tool available - just acknowledge
                 text = f"I understood your request about: {task_desc[:100]}... However, I don't have the spawn_task tool available in this context."
                 yield MockAssistantMessage(content=[MockTextBlock(text=text)])
                 yield MockResultMessage(result=text, is_error=False)

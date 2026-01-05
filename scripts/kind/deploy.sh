@@ -29,4 +29,4 @@ kubectl --context="${KIND_CONTEXT}" rollout status statefulset/postgres -n mainl
 echo "=== Deployment complete ==="
 echo "Frontend: http://localhost:3000"
 echo "Backend:  http://localhost:8000"
-kubectl get pods -n mainloop
+kubectl --context="${KIND_CONTEXT}" get pods -n mainloop

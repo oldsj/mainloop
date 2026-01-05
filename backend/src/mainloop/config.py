@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Mock Claude for fast testing (no API calls)
     use_mock_claude: bool = False
 
+    # Mock GitHub for testing without real GitHub API
+    use_mock_github: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -11,6 +11,8 @@ spec:
       imagePullSecrets: []
       containers:
         - name: backend
+          # Use locally loaded image, never try to pull
+          imagePullPolicy: Never
           # Add IS_TEST_ENV for test endpoints
           env:
             - name: IS_TEST_ENV
@@ -18,3 +20,9 @@ spec:
             # Use cheapest/fastest model for tests
             - name: CLAUDE_MODEL
               value: haiku
+            # Mock Claude for fast testing (set to 'false' for real Claude tests)
+            - name: USE_MOCK_CLAUDE
+              value: 'true'
+            # Mock GitHub API (always true in tests - no real GitHub calls)
+            - name: USE_MOCK_GITHUB
+              value: 'true'

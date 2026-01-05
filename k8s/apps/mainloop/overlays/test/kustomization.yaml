@@ -21,6 +21,18 @@ patches:
       kind: Deployment
       name: mainloop-backend
 
+  # Patch frontend deployment for test environment
+  - path: frontend-patch.yaml
+    target:
+      kind: Deployment
+      name: mainloop-frontend
+
+  # Patch agent-controller deployment for test environment
+  - path: agent-controller-patch.yaml
+    target:
+      kind: Deployment
+      name: mainloop-agent-controller
+
   # Disable HTTPRoutes that don't exist in test (prevent errors)
   # Note: These resources don't exist in base anymore, no patching needed
 

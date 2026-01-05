@@ -78,28 +78,17 @@ Ask for the GitHub repo URL like:
     return base_prompt
 
 
-def create_spawn_task_tool(
+def create_spawn_task_callable(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
 ):
-    """Create a spawn_task tool with context baked in.
+    """Create a raw spawn_task callable for mock Claude to use.
 
-    This factory creates a tool that has access to the current user/conversation context.
+    This returns an async function that can be called directly with a dict of args.
     """
 
-    @tool(
-        "spawn_task",
-        "Spawn an autonomous coding agent to work on a development task. "
-        "Use this when the user confirms they want you to create, modify, or delete code. "
-        "Requires a task description and GitHub repository URL.",
-        {
-            "task_description": str,
-            "repo_url": str,
-            "skip_planning": bool,
-        },
-    )
-    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
+    async def spawn_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         """Spawn a worker task to handle a coding request."""
         task_description = args.get("task_description", "")
         repo_url = args.get("repo_url", "")
@@ -185,6 +174,39 @@ def create_spawn_task_tool(
                 "content": [{"type": "text", "text": f"Error spawning task: {str(e)}"}],
                 "is_error": True,
             }
+
+    return spawn_task_impl
+
+
+def create_spawn_task_tool(
+    user_id: str,
+    main_thread_id: str,
+    conversation_id: str,
+):
+    """Create a spawn_task tool with context baked in.
+
+    This factory creates a tool that has access to the current user/conversation context.
+    Returns an SdkMcpTool for use with Claude Agent SDK.
+    """
+    # Get the raw callable
+    spawn_task_impl = create_spawn_task_callable(
+        user_id, main_thread_id, conversation_id
+    )
+
+    # Wrap it with the @tool decorator for Claude
+    @tool(
+        "spawn_task",
+        "Spawn an autonomous coding agent to work on a development task. "
+        "Use this when the user confirms they want you to create, modify, or delete code. "
+        "Requires a task description and GitHub repository URL.",
+        {
+            "task_description": str,
+            "repo_url": str,
+            "skip_planning": bool,
+        },
+    )
+    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
+        return await spawn_task_impl(args)
 
     return spawn_task
 
@@ -304,8 +326,14 @@ async def get_claude_response(
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
+        spawn_task_callable = None  # Raw callable for mock Claude
+        spawn_task_tool = None  # SdkMcpTool for real Claude
 
         if user_id and main_thread_id and conversation_id:
+            # Create raw callable (for mock) and tool (for real Claude)
+            spawn_task_callable = create_spawn_task_callable(
+                user_id, main_thread_id, conversation_id
+            )
             spawn_task_tool = create_spawn_task_tool(
                 user_id, main_thread_id, conversation_id
             )
@@ -332,8 +360,9 @@ async def get_claude_response(
             )
 
             collected_text: list[str] = []
+            # Pass the raw callable (not the SdkMcpTool) to mock
             async for msg in MockClaudeResponse.query_mock(
-                prompt_text, mcp_servers=mcp_servers
+                prompt_text, spawn_task_tool=spawn_task_callable
             ):
                 if isinstance(msg, MockAssistantMessage):
                     for block in msg.content:

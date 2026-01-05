@@ -301,8 +301,13 @@ test-e2e: ## Run Playwright e2e tests (Kind cluster, auto-setup)
 		echo "Waiting for backend..."; \
 		sleep 2; \
 	done
-	@echo "Running Playwright tests..."
-	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
+	@echo "Waiting for API endpoints to be ready..."
+	@until curl -sf -X POST http://localhost:8000/internal/test/reset > /dev/null 2>&1; do \
+		echo "Waiting for reset endpoint..."; \
+		sleep 2; \
+	done
+	@echo "Running Playwright tests (mocked, excluding @real-claude)..."
+	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --grep-invert @real-claude
 
 test-e2e-ui: ## Run Playwright tests with interactive UI mode
 	@$(MAKE) test-e2e-setup
@@ -342,6 +347,10 @@ TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:3031
 
 test: ## Playwright UI with hot reload (backend Docker, frontend Vite)
+	@if lsof -i :8081 -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "Error: Port 8081 already in use. Is 'make test' already running?"; \
+		exit 1; \
+	fi
 	@echo "Starting backend (Docker)..."
 	@docker compose -f docker-compose.test.yml up -d backend-test postgres-test --build --wait
 	@echo ""
@@ -349,15 +358,16 @@ test: ## Playwright UI with hot reload (backend Docker, frontend Vite)
 	@echo "Backend: $(TEST_API_URL) (Docker, watchexec restarts on changes)"
 	@echo "Frontend: http://localhost:5173 (Vite with hot reload)"
 	@echo ""
-	@trap 'kill 0' INT; \
+	@trap 'docker compose -f $(CURDIR)/docker-compose.test.yml down; kill 0' INT TERM; \
 	watchexec -w backend/src -w models -e py \
 		-i '__pycache__/' \
 		--on-busy-update restart \
-		-- docker compose -f docker-compose.test.yml restart backend-test & \
-	cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
+		-- docker compose -f $(CURDIR)/docker-compose.test.yml restart backend-test & \
+	cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --ui; \
+	docker compose -f $(CURDIR)/docker-compose.test.yml down
 
-test-run: ## Run tests headless (against Vite server from make test)
-	@cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test
+test-run: ## Run tests headless (against Vite server from make test, excludes @real-claude)
+	@cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --grep-invert @real-claude
 
 test-ci: ## Run tests in CI (starts own backend, tears down after)
 	@docker compose -f docker-compose.test.yml up -d --build --wait

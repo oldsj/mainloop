@@ -5,16 +5,12 @@ import { setupConversation } from '../fixtures';
  * AGENTS STAGE - End-to-end task creation
  *
  * Tests the full flow: conversation → Claude spawns task → task appears in inbox
+ *
+ * Tagged @real-claude - only runs in CI tier 2 (real Claude, mocked GitHub)
  */
 
-test.describe('Agents: Create Task (E2E)', () => {
-  // This test requires real Claude - skip unless explicitly enabled
-  test.skip(
-    !process.env.RUN_REAL_CLAUDE_TESTS,
-    'Skipping: requires real Claude (set RUN_REAL_CLAUDE_TESTS=1)'
-  );
-
-  test('create task via conversation', async ({ page }) => {
+test.describe('Agents: Create Task (E2E) @real-claude', () => {
+  test('create task via conversation @real-claude', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
