@@ -130,7 +130,9 @@ class MockClaudeResponse:
             # If we have MCP servers with spawn_task, simulate the tool call
             if mcp_servers and "mainloop" in mcp_servers:
                 # First, acknowledge
-                text = f"I'll spawn a worker agent to work on this. Repository: {repo_url}"
+                text = (
+                    f"I'll spawn a worker agent to work on this. Repository: {repo_url}"
+                )
                 yield MockAssistantMessage(content=[MockTextBlock(text=text)])
 
                 # The actual spawn happens through the real MCP tool

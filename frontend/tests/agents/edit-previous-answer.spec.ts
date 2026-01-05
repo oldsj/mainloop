@@ -15,7 +15,9 @@ test.describe('Question Answering Flow', () => {
 
     // Questions should auto-expand for tasks needing attention
     // Look for the question text
-    await expect(page.locator('text=Which authentication method').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=Which authentication method').first()).toBeVisible({
+      timeout: 5000
+    });
 
     // Answer first question by clicking Yes
     const yesButton = page.locator('button:has-text("Yes")').first();
@@ -24,6 +26,8 @@ test.describe('Question Answering Flow', () => {
 
     // After answering, check for answered state or next question
     // The UI might show a checkmark or move to next question
-    await expect(page.locator('text=Should we add rate limiting').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=Should we add rate limiting').first()).toBeVisible({
+      timeout: 5000
+    });
   });
 });

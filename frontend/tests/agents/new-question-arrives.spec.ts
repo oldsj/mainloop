@@ -19,7 +19,9 @@ test.describe('Real-time Updates', () => {
 
     // Verify questions are visible when task is expanded
     // Click on the task to expand it if needed
-    const taskCard = needsInputBadge.locator('xpath=ancestor::div[contains(@class, "border")]').first();
+    const taskCard = needsInputBadge
+      .locator('xpath=ancestor::div[contains(@class, "border")]')
+      .first();
     await taskCard.click();
 
     // Question should be visible

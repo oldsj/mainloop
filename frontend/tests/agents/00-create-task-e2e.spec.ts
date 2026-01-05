@@ -9,7 +9,10 @@ import { setupConversation } from '../fixtures';
 
 test.describe('Agents: Create Task (E2E)', () => {
   // This test requires real Claude - skip unless explicitly enabled
-  test.skip(!process.env.RUN_REAL_CLAUDE_TESTS, 'Skipping: requires real Claude (set RUN_REAL_CLAUDE_TESTS=1)');
+  test.skip(
+    !process.env.RUN_REAL_CLAUDE_TESTS,
+    'Skipping: requires real Claude (set RUN_REAL_CLAUDE_TESTS=1)'
+  );
 
   test('create task via conversation', async ({ page }) => {
     await page.goto('/');

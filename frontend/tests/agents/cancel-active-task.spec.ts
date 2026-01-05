@@ -19,7 +19,9 @@ test.describe('Task Cancellation', () => {
 
     // 2. Click the cancel button (X icon in task header)
     // First hover to make the button visible (it may be hidden until hover)
-    const taskCard = reviewPlanBadge.locator('xpath=ancestor::div[contains(@class, "border")]').first();
+    const taskCard = reviewPlanBadge
+      .locator('xpath=ancestor::div[contains(@class, "border")]')
+      .first();
     await taskCard.hover();
 
     const cancelButton = page.getByRole('button', { name: 'Cancel task' }).first();
