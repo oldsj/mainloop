@@ -1,57 +1,92 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright configuration with layered test dependencies.
+ * Modern Playwright configuration with project dependencies.
  *
- * Test stages (fail-fast, each depends on previous):
- *   1. setup   - App loads, API healthy
- *   2. basic   - Simple conversation back-and-forth
- *   3. context - Conversation history, compaction
- *   4. agents  - Spawning workers, task management
+ * Environment variables:
+ *   PLAYWRIGHT_BASE_URL - Frontend URL (default: http://localhost:5173)
+ *   API_URL            - Backend URL (default: http://localhost:8081)
  *
  * Usage:
- *   make test-e2e       # Run all stages with isolated env
- *   make test-e2e-ui    # Interactive UI mode
+ *   make test          # Playwright UI (backend Docker, frontend Vite)
+ *   make test-run      # Headless CI mode
  */
+
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
+const apiURL = process.env.API_URL || 'http://localhost:8081';
+
 export default defineConfig({
   testDir: './tests',
 
-  // Fail fast in CI, run all in dev
-  maxFailures: process.env.CI ? 5 : 0,
+  // Fail fast - stop on first failure
+  maxFailures: 1,
 
-  // Sequential by default for state-dependent tests
+  // Tests run sequentially by default (state-dependent)
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
-  workers: 1, // Sequential execution to maintain state
+  retries: process.env.CI ? 2 : 0,
+  workers: 1,
 
-  reporter: [['html', { open: 'never' }], ['list']],
+  reporter: process.env.CI
+    ? [['github'], ['html', { open: 'never' }]]
+    : [['list'], ['html', { open: 'never' }]],
+
+  // Global timeout for tests
+  timeout: 30000,
+  expect: { timeout: 10000 },
 
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
-    trace: 'on-first-retry',
+    baseURL,
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    video: 'retain-on-failure'
+    video: 'retain-on-failure',
+    // Pass API_URL to tests via extraHTTPHeaders or use in fixtures
+    extraHTTPHeaders: {
+      'x-test-api-url': apiURL
+    }
+  },
+
+  // Store API_URL for fixtures to use
+  metadata: {
+    apiURL
   },
 
   projects: [
+    // Desktop Chrome tests (default)
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] }
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: [/mobile\//, /global\.(setup|teardown)\.ts/]
     },
+
+    // Mobile tests (Pixel 5 viewport)
     {
       name: 'mobile',
-      testMatch: /mobile\/.*\.spec\.ts/,
-      use: { ...devices['Pixel 5'] }
+      use: { ...devices['Pixel 5'] },
+      testMatch: /mobile\/.*\.spec\.ts/
     }
   ],
 
-  webServer: {
-    command: 'VITE_API_URL=http://localhost:8081 pnpm dev --port 5173',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 60000,
-    stdout: 'ignore',
-    stderr: 'pipe'
-  }
+  // Global setup/teardown (runs once, not per-project)
+  globalSetup: './tests/global-setup.ts',
+  globalTeardown: './tests/global-teardown.ts',
+
+  // Start Vite dev server only if not using external frontend (Docker)
+  // When PLAYWRIGHT_BASE_URL is set, we assume Docker frontend is running
+  ...(process.env.PLAYWRIGHT_BASE_URL
+    ? {}
+    : {
+        webServer: {
+          command: 'pnpm dev --port 5173 --strictPort',
+          url: 'http://localhost:5173',
+          reuseExistingServer: true,
+          timeout: 60000,
+          env: {
+            VITE_API_URL: apiURL
+          }
+        }
+      })
 });
+
+// Export for use in fixtures
+export { apiURL, baseURL };

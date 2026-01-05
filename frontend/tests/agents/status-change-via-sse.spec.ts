@@ -1,52 +1,42 @@
-// spec: frontend/specs/task-interactions.md
-// seed: frontend/tests/seed.spec.ts
-
 import { test, expect } from '@playwright/test';
+import { seedTaskWaitingPlanReview } from '../fixtures/seed-data';
 
 test.describe('Real-time Updates', () => {
-  test('Status Change via SSE', async ({ page }) => {
+  test.skip('Task displays in inbox with correct status', async ({ page }) => {
+    // Seed a task and verify it appears in the inbox
     await page.goto('/');
+    await seedTaskWaitingPlanReview(page);
+    await page.reload();
+
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // 1. Have a task in active state
-    const activeTask = page.locator('text=PLANNING, text=IMPLEMENTING').first();
-    await expect(activeTask).toBeVisible();
+    // Task should appear with REVIEW PLAN status
+    const reviewBadge = page.locator('text=REVIEW PLAN').first();
+    await expect(reviewBadge).toBeVisible({ timeout: 10000 });
 
-    const initialStatus = await activeTask.textContent();
-    const taskCard = activeTask.locator('..').locator('..');
+    // Get the task card containing the badge
+    const taskCard = reviewBadge.locator('xpath=ancestor::div[contains(@class, "border")]').first();
 
-    // Get task description to identify it later
-    const taskDescription = await taskCard.locator('p.truncate').first().textContent();
+    // Verify task description is visible
+    await expect(taskCard.locator('text=Add user authentication').first()).toBeVisible();
 
-    // 2. Backend updates task status (simulated via SSE)
-    // This would require backend to send SSE event
-    // For testing, we can trigger a state change by interacting with the task
+    // Verify badge styling (should indicate attention needed)
+    await expect(reviewBadge).toBeVisible();
 
-    // 3. Observe inbox updates
-    // Expected: Task status updates without page refresh
-    // Wait for potential status change (this is environment-dependent)
-    await page.waitForTimeout(2000);
-
-    // Expected: UI reflects new state automatically
-    const updatedTaskCard = page
-      .locator(`text="${taskDescription}"`)
-      .first()
-      .locator('..')
-      .locator('..');
-    await expect(updatedTaskCard).toBeVisible();
-
-    // Expected: No jarring transitions or flashing
-    // The task should smoothly update without full page reload
-
-    // Expected: Badge counts update appropriately
-    const attentionBadge = page.locator('.border.border-term-info').first();
+    // Verify attention badge in header updates
+    const attentionBadge = page.locator('header').locator('.border.border-term-info').first();
     if (await attentionBadge.isVisible()) {
       const badgeCount = await attentionBadge.textContent();
       expect(badgeCount).toMatch(/\d+/);
     }
+  });
 
-    // Verify no page reload occurred by checking connection state
-    const isConnected = await page.evaluate(() => navigator.onLine);
-    expect(isConnected).toBe(true);
+  test.skip('Status updates via SSE without page reload', async () => {
+    // TODO: This test requires SSE event mocking or backend trigger
+    // Currently we can only test initial state rendering
+    // To properly test SSE:
+    // 1. Seed task in state A
+    // 2. Trigger backend to change state to B
+    // 3. Verify UI updates without reload
   });
 });

@@ -1,26 +1,27 @@
 /**
- * Test data fixtures
+ * Test data seeding helpers.
  *
- * Helpers to seed database with tasks and queue items for testing.
+ * Uses API_URL env var directly - no port mapping magic.
  */
 
 import type { Page } from '@playwright/test';
 
+// Single source of truth for API URL
+const apiURL = process.env.API_URL || 'http://localhost:8081';
+
 /**
- * Seed a task in "waiting_plan_review" status
- *
- * Creates a task with a plan ready for review, simulating what happens
- * when Claude finishes planning and needs human approval.
+ * Reset test database for clean state
+ */
+export async function resetTestData(page: Page): Promise<void> {
+  await page.request.post(`${apiURL}/internal/test/reset`);
+}
+
+/**
+ * Seed a task in "waiting_plan_review" status (REVIEW PLAN badge)
  */
 export async function seedTaskWaitingPlanReview(page: Page) {
-  // Get the base URL from the page and derive API URL
-  const baseURL = new URL(page.url()).origin;
-  // Map frontend port to backend port:
-  // - CI Kind: 3000 -> 8000
-  // - Local docker-compose: 3031 -> 8081
-  const apiURL = baseURL.replace(':3031', ':8081').replace(':3000', ':8000');
+  await resetTestData(page);
 
-  // Directly insert task into database via internal API
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
       status: 'waiting_plan_review',
@@ -54,33 +55,86 @@ Add JWT-based authentication to the application.
 }
 
 /**
- * Seed a queue item with questions
+ * Seed a task in "waiting_questions" status (NEEDS INPUT badge)
  */
-export async function seedQueueItemQuestions(page: Page) {
-  const baseURL = new URL(page.url()).origin;
-  // Map frontend port to backend port (same as seedTaskWaitingPlanReview)
-  const apiURL = baseURL.replace(':3031', ':8081').replace(':3000', ':8000');
+export async function seedTaskWaitingQuestions(page: Page) {
+  await resetTestData(page);
 
-  const response = await page.request.post(`${apiURL}/internal/test/seed-queue-item`, {
+  const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
-      type: 'question',
-      content: {
-        questions: [
-          {
-            id: 'q1',
-            question: 'Which authentication method should we use?',
-            options: [
-              { id: 'jwt', label: 'JWT tokens' },
-              { id: 'session', label: 'Server sessions' }
-            ]
-          }
-        ]
-      }
+      status: 'waiting_questions',
+      task_type: 'feature',
+      description: 'Add user authentication',
+      repo_url: 'https://github.com/test/repo',
+      questions: [
+        {
+          id: 'q1',
+          question: 'Which authentication method should we use?',
+          options: [
+            { id: 'jwt', label: 'Yes' },
+            { id: 'session', label: 'No' }
+          ]
+        },
+        {
+          id: 'q2',
+          question: 'Should we add rate limiting?',
+          options: [
+            { id: 'yes', label: 'Yes' },
+            { id: 'no', label: 'No' },
+            { id: 'maybe', label: 'Maybe' }
+          ]
+        }
+      ]
     }
   });
 
   if (!response.ok()) {
-    throw new Error(`Failed to seed queue item: ${response.status()}`);
+    throw new Error(`Failed to seed task: ${response.status()}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Seed a task in "implementing" status (WORKING badge)
+ */
+export async function seedTaskImplementing(page: Page) {
+  await resetTestData(page);
+
+  const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
+    data: {
+      status: 'implementing',
+      task_type: 'feature',
+      description: 'Add user authentication',
+      repo_url: 'https://github.com/test/repo'
+    }
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to seed task: ${response.status()}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Seed a task in "ready_to_implement" status (READY badge)
+ */
+export async function seedTaskReadyToImplement(page: Page) {
+  await resetTestData(page);
+
+  const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
+    data: {
+      status: 'ready_to_implement',
+      task_type: 'feature',
+      description: 'Add user authentication',
+      repo_url: 'https://github.com/test/repo',
+      plan: `# Implementation Plan\n\n## Steps\n1. Create User model\n2. Add auth endpoints`
+    }
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to seed task: ${response.status()}`);
   }
 
   return response.json();

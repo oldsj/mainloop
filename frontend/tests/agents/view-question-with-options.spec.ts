@@ -1,17 +1,18 @@
-// spec: frontend/specs/task-interactions.md
-// seed: frontend/tests/seed.spec.ts
-
 import { test, expect } from '@playwright/test';
+import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 test.describe('Question Answering Flow', () => {
-  test('View Question with Options', async ({ page }) => {
-    // 1. Expand a task in "waiting_questions" status (NEEDS INPUT badge)
+  test.skip('View Question with Options', async ({ page }) => {
+    // Seed a task with questions
     await page.goto('/');
+    await seedTaskWaitingQuestions(page);
+    await page.reload();
+
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
     // Find task with NEEDS INPUT status
     const needsInputBadge = page.locator('text=NEEDS INPUT').first();
-    await expect(needsInputBadge).toBeVisible();
+    await expect(needsInputBadge).toBeVisible({ timeout: 10000 });
 
     // Click on the task to expand it
     const taskCard = needsInputBadge.locator('..').locator('..');

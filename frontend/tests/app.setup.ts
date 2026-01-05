@@ -1,19 +1,17 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * SETUP STAGE - Must pass before any other tests run.
+ * App health tests - verify UI elements render correctly.
  *
- * Verifies:
- * - App loads successfully
- * - API is responding
- * - Core UI elements render
+ * Note: API health + database reset are handled by global.setup.ts
+ * These tests focus on UI rendering after API is confirmed working.
  */
 
-test.describe('Setup: App Health', () => {
+test.describe('App Health', () => {
   test('app loads and shows main UI', async ({ page }) => {
     await page.goto('/');
 
-    // App shell loads - use heading role for specificity
+    // App shell loads
     await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible({
       timeout: 15000
     });
@@ -25,42 +23,34 @@ test.describe('Setup: App Health', () => {
     await expect(page.getByText('[INBOX]').first()).toBeVisible();
   });
 
-  test('API health check', async ({ page }) => {
-    // Navigate to app and verify it can fetch data from backend
+  test('input field is focusable', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('heading', { name: '$ mainloop' }).first().waitFor({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    // The app loads successfully means API is working (it fetches conversation on load)
-    // Check for no network errors in console
-    const errors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error' && (msg.text().includes('fetch') || msg.text().includes('API'))) {
-        errors.push(msg.text());
-      }
-    });
-
-    await page.waitForTimeout(1000);
-    // If there are API errors, they would show up here
-    // For now, just verify page loaded which means API is accessible
-    expect(true).toBe(true);
+    // Input field should be visible and focusable
+    const input = page.getByPlaceholder('Enter command...').first();
+    await expect(input).toBeVisible();
+    await input.focus();
+    await expect(input).toBeFocused();
   });
 
-  test('SSE connection establishes', async ({ page }) => {
-    await page.goto('/');
-    await page.getByRole('heading', { name: '$ mainloop' }).first().waitFor({ timeout: 10000 });
+  test('SSE connection establishes (no EventSource errors)', async ({ page }) => {
+    const sseErrors: string[] = [];
 
-    // Wait a moment for SSE to connect
-    await page.waitForTimeout(1000);
-
-    // Check for no console errors related to SSE/EventSource
-    const errors: string[] = [];
+    // Listen for console errors before navigating
     page.on('console', (msg) => {
       if (msg.type() === 'error' && msg.text().includes('EventSource')) {
-        errors.push(msg.text());
+        sseErrors.push(msg.text());
       }
     });
 
-    await page.waitForTimeout(500);
-    expect(errors).toHaveLength(0);
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
+
+    // Wait for inbox to load (confirms SSE/API working)
+    await expect(page.getByText('[INBOX]').first()).toBeVisible();
+
+    // No SSE errors should have occurred
+    expect(sseErrors).toHaveLength(0);
   });
 });

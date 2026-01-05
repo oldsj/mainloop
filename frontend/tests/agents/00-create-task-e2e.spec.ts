@@ -1,19 +1,22 @@
 import { test, expect } from '@playwright/test';
+import { setupConversation } from '../fixtures';
 
 /**
  * AGENTS STAGE - End-to-end task creation
  *
  * Tests the full flow: conversation → Claude spawns task → task appears in inbox
- * This builds on the conversation history from previous stages.
  */
 
 test.describe('Agents: Create Task (E2E)', () => {
+  // This test requires real Claude - skip unless explicitly enabled
+  test.skip(!process.env.RUN_REAL_CLAUDE_TESTS, 'Skipping: requires real Claude (set RUN_REAL_CLAUDE_TESTS=1)');
+
   test('create task via conversation', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // Verify we have conversation history from previous stages
-    await expect(page.getByText('hello').first()).toBeVisible();
+    // Set up conversation state
+    await setupConversation(page);
 
     // Ask Claude to create a task (use first input - desktop)
     const input = page.getByPlaceholder('Enter command...').first();
@@ -27,11 +30,13 @@ test.describe('Agents: Create Task (E2E)', () => {
 
     // Claude should ask for confirmation before spawning
     // Wait for response that includes spawn confirmation or question
+    // Use getByRole('main') to scope to desktop layout (mobile duplicates are hidden)
     await expect(
       page
+        .getByRole('main')
         .locator('.message')
         .filter({ hasText: /spawn|create|implement|task/i })
-        .last()
+        .first()
     ).toBeVisible({ timeout: 30000 });
 
     // If Claude asks for confirmation, look for a confirm button or message

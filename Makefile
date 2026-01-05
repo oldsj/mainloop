@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-run test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci
 
 # Load .env file if it exists
 -include .env
@@ -336,21 +336,32 @@ test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
 test-e2e-report: ## Show Playwright HTML test report
 	cd frontend && pnpm exec playwright show-report
 
-# Fast Testing (Docker backend + Local Vite + Playwright UI)
-test: ## Playwright UI with hot reload (backend Docker, frontend local)
-	@echo "Starting backend (Docker) + frontend (local Vite)..."
-	@docker compose -f docker-compose.test.yml up -d --build --wait
+# Fast Testing (Docker backend + frontend)
+# Backend runs on 8081, frontend on 3031
+TEST_API_URL := http://localhost:8081
+TEST_FRONTEND_URL := http://localhost:3031
+
+test: ## Playwright UI with hot reload (backend Docker, frontend Vite)
+	@echo "Starting backend (Docker)..."
+	@docker compose -f docker-compose.test.yml up -d backend-test postgres-test --build --wait
 	@echo ""
 	@echo "=== Playwright UI ==="
-	@echo "Backend: http://localhost:8081 (Docker, hot reload)"
-	@echo "Frontend: http://localhost:5173 (Vite, started by Playwright)"
+	@echo "Backend: $(TEST_API_URL) (Docker, watchexec restarts on changes)"
+	@echo "Frontend: http://localhost:5173 (Vite with hot reload)"
 	@echo ""
-	@(cd frontend && pnpm exec playwright test --ui) || true
-	@docker compose -f docker-compose.test.yml down -v
+	@trap 'kill 0' INT; \
+	watchexec -w backend/src -w models -e py \
+		-i '__pycache__/' \
+		--on-busy-update restart \
+		-- docker compose -f docker-compose.test.yml restart backend-test & \
+	cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
 
-test-run: ## Run tests once (CI mode)
+test-run: ## Run tests headless (against Vite server from make test)
+	@cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test
+
+test-ci: ## Run tests in CI (starts own backend, tears down after)
 	@docker compose -f docker-compose.test.yml up -d --build --wait
-	@(cd frontend && pnpm exec playwright test) || EXIT_CODE=$$?; \
+	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test) || EXIT_CODE=$$?; \
 	docker compose -f docker-compose.test.yml down -v; \
 	exit $${EXIT_CODE:-0}
 

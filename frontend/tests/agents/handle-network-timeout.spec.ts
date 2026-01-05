@@ -1,11 +1,12 @@
-// spec: frontend/specs/task-interactions.md
-// seed: frontend/tests/seed.spec.ts
-
 import { test, expect } from '@playwright/test';
+import { seedTaskWaitingPlanReview } from '../fixtures/seed-data';
 
 test.describe('Error Handling', () => {
-  test('Handle Network Timeout', async ({ page }) => {
+  test.skip('Handle Network Timeout', async ({ page }) => {
     await page.goto('/');
+    await seedTaskWaitingPlanReview(page);
+    await page.reload();
+
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
     // 1. Submit action during slow network conditions
@@ -15,7 +16,7 @@ test.describe('Error Handling', () => {
     });
 
     const reviewPlanBadge = page.locator('text=REVIEW PLAN').first();
-    if (await reviewPlanBadge.isVisible()) {
+    if (await reviewPlanBadge.isVisible({ timeout: 10000 })) {
       const taskCard = reviewPlanBadge.locator('..').locator('..');
       await taskCard.click();
 

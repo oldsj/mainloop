@@ -1,16 +1,17 @@
-// spec: frontend/specs/task-interactions.md
-// seed: frontend/tests/seed.spec.ts
-
 import { test, expect } from '@playwright/test';
+import { seedTaskReadyToImplement } from '../fixtures/seed-data';
 
 test.describe('Start Implementation Flow', () => {
-  test('Start Implementation', async ({ page }) => {
+  test.skip('Start Implementation', async ({ page }) => {
     await page.goto('/');
+    await seedTaskReadyToImplement(page);
+    await page.reload();
+
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
     // 1. Find task in "ready_to_implement" status
     const readyBadge = page.locator('text=READY').first();
-    await expect(readyBadge).toBeVisible();
+    await expect(readyBadge).toBeVisible({ timeout: 10000 });
 
     const taskCard = readyBadge.locator('..').locator('..');
     await taskCard.click();

@@ -41,8 +41,8 @@ services:
       - CLAUDE_AGENT_URL=http://claude-agent-test:8001
       - IS_TEST_ENV=true
       - USE_MOCK_CLAUDE=true
-    # Override to enable hot reload
-    command: ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # No --reload needed - watchexec restarts container on file changes
+    command: ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       postgres-test:
         condition: service_healthy
