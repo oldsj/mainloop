@@ -69,9 +69,45 @@ app.add_middleware(
 )
 
 
+def _apply_mock_github():
+    """Replace github_pr functions with mocks if USE_MOCK_GITHUB=true."""
+    if not settings.use_mock_github:
+        return
+
+    import mainloop.services.github_pr as github_pr
+    from mainloop.services import github_mock
+
+    # Replace functions with mocks
+    funcs_to_mock = [
+        "create_github_issue",
+        "update_github_issue",
+        "add_issue_comment",
+        "get_issue_status",
+        "get_issue_comments",
+        "get_comment_reactions",
+        "get_pr_status",
+        "get_pr_comments",
+        "get_pr_reviews",
+        "get_check_status",
+        "get_check_failure_logs",
+        "add_reaction_to_comment",
+        "acknowledge_comments",
+        "is_pr_merged",
+        "is_pr_approved",
+    ]
+    for name in funcs_to_mock:
+        if hasattr(github_mock, name):
+            setattr(github_pr, name, getattr(github_mock, name))
+
+    print("[startup] GitHub mock enabled - API calls will be simulated")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and DBOS on startup."""
+    # Apply mocks before anything else
+    _apply_mock_github()
+
     # Connect to PostgreSQL
     await db.connect()
     await db.ensure_tables_exist()
@@ -231,9 +267,15 @@ async def chat(
     )
     await db.increment_message_count(conversation.id)
 
-    # Get main thread record for the ID
+    # Get or create main thread record
     main_thread = await db.get_main_thread_by_user(user_id)
-    thread_id = main_thread.id if main_thread else main_thread_id
+    if not main_thread:
+        # Create main thread record if it doesn't exist (e.g., after DB reset)
+        from models import MainThread
+
+        main_thread = MainThread(user_id=user_id, workflow_run_id=main_thread_id)
+        main_thread = await db.create_main_thread(main_thread)
+    thread_id = main_thread.id
 
     # Process message with summary + recent messages for context
     result = await process_message(
@@ -1182,12 +1224,26 @@ async def reset_test_data():
             status_code=403, detail="Only available in test environment"
         )
 
-    # Clear all tables
+    # Truncate all app tables (CASCADE handles foreign keys)
     async with db.connection() as conn:
-        await conn.execute("DELETE FROM queue_items")
-        await conn.execute("DELETE FROM messages")
-        await conn.execute("DELETE FROM worker_tasks")
-        await conn.execute("DELETE FROM main_threads")
+        await conn.execute(
+            """
+            TRUNCATE TABLE
+                queue_items, messages, worker_tasks, projects,
+                conversations, main_threads
+            CASCADE
+        """
+        )
+        # Clear DBOS workflow state
+        await conn.execute(
+            "TRUNCATE TABLE dbos.workflow_events, dbos.operation_outputs, dbos.workflow_status CASCADE"
+        )
+
+    # Reset mock state if mocking is enabled
+    if settings.use_mock_github:
+        from mainloop.services.github_mock import mock_state
+
+        mock_state.reset()
 
     return {"status": "reset"}
 

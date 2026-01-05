@@ -45,7 +45,7 @@ jobs:
             file: frontend/Dockerfile
             context: .
             tag: mainloop-frontend:test
-            build-args: VITE_API_URL=http://localhost:8000
+            build-args: VITE_API_URL=http://localhost:8081
           - image: agent
             file: claude-agent/Dockerfile
             context: ./claude-agent
@@ -133,30 +133,27 @@ jobs:
           path: /tmp/images
           merge-multiple: true
 
-      - name: Load images into Docker and Kind
+      - name: Load images into Kind
         run: |
-          # Load into Docker (parallel)
           docker load --input /tmp/images/backend.tar &
           docker load --input /tmp/images/frontend.tar &
           docker load --input /tmp/images/agent.tar &
           wait
 
-          # Load into Kind (parallel)
-          kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }} &
-          kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }} &
-          kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          kind load docker-image mainloop-backend:test --name "$KIND_CLUSTER_NAME" &
+          kind load docker-image mainloop-frontend:test --name "$KIND_CLUSTER_NAME" &
+          kind load docker-image mainloop-agent-controller:test --name "$KIND_CLUSTER_NAME" &
           wait
 
       - name: Create secrets
         env:
           CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           kubectl create namespace mainloop
           kubectl create secret generic mainloop-secrets \
             --namespace mainloop \
-            --from-literal=claude-secret-token="${CLAUDE_TOKEN}" \
-            --from-literal=github-token="${GH_TOKEN}"
+            --from-literal=claude-secret-token="$CLAUDE_TOKEN" \
+            --from-literal=github-token=""
 
       - name: Deploy to Kind
         run: |
@@ -167,25 +164,18 @@ jobs:
 
       - name: Wait for services
         run: |
-          # Wait for endpoints to be ready (more reliable than just pod ready)
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-backend -n mainloop --timeout=120s || true
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-frontend -n mainloop --timeout=120s || true
-
-          # Verify HTTP endpoints are responding
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:8000/health || {
+          curl -sf --retry 30 --retry-delay 2 --retry-all-errors \
+            http://localhost:8081/health || {
             echo "Backend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-backend --tail=50
+            kubectl logs -n mainloop deployment/mainloop-backend --tail=100
             exit 1
           }
           echo "Backend healthy"
 
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:3000 || {
+          curl -sf --retry 30 --retry-delay 2 --retry-all-errors \
+            http://localhost:5173 || {
             echo "Frontend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-frontend --tail=50
+            kubectl logs -n mainloop deployment/mainloop-frontend --tail=100
             exit 1
           }
           echo "Frontend healthy"
@@ -193,9 +183,17 @@ jobs:
       - name: Run Playwright tests
         run: |
           cd frontend
-          PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
+          PLAYWRIGHT_BASE_URL=http://localhost:5173 API_URL=http://localhost:8081 pnpm exec playwright test
         env:
           CI: true
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Backend logs ==="
+          kubectl logs -n mainloop deployment/mainloop-backend --tail=200
+          echo "=== Frontend logs ==="
+          kubectl logs -n mainloop deployment/mainloop-frontend --tail=100
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

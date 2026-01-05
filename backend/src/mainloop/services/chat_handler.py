@@ -78,29 +78,19 @@ Ask for the GitHub repo URL like:
     return base_prompt
 
 
-def create_spawn_task_tool(
+def create_spawn_task_callable(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
 ):
-    """Create a spawn_task tool with context baked in.
+    """Create a raw spawn_task callable for Claude to use.
 
-    This factory creates a tool that has access to the current user/conversation context.
+    This returns an async function that can be called directly with a dict of args.
     """
 
-    @tool(
-        "spawn_task",
-        "Spawn an autonomous coding agent to work on a development task. "
-        "Use this when the user confirms they want you to create, modify, or delete code. "
-        "Requires a task description and GitHub repository URL.",
-        {
-            "task_description": str,
-            "repo_url": str,
-            "skip_planning": bool,
-        },
-    )
-    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
+    async def spawn_task_impl(args: dict[str, Any]) -> dict[str, Any]:
         """Spawn a worker task to handle a coding request."""
+        print(f"[SPAWN] spawn_task_impl called with args: {args}")
         task_description = args.get("task_description", "")
         repo_url = args.get("repo_url", "")
         skip_planning = args.get("skip_planning", False)
@@ -137,7 +127,9 @@ def create_spawn_task_tool(
             }
 
         try:
+            print(f"[SPAWN] Creating task for repo: {repo_url}")
             keywords = extract_keywords(task_description)
+            print(f"[SPAWN] Keywords: {keywords}")
 
             task = WorkerTask(
                 main_thread_id=main_thread_id,
@@ -151,13 +143,22 @@ def create_spawn_task_tool(
                 keywords=keywords,
                 skip_plan=skip_planning,
             )
+            print("[SPAWN] WorkerTask created, calling db.create_worker_task")
             task = await db.create_worker_task(task)
+            print(f"[SPAWN] Task saved to DB: {task.id}")
+
+            # Create project from repo URL (so it shows in sidebar)
+            print(f"[SPAWN] Creating project for repo: {repo_url}")
+            project = await db.get_or_create_project_from_url(user_id, repo_url)
+            print(f"[SPAWN] Project created/found: {project.id} - {project.full_name}")
 
             # Enqueue the worker task
             from mainloop.workflows.worker import worker_task_workflow
 
+            print(f"[SPAWN] Enqueueing workflow for task {task.id}")
             with SetWorkflowID(task.id):
-                worker_queue.enqueue(worker_task_workflow, task.id)
+                handle = worker_queue.enqueue(worker_task_workflow, task.id)
+                print(f"[SPAWN] Workflow enqueued, handle: {handle}")
 
             logger.info(
                 f"Spawned worker task via tool: {task.id} (skip_plan={skip_planning})"
@@ -180,11 +181,48 @@ def create_spawn_task_tool(
                 ]
             }
         except Exception as e:
+            import traceback
+
+            print(f"[SPAWN] ERROR: {e}")
+            print(f"[SPAWN] Traceback: {traceback.format_exc()}")
             logger.error(f"Failed to spawn task: {e}")
             return {
                 "content": [{"type": "text", "text": f"Error spawning task: {str(e)}"}],
                 "is_error": True,
             }
+
+    return spawn_task_impl
+
+
+def create_spawn_task_tool(
+    user_id: str,
+    main_thread_id: str,
+    conversation_id: str,
+):
+    """Create a spawn_task tool with context baked in.
+
+    This factory creates a tool that has access to the current user/conversation context.
+    Returns an SdkMcpTool for use with Claude Agent SDK.
+    """
+    # Get the raw callable
+    spawn_task_impl = create_spawn_task_callable(
+        user_id, main_thread_id, conversation_id
+    )
+
+    # Wrap it with the @tool decorator for Claude
+    @tool(
+        "spawn_task",
+        "Spawn an autonomous coding agent to work on a development task. "
+        "Use this when the user confirms they want you to create, modify, or delete code. "
+        "Requires a task description and GitHub repository URL.",
+        {
+            "task_description": str,
+            "repo_url": str,
+            "skip_planning": bool,
+        },
+    )
+    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
+        return await spawn_task_impl(args)
 
     return spawn_task
 
@@ -293,8 +331,6 @@ async def get_claude_response(
     will have access to the spawn_task tool to spawn autonomous worker agents.
 
     This ensures continuity across sessions, pod restarts, and deployments.
-
-    If USE_MOCK_CLAUDE=true, returns canned responses without API calls.
     """
     try:
         # Build prompt with summary and recent messages
@@ -321,44 +357,17 @@ async def get_claude_response(
             recent_repos = await db.get_recent_repos(main_thread_id)
             system_prompt = build_chat_system_prompt(recent_repos)
 
-        # Use mock Claude for fast testing (no API calls)
-        if settings.use_mock_claude:
-            logger.info("Using mock Claude (USE_MOCK_CLAUDE=true)")
-            from mainloop.services.claude_mock import (
-                MockAssistantMessage,
-                MockClaudeResponse,
-                MockResultMessage,
-                MockTextBlock,
-            )
-
-            collected_text: list[str] = []
-            async for msg in MockClaudeResponse.query_mock(
-                prompt_text, mcp_servers=mcp_servers
-            ):
-                if isinstance(msg, MockAssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, MockTextBlock):
-                            collected_text.append(block.text)
-                elif isinstance(msg, MockResultMessage):
-                    if msg.is_error:
-                        return ClaudeResponse(
-                            text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
-                        )
-
-            return ClaudeResponse(
-                text=(
-                    "\n".join(collected_text)
-                    if collected_text
-                    else "No response generated."
-                ),
-            )
-
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="bypassPermissions",
             system_prompt=system_prompt,
             mcp_servers=mcp_servers if mcp_servers else None,
             allowed_tools=allowed_tools if allowed_tools else None,
+        )
+
+        print(
+            f"[CLAUDE] query - model={model}, mcp_servers={list(mcp_servers.keys()) if mcp_servers else None}, "
+            f"allowed_tools={allowed_tools}"
         )
 
         # CRITICAL: When using MCP servers, must use async generator for prompt.

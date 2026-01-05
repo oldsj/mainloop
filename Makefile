@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci test-real-claude
 
 # Load .env file if it exists
 -include .env
@@ -242,17 +242,17 @@ kind-deploy: ## Deploy mainloop to Kind
 kind-reset: ## Reset data (DB + task namespaces) - keeps cluster
 	@./scripts/kind/reset-data.sh
 
-kind-logs: ## Tail backend logs
-	@kubectl logs -n mainloop deployment/mainloop-backend -f
+kind-logs: ## Tail backend logs (Kind test cluster)
+	@kubectl --context=kind-$(KIND_CLUSTER_NAME) logs -n mainloop deployment/mainloop-backend -f
 
-kind-shell: ## Open shell in backend pod
-	@kubectl exec -it -n mainloop deployment/mainloop-backend -- bash
+kind-shell: ## Open shell in backend pod (Kind test cluster)
+	@kubectl --context=kind-$(KIND_CLUSTER_NAME) exec -it -n mainloop deployment/mainloop-backend -- bash
 
 test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test environment
 	@echo ""
 	@echo "=== Local K8s environment ready ==="
-	@echo "Frontend: http://localhost:3000"
-	@echo "Backend:  http://localhost:8000"
+	@echo "Frontend: $(TEST_FRONTEND_URL)"
+	@echo "Backend:  $(TEST_API_URL)"
 	@echo ""
 	@echo "Run 'make kind-logs' to tail backend logs"
 	@echo "Run 'make kind-reset' to reset data between tests"
@@ -280,90 +280,88 @@ test-k8s-job: ## Test K8s job creation (creates a real job)
 test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
-# Frontend E2E Tests (Playwright with Kind)
-test-e2e: ## Run Playwright e2e tests (Kind cluster, auto-setup)
-	@echo "Setting up Kind test environment..."
-	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
-		echo "Creating Kind cluster..."; \
-		$(MAKE) kind-create; \
-	else \
-		echo "Kind cluster already exists, skipping creation"; \
-	fi
-	@echo "Building and loading images (uses Docker cache)..."
-	@$(MAKE) kind-load
-	@echo "Creating/updating secrets..."
-	@$(MAKE) kind-secrets
-	@echo "Deploying to Kind..."
-	@$(MAKE) kind-deploy
-	@echo "Waiting for services..."
-	@sleep 5
-	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
-		echo "Waiting for backend..."; \
-		sleep 2; \
-	done
-	@echo "Running Playwright tests..."
-	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
-
-test-e2e-ui: ## Run Playwright tests with interactive UI mode
-	@$(MAKE) test-e2e-setup
-	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --ui
-
-test-e2e-debug: ## Run Playwright tests in debug mode
-	@$(MAKE) test-e2e-setup
-	@cd frontend && PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --debug
-
-test-e2e-setup: ## Setup Kind environment (internal helper)
-	@echo "Setting up Kind test environment..."
-	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
-		echo "Creating Kind cluster..."; \
-		$(MAKE) kind-create; \
-	else \
-		echo "Kind cluster already exists, skipping creation"; \
-	fi
-	@$(MAKE) kind-load
-	@$(MAKE) kind-secrets
-	@$(MAKE) kind-deploy
-	@echo "Waiting for services..."
-	@sleep 5
-	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
-		echo "Waiting for backend..."; \
-		sleep 2; \
-	done
-
-test-e2e-dev: ## Run Playwright tests against dev environment (make dev)
-	PLAYWRIGHT_BASE_URL=http://localhost:3030 cd frontend && pnpm exec playwright test
-
-test-e2e-report: ## Show Playwright HTML test report
-	cd frontend && pnpm exec playwright show-report
-
-# Fast Testing (Docker backend + frontend)
-# Backend runs on 8081, frontend on 3031
+# Testing (Kind cluster with real Claude)
+# Backend: 8081, Frontend: 5173
+# No mocking - uses real Claude (haiku for CI, configurable for local)
 TEST_API_URL := http://localhost:8081
-TEST_FRONTEND_URL := http://localhost:3031
+TEST_FRONTEND_URL := http://localhost:5173
 
-test: ## Playwright UI with hot reload (backend Docker, frontend Vite)
-	@echo "Starting backend (Docker)..."
-	@docker compose -f docker-compose.test.yml up -d backend-test postgres-test --build --wait
+test: ## Playwright UI with hot reload (Kind cluster, real Claude)
+	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
+		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set. Add it to .env or run: make setup-claude-creds-mac"; \
+		exit 1; \
+	fi
+	@echo "Setting up Kind test environment..."
+	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		echo "Creating Kind cluster..."; \
+		$(MAKE) kind-create; \
+	fi
+	@$(MAKE) kind-load
+	@$(MAKE) kind-secrets
+	@$(MAKE) kind-deploy
+	@echo "Waiting for backend..."
+	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 2; done
 	@echo ""
-	@echo "=== Playwright UI ==="
-	@echo "Backend: $(TEST_API_URL) (Docker, watchexec restarts on changes)"
-	@echo "Frontend: http://localhost:5173 (Vite with hot reload)"
+	@echo "=== Playwright UI (Kind, Real Claude) ==="
+	@echo "Backend:  $(TEST_API_URL)"
+	@echo "Frontend: $(TEST_FRONTEND_URL)"
 	@echo ""
-	@trap 'kill 0' INT; \
-	watchexec -w backend/src -w models -e py \
-		-i '__pycache__/' \
-		--on-busy-update restart \
-		-- docker compose -f docker-compose.test.yml restart backend-test & \
-	cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
+	@echo "Commands:"
+	@echo "  make test-run    - Run all tests headless"
+	@echo "  make test-reset  - Reset DB and task namespaces"
+	@echo "  make kind-logs   - Tail backend logs"
+	@echo ""
+	@trap 'echo ""; echo "Cleaning up..."; pkill -P $$$$ 2>/dev/null; kubectl --context=$(KIND_CONTEXT) get ns -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null | xargs -r kubectl --context=$(KIND_CONTEXT) delete --wait=false 2>/dev/null; exit 0' INT TERM; \
+	watchexec -w backend/src -w models -e py -i '__pycache__/' \
+		--on-busy-update restart -- make kind-reload-backend & \
+	watchexec -w frontend/src -e ts,svelte,css -i 'node_modules/' \
+		--on-busy-update restart -- make kind-reload-frontend & \
+	watchexec -w k8s -e yaml \
+		--on-busy-update restart -- make kind-reload-manifests & \
+	cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
 
-test-run: ## Run tests headless (against Vite server from make test)
-	@cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test
+# Fast reload targets (rebuild single image + rollout restart, no full redeploy)
+KIND_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 
-test-ci: ## Run tests in CI (starts own backend, tears down after)
-	@docker compose -f docker-compose.test.yml up -d --build --wait
-	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test) || EXIT_CODE=$$?; \
-	docker compose -f docker-compose.test.yml down -v; \
-	exit $${EXIT_CODE:-0}
+kind-reload-manifests: ## Apply k8s manifests to Kind
+	@kubectl --context=$(KIND_CONTEXT) apply -k k8s/apps/mainloop/overlays/test --server-side --force-conflicts
+
+kind-reload-backend: ## Fast reload backend only
+	@docker build -f backend/Dockerfile -t mainloop-backend:test . -q
+	@kind load docker-image mainloop-backend:test --name $(KIND_CLUSTER_NAME) 2>/dev/null
+	@kubectl --context=$(KIND_CONTEXT) rollout restart deployment/mainloop-backend -n mainloop
+	@kubectl --context=$(KIND_CONTEXT) rollout status deployment/mainloop-backend -n mainloop --timeout=60s
+	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 1; done
+
+kind-reload-frontend: ## Fast reload frontend only
+	@docker build -f frontend/Dockerfile --build-arg VITE_API_URL=$(TEST_API_URL) -t mainloop-frontend:test . -q
+	@kind load docker-image mainloop-frontend:test --name $(KIND_CLUSTER_NAME) 2>/dev/null
+	@kubectl --context=$(KIND_CONTEXT) rollout restart deployment/mainloop-frontend -n mainloop
+	@kubectl --context=$(KIND_CONTEXT) rollout status deployment/mainloop-frontend -n mainloop --timeout=60s
+	@until curl -sf $(TEST_FRONTEND_URL) > /dev/null 2>&1; do sleep 1; done
+
+test-run: ## Run all tests headless (against Kind)
+	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test
+
+test-reset: ## Reset test state (DB + task namespaces)
+	@./scripts/kind/reset-data.sh
+
+test-ci: ## Run e2e tests in CI (Kind cluster, real Claude haiku)
+	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
+		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set"; \
+		exit 1; \
+	fi
+	@echo "Setting up Kind cluster for CI..."
+	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		$(MAKE) kind-create; \
+	fi
+	@$(MAKE) kind-load
+	@$(MAKE) kind-secrets
+	@$(MAKE) kind-deploy
+	@echo "Waiting for backend..."
+	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 2; done
+	@echo "Running Playwright tests..."
+	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test
 
 # Debugging commands
 # Set API_URL in .env file or override: make debug-tasks API_URL=https://your-api.example.com

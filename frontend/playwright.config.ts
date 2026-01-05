@@ -15,16 +15,19 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 const apiURL = process.env.API_URL || 'http://localhost:8000';
 
+// Headed by default locally, headless on CI (override with HEADLESS=true/false)
+const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : !!process.env.CI;
+
 export default defineConfig({
   testDir: './tests',
 
-  // Fail fast - stop on first failure
-  maxFailures: 1,
+  // Run all tests - don't stop on first failure (see all issues)
+  maxFailures: undefined,
 
   // Tests run sequentially by default (state-dependent)
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: 0, // No retries - fail fast, don't hide flakiness
   workers: 1,
 
   reporter: process.env.CI
@@ -37,6 +40,7 @@ export default defineConfig({
 
   use: {
     baseURL,
+    headless,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

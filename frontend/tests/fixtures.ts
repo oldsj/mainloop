@@ -54,8 +54,9 @@ export async function resetTestData(): Promise<void> {
  */
 export async function sendMessage(page: Page, message: string): Promise<void> {
   const input = page.getByPlaceholder('Enter command...').first();
+  await input.click();
   await input.fill(message);
-  await input.press('Enter');
+  await page.getByRole('button', { name: 'EXEC' }).click();
 
   // Wait for our message to appear in the chat
   await expect(page.getByText(message).first()).toBeVisible({ timeout: 5000 });
@@ -163,13 +164,14 @@ export async function setupConversation(page: Page): Promise<void> {
 
   // Send hello message
   const input = page.getByPlaceholder('Enter command...').first();
+  await input.click();
   await input.fill('hello');
-  await input.press('Enter');
+  await page.getByRole('button', { name: 'EXEC' }).click();
 
   // Wait for message to appear in chat
   await expect(page.getByText('hello').first()).toBeVisible({ timeout: 10000 });
 
-  // Wait for assistant response (mock claude should respond quickly)
+  // Wait for assistant response from Claude API
   // Assistant messages have bg-term-bg-secondary class
   const assistantMessage = page.locator('.message.bg-term-bg-secondary').first();
   await expect(assistantMessage).toBeVisible({ timeout: 30000 });

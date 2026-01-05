@@ -10,13 +10,13 @@ echo "=== Building and loading images into Kind cluster ==="
 
 cd "${REPO_ROOT}"
 
-# Build images with test tag
+# Build images with test tag (shares cache with make dev)
 echo "Building backend..."
 docker build -f backend/Dockerfile -t mainloop-backend:test .
 
 echo "Building frontend..."
 docker build -f frontend/Dockerfile \
-  --build-arg VITE_API_URL=http://localhost:8000 \
+  --build-arg VITE_API_URL=http://localhost:8081 \
   -t mainloop-frontend:test .
 
 echo "Building agent-controller..."

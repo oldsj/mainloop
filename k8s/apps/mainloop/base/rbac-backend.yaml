@@ -46,6 +46,11 @@ rules:
   - apiGroups: ['']
     resources: [pods, pods/log]
     verbs: [get, list, watch]
+
+  # NetworkPolicy management - isolate task namespaces
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, get, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -1,10 +1,40 @@
-# Fast test environment with hot reload
+# Fast test environment
 #
 # Usage:
-#   make test    # Playwright UI with hot reload
-#   make test-run # CI mode (one-shot)
+#   make test        # Playwright UI with hot reload (frontend via Vite)
+#   make test-run    # CI mode headless (frontend via Vite)
+#   make test-e2e    # CI mode with all containers (frontend built)
 
 services:
+  frontend-test:
+    image: mainloop-frontend-test
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8081
+    container_name: mainloop-frontend-test
+    ports:
+      - 3031:3000
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      backend-test:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    profiles:
+      - ci
   postgres-test:
     image: postgres:16-alpine
     container_name: mainloop-postgres-test
@@ -21,6 +51,7 @@ services:
       retries: 10
 
   backend-test:
+    image: mainloop-backend-test
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -40,7 +71,8 @@ services:
       - DB_PASSWORD=mainloop
       - CLAUDE_AGENT_URL=http://claude-agent-test:8001
       - IS_TEST_ENV=true
-      - USE_MOCK_CLAUDE=true
+      - USE_MOCK_GITHUB=${USE_MOCK_GITHUB:-true}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     # No --reload needed - watchexec restarts container on file changes
     command: [uvicorn, mainloop.api:app, --host, 0.0.0.0, --port, '8000']
     depends_on:

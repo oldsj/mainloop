@@ -17,7 +17,7 @@
     <span class="text-xs text-term-fg-muted">PROJECTS</span>
   </div>
 
-  <div class="max-h-48 overflow-y-auto">
+  <div class="max-h-48 overflow-y-auto" data-testid="projects-list">
     {#each $projectsList as project (project.id)}
       <button
         onclick={() => handleClick(project.id)}

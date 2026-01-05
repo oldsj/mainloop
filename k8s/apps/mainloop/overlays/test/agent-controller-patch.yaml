@@ -1,0 +1,15 @@
+# Patch agent-controller deployment for local testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-agent-controller
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      # Remove GHCR image pull secrets (using local images)
+      imagePullSecrets: []
+      containers:
+        - name: agent-controller
+          # Use locally loaded image, never try to pull
+          imagePullPolicy: Never

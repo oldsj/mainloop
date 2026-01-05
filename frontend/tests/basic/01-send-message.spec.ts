@@ -17,7 +17,7 @@ test.describe('Basic: Send Message', () => {
     const input = page.getByPlaceholder('Enter command...').first();
     await input.click(); // Focus first
     await input.fill('hello');
-    await input.press('Enter');
+    await page.getByRole('button', { name: 'EXEC' }).click();
 
     // Message should appear in chat (wait longer, backend needs to process)
     await expect(page.getByText('hello').first()).toBeVisible({ timeout: 10000 });
