@@ -71,8 +71,9 @@ services:
       - DB_PASSWORD=mainloop
       - CLAUDE_AGENT_URL=http://claude-agent-test:8001
       - IS_TEST_ENV=true
-      - USE_MOCK_CLAUDE=true
-      - USE_MOCK_GITHUB=true
+      - USE_MOCK_CLAUDE=${USE_MOCK_CLAUDE:-true}
+      - USE_MOCK_GITHUB=${USE_MOCK_GITHUB:-true}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     # No --reload needed - watchexec restarts container on file changes
     command: [uvicorn, mainloop.api:app, --host, 0.0.0.0, --port, '8000']
     depends_on:

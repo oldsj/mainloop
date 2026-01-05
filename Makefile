@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci
+.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci test-real-claude
 
 # Load .env file if it exists
 -include .env
@@ -372,6 +372,16 @@ test-run: ## Run tests headless (against Vite server from make test, excludes @r
 test-ci: ## Run mocked e2e tests in CI (docker-compose, fast)
 	@docker compose -f docker-compose.test.yml --profile ci up -d --build --wait
 	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --grep-invert @real-claude) || EXIT_CODE=$$?; \
+	docker compose -f docker-compose.test.yml --profile ci down -v; \
+	exit $${EXIT_CODE:-0}
+
+test-real-claude: ## Run real Claude tests locally (requires CLAUDE_CODE_OAUTH_TOKEN in .env)
+	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
+		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set. Add it to .env or run: make setup-claude-creds-mac"; \
+		exit 1; \
+	fi
+	@USE_MOCK_CLAUDE=false docker compose -f docker-compose.test.yml --profile ci up -d --build --wait
+	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --grep @real-claude) || EXIT_CODE=$$?; \
 	docker compose -f docker-compose.test.yml --profile ci down -v; \
 	exit $${EXIT_CODE:-0}
 
