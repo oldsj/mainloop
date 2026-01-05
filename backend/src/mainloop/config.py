@@ -49,9 +49,6 @@ class Settings(BaseSettings):
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False
 
-    # Mock Claude for fast testing (no API calls)
-    use_mock_claude: bool = False
-
     # Mock GitHub for testing without real GitHub API
     use_mock_github: bool = False
 

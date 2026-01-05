@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
+  import { projects } from '$lib/stores/projects';
   import { api } from '$lib/api';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
@@ -90,6 +91,9 @@
 
       // Add assistant response (now returned synchronously)
       conversationStore.addMessage(response.message);
+
+      // Refresh projects in case a task was spawned
+      projects.fetchProjects();
     } catch (error) {
       console.error('Failed to send message:', error);
     } finally {

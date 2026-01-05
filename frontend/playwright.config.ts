@@ -15,6 +15,9 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 const apiURL = process.env.API_URL || 'http://localhost:8000';
 
+// Headed by default locally, headless on CI (override with HEADLESS=true/false)
+const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : !!process.env.CI;
+
 export default defineConfig({
   testDir: './tests',
 
@@ -37,6 +40,7 @@ export default defineConfig({
 
   use: {
     baseURL,
+    headless,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

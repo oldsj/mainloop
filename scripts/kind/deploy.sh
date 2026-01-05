@@ -27,6 +27,6 @@ kubectl --context="${KIND_CONTEXT}" rollout status deployment/mainloop-agent-con
 kubectl --context="${KIND_CONTEXT}" rollout status statefulset/postgres -n mainloop --timeout=120s
 
 echo "=== Deployment complete ==="
-echo "Frontend: http://localhost:3000"
-echo "Backend:  http://localhost:8000"
+echo "Frontend: http://localhost:3002"
+echo "Backend:  http://localhost:8082"
 kubectl --context="${KIND_CONTEXT}" get pods -n mainloop

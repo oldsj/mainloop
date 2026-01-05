@@ -7,25 +7,15 @@ from typing import Any
 from dbos import DBOS
 from mainloop.config import settings
 from mainloop.db import db
-from mainloop.services.github_pr import (  # Issue support; Question/plan approval support
-    acknowledge_comments,
-    add_issue_comment,
-    create_github_issue,
+from mainloop.services import github_pr  # Import module for mockability
+from mainloop.services.github_pr import (  # Non-mocked utilities
     format_feedback_for_agent,
     format_issue_feedback_for_agent,
     format_plan_for_issue,
     format_questions_for_issue,
     generate_branch_name,
-    get_check_failure_logs,
-    get_check_status,
-    get_comment_reactions,
-    get_issue_comments,
-    get_issue_status,
-    get_pr_comments,
-    get_pr_status,
     parse_plan_approval_from_comment,
     parse_question_answers_from_comment,
-    update_github_issue,
 )
 from mainloop.services.k8s_jobs import create_worker_job
 from mainloop.services.k8s_namespace import (
@@ -286,7 +276,7 @@ async def spawn_feedback_job(
 @DBOS.step()
 async def check_pr_status(repo_url: str, pr_number: int) -> dict:
     """Check the current status of a PR."""
-    status = await get_pr_status(repo_url, pr_number)
+    status = await github_pr.get_pr_status(repo_url, pr_number)
     if not status:
         return {"state": "not_found"}
 
@@ -304,7 +294,7 @@ async def check_issue_status_step(
     etag: str | None = None,
 ) -> dict:
     """Check the current status of an issue with conditional request support."""
-    response = await get_issue_status(repo_url, issue_number, etag=etag)
+    response = await github_pr.get_issue_status(repo_url, issue_number, etag=etag)
 
     if response.not_modified:
         return {"not_modified": True}
@@ -329,7 +319,9 @@ async def check_for_new_issue_comments(
     etag: str | None = None,
 ) -> dict:
     """Check for new comments on an issue with conditional request support."""
-    response = await get_issue_comments(repo_url, issue_number, since=since, etag=etag)
+    response = await github_pr.get_issue_comments(
+        repo_url, issue_number, since=since, etag=etag
+    )
 
     if response.not_modified:
         return {"not_modified": True, "comments": []}
@@ -371,7 +363,9 @@ async def update_github_issue_step(
     labels: list[str] | None = None,
 ) -> bool:
     """Update a GitHub issue."""
-    return await update_github_issue(repo_url, issue_number, title, body, state, labels)
+    return await github_pr.update_github_issue(
+        repo_url, issue_number, title, body, state, labels
+    )
 
 
 @DBOS.step()
@@ -381,7 +375,7 @@ async def add_issue_comment_step(
     body: str,
 ) -> bool:
     """Add a comment to a GitHub issue."""
-    return await add_issue_comment(repo_url, issue_number, body)
+    return await github_pr.add_issue_comment(repo_url, issue_number, body)
 
 
 @DBOS.step()
@@ -392,7 +386,7 @@ async def post_questions_to_issue(
 ) -> bool:
     """Format and post questions as a GitHub issue comment."""
     body = format_questions_for_issue(questions)
-    return await add_issue_comment(repo_url, issue_number, body)
+    return await github_pr.add_issue_comment(repo_url, issue_number, body)
 
 
 @DBOS.step()
@@ -408,7 +402,7 @@ async def check_issue_for_question_answers(
         Dict mapping question ID to answer, or None if no answers found.
 
     """
-    response = await get_issue_comments(repo_url, issue_number, since=since)
+    response = await github_pr.get_issue_comments(repo_url, issue_number, since=since)
 
     if response.not_modified or not response.data:
         return None
@@ -443,7 +437,9 @@ async def post_plan_to_issue(
 
     """
     body = format_plan_for_issue(plan_text)
-    return await add_issue_comment(repo_url, issue_number, body, return_id=True)
+    return await github_pr.add_issue_comment(
+        repo_url, issue_number, body, return_id=True
+    )
 
 
 @DBOS.step()
@@ -460,7 +456,7 @@ async def check_plan_comment_reactions(
     if not comment_id:
         return False
 
-    reactions = await get_comment_reactions(repo_url, comment_id)
+    reactions = await github_pr.get_comment_reactions(repo_url, comment_id)
 
     # Approval reactions
     approval_reactions = {"+1", "rocket", "heart", "hooray"}
@@ -485,7 +481,7 @@ async def check_issue_for_plan_approval(
         or None if no relevant comments found.
 
     """
-    response = await get_issue_comments(repo_url, issue_number, since=since)
+    response = await github_pr.get_issue_comments(repo_url, issue_number, since=since)
 
     if response.not_modified or not response.data:
         return None
@@ -532,7 +528,7 @@ async def create_github_issue_step(
         Dict with issue number, url, and title, or None if failed
 
     """
-    result = await create_github_issue(repo_url, title, body, labels)
+    result = await github_pr.create_github_issue(repo_url, title, body, labels)
     if result:
         return {
             "number": result.number,
@@ -563,7 +559,7 @@ async def check_for_new_comments(
     since: datetime,
 ) -> list[dict]:
     """Check for new comments on a PR."""
-    comments = await get_pr_comments(repo_url, pr_number, since=since)
+    comments = await github_pr.get_pr_comments(repo_url, pr_number, since=since)
     return [
         {
             "id": c.id,
@@ -583,17 +579,14 @@ async def get_feedback_context(
 ) -> str:
     """Get formatted feedback for the agent and acknowledge comments."""
     # Get comments first to acknowledge them
-    from mainloop.services.github_pr import (
-        _should_agent_act_on_comment,
-        get_pr_comments,
-    )
+    from mainloop.services.github_pr import _should_agent_act_on_comment
 
-    comments = await get_pr_comments(repo_url, pr_number, since=since)
+    comments = await github_pr.get_pr_comments(repo_url, pr_number, since=since)
     actionable_comments = [c for c in comments if _should_agent_act_on_comment(c)]
 
     # Add 👀 reaction to acknowledge we've seen the comments
     if actionable_comments:
-        await acknowledge_comments(repo_url, actionable_comments)
+        await github_pr.acknowledge_comments(repo_url, actionable_comments)
 
     return await format_feedback_for_agent(repo_url, pr_number, since=since)
 
@@ -607,7 +600,7 @@ async def cleanup_namespace(task_id: str) -> None:
 @DBOS.step()
 async def get_check_status_step(repo_url: str, pr_number: int) -> dict:
     """Get combined status of GitHub Actions checks for a PR."""
-    status = await get_check_status(repo_url, pr_number)
+    status = await github_pr.get_check_status(repo_url, pr_number)
     return {
         "status": status.status,
         "total_count": status.total_count,
@@ -619,7 +612,7 @@ async def get_check_status_step(repo_url: str, pr_number: int) -> dict:
 @DBOS.step()
 async def get_check_failure_logs_step(repo_url: str, pr_number: int) -> str:
     """Get formatted failure logs from failed check runs."""
-    return await get_check_failure_logs(repo_url, pr_number)
+    return await github_pr.get_check_failure_logs(repo_url, pr_number)
 
 
 @DBOS.step()
@@ -875,10 +868,13 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
     The workflow uses DBOS for durable execution - it survives restarts
     and will resume from the last completed step.
     """
+    print(f"[WORKFLOW] Starting worker_task_workflow for task: {task_id}")
     logger.info(f"Starting worker for task: {task_id}")
 
     # Load the task
+    print(f"[WORKFLOW] Loading task from DB: {task_id}")
     task = await load_worker_task(task_id)
+    print(f"[WORKFLOW] Task loaded: {task}")
     if not task:
         return {"status": "failed", "error": "Task not found"}
 
@@ -905,8 +901,10 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         return await _run_code_review_loop(task_id, task, namespace, pr_url, pr_number)
 
     # Setup namespace
+    print(f"[WORKFLOW] Creating namespace for task: {task_id}")
     logger.info(f"Creating namespace for task: {task_id}")
     namespace = await setup_namespace(task_id)
+    print(f"[WORKFLOW] Namespace created: {namespace}")
 
     try:
         issue_url: str | None = None
@@ -922,7 +920,9 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         # Pauses after plan approval, waiting for user to trigger implementation
         # ============================================================
         if not task.skip_plan:
+            print(f"[WORKFLOW] Setting task status to PLANNING: {task_id}")
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
+            print(f"[WORKFLOW] Task status updated to PLANNING")
             plan_iteration = 0
             plan_text: str | None = None
             suggested_options: list[str] = []

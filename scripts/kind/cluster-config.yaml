@@ -1,4 +1,5 @@
 # Kind cluster configuration for local testing
+# Ports chosen to avoid conflicts with make dev (backend 8080, frontend 3000)
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: mainloop-test
@@ -8,7 +9,7 @@ nodes:
     # Extra port mappings for local access
     extraPortMappings:
       - containerPort: 30080 # Frontend NodePort
-        hostPort: 3000
+        hostPort: 5173
         protocol: TCP
       - containerPort: 30081 # Backend NodePort
         hostPort: 8081

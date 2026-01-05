@@ -20,9 +20,6 @@ spec:
             # Use cheapest/fastest model for tests
             - name: CLAUDE_MODEL
               value: haiku
-            # Mock Claude for fast testing (set to 'false' for real Claude tests)
-            - name: USE_MOCK_CLAUDE
-              value: 'true'
-            # Mock GitHub API (always true in tests - no real GitHub calls)
+            # Mock GitHub API (no real GitHub calls in tests)
             - name: USE_MOCK_GITHUB
               value: 'true'

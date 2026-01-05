@@ -1224,12 +1224,16 @@ async def reset_test_data():
             status_code=403, detail="Only available in test environment"
         )
 
-    # Clear all tables
+    # Truncate all app tables (CASCADE handles foreign keys)
     async with db.connection() as conn:
-        await conn.execute("DELETE FROM queue_items")
-        await conn.execute("DELETE FROM messages")
-        await conn.execute("DELETE FROM worker_tasks")
-        await conn.execute("DELETE FROM main_threads")
+        await conn.execute("""
+            TRUNCATE TABLE
+                queue_items, messages, worker_tasks, projects,
+                conversations, main_threads
+            CASCADE
+        """)
+        # Clear DBOS workflow state
+        await conn.execute("TRUNCATE TABLE dbos.workflow_events, dbos.operation_outputs, dbos.workflow_status CASCADE")
 
     # Reset mock state if mocking is enabled
     if settings.use_mock_github:

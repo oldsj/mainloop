@@ -40,13 +40,19 @@ make test-run     # Run tests headless (in another terminal)
 
 **Workflow:**
 
-1. Run `make test` - starts backend (:8081), frontend (:5173), and Playwright UI
+1. Run `make test` - starts Kind cluster with backend (:8081) and frontend (:5173)
 2. Keep it running while you develop
 3. Use `make test-run` in another terminal for quick headless iterations
 
 Tests in `frontend/tests/` use fixtures from `frontend/tests/fixtures.ts`.
 
-**Mocking:** Set `USE_MOCK_CLAUDE=true` and `USE_MOCK_GITHUB=true` for fast tests without API calls.
+**Important:** Tests run against Kind cluster. After code changes, wait for k8s deployments to complete before running tests:
+
+```bash
+kubectl get pods -n mainloop --context kind-mainloop-test -w
+```
+
+Watch for new pods to reach `Running` status and old pods to terminate. The cluster auto-reloads on file changes via watchexec.
 
 ## Key Patterns
 
