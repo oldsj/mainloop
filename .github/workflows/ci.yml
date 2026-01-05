@@ -76,110 +76,9 @@ jobs:
           path: /tmp/${{ matrix.image }}.tar
           retention-days: 1
 
-  # Tier 1: Mocked tests (fast, no API costs)
-  # Uses docker-compose with USE_MOCK_CLAUDE=true, USE_MOCK_GITHUB=true
-  e2e-mocked:
-    name: E2E Tests (Mocked)
+  e2e:
+    name: E2E Tests
     needs: [lint, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package.json') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install --with-deps chromium
-        working-directory: frontend
-
-      - name: Install Playwright deps (if cached)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm exec playwright install-deps chromium
-        working-directory: frontend
-
-      - name: Download image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: '*-image'
-          path: /tmp/images
-          merge-multiple: true
-
-      - name: Load pre-built images
-        run: |
-          docker load --input /tmp/images/backend.tar
-          docker load --input /tmp/images/frontend.tar
-          # Tag for docker-compose service names
-          docker tag mainloop-backend:test mainloop-backend-test
-          docker tag mainloop-frontend:test mainloop-frontend-test
-
-      - name: Start services (docker-compose)
-        run: docker compose -f docker-compose.test.yml --profile ci up -d --wait
-
-      - name: Run Playwright tests (mocked)
-        run: |
-          cd frontend
-          PLAYWRIGHT_BASE_URL=http://localhost:3031 API_URL=http://localhost:8081 pnpm exec playwright test --grep-invert @real-claude
-        env:
-          CI: true
-
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          echo "=== Backend logs ==="
-          docker compose -f docker-compose.test.yml logs backend-test --tail=100
-          echo "=== Frontend logs ==="
-          docker compose -f docker-compose.test.yml logs frontend-test --tail=100
-
-      - name: Cleanup
-        if: always()
-        run: docker compose -f docker-compose.test.yml --profile ci down -v
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: playwright-report-mocked
-          path: frontend/playwright-report/
-          retention-days: 7
-
-      - name: Upload failure screenshots
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: test-screenshots-mocked
-          path: frontend/test-results/
-          retention-days: 7
-
-  # Tier 2: Real Claude tests (slower, uses Claude API, mocked GitHub)
-  # Runs after mocked tests pass on every push
-  e2e-real-claude:
-    name: E2E Tests (Real Claude)
-    needs: [e2e-mocked, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -234,7 +133,7 @@ jobs:
           path: /tmp/images
           merge-multiple: true
 
-      - name: Load images into Docker and Kind
+      - name: Load images into Kind
         run: |
           docker load --input /tmp/images/backend.tar &
           docker load --input /tmp/images/frontend.tar &
@@ -256,49 +155,51 @@ jobs:
             --from-literal=claude-secret-token="$CLAUDE_TOKEN" \
             --from-literal=github-token=""
 
-      - name: Deploy to Kind (real Claude, mocked GitHub)
+      - name: Deploy to Kind
         run: |
           kubectl apply -k k8s/apps/mainloop/overlays/test --server-side
-          kubectl set env deployment/mainloop-backend -n mainloop USE_MOCK_CLAUDE=false
           kubectl rollout status deployment/mainloop-backend -n mainloop --timeout=180s
           kubectl rollout status deployment/mainloop-frontend -n mainloop --timeout=180s
           kubectl rollout status statefulset/postgres -n mainloop --timeout=120s
 
       - name: Wait for services
         run: |
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-backend -n mainloop --timeout=120s || true
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-frontend -n mainloop --timeout=120s || true
-
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
+          curl -sf --retry 30 --retry-delay 2 --retry-all-errors \
             http://localhost:8081/health || {
             echo "Backend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-backend --tail=50
+            kubectl logs -n mainloop deployment/mainloop-backend --tail=100
             exit 1
           }
           echo "Backend healthy"
 
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:3000 || {
+          curl -sf --retry 30 --retry-delay 2 --retry-all-errors \
+            http://localhost:5173 || {
             echo "Frontend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-frontend --tail=50
+            kubectl logs -n mainloop deployment/mainloop-frontend --tail=100
             exit 1
           }
           echo "Frontend healthy"
 
-      - name: Run Playwright tests (real Claude)
+      - name: Run Playwright tests
         run: |
           cd frontend
-          PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --grep @real-claude
+          PLAYWRIGHT_BASE_URL=http://localhost:5173 API_URL=http://localhost:8081 pnpm exec playwright test
         env:
           CI: true
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Backend logs ==="
+          kubectl logs -n mainloop deployment/mainloop-backend --tail=200
+          echo "=== Frontend logs ==="
+          kubectl logs -n mainloop deployment/mainloop-frontend --tail=100
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report-real-claude
+          name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
 
@@ -306,6 +207,6 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: test-screenshots-real-claude
+          name: test-screenshots
           path: frontend/test-results/
           retention-days: 7
