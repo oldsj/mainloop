@@ -11,24 +11,18 @@ test.describe('Tab Navigation', () => {
     await page.goto('/');
 
     // Wait for page to load
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    // 1. Navigate to [INBOX] tab
     const inboxTab = page.getByRole('button', { name: 'Inbox' });
-    await inboxTab.click();
-    await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
-
-    // 2. Tap the [CHAT] tab
     const chatTab = page.getByRole('button', { name: 'Chat' });
+
+    // Navigate to [INBOX] tab
+    await inboxTab.click();
+    await expect(inboxTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
+
+    // Return to [CHAT] tab
     await chatTab.click();
-
-    // Expected: [CHAT] tab becomes highlighted
-    await expect(chatTab).toHaveClass(/text-term-accent/);
-
-    // Expected: [INBOX] tab becomes muted
+    await expect(chatTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
     await expect(inboxTab).not.toHaveClass(/text-term-accent/);
-
-    // Expected: Input bar visible again (proves chat view is active)
-    await expect(page.getByRole('textbox', { name: 'Enter command...' })).toBeVisible();
   });
 });

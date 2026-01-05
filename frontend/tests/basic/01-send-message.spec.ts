@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { resetTestData } from '../fixtures';
+import { setupConversation } from '../fixtures';
 
 /**
  * BASIC STAGE - Send a message test
@@ -7,19 +7,16 @@ import { resetTestData } from '../fixtures';
 
 test.describe('Basic: Send Message', () => {
   test('send message and receive response', async ({ page }) => {
-    // Reset data for clean state
-    await resetTestData();
-
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // Type and send a simple message
-    const input = page.getByPlaceholder('Enter command...').first();
-    await input.click(); // Focus first
-    await input.fill('hello');
-    await page.getByRole('button', { name: 'EXEC' }).click();
+    // Use the setupConversation fixture which handles the full flow
+    await setupConversation(page);
 
-    // Message should appear in chat (wait longer, backend needs to process)
-    await expect(page.getByText('hello').first()).toBeVisible({ timeout: 10000 });
+    // Verify message appeared
+    await expect(page.getByText('hello').first()).toBeVisible();
+
+    // Verify we have at least 2 messages (user + assistant)
+    const messages = page.locator('.message');
+    expect(await messages.count()).toBeGreaterThanOrEqual(2);
   });
 });
