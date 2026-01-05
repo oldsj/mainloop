@@ -922,7 +922,7 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         if not task.skip_plan:
             print(f"[WORKFLOW] Setting task status to PLANNING: {task_id}")
             await update_worker_task_status(task_id, TaskStatus.PLANNING)
-            print(f"[WORKFLOW] Task status updated to PLANNING")
+            print("[WORKFLOW] Task status updated to PLANNING")
             plan_iteration = 0
             plan_text: str | None = None
             suggested_options: list[str] = []

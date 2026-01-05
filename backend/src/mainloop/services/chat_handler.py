@@ -143,7 +143,7 @@ def create_spawn_task_callable(
                 keywords=keywords,
                 skip_plan=skip_planning,
             )
-            print(f"[SPAWN] WorkerTask created, calling db.create_worker_task")
+            print("[SPAWN] WorkerTask created, calling db.create_worker_task")
             task = await db.create_worker_task(task)
             print(f"[SPAWN] Task saved to DB: {task.id}")
 
@@ -182,6 +182,7 @@ def create_spawn_task_callable(
             }
         except Exception as e:
             import traceback
+
             print(f"[SPAWN] ERROR: {e}")
             print(f"[SPAWN] Traceback: {traceback.format_exc()}")
             logger.error(f"Failed to spawn task: {e}")
