@@ -42,7 +42,7 @@ services:
       - IS_TEST_ENV=true
       - USE_MOCK_CLAUDE=true
     # No --reload needed - watchexec restarts container on file changes
-    command: ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: [uvicorn, mainloop.api:app, --host, 0.0.0.0, --port, '8000']
     depends_on:
       postgres-test:
         condition: service_healthy

@@ -283,12 +283,12 @@ make kind-delete      # Delete the Kind cluster when done
 
 When adding a new feature, follow this workflow to keep documentation and tests in sync:
 
-```
+```text
 README.md / docs/           →    frontend/specs/*.md    →    frontend/tests/*.spec.ts
 (what the feature does)          (test scenarios)            (executable tests)
 ```
 
-**Step 1: Document the feature**
+#### Step 1: Document the feature
 
 Update README.md or create a doc in `docs/` describing:
 
@@ -296,11 +296,11 @@ Update README.md or create a doc in `docs/` describing:
 - Key user flows and interactions
 - Edge cases and error states
 
-**Step 2: Generate test specs**
+#### Step 2: Generate test specs
 
 Use the `playwright-test-planner` agent to create test scenarios:
 
-```
+```text
 "Use playwright-test-planner to create a test plan for [feature] based on docs/[feature].md"
 ```
 
@@ -310,11 +310,11 @@ The planner will:
 - Explore the running app at http://localhost:3000
 - Generate `frontend/specs/[feature].md` with test scenarios
 
-**Step 3: Generate tests from specs**
+#### Step 3: Generate tests from specs
 
 Use the `playwright-test-generator` agent:
 
-```
+```text
 "Use playwright-test-generator to generate tests from specs/[feature].md"
 ```
 
@@ -324,11 +324,11 @@ The generator will:
 - Record the actions
 - Output `frontend/tests/[feature]/*.spec.ts`
 
-**Step 4: Fix any failures**
+#### Step 4: Fix any failures
 
 If tests fail, use the `playwright-test-healer` agent:
 
-```
+```text
 "Use playwright-test-healer to fix tests/[feature]/[test].spec.ts"
 ```
 
