@@ -11,5 +11,5 @@ nodes:
         hostPort: 3000
         protocol: TCP
       - containerPort: 30081 # Backend NodePort
-        hostPort: 8000
+        hostPort: 8081
         protocol: TCP

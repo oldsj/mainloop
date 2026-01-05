@@ -252,7 +252,7 @@ test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test
 	@echo ""
 	@echo "=== Local K8s environment ready ==="
 	@echo "Frontend: http://localhost:3000"
-	@echo "Backend:  http://localhost:8000"
+	@echo "Backend:  http://localhost:8081"
 	@echo ""
 	@echo "Run 'make kind-logs' to tail backend logs"
 	@echo "Run 'make kind-reset' to reset data between tests"
@@ -297,12 +297,12 @@ test-e2e: ## Run Playwright e2e tests (Kind cluster, auto-setup)
 	@$(MAKE) kind-deploy
 	@echo "Waiting for services..."
 	@sleep 5
-	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
+	@until curl -sf http://localhost:8081/health > /dev/null 2>&1; do \
 		echo "Waiting for backend..."; \
 		sleep 2; \
 	done
 	@echo "Waiting for API endpoints to be ready..."
-	@until curl -sf -X POST http://localhost:8000/internal/test/reset > /dev/null 2>&1; do \
+	@until curl -sf -X POST http://localhost:8081/internal/test/reset > /dev/null 2>&1; do \
 		echo "Waiting for reset endpoint..."; \
 		sleep 2; \
 	done
@@ -330,7 +330,7 @@ test-e2e-setup: ## Setup Kind environment (internal helper)
 	@$(MAKE) kind-deploy
 	@echo "Waiting for services..."
 	@sleep 5
-	@until curl -sf http://localhost:8000/health > /dev/null 2>&1; do \
+	@until curl -sf http://localhost:8081/health > /dev/null 2>&1; do \
 		echo "Waiting for backend..."; \
 		sleep 2; \
 	done

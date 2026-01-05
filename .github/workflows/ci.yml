@@ -272,7 +272,7 @@ jobs:
             endpoints/mainloop-frontend -n mainloop --timeout=120s || true
 
           curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:8000/health || {
+            http://localhost:8081/health || {
             echo "Backend failed to start"
             kubectl logs -n mainloop deployment/mainloop-backend --tail=50
             exit 1
