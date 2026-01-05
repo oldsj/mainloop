@@ -279,6 +279,86 @@ make kind-delete      # Delete the Kind cluster when done
 - Mobile tabs: `getByRole('button', { name: 'Chat' })`, `getByRole('button', { name: 'Inbox' })`
 - Inbox header: `locator('h2:has-text("[INBOX]")')`
 
+### Adding New Features (Docs → Specs → Tests)
+
+When adding a new feature, follow this workflow to keep documentation and tests in sync:
+
+```
+README.md / docs/           →    frontend/specs/*.md    →    frontend/tests/*.spec.ts
+(what the feature does)          (test scenarios)            (executable tests)
+```
+
+**Step 1: Document the feature**
+
+Update README.md or create a doc in `docs/` describing:
+
+- What the feature does (user-facing behavior)
+- Key user flows and interactions
+- Edge cases and error states
+
+**Step 2: Generate test specs**
+
+Use the `playwright-test-planner` agent to create test scenarios:
+
+```
+"Use playwright-test-planner to create a test plan for [feature] based on docs/[feature].md"
+```
+
+The planner will:
+
+- Read the feature documentation
+- Explore the running app at http://localhost:3000
+- Generate `frontend/specs/[feature].md` with test scenarios
+
+**Step 3: Generate tests from specs**
+
+Use the `playwright-test-generator` agent:
+
+```
+"Use playwright-test-generator to generate tests from specs/[feature].md"
+```
+
+The generator will:
+
+- Execute each step in a real browser
+- Record the actions
+- Output `frontend/tests/[feature]/*.spec.ts`
+
+**Step 4: Fix any failures**
+
+If tests fail, use the `playwright-test-healer` agent:
+
+```
+"Use playwright-test-healer to fix tests/[feature]/[test].spec.ts"
+```
+
+**Spec format** (in `frontend/specs/`):
+
+```markdown
+# Feature Test Plan
+
+> See [docs/feature.md](../docs/feature.md) for feature spec
+
+## Test Scenarios
+
+### 1. Scenario Category
+
+#### 1.1 Specific Test Case
+
+**Seed:** tests/fixtures/seed-data.ts
+
+**Steps:**
+
+1. Action to perform
+2. Another action
+
+**Expected:**
+
+- What should happen
+```
+
+**When modifying existing features**: Update the docs first, then regenerate specs and tests to ensure they stay in sync.
+
 ## Important
 
 - Avoid creating markdown documentation unless explicitly asked
