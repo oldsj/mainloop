@@ -10,7 +10,7 @@
 
 **Structure:**
 
-```
+```text
 mainloop/
 ├── backend/      # Python 3.13+ FastAPI + PostgreSQL
 ├── frontend/     # TypeScript/SvelteKit 5 + Tailwind v4
@@ -39,6 +39,7 @@ make test-run     # Run tests headless (in another terminal)
 ```
 
 **Workflow:**
+
 1. Run `make test` - starts backend (:8081), frontend (:5173), and Playwright UI
 2. Keep it running while you develop
 3. Use `make test-run` in another terminal for quick headless iterations
@@ -63,7 +64,7 @@ make setup-claude-creds  # Extract Claude credentials from Keychain
 
 ## Documentation Philosophy
 
-```
+```text
 README.md     → High-level overview, features (marketing funnel)
   ↓
 docs/         → Feature-specific documentation
@@ -76,6 +77,7 @@ tests/        → Playwright tests verify specs
 Specs define desired behavior. Tests are the source of truth.
 
 **Playwright agents automate test creation:**
+
 1. `playwright-test-planner` - browses app, explores UI, generates test plan
 2. `playwright-test-generator` - creates tests from plan
 3. `playwright-test-healer` - debugs and fixes failing tests
