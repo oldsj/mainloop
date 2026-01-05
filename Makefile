@@ -369,10 +369,10 @@ test: ## Playwright UI with hot reload (backend Docker, frontend Vite)
 test-run: ## Run tests headless (against Vite server from make test, excludes @real-claude)
 	@cd frontend && API_URL=$(TEST_API_URL) pnpm exec playwright test --grep-invert @real-claude
 
-test-ci: ## Run tests in CI (starts own backend, tears down after)
-	@docker compose -f docker-compose.test.yml up -d --build --wait
-	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test) || EXIT_CODE=$$?; \
-	docker compose -f docker-compose.test.yml down -v; \
+test-ci: ## Run mocked e2e tests in CI (docker-compose, fast)
+	@docker compose -f docker-compose.test.yml --profile ci up -d --build --wait
+	@(cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --grep-invert @real-claude) || EXIT_CODE=$$?; \
+	docker compose -f docker-compose.test.yml --profile ci down -v; \
 	exit $${EXIT_CODE:-0}
 
 # Debugging commands

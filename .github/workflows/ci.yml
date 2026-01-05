@@ -77,12 +77,12 @@ jobs:
           retention-days: 1
 
   # Tier 1: Mocked tests (fast, no API costs)
-  # Uses USE_MOCK_CLAUDE=true, USE_MOCK_GITHUB=true from K8s overlay
+  # Uses docker-compose with USE_MOCK_CLAUDE=true, USE_MOCK_GITHUB=true
   e2e-mocked:
     name: E2E Tests (Mocked)
-    needs: [lint, build]
+    needs: [lint]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -122,75 +122,27 @@ jobs:
         run: pnpm exec playwright install-deps chromium
         working-directory: frontend
 
-      - name: Setup Kind
-        uses: helm/kind-action@v1.12.0
-        with:
-          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
-          config: ./scripts/kind/cluster-config.yaml
-
-      - name: Download all image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: '*-image'
-          path: /tmp/images
-          merge-multiple: true
-
-      - name: Load images into Docker and Kind
-        run: |
-          docker load --input /tmp/images/backend.tar &
-          docker load --input /tmp/images/frontend.tar &
-          docker load --input /tmp/images/agent.tar &
-          wait
-
-          kind load docker-image mainloop-backend:test --name "$KIND_CLUSTER_NAME" &
-          kind load docker-image mainloop-frontend:test --name "$KIND_CLUSTER_NAME" &
-          kind load docker-image mainloop-agent-controller:test --name "$KIND_CLUSTER_NAME" &
-          wait
-
-      - name: Create secrets
-        run: |
-          kubectl create namespace mainloop
-          kubectl create secret generic mainloop-secrets \
-            --namespace mainloop \
-            --from-literal=claude-secret-token="" \
-            --from-literal=github-token=""
-
-      - name: Deploy to Kind
-        run: |
-          kubectl apply -k k8s/apps/mainloop/overlays/test --server-side
-          kubectl rollout status deployment/mainloop-backend -n mainloop --timeout=180s
-          kubectl rollout status deployment/mainloop-frontend -n mainloop --timeout=180s
-          kubectl rollout status statefulset/postgres -n mainloop --timeout=120s
-
-      - name: Wait for services
-        run: |
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-backend -n mainloop --timeout=120s || true
-          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
-            endpoints/mainloop-frontend -n mainloop --timeout=120s || true
-
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:8000/health || {
-            echo "Backend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-backend --tail=50
-            exit 1
-          }
-          echo "Backend healthy"
-
-          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
-            http://localhost:3000 || {
-            echo "Frontend failed to start"
-            kubectl logs -n mainloop deployment/mainloop-frontend --tail=50
-            exit 1
-          }
-          echo "Frontend healthy"
+      - name: Start services (docker-compose)
+        run: docker compose -f docker-compose.test.yml --profile ci up -d --build --wait
 
       - name: Run Playwright tests (mocked)
         run: |
           cd frontend
-          PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test --grep-invert @real-claude
+          PLAYWRIGHT_BASE_URL=http://localhost:3031 API_URL=http://localhost:8081 pnpm exec playwright test --grep-invert @real-claude
         env:
           CI: true
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Backend logs ==="
+          docker compose -f docker-compose.test.yml logs backend-test --tail=100
+          echo "=== Frontend logs ==="
+          docker compose -f docker-compose.test.yml logs frontend-test --tail=100
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.test.yml --profile ci down -v
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -209,13 +161,12 @@ jobs:
           retention-days: 7
 
   # Tier 2: Real Claude tests (slower, uses Claude API, mocked GitHub)
-  # Only runs on main branch after mocked tests pass
+  # Runs after mocked tests pass on every push
   e2e-real-claude:
     name: E2E Tests (Real Claude)
-    needs: [e2e-mocked]
+    needs: [e2e-mocked, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout
