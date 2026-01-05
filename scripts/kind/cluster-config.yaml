@@ -1,0 +1,15 @@
+# Kind cluster configuration for local testing
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mainloop-test
+
+nodes:
+  - role: control-plane
+    # Extra port mappings for local access
+    extraPortMappings:
+      - containerPort: 30080 # Frontend NodePort
+        hostPort: 3000
+        protocol: TCP
+      - containerPort: 30081 # Backend NodePort
+        hostPort: 8000
+        protocol: TCP

@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  KIND_CLUSTER_NAME: mainloop-test
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write # Required for trunk-action to post annotations
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: trunk-io/trunk-action@v1
+
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            file: backend/Dockerfile
+            context: .
+            tag: mainloop-backend:test
+          - image: frontend
+            file: frontend/Dockerfile
+            context: .
+            tag: mainloop-frontend:test
+            build-args: VITE_API_URL=http://localhost:8000
+          - image: agent
+            file: claude-agent/Dockerfile
+            context: ./claude-agent
+            tag: mainloop-agent-controller:test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.build-args }}
+          tags: ${{ matrix.tag }}
+          outputs: type=docker,dest=/tmp/${{ matrix.image }}.tar
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}-image
+          path: /tmp/${{ matrix.image }}.tar
+          retention-days: 1
+
+  e2e:
+    name: E2E Tests
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Install Playwright deps (if cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+        working-directory: frontend
+
+      - name: Setup Kind
+        uses: helm/kind-action@v1.12.0
+        with:
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+          config: ./scripts/kind/cluster-config.yaml
+
+      - name: Download all image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-image'
+          path: /tmp/images
+          merge-multiple: true
+
+      - name: Load images into Docker and Kind
+        run: |
+          # Load into Docker (parallel)
+          docker load --input /tmp/images/backend.tar &
+          docker load --input /tmp/images/frontend.tar &
+          docker load --input /tmp/images/agent.tar &
+          wait
+
+          # Load into Kind (parallel)
+          kind load docker-image mainloop-backend:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          kind load docker-image mainloop-frontend:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          kind load docker-image mainloop-agent-controller:test --name ${{ env.KIND_CLUSTER_NAME }} &
+          wait
+
+      - name: Create secrets
+        env:
+          CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          kubectl create namespace mainloop
+          kubectl create secret generic mainloop-secrets \
+            --namespace mainloop \
+            --from-literal=claude-secret-token="${CLAUDE_TOKEN}" \
+            --from-literal=github-token="${GH_TOKEN}"
+
+      - name: Deploy to Kind
+        run: |
+          kubectl apply -k k8s/apps/mainloop/overlays/test --server-side
+          kubectl rollout status deployment/mainloop-backend -n mainloop --timeout=180s
+          kubectl rollout status deployment/mainloop-frontend -n mainloop --timeout=180s
+          kubectl rollout status statefulset/postgres -n mainloop --timeout=120s
+
+      - name: Wait for services
+        run: |
+          # Wait for endpoints to be ready (more reliable than just pod ready)
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
+            endpoints/mainloop-backend -n mainloop --timeout=120s || true
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0].ip}' \
+            endpoints/mainloop-frontend -n mainloop --timeout=120s || true
+
+          # Verify HTTP endpoints are responding
+          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8000/health || {
+            echo "Backend failed to start"
+            kubectl logs -n mainloop deployment/mainloop-backend --tail=50
+            exit 1
+          }
+          echo "Backend healthy"
+
+          curl -sf --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:3000 || {
+            echo "Frontend failed to start"
+            kubectl logs -n mainloop deployment/mainloop-frontend --tail=50
+            exit 1
+          }
+          echo "Frontend healthy"
+
+      - name: Run Playwright tests
+        run: |
+          cd frontend
+          PLAYWRIGHT_BASE_URL=http://localhost:3000 pnpm exec playwright test
+        env:
+          CI: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload failure screenshots
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-screenshots
+          path: frontend/test-results/
+          retention-days: 7

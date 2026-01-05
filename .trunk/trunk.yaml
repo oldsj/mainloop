@@ -11,6 +11,13 @@ runtimes:
     - python@3.10.8
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
+  definitions:
+    - name: prettier
+      runtime: node
+      package: prettier
+      extra_packages:
+        - prettier-plugin-svelte
+        - prettier-plugin-tailwindcss
   ignore:
     # K8s security best practices - remaining issues are acceptable for internal Tailscale-only services
     # Fixed: container security contexts, health probes, RBAC over-permissions

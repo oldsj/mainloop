@@ -1,109 +1,92 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright configuration with layered test dependencies.
+ * Modern Playwright configuration with project dependencies.
  *
- * Test stages (fail-fast, each depends on previous):
- *   1. setup   - App loads, API healthy
- *   2. basic   - Simple conversation back-and-forth
- *   3. context - Conversation history, compaction
- *   4. agents  - Spawning workers, task management
+ * Environment variables:
+ *   PLAYWRIGHT_BASE_URL - Frontend URL (default: http://localhost:5173)
+ *   API_URL            - Backend URL (default: http://localhost:8000)
  *
  * Usage:
- *   make test-e2e       # Run all stages with isolated env
- *   make test-e2e-ui    # Interactive UI mode
+ *   make test          # Playwright UI (backend Docker, frontend Vite)
+ *   make test-run      # Headless CI mode
  */
+
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
+const apiURL = process.env.API_URL || 'http://localhost:8000';
+
 export default defineConfig({
   testDir: './tests',
 
   // Fail fast - stop on first failure
-  maxFailures: process.env.CI ? 5 : 1,
+  maxFailures: 1,
 
-  // Sequential by default for state-dependent tests
+  // Tests run sequentially by default (state-dependent)
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
-  workers: 1, // Sequential execution to maintain state
+  retries: process.env.CI ? 2 : 0,
+  workers: 1,
 
-  reporter: [['html', { open: 'never' }], ['list']],
+  reporter: process.env.CI
+    ? [['github'], ['html', { open: 'never' }]]
+    : [['list'], ['html', { open: 'never' }]],
+
+  // Global timeout for tests
+  timeout: 30000,
+  expect: { timeout: 10000 },
 
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
-    trace: 'on-first-retry',
+    baseURL,
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    // Pass API_URL to tests via extraHTTPHeaders or use in fixtures
+    extraHTTPHeaders: {
+      'x-test-api-url': apiURL
+    }
+  },
+
+  // Store API_URL for fixtures to use
+  metadata: {
+    apiURL
   },
 
   projects: [
-    // Agents project - for test-agents MCP server
+    // Desktop Chrome tests (default)
     {
-      name: 'agents',
-      testMatch: /seed\.spec\.ts/,
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: [/mobile\//, /global\.(setup|teardown)\.ts/]
     },
 
-    // Stage 1: Setup - verify app loads and API is healthy
-    {
-      name: 'setup',
-      testMatch: /.*\.setup\.ts/,
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
-    },
-
-    // Stage 2: Basic - simple conversation (depends on setup)
-    {
-      name: 'basic',
-      testMatch: /basic\/.*\.spec\.ts/,
-      dependencies: ['setup'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
-    },
-
-    // Stage 3: Context - conversation history and compaction (depends on basic)
-    {
-      name: 'context',
-      testMatch: /context\/.*\.spec\.ts/,
-      dependencies: ['basic'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
-    },
-
-    // Stage 4: Agents - worker spawning and task management (depends on context)
-    {
-      name: 'agents',
-      testMatch: /agents\/.*\.spec\.ts/,
-      dependencies: ['context'],
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
-      },
-    },
-
-    // Mobile tests run after all desktop tests pass
+    // Mobile tests (Pixel 5 viewport)
     {
       name: 'mobile',
-      testMatch: /mobile\/.*\.spec\.ts/,
-      dependencies: ['basic'],
-      use: {
-        ...devices['Pixel 5'],
-        viewport: { width: 393, height: 851 }, // Pixel 5 viewport
-      },
-    },
+      use: { ...devices['Pixel 5'] },
+      testMatch: /mobile\/.*\.spec\.ts/
+    }
   ],
 
-  webServer: {
-    command: 'echo "Waiting for test environment..."',
-    url: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3031',
-    reuseExistingServer: true,
-    timeout: 60000,
-  },
+  // Global setup/teardown (runs once, not per-project)
+  globalSetup: './tests/global-setup.ts',
+  globalTeardown: './tests/global-teardown.ts',
+
+  // Start Vite dev server only if not using external frontend (Docker)
+  // When PLAYWRIGHT_BASE_URL is set, we assume Docker frontend is running
+  ...(process.env.PLAYWRIGHT_BASE_URL
+    ? {}
+    : {
+        webServer: {
+          command: 'pnpm dev --port 5173 --strictPort',
+          url: 'http://localhost:5173',
+          reuseExistingServer: true,
+          timeout: 60000,
+          env: {
+            VITE_API_URL: apiURL
+          }
+        }
+      })
 });
+
+// Export for use in fixtures
+export { apiURL, baseURL };

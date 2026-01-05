@@ -12,16 +12,16 @@ test.describe('State Persistence', () => {
   test.fixme('Chat Input Preserved', async ({ page }) => {
     // Set mobile viewport (Pixel 5)
     await page.setViewportSize({ width: 393, height: 851 });
-    await page.goto('http://localhost:3031');
-    
+    await page.goto('/');
+
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
-    
+
     // 1. Start typing a message in chat
     const inputField = page.getByRole('textbox', { name: 'Enter command...' });
     await inputField.fill('test message draft');
     await expect(inputField).toHaveValue('test message draft');
-    
+
     // 2. Switch to [INBOX] tab
     const inboxTab = page.getByRole('button', { name: 'Inbox' });
     await inboxTab.click();
@@ -31,7 +31,7 @@ test.describe('State Persistence', () => {
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await chatTab.click();
     await expect(inputField).toBeVisible();
-    
+
     // Expected: Typed text preserved in input field
     // Expected: No loss of draft message
     await expect(inputField).toHaveValue('test message draft');

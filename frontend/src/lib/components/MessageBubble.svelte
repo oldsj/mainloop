@@ -15,7 +15,7 @@
 </script>
 
 <div
-  class="w-full border-l-2 px-3 py-2 md:px-4 {isUser
+  class="message w-full border-l-2 px-3 py-2 md:px-4 {isUser
     ? 'border-term-accent-alt bg-transparent'
     : 'border-term-accent bg-term-bg-secondary'}"
 >

@@ -233,16 +233,32 @@ Layout modes:
 
 ### E2E Testing (Playwright)
 
-Tests live in `frontend/tests/` with an isolated test environment (separate DB + containers).
+Tests live in `frontend/tests/` and run against a Kind (Kubernetes in Docker) cluster that tests actual K8s job spawning.
 
 ```bash
-make test-env-watch   # Start test env with hot-reload (background)
-make test-run         # Reset DB and run tests (fast iteration)
-make test-env-down    # Stop test environment
-make test-e2e         # One-shot: start env, run tests, stop env
+make test-e2e         # Auto-setup Kind cluster, build/load images, run tests
+make test-e2e-ui      # Same setup, interactive UI mode
+make test-e2e-debug   # Same setup, debug mode
+make kind-delete      # Delete the Kind cluster when done
 ```
 
+**How it works:**
+
+- `make test-e2e` checks if Kind cluster exists (creates if needed)
+- Builds images using Docker cache from `make dev`/`make deploy`
+- Loads images into Kind
+- Deploys with test Kustomize overlay (simple Postgres StatefulSet)
+- Runs Playwright tests against http://localhost:3000
+- Cluster persists between runs for fast iteration
+
+**IMPORTANT:**
+
+- Never manually run `kubectl apply -k k8s/apps/mainloop/overlays/test` - always use `make test-e2e` or other make targets
+- Test scripts use `--context kind-mainloop-test` flag and won't change your shell's kubectl context
+- `make deploy` targets your production cluster based on current kubectl context
+
 **Test structure** (runs sequentially with fail-fast):
+
 - `app.setup.ts` - Page loads, basic elements visible
 - `basic/` - Simple conversation flows
 - `context/` - Message history and context
@@ -250,16 +266,98 @@ make test-e2e         # One-shot: start env, run tests, stop env
 - `mobile/` - Tab bar navigation (Pixel 5 viewport)
 
 **When modifying UI components**, check if tests need updates:
+
 - Tests use role-based selectors: `getByRole('button', { name: 'Chat' })`
 - Some tests check CSS classes for active states (e.g., `toHaveClass(/text-term-accent/)`)
 - Mobile tests use `.first()` or `.last()` to handle duplicate elements across viewports
-- Run `make test-run` after UI changes to catch breakage early
+- Run `make test-e2e` after UI changes to catch breakage early
 
 **Key selectors used in tests:**
+
 - Header: `getByRole('heading', { name: '$ mainloop' })`
 - Input: `getByPlaceholder('Enter command...')`
 - Mobile tabs: `getByRole('button', { name: 'Chat' })`, `getByRole('button', { name: 'Inbox' })`
 - Inbox header: `locator('h2:has-text("[INBOX]")')`
+
+### Adding New Features (Docs → Specs → Tests)
+
+When adding a new feature, follow this workflow to keep documentation and tests in sync:
+
+```text
+README.md / docs/           →    frontend/specs/*.md    →    frontend/tests/*.spec.ts
+(what the feature does)          (test scenarios)            (executable tests)
+```
+
+#### Step 1: Document the feature
+
+Update README.md or create a doc in `docs/` describing:
+
+- What the feature does (user-facing behavior)
+- Key user flows and interactions
+- Edge cases and error states
+
+#### Step 2: Generate test specs
+
+Use the `playwright-test-planner` agent to create test scenarios:
+
+```text
+"Use playwright-test-planner to create a test plan for [feature] based on docs/[feature].md"
+```
+
+The planner will:
+
+- Read the feature documentation
+- Explore the running app at http://localhost:3000
+- Generate `frontend/specs/[feature].md` with test scenarios
+
+#### Step 3: Generate tests from specs
+
+Use the `playwright-test-generator` agent:
+
+```text
+"Use playwright-test-generator to generate tests from specs/[feature].md"
+```
+
+The generator will:
+
+- Execute each step in a real browser
+- Record the actions
+- Output `frontend/tests/[feature]/*.spec.ts`
+
+#### Step 4: Fix any failures
+
+If tests fail, use the `playwright-test-healer` agent:
+
+```text
+"Use playwright-test-healer to fix tests/[feature]/[test].spec.ts"
+```
+
+**Spec format** (in `frontend/specs/`):
+
+```markdown
+# Feature Test Plan
+
+> See [docs/feature.md](../docs/feature.md) for feature spec
+
+## Test Scenarios
+
+### 1. Scenario Category
+
+#### 1.1 Specific Test Case
+
+**Seed:** tests/fixtures/seed-data.ts
+
+**Steps:**
+
+1. Action to perform
+2. Another action
+
+**Expected:**
+
+- What should happen
+```
+
+**When modifying existing features**: Update the docs first, then regenerate specs and tests to ensure they stay in sync.
 
 ## Important
 

@@ -1,26 +1,36 @@
 import { test, expect } from '@playwright/test';
+import { setupConversation } from '../fixtures';
 
 /**
  * CONTEXT STAGE - Verify conversation history
  *
- * This test verifies that messages from previous tests are preserved.
+ * Self-contained tests for conversation persistence.
  */
 
 test.describe('Context: Conversation History', () => {
-  test('previous messages are visible', async ({ page }) => {
+  test('messages are visible after sending', async ({ page }) => {
     await page.goto('/');
 
-    // The "hello" message from basic stage should still be visible
+    // Set up conversation (self-contained)
+    await setupConversation(page);
+
+    // The "hello" message should be visible
     await expect(page.getByText('hello').first()).toBeVisible();
 
-    // There should be multiple messages in the conversation
+    // There should be messages in the conversation
     const messages = page.locator('.message');
-    await expect(messages).toHaveCount(await messages.count());
     expect(await messages.count()).toBeGreaterThan(0);
   });
 
   test('send another message maintains history', async ({ page }) => {
     await page.goto('/');
+
+    // Set up initial conversation (self-contained)
+    await setupConversation(page);
+
+    // Count messages before sending (scope to main to avoid counting mobile layout)
+    const messages = page.getByRole('main').locator('.message');
+    const countBefore = await messages.count();
 
     // Send a new message (use first input - desktop)
     const input = page.getByPlaceholder('Enter command...').first();
@@ -30,10 +40,11 @@ test.describe('Context: Conversation History', () => {
     // New message appears
     await expect(page.getByText('what did I just say?').first()).toBeVisible();
 
-    // Old messages still present
-    await expect(page.getByText('hello').first()).toBeVisible();
+    // Wait for loading to complete (response received)
+    // Use getByRole('main') to target only the desktop layout (mobile is hidden but still in DOM)
+    await expect(page.getByRole('main').getByText('processing')).toBeHidden({ timeout: 60000 });
 
-    // Response references previous context
-    await expect(page.locator('.message').last()).toBeVisible({ timeout: 30000 });
+    // Verify response arrived (at least 2 new messages: user + assistant)
+    await expect(messages).toHaveCount(countBefore + 2, { timeout: 5000 });
   });
 });

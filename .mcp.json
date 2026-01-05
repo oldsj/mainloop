@@ -2,10 +2,7 @@
   "mcpServers": {
     "playwright-test": {
       "command": "bash",
-      "args": [
-        "-c",
-        "cd frontend && npx playwright run-test-mcp-server"
-      ]
+      "args": ["-c", "cd frontend && npx playwright run-test-mcp-server"]
     }
   }
 }

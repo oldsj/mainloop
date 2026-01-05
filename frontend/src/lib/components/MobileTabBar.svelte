@@ -1,12 +1,17 @@
 <script lang="ts">
   import { activeTasksCount } from '$lib/stores/tasks';
   import { unreadCount } from '$lib/stores/inbox';
-
-  type Tab = 'chat' | 'tasks';
-
-  let { activeTab = $bindable('chat') }: { activeTab: Tab } = $props();
+  import { mobileTab } from '$lib/stores/mobileTab';
 
   const totalCount = $derived($activeTasksCount + $unreadCount);
+
+  // Derived class strings for reactive styling
+  const chatTabClass = $derived(
+    $mobileTab === 'chat' ? 'text-term-accent' : 'text-term-fg-muted'
+  );
+  const inboxTabClass = $derived(
+    $mobileTab === 'tasks' ? 'text-term-accent' : 'text-term-fg-muted'
+  );
 </script>
 
 <nav
@@ -16,12 +21,10 @@
   <div class="flex items-center justify-around">
     <button
       data-testid="tab-chat"
-      onclick={() => (activeTab = 'chat')}
-      class="flex flex-1 flex-col items-center gap-1 py-3 transition-colors"
-      class:text-term-accent={activeTab === 'chat'}
-      class:text-term-fg-muted={activeTab !== 'chat'}
+      onclick={() => mobileTab.set('chat')}
+      class="flex flex-1 flex-col items-center gap-1 py-3 transition-colors {chatTabClass}"
       aria-label="Chat"
-      aria-selected={activeTab === 'chat'}
+      aria-selected={$mobileTab === 'chat'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -42,12 +45,10 @@
 
     <button
       data-testid="tab-inbox"
-      onclick={() => (activeTab = 'tasks')}
-      class="relative flex flex-1 flex-col items-center gap-1 py-3 transition-colors"
-      class:text-term-accent={activeTab === 'tasks'}
-      class:text-term-fg-muted={activeTab !== 'tasks'}
+      onclick={() => mobileTab.set('tasks')}
+      class="relative flex flex-1 flex-col items-center gap-1 py-3 transition-colors {inboxTabClass}"
       aria-label="Inbox"
-      aria-selected={activeTab === 'tasks'}
+      aria-selected={$mobileTab === 'tasks'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

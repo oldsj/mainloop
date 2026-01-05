@@ -47,6 +47,7 @@ from models import (
     Project,
     QueueItem,
     QueueItemResponse,
+    QueueItemType,
     TaskStatus,
     WorkerTask,
 )
@@ -60,11 +61,8 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Local dev (default)
-        "http://localhost:3030",  # Local dev (alternative)
-        settings.frontend_origin,  # Production
-    ],
+    allow_origin_regex=r"http://localhost:\d+",  # All localhost ports
+    allow_origins=[settings.frontend_origin],  # Production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,14 +86,9 @@ async def shutdown_event():
     await db.disconnect()
 
 
-def get_user_id_from_cf_header(
-    cf_access_jwt_assertion: str | None = Header(None),
-) -> str:
-    """Extract user ID from Cloudflare Access JWT header."""
-    if not cf_access_jwt_assertion:
-        return "local-dev-user"
-    # TODO: Decode and verify CF Access JWT
-    return "user-from-cf-jwt"
+def get_user_id_from_cf_header() -> str:
+    """Get user ID - always returns local-dev-user for now."""
+    return "local-dev-user"
 
 
 # ============= Health & Info =============
@@ -1102,6 +1095,7 @@ class SeedTaskRequest(BaseModel):
     description: str = "Test task"
     repo_url: str | None = None
     plan: str | None = None
+    questions: list[dict] | None = None  # For waiting_questions status
 
 
 @app.post("/internal/test/seed-task")
@@ -1111,19 +1105,21 @@ async def seed_task_for_testing(request: SeedTaskRequest):
     WARNING: Only available in test environments. Do not use in production.
     """
     if not settings.is_test_env:
-        raise HTTPException(status_code=403, detail="Only available in test environment")
+        raise HTTPException(
+            status_code=403, detail="Only available in test environment"
+        )
 
     from uuid import uuid4
 
     # Get or create a test main thread
-    user_id = "test-user"
-    threads = await db.list_threads(user_id)
-    if threads:
-        thread_id = threads[0].id
-    else:
-        # Create test thread
-        thread = await get_or_start_main_thread(user_id)
-        thread_id = thread.id
+    # Use "local-dev-user" to match the default user ID in get_user_id_from_cf_header()
+    user_id = "local-dev-user"
+    thread = await db.get_main_thread_by_user(user_id)
+    if not thread:
+        # Create test thread directly (no workflow needed for tests)
+        thread = MainThread(user_id=user_id, workflow_run_id="test-workflow")
+        thread = await db.create_main_thread(thread)
+    thread_id = thread.id
 
     # Create task
     task = WorkerTask(
@@ -1135,6 +1131,7 @@ async def seed_task_for_testing(request: SeedTaskRequest):
         prompt=f"Implement: {request.description}",
         repo_url=request.repo_url,
         status=request.status,
+        plan_text=request.plan,  # Store plan on task for UI display
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -1148,13 +1145,51 @@ async def seed_task_for_testing(request: SeedTaskRequest):
             main_thread_id=thread_id,
             task_id=task.id,
             user_id=user_id,
-            type="plan_review",
-            content={"plan": request.plan},
+            item_type=QueueItemType.PLAN_REVIEW,
+            title="Review Plan",
+            content=request.plan,
+            created_at=datetime.now(),
+        )
+        await db.create_queue_item(queue_item)
+
+    # If task has questions, create a queue item
+    if request.status == TaskStatus.WAITING_QUESTIONS and request.questions:
+        import json
+
+        queue_item = QueueItem(
+            id=str(uuid4()),
+            main_thread_id=thread_id,
+            task_id=task.id,
+            user_id=user_id,
+            item_type=QueueItemType.QUESTION,
+            title="Answer Questions",
+            content=json.dumps(request.questions),  # Serialize questions to string
             created_at=datetime.now(),
         )
         await db.create_queue_item(queue_item)
 
     return {"task_id": task.id, "status": task.status}
+
+
+@app.post("/internal/test/reset")
+async def reset_test_data():
+    """Clear all data for fresh test runs.
+
+    WARNING: Only available in test environments. Do not use in production.
+    """
+    if not settings.is_test_env:
+        raise HTTPException(
+            status_code=403, detail="Only available in test environment"
+        )
+
+    # Clear all tables
+    async with db.connection() as conn:
+        await conn.execute("DELETE FROM queue_items")
+        await conn.execute("DELETE FROM messages")
+        await conn.execute("DELETE FROM worker_tasks")
+        await conn.execute("DELETE FROM main_threads")
+
+    return {"status": "reset"}
 
 
 # ============= Run =============

@@ -9,7 +9,7 @@ test.describe('Tab Navigation', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. Load application fresh at mobile viewport
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Observe which view is active
     // Expected: Input bar at bottom (above tab bar)
@@ -19,7 +19,7 @@ test.describe('Tab Navigation', () => {
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await expect(chatTab).toBeVisible();
     await expect(chatTab).toHaveClass(/text-term-accent/);
-    
+
     // Expected: Inbox view hidden
     const inboxHeading = page.getByRole('heading', { name: '[INBOX]' });
     await expect(inboxHeading).not.toBeVisible();

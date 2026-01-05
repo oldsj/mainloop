@@ -293,6 +293,8 @@ async def get_claude_response(
     will have access to the spawn_task tool to spawn autonomous worker agents.
 
     This ensures continuity across sessions, pod restarts, and deployments.
+
+    If USE_MOCK_CLAUDE=true, returns canned responses without API calls.
     """
     try:
         # Build prompt with summary and recent messages
@@ -319,6 +321,38 @@ async def get_claude_response(
             recent_repos = await db.get_recent_repos(main_thread_id)
             system_prompt = build_chat_system_prompt(recent_repos)
 
+        # Use mock Claude for fast testing (no API calls)
+        if settings.use_mock_claude:
+            logger.info("Using mock Claude (USE_MOCK_CLAUDE=true)")
+            from mainloop.services.claude_mock import (
+                MockAssistantMessage,
+                MockClaudeResponse,
+                MockResultMessage,
+                MockTextBlock,
+            )
+
+            collected_text: list[str] = []
+            async for msg in MockClaudeResponse.query_mock(
+                prompt_text, mcp_servers=mcp_servers
+            ):
+                if isinstance(msg, MockAssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, MockTextBlock):
+                            collected_text.append(block.text)
+                elif isinstance(msg, MockResultMessage):
+                    if msg.is_error:
+                        return ClaudeResponse(
+                            text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
+                        )
+
+            return ClaudeResponse(
+                text=(
+                    "\n".join(collected_text)
+                    if collected_text
+                    else "No response generated."
+                ),
+            )
+
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="bypassPermissions",
@@ -335,7 +369,7 @@ async def get_claude_response(
         else:
             prompt = prompt_text
 
-        collected_text: list[str] = []
+        collected_text = []
         compaction_count: int = 0
 
         async for msg in query(prompt=prompt, options=options):

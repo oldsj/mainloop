@@ -8,7 +8,7 @@ test.describe('Tab Navigation', () => {
     // Set mobile viewport (Pixel 5)
     await page.setViewportSize({ width: 393, height: 851 });
 
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
@@ -21,10 +21,10 @@ test.describe('Tab Navigation', () => {
     // 2. Tap the [CHAT] tab
     const chatTab = page.getByRole('button', { name: 'Chat' });
     await chatTab.click();
-    
+
     // Expected: [CHAT] tab becomes highlighted
     await expect(chatTab).toHaveClass(/text-term-accent/);
-    
+
     // Expected: [INBOX] tab becomes muted
     await expect(inboxTab).not.toHaveClass(/text-term-accent/);
 

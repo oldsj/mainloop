@@ -543,8 +543,8 @@ class Database:
                 INSERT INTO worker_tasks
                 (id, main_thread_id, user_id, task_type, description, prompt, model,
                  repo_url, branch_name, base_branch, status, created_at,
-                 conversation_id, message_id, keywords, skip_plan)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                 conversation_id, message_id, keywords, skip_plan, plan_text)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 """,
                 task.id,
                 task.main_thread_id,
@@ -562,6 +562,7 @@ class Database:
                 task.message_id,
                 task.keywords,
                 task.skip_plan,
+                task.plan_text,
             )
         return task
 

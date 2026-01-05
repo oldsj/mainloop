@@ -9,7 +9,7 @@ test.describe('Inbox Panel Visibility', () => {
     await page.setViewportSize({ width: 393, height: 851 });
 
     // 1. Load application at mobile viewport
-    await page.goto('http://localhost:3031');
+    await page.goto('/');
 
     // 2. Wait for app to fully load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
@@ -19,16 +19,16 @@ test.describe('Inbox Panel Visibility', () => {
     const inboxTab = page.getByRole('button', { name: 'Inbox' });
     await expect(chatTab).toBeVisible();
     await expect(inboxTab).toBeVisible();
-    
+
     // Verify [CHAT] tab is active by default
     await expect(chatTab).toHaveClass(/text-term-accent/);
 
     // 3. Tap the [INBOX] tab
     await inboxTab.click();
-    
+
     // Verify inbox panel is now visible
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
-    
+
     // Verify [INBOX] tab is now active
     await expect(inboxTab).toHaveClass(/text-term-accent/);
 
