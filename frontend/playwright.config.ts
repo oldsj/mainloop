@@ -27,7 +27,7 @@ export default defineConfig({
   // Tests run sequentially by default (state-dependent)
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,  // No retries - fail fast, don't hide flakiness
+  retries: 0, // No retries - fail fast, don't hide flakiness
   workers: 1,
 
   reporter: process.env.CI
