@@ -1,6 +1,6 @@
 # mainloop
 
-An attention management system — one place to focus, accessible from any device.
+A single conversation to manage all of your AI sessions - that keeps working while you're away.
 
 Your main conversation thread is the closest digital mapping to your own internal thread of consciousness. Everything else flows into a unified inbox that surfaces only what needs your attention.
 
