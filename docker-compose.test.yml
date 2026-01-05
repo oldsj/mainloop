@@ -7,6 +7,7 @@
 
 services:
   frontend-test:
+    image: mainloop-frontend-test
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -50,6 +51,7 @@ services:
       retries: 10
 
   backend-test:
+    image: mainloop-backend-test
     build:
       context: .
       dockerfile: backend/Dockerfile

@@ -80,7 +80,7 @@ jobs:
   # Uses docker-compose with USE_MOCK_CLAUDE=true, USE_MOCK_GITHUB=true
   e2e-mocked:
     name: E2E Tests (Mocked)
-    needs: [lint]
+    needs: [lint, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -122,8 +122,23 @@ jobs:
         run: pnpm exec playwright install-deps chromium
         working-directory: frontend
 
+      - name: Download image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-image'
+          path: /tmp/images
+          merge-multiple: true
+
+      - name: Load pre-built images
+        run: |
+          docker load --input /tmp/images/backend.tar
+          docker load --input /tmp/images/frontend.tar
+          # Tag for docker-compose service names
+          docker tag mainloop-backend:test mainloop-backend-test
+          docker tag mainloop-frontend:test mainloop-frontend-test
+
       - name: Start services (docker-compose)
-        run: docker compose -f docker-compose.test.yml --profile ci up -d --build --wait
+        run: docker compose -f docker-compose.test.yml --profile ci up -d --wait
 
       - name: Run Playwright tests (mocked)
         run: |
