@@ -7,7 +7,7 @@
 import type { Page } from '@playwright/test';
 
 // Single source of truth for API URL
-const apiURL = process.env.API_URL || 'http://localhost:8081';
+const apiURL = process.env.API_URL || 'http://localhost:8000';
 
 /**
  * Reset test database for clean state

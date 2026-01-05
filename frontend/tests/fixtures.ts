@@ -10,7 +10,7 @@ import { test as base, expect, type Page } from '@playwright/test';
  */
 
 // API URL from environment (set by make test or CI)
-export const apiURL = process.env.API_URL || 'http://localhost:8081';
+export const apiURL = process.env.API_URL || 'http://localhost:8000';
 
 /**
  * Extended test with common fixtures

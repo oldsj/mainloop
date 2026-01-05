@@ -1,6 +1,6 @@
 import { request } from '@playwright/test';
 
-const apiURL = process.env.API_URL || 'http://localhost:8081';
+const apiURL = process.env.API_URL || 'http://localhost:8000';
 
 /**
  * Global setup - runs once before all tests.

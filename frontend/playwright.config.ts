@@ -5,7 +5,7 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * Environment variables:
  *   PLAYWRIGHT_BASE_URL - Frontend URL (default: http://localhost:5173)
- *   API_URL            - Backend URL (default: http://localhost:8081)
+ *   API_URL            - Backend URL (default: http://localhost:8000)
  *
  * Usage:
  *   make test          # Playwright UI (backend Docker, frontend Vite)
@@ -13,7 +13,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
-const apiURL = process.env.API_URL || 'http://localhost:8081';
+const apiURL = process.env.API_URL || 'http://localhost:8000';
 
 export default defineConfig({
   testDir: './tests',
