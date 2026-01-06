@@ -24,11 +24,11 @@ export default defineConfig({
   // Run all tests - don't stop on first failure (see all issues)
   maxFailures: undefined,
 
-  // Tests run sequentially by default (state-dependent)
+  // Tests run serially due to shared DB reset and real Claude API
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0, // No retries - fail fast, don't hide flakiness
-  workers: 1,
+  workers: 1, // Bottleneck: resetTestData() and real Claude API calls
 
   reporter: process.env.CI
     ? [['github'], ['html', { open: 'never' }]]
@@ -44,6 +44,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    colorScheme: 'dark', // Reduce white flashing between tests
     // Pass API_URL to tests via extraHTTPHeaders or use in fixtures
     extraHTTPHeaders: {
       'x-test-api-url': apiURL

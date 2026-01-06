@@ -7,6 +7,8 @@ import { setupConversation } from '../fixtures';
  * Self-contained tests for conversation persistence.
  */
 
+test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run serially
+
 test.describe('Context: Conversation History', () => {
   test('messages are visible after sending', async ({ page }) => {
     await page.goto('/');

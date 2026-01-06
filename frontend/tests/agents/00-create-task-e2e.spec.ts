@@ -7,6 +7,8 @@ import { setupConversation } from '../fixtures';
  * Tests the full flow: conversation → Claude spawns task → task appears in inbox
  */
 
+test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run serially
+
 test.describe('Agents: Create Task (E2E)', () => {
   test.setTimeout(60000); // 1 min - haiku is fast
 

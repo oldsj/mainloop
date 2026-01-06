@@ -5,6 +5,8 @@ import { setupConversation } from '../fixtures';
  * BASIC STAGE - Send a message test
  */
 
+test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run serially
+
 test.describe('Basic: Send Message', () => {
   test('send message and receive response', async ({ page }) => {
     await page.goto('/');

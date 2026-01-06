@@ -69,19 +69,22 @@ export async function seedTaskWaitingQuestions(page: Page) {
       questions: [
         {
           id: 'q1',
+          header: 'Authentication Method',
           question: 'Which authentication method should we use?',
           options: [
-            { id: 'jwt', label: 'Yes' },
-            { id: 'session', label: 'No' }
+            { id: 'jwt', label: 'JWT tokens', description: 'Stateless, good for APIs' },
+            { id: 'session', label: 'Session cookies', description: 'Server-side sessions' },
+            { id: 'oauth', label: 'OAuth 2.0', description: 'Third-party providers' }
           ]
         },
         {
           id: 'q2',
+          header: 'Rate Limiting',
           question: 'Should we add rate limiting?',
           options: [
-            { id: 'yes', label: 'Yes' },
-            { id: 'no', label: 'No' },
-            { id: 'maybe', label: 'Maybe' }
+            { id: 'yes', label: 'Yes', description: 'Prevent abuse' },
+            { id: 'no', label: 'No', description: 'Keep it simple' },
+            { id: 'later', label: 'Add later', description: 'Start without, add if needed' }
           ]
         }
       ]

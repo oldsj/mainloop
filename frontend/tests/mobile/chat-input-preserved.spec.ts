@@ -13,7 +13,7 @@ test.describe('State Persistence', () => {
     await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
     // Verify we're on chat tab by default
-    const chatTab = page.getByRole('button', { name: 'Chat' });
+    const chatTab = page.getByTestId('tab-chat');
     await expect(chatTab).toHaveClass(/text-term-accent/);
 
     // 1. Start typing a message in chat
@@ -22,12 +22,14 @@ test.describe('State Persistence', () => {
     await expect(inputField).toHaveValue('test message draft');
 
     // 2. Switch to [INBOX] tab
-    const inboxTab = page.getByRole('button', { name: 'Inbox' });
+    const inboxTab = page.getByTestId('tab-inbox');
     await inboxTab.click();
+    await page.waitForTimeout(100); // Wait for Svelte reactivity
     await expect(inboxTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
 
     // 3. Switch back to [CHAT] tab
     await chatTab.click();
+    await page.waitForTimeout(100); // Wait for Svelte reactivity
     await expect(chatTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
 
     // Expected: Typed text preserved in input field
