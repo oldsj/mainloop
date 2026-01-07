@@ -142,9 +142,12 @@ from mainloop.services.github_pr import (  # noqa: E402
     CombinedCheckStatus,
     ConditionalResponse,
     CreatedIssue,
+    IssueSummary,
     PRComment,
     PRReview,
     PRStatus,
+    ProjectPRSummary,
+    RepoMetadata,
 )
 
 # ==================== Mock Implementations ====================
@@ -452,6 +455,107 @@ async def format_issue_feedback_for_agent(
 ) -> str:
     """Mock format_issue_feedback_for_agent - returns empty string."""
     return ""
+
+
+# ==================== New Chat Tool Mocks ====================
+
+
+async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
+    """Mock get_repo_metadata - returns mock repo data."""
+    owner, repo = _parse_repo(repo_url)
+
+    logger.info(f"[mock] Getting repo metadata for {owner}/{repo}")
+
+    return RepoMetadata(
+        owner=owner,
+        name=repo,
+        full_name=f"{owner}/{repo}",
+        description="A mock repository for testing",
+        default_branch="main",
+        avatar_url=f"https://github.com/{owner}.png",
+        html_url=f"https://github.com/{owner}/{repo}",
+        open_issues_count=len(
+            [i for i in mock_state._issues.values() if i.state == "open"]
+        ),
+    )
+
+
+async def list_open_issues(repo_url: str, limit: int = 10) -> list[IssueSummary]:
+    """Mock list_open_issues - returns issues from mock state."""
+    owner, repo = _parse_repo(repo_url)
+
+    logger.info(f"[mock] Listing open issues for {owner}/{repo}")
+
+    # Return open issues from mock state
+    open_issues = [i for i in mock_state._issues.values() if i.state == "open"][:limit]
+
+    # If no issues in state, return some default mock issues
+    if not open_issues:
+        return [
+            IssueSummary(
+                number=1,
+                title="Mock issue for testing",
+                state="open",
+                author="test-user",
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+                url=f"https://github.com/{owner}/{repo}/issues/1",
+                labels=["test", "mock"],
+            ),
+            IssueSummary(
+                number=2,
+                title="Another mock issue",
+                state="open",
+                author="test-user",
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+                url=f"https://github.com/{owner}/{repo}/issues/2",
+                labels=["enhancement"],
+            ),
+        ]
+
+    return [
+        IssueSummary(
+            number=issue.number,
+            title=issue.title,
+            state=issue.state,
+            author="test-user",
+            created_at=issue.created_at,
+            updated_at=issue.updated_at,
+            url=f"https://github.com/{owner}/{repo}/issues/{issue.number}",
+            labels=issue.labels,
+        )
+        for issue in open_issues
+    ]
+
+
+async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary]:
+    """Mock list_open_prs - returns PRs from mock state."""
+    owner, repo = _parse_repo(repo_url)
+
+    logger.info(f"[mock] Listing open PRs for {owner}/{repo}")
+
+    # Return open PRs from mock state
+    open_prs = [p for p in mock_state._prs.values() if p.state == "open"][:limit]
+
+    # If no PRs in state, return empty list (or could return mock PRs)
+    if not open_prs:
+        return []
+
+    return [
+        ProjectPRSummary(
+            number=pr.number,
+            title=pr.title,
+            state=pr.state,
+            author="test-user",
+            created_at=pr.created_at,
+            updated_at=pr.updated_at,
+            url=f"https://github.com/{owner}/{repo}/pull/{pr.number}",
+            is_mainloop="mainloop" in pr.head_branch.lower()
+            or "feature/" in pr.head_branch,
+        )
+        for pr in open_prs
+    ]
 
 
 # ==================== Utility Functions ====================

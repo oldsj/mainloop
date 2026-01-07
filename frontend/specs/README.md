@@ -42,3 +42,4 @@ Brief description of what this feature does.
 - [inbox-management.md](./inbox-management.md) - Inbox panel and queue items
 - [task-interactions.md](./task-interactions.md) - Question answering and plan review
 - [mobile-navigation.md](./mobile-navigation.md) - Mobile tab bar navigation
+- [github-tool.md](./github-tool.md) - Chat agent GitHub integration

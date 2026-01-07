@@ -94,6 +94,10 @@ def _apply_mock_github():
         "acknowledge_comments",
         "is_pr_merged",
         "is_pr_approved",
+        # Chat tool functions
+        "get_repo_metadata",
+        "list_open_issues",
+        "list_open_prs",
     ]
     for name in funcs_to_mock:
         if hasattr(github_mock, name):

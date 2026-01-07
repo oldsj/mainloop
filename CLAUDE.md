@@ -65,6 +65,14 @@ Wait for new pods to show `Running` and old pods to terminate.
 - For new features, use `playwright-test-planner` to explore and generate plans
 - Use `playwright-test-generator` to create tests from plans
 
+**GitHub mocking:**
+
+Test environment uses `USE_MOCK_GITHUB=true` to avoid hitting the real GitHub API. When adding new GitHub API functions:
+
+1. Add mock implementation to `backend/src/mainloop/services/github_mock.py`
+2. Add function name to `funcs_to_mock` list in `backend/src/mainloop/api.py`
+3. Mock should return realistic test data, not empty responses
+
 ## Key Patterns
 
 - **Pydantic models** in `models/` shared between frontend types and backend
