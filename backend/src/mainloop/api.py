@@ -1318,7 +1318,7 @@ async def seed_repo_for_testing(request: SeedRepoRequest):
             status_code=403, detail="Only available in test environment"
         )
 
-    import subprocess
+    import subprocess  # nosec B404 - test-only endpoint
 
     from mainloop.services.repo_cache import get_repo_cache
 
@@ -1396,22 +1396,26 @@ dev = ["pytest"]
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content)
 
-    # Initialize git repo
-    subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+    # Initialize git repo (nosec: test-only endpoint with fixed commands)
     subprocess.run(
+        ["git", "init"], cwd=repo_path, capture_output=True, check=True
+    )  # nosec B603 B607
+    subprocess.run(  # nosec B603 B607
         ["git", "config", "user.email", "test@example.com"],
         cwd=repo_path,
         capture_output=True,
         check=True,
     )
-    subprocess.run(
+    subprocess.run(  # nosec B603 B607
         ["git", "config", "user.name", "Test User"],
         cwd=repo_path,
         capture_output=True,
         check=True,
     )
-    subprocess.run(["git", "add", "."], cwd=repo_path, capture_output=True, check=True)
     subprocess.run(
+        ["git", "add", "."], cwd=repo_path, capture_output=True, check=True
+    )  # nosec B603 B607
+    subprocess.run(  # nosec B603 B607
         ["git", "commit", "-m", "Initial commit"],
         cwd=repo_path,
         capture_output=True,
@@ -1420,7 +1424,7 @@ dev = ["pytest"]
     # Add a dummy remote so pull operations don't fail
     # (the repo cache tries to pull on existing repos)
     dummy_remote = f"https://github.com/{request.owner}/{request.name}.git"
-    subprocess.run(
+    subprocess.run(  # nosec B603 B607
         ["git", "remote", "add", "origin", dummy_remote],
         cwd=repo_path,
         capture_output=True,
