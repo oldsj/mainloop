@@ -81,7 +81,7 @@ export default defineConfig({
       name: 'slow-e2e',
       testMatch: /(00-create-task|01-send-message|01-conversation-history).*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      fullyParallel: false  // Run serially - Claude API can't handle parallel requests well
+      fullyParallel: false // Run serially - Claude API can't handle parallel requests well
     }
   ],
 

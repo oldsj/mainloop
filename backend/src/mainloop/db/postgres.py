@@ -540,6 +540,7 @@ class Database:
         async with self.connection() as conn:
             # Serialize pending_questions to JSON for storage
             import json
+
             pending_questions_json = (
                 json.dumps([q.model_dump() for q in task.pending_questions])
                 if task.pending_questions

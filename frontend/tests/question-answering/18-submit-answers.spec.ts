@@ -23,7 +23,9 @@ test.describe('Submitting Answers', () => {
     await page.reload();
 
     // Task with questions should auto-expand showing the first question
-    await expect(page.locator('text=Which authentication method should we use?').first()).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.locator('text=Which authentication method should we use?').first()
+    ).toBeVisible({ timeout: 10000 });
 
     // 5. Answer question 1 with 'JWT tokens' option
     const q1Option = page.locator('button:has-text("JWT tokens")').first();
@@ -52,13 +54,13 @@ test.describe('Submitting Answers', () => {
     // 11. Wait for submission to complete and task status to change
     // The task should transition away from 'NEEDS INPUT' status
     // Wait for either 'PLANNING' badge or questions UI to disappear
-    await expect(
-      page.locator('text=NEEDS INPUT').first()
-    ).not.toBeVisible({ timeout: 15000 });
+    await expect(page.locator('text=NEEDS INPUT').first()).not.toBeVisible({ timeout: 15000 });
 
     // 12. Verify task status badge changed (could be PLANNING or IMPLEMENTING)
     // At minimum, verify the NEEDS INPUT badge is gone
-    const taskBadges = page.locator('[class*="border-term"]').filter({ hasText: /PLANNING|IMPLEMENTING|PLANNING/ });
+    const taskBadges = page
+      .locator('[class*="border-term"]')
+      .filter({ hasText: /PLANNING|IMPLEMENTING|PLANNING/ });
     await expect(taskBadges.first()).toBeVisible({ timeout: 5000 });
   });
 });

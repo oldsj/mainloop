@@ -25,12 +25,12 @@ fi
 # Verify backend health endpoint responds
 echo "Verifying backend health..."
 MAX_ATTEMPTS=30
-for i in $(seq 1 $MAX_ATTEMPTS); do
-  if curl -sf "${TEST_API_URL}/health" > /dev/null 2>&1; then
+for i in $(seq 1 "${MAX_ATTEMPTS}"); do
+  if curl -sf "${TEST_API_URL}/health" >/dev/null 2>&1; then
     echo "✓ Deployments ready, backend healthy"
     exit 0
   fi
-  if [ $i -eq $MAX_ATTEMPTS ]; then
+  if [[ ${i} -eq ${MAX_ATTEMPTS} ]]; then
     echo "Error: Backend not healthy after ${MAX_ATTEMPTS}s"
     echo "Check logs: make kind-logs"
     exit 1

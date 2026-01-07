@@ -34,7 +34,7 @@ test.describe('Custom Text Answers', () => {
     // 6. Type custom answer into the input
     await customInput.click();
     await customInput.fill('My custom authentication approach');
-    
+
     // Verify text appears in input
     await expect(customInput).toHaveValue('My custom authentication approach');
 

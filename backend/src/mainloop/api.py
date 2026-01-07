@@ -771,8 +771,8 @@ async def answer_task_questions(
         )
 
     # Send answers to the worker workflow
-    from mainloop.workflows.worker import TOPIC_QUESTION_RESPONSE
     from dbos import error as dbos_error
+    from mainloop.workflows.worker import TOPIC_QUESTION_RESPONSE
 
     # Try to send to worker workflow, but continue if workflow doesn't exist (e.g., in tests)
     try:
@@ -1180,15 +1180,19 @@ async def seed_task_for_testing(
     # Convert questions dict to TaskQuestion models if provided
     pending_questions = None
     if request.questions:
-        from models.workflow import TaskQuestion, QuestionOption
+        from models.workflow import QuestionOption, TaskQuestion
 
         pending_questions = [
             TaskQuestion(
                 id=q["id"],
-                header=q.get("header", q["question"][:30]),  # Default header from question
+                header=q.get(
+                    "header", q["question"][:30]
+                ),  # Default header from question
                 question=q["question"],
                 options=[
-                    QuestionOption(label=opt["label"], description=opt.get("description"))
+                    QuestionOption(
+                        label=opt["label"], description=opt.get("description")
+                    )
                     for opt in q.get("options", [])
                 ],
                 multi_select=q.get("multi_select", False),

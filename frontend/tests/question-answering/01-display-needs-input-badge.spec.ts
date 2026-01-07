@@ -25,9 +25,11 @@ test.describe('Question Viewing and Display', () => {
     await expect(needsInputBadge).toBeVisible({ timeout: 10000 });
 
     // 5. Verify badge has warning styling (border-term-warning text-term-warning)
-    const badgeElement = page.locator('.border-term-warning.text-term-warning', {
-      hasText: 'NEEDS INPUT'
-    }).first();
+    const badgeElement = page
+      .locator('.border-term-warning.text-term-warning', {
+        hasText: 'NEEDS INPUT'
+      })
+      .first();
     await expect(badgeElement).toBeVisible();
 
     // 6. Verify task is auto-expanded - first question visible without clicking
