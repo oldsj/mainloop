@@ -333,3 +333,56 @@ class Project(BaseModel):
     # Stats (cached, refreshed periodically)
     open_pr_count: int = Field(default=0, description="Cached open PR count")
     open_issue_count: int = Field(default=0, description="Cached open issue count")
+
+
+class PlanningSessionStatus(str, Enum):
+    """Status of a planning session."""
+
+    ACTIVE = "active"  # Planning in progress
+    APPROVED = "approved"  # User approved the plan
+    CANCELLED = "cancelled"  # User cancelled planning
+
+
+class PlanningSession(BaseModel):
+    """Represents an active planning session in the main thread.
+
+    Planning sessions track in-thread planning dialogue before a WorkerTask
+    is created. Once the user approves the plan, a WorkerTask is created
+    and the session is marked as approved.
+    """
+
+    id: str = Field(default_factory=_uuid, description="Unique session ID")
+    user_id: str = Field(..., description="User ID")
+    conversation_id: str = Field(..., description="Conversation where planning happens")
+    main_thread_id: str = Field(..., description="Main thread ID")
+
+    # Task definition
+    repo_url: str = Field(..., description="GitHub repository URL")
+    task_description: str = Field(..., description="What the user wants to accomplish")
+
+    # Planning state
+    status: PlanningSessionStatus = Field(
+        default=PlanningSessionStatus.ACTIVE, description="Session status"
+    )
+    plan_text: str | None = Field(None, description="Generated plan text")
+
+    # Message tracking (for context compression)
+    planning_message_ids: list[str] = Field(
+        default_factory=list, description="Message IDs from planning dialogue"
+    )
+
+    # SDK session for resumption
+    claude_session_id: str | None = Field(
+        None, description="Claude Agent SDK session ID for resumption"
+    )
+
+    # Resulting task (if approved)
+    worker_task_id: str | None = Field(
+        None, description="WorkerTask ID created from this session"
+    )
+
+    # Timestamps
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    completed_at: datetime | None = Field(None, description="Completion timestamp")

@@ -14,49 +14,67 @@ from claude_agent_sdk import (
     query,
     tool,
 )
-from dbos import SetWorkflowID
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.services.planning import (
+    approve_plan,
+    cancel_planning,
+    start_planning_session,
+)
 from mainloop.services.task_router import (
-    extract_keywords,
     find_matching_tasks,
 )
-from mainloop.workflows.dbos_config import worker_queue
 
 from models import (
     Message,
     QueueItem,
     QueueItemPriority,
     QueueItemType,
-    TaskStatus,
     WorkerTask,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def build_chat_system_prompt(recent_repos: list[str] | None = None) -> str:
+def build_chat_system_prompt(
+    recent_repos: list[str] | None = None,
+    planning_active: bool = False,
+) -> str:
     """Build the system prompt for chat, including recent repos if available."""
-    base_prompt = """You are a helpful AI assistant that can also spawn autonomous coding agents.
+    if planning_active:
+        # During active planning, use a focused prompt
+        return """You are in planning mode, helping design an implementation approach.
+
+Continue exploring the codebase and refining the plan based on user feedback.
+When the plan is ready for approval, ask the user if they want to:
+- Approve the plan (use approve_plan tool)
+- Request changes (continue refining)
+- Cancel planning (use cancel_planning tool)
+"""
+
+    base_prompt = """You are a helpful AI assistant that can help with coding tasks.
 
 When the user requests work that involves modifying code, creating files, making commits, or any development task:
 1. Confirm you understand what they want
-2. Ask them to confirm they want you to spawn a worker agent
-3. If they have recent repos, suggest one; otherwise ask for the GitHub repository URL
-4. Once confirmed, use the spawn_task tool to start the work
+2. Ask for the GitHub repository URL if not already known
+3. Use the start_planning tool to begin planning the implementation
 
-When to use spawn_task:
+The planning flow:
+1. start_planning: Begins an interactive planning session where you explore the codebase
+2. During planning, you'll have read-only access to the repo to understand the architecture
+3. You'll create an implementation plan together with the user
+4. approve_plan: Creates a GitHub issue and spawns a worker to implement
+5. cancel_planning: Cancels if the user changes their mind
+
+When to use start_planning:
 - Creating, modifying, or deleting code files
 - Making commits or pull requests
-- Running builds, tests, or deployments
 - Any work that requires access to a codebase
 
-Do NOT use spawn_task for:
+Do NOT use planning tools for:
 - Answering questions about how to do something
 - Explaining concepts or providing information
-- General conversation
-
-Always get explicit confirmation before spawning a task."""
+- General conversation"""
 
     if recent_repos:
         repos_list = "\n".join(f"  - {repo}" for repo in recent_repos)
@@ -65,43 +83,39 @@ Always get explicit confirmation before spawning a task."""
 The user has recently worked with these repositories:
 {repos_list}
 
-If relevant to their request, suggest using one of these repos. For example:
-"I can spawn a worker agent for this. Should I use {recent_repos[0]}?"
-"""
+If relevant to their request, suggest using one of these repos."""
     else:
         base_prompt += """
 
-Ask for the GitHub repo URL like:
-"I can spawn a worker agent to do this. Would you like me to proceed? Please provide the GitHub repo URL."
-"""
+Ask for the GitHub repo URL before starting planning."""
 
     return base_prompt
 
 
-def create_spawn_task_callable(
+def create_planning_tools(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
 ):
-    """Create a raw spawn_task callable for Claude to use.
+    """Create planning tools with context baked in.
 
-    This returns an async function that can be called directly with a dict of args.
+    Returns a list of tools for starting, approving, and cancelling planning.
     """
 
-    async def spawn_task_impl(args: dict[str, Any]) -> dict[str, Any]:
-        """Spawn a worker task to handle a coding request."""
-        print(f"[SPAWN] spawn_task_impl called with args: {args}")
-        task_description = args.get("task_description", "")
+    @tool(
+        "start_planning",
+        "Start an interactive planning session to design an implementation approach. "
+        "Use this when the user wants to work on a coding task. "
+        "You'll get read-only access to explore the codebase and create a plan.",
+        {
+            "repo_url": str,
+            "task_description": str,
+        },
+    )
+    async def start_planning_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Start a planning session."""
         repo_url = args.get("repo_url", "")
-        skip_planning = args.get("skip_planning", False)
-
-        if not task_description:
-            return {
-                "content": [
-                    {"type": "text", "text": "Error: task_description is required"}
-                ],
-                "is_error": True,
-            }
+        task_description = args.get("task_description", "")
 
         if not repo_url:
             return {
@@ -114,117 +128,138 @@ def create_spawn_task_callable(
                 "is_error": True,
             }
 
-        # Validate repo URL format
-        if not repo_url.startswith("https://github.com/"):
+        if not task_description:
+            return {
+                "content": [
+                    {"type": "text", "text": "Error: task_description is required"}
+                ],
+                "is_error": True,
+            }
+
+        try:
+            session, initial_message = await start_planning_session(
+                user_id=user_id,
+                main_thread_id=main_thread_id,
+                conversation_id=conversation_id,
+                repo_url=repo_url,
+                task_description=task_description,
+            )
+            logger.info(f"Started planning session {session.id}")
+
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Error: Invalid repo URL format. Expected https://github.com/owner/repo, got: {repo_url}",
+                        "text": f"Planning session started (ID: {session.id[:8]})\n\n"
+                        f"{initial_message}\n\n"
+                        "You now have read-only access to the codebase. "
+                        "Explore the code structure and create an implementation plan.",
+                    }
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Failed to start planning: {e}")
+            return {
+                "content": [
+                    {"type": "text", "text": f"Error starting planning: {str(e)}"}
+                ],
+                "is_error": True,
+            }
+
+    @tool(
+        "approve_plan",
+        "Approve the current plan and create a GitHub issue. "
+        "This will spawn a worker agent to implement the plan. "
+        "Use this when the user approves the implementation plan.",
+        {
+            "plan_text": str,
+        },
+    )
+    async def approve_plan_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Approve the plan and create a task."""
+        plan_text = args.get("plan_text", "")
+
+        if not plan_text:
+            return {
+                "content": [{"type": "text", "text": "Error: plan_text is required"}],
+                "is_error": True,
+            }
+
+        # Get active planning session
+        session = await db.get_active_planning_session(conversation_id)
+        if not session:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: No active planning session. Use start_planning first.",
                     }
                 ],
                 "is_error": True,
             }
 
         try:
-            print(f"[SPAWN] Creating task for repo: {repo_url}")
-            keywords = extract_keywords(task_description)
-            print(f"[SPAWN] Keywords: {keywords}")
-
-            task = WorkerTask(
-                main_thread_id=main_thread_id,
-                user_id=user_id,
-                task_type="feature",
-                description=task_description,
-                prompt=task_description,
-                repo_url=repo_url,
-                status=TaskStatus.PENDING,
-                conversation_id=conversation_id,
-                keywords=keywords,
-                skip_plan=skip_planning,
-            )
-            print("[SPAWN] WorkerTask created, calling db.create_worker_task")
-            task = await db.create_worker_task(task)
-            print(f"[SPAWN] Task saved to DB: {task.id}")
-
-            # Create project from repo URL (so it shows in sidebar)
-            print(f"[SPAWN] Creating project for repo: {repo_url}")
-            project = await db.get_or_create_project_from_url(user_id, repo_url)
-            print(f"[SPAWN] Project created/found: {project.id} - {project.full_name}")
-
-            # Enqueue the worker task
-            from mainloop.workflows.worker import worker_task_workflow
-
-            print(f"[SPAWN] Enqueueing workflow for task {task.id}")
-            with SetWorkflowID(task.id):
-                handle = worker_queue.enqueue(worker_task_workflow, task.id)
-                print(f"[SPAWN] Workflow enqueued, handle: {handle}")
-
-            logger.info(
-                f"Spawned worker task via tool: {task.id} (skip_plan={skip_planning})"
-            )
-
-            # Record this repo as recently used
-            await db.add_recent_repo(main_thread_id, repo_url)
+            task, result_message = await approve_plan(session, plan_text)
+            logger.info(f"Approved plan, created task {task.id}")
 
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Worker task spawned successfully!\n"
-                        f"Task ID: {task.id[:8]}\n"
-                        f"Repository: {repo_url}\n"
-                        f"Description: {task_description}\n"
-                        f"Skip planning: {skip_planning}\n\n"
-                        f"The agent will start working and update the user via their inbox.",
+                        "text": result_message,
                     }
                 ]
             }
         except Exception as e:
-            import traceback
-
-            print(f"[SPAWN] ERROR: {e}")
-            print(f"[SPAWN] Traceback: {traceback.format_exc()}")
-            logger.error(f"Failed to spawn task: {e}")
+            logger.error(f"Failed to approve plan: {e}")
             return {
-                "content": [{"type": "text", "text": f"Error spawning task: {str(e)}"}],
+                "content": [
+                    {"type": "text", "text": f"Error approving plan: {str(e)}"}
+                ],
                 "is_error": True,
             }
 
-    return spawn_task_impl
-
-
-def create_spawn_task_tool(
-    user_id: str,
-    main_thread_id: str,
-    conversation_id: str,
-):
-    """Create a spawn_task tool with context baked in.
-
-    This factory creates a tool that has access to the current user/conversation context.
-    Returns an SdkMcpTool for use with Claude Agent SDK.
-    """
-    # Get the raw callable
-    spawn_task_impl = create_spawn_task_callable(
-        user_id, main_thread_id, conversation_id
-    )
-
-    # Wrap it with the @tool decorator for Claude
     @tool(
-        "spawn_task",
-        "Spawn an autonomous coding agent to work on a development task. "
-        "Use this when the user confirms they want you to create, modify, or delete code. "
-        "Requires a task description and GitHub repository URL.",
-        {
-            "task_description": str,
-            "repo_url": str,
-            "skip_planning": bool,
-        },
+        "cancel_planning",
+        "Cancel the current planning session. "
+        "No GitHub issue will be created. "
+        "Use this if the user decides not to proceed.",
+        {},
     )
-    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
-        return await spawn_task_impl(args)
+    async def cancel_planning_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Cancel the planning session."""
+        # Get active planning session
+        session = await db.get_active_planning_session(conversation_id)
+        if not session:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "No active planning session to cancel.",
+                    }
+                ],
+            }
 
-    return spawn_task
+        try:
+            result_message = await cancel_planning(session)
+            logger.info(f"Cancelled planning session {session.id}")
+
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": result_message,
+                    }
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Failed to cancel planning: {e}")
+            return {
+                "content": [{"type": "text", "text": f"Error cancelling: {str(e)}"}],
+                "is_error": True,
+            }
+
+    return [start_planning_tool, approve_plan_tool, cancel_planning_tool]
 
 
 def format_conversation_history(messages: list[Message]) -> str:
@@ -321,41 +356,55 @@ async def get_claude_response(
     main_thread_id: str | None = None,
     conversation_id: str | None = None,
 ) -> ClaudeResponse:
-    """Get a response from Claude with conversation context and spawn_task tool.
+    """Get a response from Claude with conversation context and planning tools.
 
     Context is provided via:
     - summary: Compacted summary of older messages (from PostgreSQL)
     - recent_messages: Recent unsummarized messages (from PostgreSQL)
 
     If user_id, main_thread_id, and conversation_id are provided, Claude
-    will have access to the spawn_task tool to spawn autonomous worker agents.
+    will have access to planning tools for in-thread planning sessions.
 
     This ensures continuity across sessions, pod restarts, and deployments.
     """
     try:
+        # Check for active planning session
+        planning_active = False
+        if conversation_id:
+            active_session = await db.get_active_planning_session(conversation_id)
+            planning_active = active_session is not None
+
         # Build prompt with summary and recent messages
         prompt_text = build_context_prompt(summary, recent_messages or [], message)
 
-        # Create MCP server with spawn_task tool if context is provided
+        # Create MCP server with planning tools if context is provided
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
 
         if user_id and main_thread_id and conversation_id:
-            spawn_task_tool = create_spawn_task_tool(
+            planning_tools = create_planning_tools(
                 user_id, main_thread_id, conversation_id
             )
             mcp_server = create_sdk_mcp_server(
                 name="mainloop",
                 version="1.0.0",
-                tools=[spawn_task_tool],
+                tools=planning_tools,
             )
             mcp_servers["mainloop"] = mcp_server
-            allowed_tools.append("mcp__mainloop__spawn_task")
+            allowed_tools.extend(
+                [
+                    "mcp__mainloop__start_planning",
+                    "mcp__mainloop__approve_plan",
+                    "mcp__mainloop__cancel_planning",
+                ]
+            )
 
             # Fetch recent repos for system prompt
             recent_repos = await db.get_recent_repos(main_thread_id)
-            system_prompt = build_chat_system_prompt(recent_repos)
+            system_prompt = build_chat_system_prompt(
+                recent_repos, planning_active=planning_active
+            )
 
         options = ClaudeAgentOptions(
             model=model,

@@ -1386,11 +1386,32 @@ async def worker_task_workflow(task_id: str) -> dict[str, Any]:
         await update_worker_task_status(task_id, TaskStatus.IMPLEMENTING)
 
         if task.skip_plan:
-            # Skip plan mode: create PR directly with implementation
-            impl_result = await run_job_with_retry(
-                lambda: spawn_implement_job(task_id, namespace, task),
-                "implement job (skip plan)",
-            )
+            # Skip plan mode (includes in-thread planning)
+            # Check if task came from in-thread planning (has issue already)
+            if task.issue_url and task.issue_number:
+                # In-thread planning: use existing issue
+                issue_url = task.issue_url
+                issue_number = task.issue_number
+                branch_name = generate_branch_name(task.description)
+                logger.info(
+                    f"Using existing issue #{issue_number} from in-thread planning"
+                )
+                impl_result = await run_job_with_retry(
+                    lambda: spawn_implement_job(
+                        task_id,
+                        namespace,
+                        task,
+                        issue_number=issue_number,
+                        branch_name=branch_name,
+                    ),
+                    f"implement job (from planning, issue #{issue_number})",
+                )
+            else:
+                # Direct skip_plan: create PR directly without issue
+                impl_result = await run_job_with_retry(
+                    lambda: spawn_implement_job(task_id, namespace, task),
+                    "implement job (skip plan)",
+                )
         else:
             # Normal mode: implement the approved plan
             impl_result = await run_job_with_retry(

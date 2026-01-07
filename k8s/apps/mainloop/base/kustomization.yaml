@@ -7,6 +7,7 @@ resources:
   - namespace.yaml
   - rbac-backend.yaml
   - networkpolicy.yaml
+  - pvc-repo-cache.yaml
   - deployment-backend.yaml
   - deployment-agent-controller.yaml
   - deployment-frontend.yaml
