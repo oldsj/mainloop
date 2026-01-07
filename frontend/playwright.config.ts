@@ -15,8 +15,8 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 const apiURL = process.env.API_URL || 'http://localhost:8000';
 
-// Headed by default locally, headless on CI (override with HEADLESS=true/false)
-const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : !!process.env.CI;
+// Headless by default (override with HEADLESS=false for debugging)
+const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : true;
 
 export default defineConfig({
   testDir: './tests',
@@ -24,11 +24,11 @@ export default defineConfig({
   // Run all tests - don't stop on first failure (see all issues)
   maxFailures: undefined,
 
-  // Tests run serially due to shared DB reset and real Claude API
-  fullyParallel: false,
+  // Parallel execution with per-worker schema isolation
+  fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0, // No retries - fail fast, don't hide flakiness
-  workers: 1, // Bottleneck: resetTestData() and real Claude API calls
+  workers: undefined, // Per-project configuration
 
   reporter: process.env.CI
     ? [['github'], ['html', { open: 'never' }]]
@@ -57,18 +57,28 @@ export default defineConfig({
   },
 
   projects: [
-    // Desktop Chrome tests (default)
+    // Fast desktop tests - UI and seeded data tests (no Claude API)
     {
-      name: 'chromium',
+      name: 'fast',
+      testMatch: /(question-answering|basic\/0[2-3]).*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\//, /global\.(setup|teardown)\.ts/]
+      fullyParallel: true
     },
 
-    // Mobile tests (Pixel 5 viewport)
+    // Fast mobile tests - UI tests on mobile viewport
     {
       name: 'mobile',
+      testMatch: /mobile\/.*\.spec\.ts/,
       use: { ...devices['Pixel 5'] },
-      testMatch: /mobile\/.*\.spec\.ts/
+      fullyParallel: true
+    },
+
+    // Slow E2E tests - real Claude API interactions
+    {
+      name: 'slow-e2e',
+      testMatch: /(00-create-task|01-send-message|01-conversation-history).*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+      fullyParallel: true
     }
   ],
 

@@ -13,13 +13,51 @@ import { test as base, expect, type Page } from '@playwright/test';
 export const apiURL = process.env.API_URL || 'http://localhost:8000';
 
 /**
+ * Generate a unique user ID for this test.
+ * Each test gets its own user ID for isolation.
+ */
+function generateTestUserId(): string {
+  return `test-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/**
  * Extended test with common fixtures
  */
 export const test = base.extend<{
+  /** Unique user ID for this test (for multi-user isolation) */
+  userId: string;
   /** Page with app loaded and ready for interaction */
   appPage: Page;
 }>({
-  appPage: async ({ page }, use) => {
+  userId: async ({}, use) => {
+    await use(generateTestUserId());
+  },
+
+  appPage: async ({ page, userId }, use) => {
+    // Set headers for page.request.* calls (e.g., seedTask)
+    await page.setExtraHTTPHeaders({
+      'X-User-ID': userId
+    });
+
+    // Intercept all requests and add X-User-ID header or query param
+    await page.route(`${apiURL}/**`, async (route) => {
+      const url = new URL(route.request().url());
+
+      // SSE/EventSource can't send headers, so add user_id as query param
+      if (url.pathname.includes('/events') || url.pathname.includes('/stream')) {
+        url.searchParams.set('user_id_query', userId);
+        await route.continue({ url: url.toString() });
+        return;
+      }
+
+      // Regular requests: add header
+      const headers = {
+        ...route.request().headers(),
+        'X-User-ID': userId
+      };
+      await route.continue({ headers });
+    });
+
     await page.goto('/');
 
     // Wait for app shell to render
@@ -27,9 +65,16 @@ export const test = base.extend<{
       timeout: 15000
     });
 
-    // Wait for SSE connection by checking for a network request or UI indicator
-    // Instead of waitForTimeout, we wait for the inbox to show (requires API connection)
-    await expect(page.getByText('[INBOX]').first()).toBeVisible();
+    // On mobile, inbox is behind a tab - check for tab bar instead
+    const inboxTab = page.getByRole('button', { name: 'Inbox' });
+    const isVisible = await inboxTab.isVisible();
+    if (isVisible) {
+      // Mobile: just verify tab bar loaded (inbox behind tab)
+      await expect(inboxTab).toBeVisible();
+    } else {
+      // Desktop: verify inbox panel is visible
+      await expect(page.getByText('[INBOX]').first()).toBeVisible();
+    }
 
     await use(page);
   }
@@ -38,11 +83,19 @@ export const test = base.extend<{
 export { expect };
 
 /**
- * Reset database to clean state.
- * Call this in beforeEach when test needs isolated state.
+ * Reset database to clean state for a specific user.
+ * With per-user isolation, this is optional - each test gets a clean user.
+ * @deprecated Use unique userId per test instead of resetting
  */
-export async function resetTestData(): Promise<void> {
-  const response = await fetch(`${apiURL}/internal/test/reset`, { method: 'POST' });
+export async function resetTestData(userId?: string): Promise<void> {
+  const headers: HeadersInit = {};
+  if (userId) {
+    headers['X-User-ID'] = userId;
+  }
+  const response = await fetch(`${apiURL}/internal/test/reset`, {
+    method: 'POST',
+    headers
+  });
   if (!response.ok) {
     throw new Error(`Failed to reset test data: ${response.status}`);
   }
@@ -152,14 +205,11 @@ export async function openInbox(page: Page): Promise<void> {
 
 /**
  * Set up a conversation with a greeting message.
- * Resets DB, sends "hello", waits for response.
+ * Sends "hello", waits for response.
+ * Note: No DB reset needed - each test gets a clean user via userId fixture.
  */
 export async function setupConversation(page: Page): Promise<void> {
-  // Reset database for clean state
-  await resetTestData();
-
-  // Reload to pick up clean state
-  await page.reload();
+  // Wait for app to be ready
   await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
   // Send hello message

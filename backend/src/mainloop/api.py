@@ -149,6 +149,7 @@ async def health():
 async def sse_events(
     request: Request,
     user_id: str = Header(alias="X-User-ID", default=None),
+    user_id_query: str | None = None,
 ):
     """SSE endpoint for real-time updates.
 
@@ -161,7 +162,10 @@ async def sse_events(
     EventSource handles this natively.
     """
     if not user_id:
-        user_id = get_user_id_from_cf_header()
+        if user_id_query and settings.is_test_env:
+            user_id = user_id_query
+        else:
+            user_id = get_user_id_from_cf_header()
 
     return create_sse_response(event_stream(user_id, request))
 
@@ -1147,7 +1151,10 @@ class SeedTaskRequest(BaseModel):
 
 
 @app.post("/internal/test/seed-task")
-async def seed_task_for_testing(request: SeedTaskRequest):
+async def seed_task_for_testing(
+    request: SeedTaskRequest,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
     """Create a task in a specific state for E2E testing.
 
     WARNING: Only available in test environments. Do not use in production.
@@ -1160,8 +1167,8 @@ async def seed_task_for_testing(request: SeedTaskRequest):
     from uuid import uuid4
 
     # Get or create a test main thread
-    # Use "local-dev-user" to match the default user ID in get_user_id_from_cf_header()
-    user_id = "local-dev-user"
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
     thread = await db.get_main_thread_by_user(user_id)
     if not thread:
         # Create test thread directly (no workflow needed for tests)

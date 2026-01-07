@@ -16,19 +16,16 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
  */
 
 test.describe('Submitting Answers', () => {
-  test.setTimeout(30000); // Extended timeout for API call
+  test.setTimeout(30000);
 
   test('Click Continue button to submit answers', async ({ page }) => {
-    // 1. Seed a task with 2 questions using seedTaskWaitingQuestions()
     await seedTaskWaitingQuestions(page);
-
-    // 2. Navigate to the app
     await page.goto('/');
-
-    // 3. Wait for app shell
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // 4. Wait for first question to be visible
+    await expect(page.getByText('NEEDS INPUT').first()).toBeVisible({ timeout: 10000 });
+    await page.getByText('NEEDS INPUT').first().click();
+
     await expect(page.locator('text=Which authentication method should we use?')).toBeVisible({ timeout: 10000 });
 
     // 5. Answer question 1 with 'JWT tokens' option

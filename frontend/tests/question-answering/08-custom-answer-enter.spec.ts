@@ -20,16 +20,13 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 test.describe('Custom Text Answers', () => {
   test('Type custom answer and submit with Enter', async ({ page }) => {
-    // 1. Seed a task with 2 questions
     await seedTaskWaitingQuestions(page);
-
-    // 2. Navigate to the app
     await page.goto('/');
-
-    // 3. Wait for app shell to load
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // 4. Verify first question (q1) is expanded and visible
+    await expect(page.getByText('NEEDS INPUT').first()).toBeVisible({ timeout: 10000 });
+    await page.getByText('NEEDS INPUT').first().click();
+
     const firstQuestion = page.locator('text=Which authentication method should we use?');
     await expect(firstQuestion).toBeVisible({ timeout: 10000 });
 

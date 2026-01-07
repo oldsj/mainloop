@@ -20,8 +20,6 @@ export async function resetTestData(page: Page): Promise<void> {
  * Seed a task in "waiting_plan_review" status (REVIEW PLAN badge)
  */
 export async function seedTaskWaitingPlanReview(page: Page) {
-  await resetTestData(page);
-
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
       status: 'waiting_plan_review',
@@ -58,8 +56,6 @@ Add JWT-based authentication to the application.
  * Seed a task in "waiting_questions" status (NEEDS INPUT badge)
  */
 export async function seedTaskWaitingQuestions(page: Page) {
-  await resetTestData(page);
-
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
       status: 'waiting_questions',
@@ -102,8 +98,6 @@ export async function seedTaskWaitingQuestions(page: Page) {
  * Seed a task in "implementing" status (WORKING badge)
  */
 export async function seedTaskImplementing(page: Page) {
-  await resetTestData(page);
-
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
       status: 'implementing',
@@ -124,8 +118,6 @@ export async function seedTaskImplementing(page: Page) {
  * Seed a task in "ready_to_implement" status (READY badge)
  */
 export async function seedTaskReadyToImplement(page: Page) {
-  await resetTestData(page);
-
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
     data: {
       status: 'ready_to_implement',

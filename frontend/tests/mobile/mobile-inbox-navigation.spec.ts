@@ -1,18 +1,11 @@
 // spec: frontend/specs/inbox-management.md
 // seed: frontend/tests/seed.spec.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 
 test.describe('Inbox Panel Visibility', () => {
-  test('Mobile Inbox Tab Navigation', async ({ page }) => {
-    // Set mobile viewport (Pixel 5)
-    await page.setViewportSize({ width: 393, height: 851 });
-
-    // 1. Load application at mobile viewport
-    await page.goto('/');
-
-    // 2. Wait for app to fully load
-    await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
+  test('Mobile Inbox Tab Navigation', async ({ appPage: page }) => {
+    // Note: Mobile viewport already set by project config (Pixel 5)
 
     // 2. Verify bottom tab bar is visible with [CHAT] and [INBOX] tabs
     const chatTab = page.getByRole('button', { name: 'Chat' });
