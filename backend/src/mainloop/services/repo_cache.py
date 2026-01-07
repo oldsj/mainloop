@@ -154,16 +154,20 @@ class RepoCache:
 
         async with self._lock:
             if repo_path.exists() and (repo_path / ".git").exists():
-                # Repo exists, pull latest
+                # Repo exists, try to pull latest
                 try:
                     await self._pull_repo(repo_path)
                 except git.GitCommandError as e:
-                    # If pull fails (e.g., diverged history), re-clone
-                    logger.warning(f"Pull failed for {repo_url}, re-cloning: {e}")
-                    import shutil
-
-                    shutil.rmtree(repo_path)
-                    await self._clone_repo(repo_url, repo_path)
+                    # Pull failed - could be network issue, no remote, etc.
+                    # Just use existing repo rather than re-cloning
+                    logger.warning(
+                        f"Pull failed for {repo_url}, using existing cached repo: {e}"
+                    )
+                except Exception as e:
+                    # Catch any other errors (e.g., no remote configured)
+                    logger.warning(
+                        f"Could not update {repo_url}, using existing cached repo: {e}"
+                    )
             else:
                 # Repo doesn't exist, clone it
                 await self._clone_repo(repo_url, repo_path)

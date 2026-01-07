@@ -1288,6 +1288,146 @@ async def reset_test_data():
     return {"status": "reset"}
 
 
+class SeedRepoRequest(BaseModel):
+    """Request to seed a fixture repo for testing."""
+
+    owner: str = "test"
+    name: str = "fixture-repo"
+    files: dict[str, str] | None = None  # filename -> content
+
+
+@app.post("/internal/test/seed-repo")
+async def seed_repo_for_testing(request: SeedRepoRequest):
+    """Create a fixture git repo in the cache for E2E testing.
+
+    This creates a real git repo with the specified files, allowing
+    planning tests to work without network access to GitHub.
+
+    WARNING: Only available in test environments. Do not use in production.
+    """
+    if not settings.is_test_env:
+        raise HTTPException(
+            status_code=403, detail="Only available in test environment"
+        )
+
+    import subprocess
+    from pathlib import Path
+
+    from mainloop.services.repo_cache import get_repo_cache
+
+    repo_cache = get_repo_cache()
+    repo_path = repo_cache.cache_path / request.owner / request.name
+
+    # Clean up existing repo if present
+    if repo_path.exists():
+        import shutil
+
+        shutil.rmtree(repo_path)
+
+    # Create repo directory
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    # Default test files if none provided
+    files = request.files or {
+        "README.md": "# Test Fixture Repo\n\nThis is a test repository for E2E testing.\n",
+        "src/main.py": '''"""Main application module."""
+
+
+def hello(name: str = "World") -> str:
+    """Return a greeting message."""
+    return f"Hello, {name}!"
+
+
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+
+
+if __name__ == "__main__":
+    print(hello())
+''',
+        "src/utils.py": '''"""Utility functions."""
+
+
+def format_name(first: str, last: str) -> str:
+    """Format a full name."""
+    return f"{first} {last}"
+
+
+def validate_email(email: str) -> bool:
+    """Basic email validation."""
+    return "@" in email and "." in email
+''',
+        "tests/test_main.py": '''"""Tests for main module."""
+
+from src.main import hello, add
+
+
+def test_hello():
+    assert hello() == "Hello, World!"
+    assert hello("Test") == "Hello, Test!"
+
+
+def test_add():
+    assert add(1, 2) == 3
+    assert add(-1, 1) == 0
+''',
+        "pyproject.toml": '''[project]
+name = "fixture-repo"
+version = "0.1.0"
+description = "Test fixture repository"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+''',
+    }
+
+    # Write files
+    for filepath, content in files.items():
+        file_path = repo_path / filepath
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=repo_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    # Add a dummy remote so pull operations don't fail
+    # (the repo cache tries to pull on existing repos)
+    dummy_remote = f"https://github.com/{request.owner}/{request.name}.git"
+    subprocess.run(
+        ["git", "remote", "add", "origin", dummy_remote],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+
+    return {
+        "status": "created",
+        "repo_url": f"https://github.com/{request.owner}/{request.name}",
+        "path": str(repo_path),
+        "files": list(files.keys()),
+    }
+
+
 # ============= Run =============
 
 
