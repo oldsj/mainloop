@@ -25,7 +25,7 @@ Key differences from old async planning:
 
 ## Architecture
 
-```
+```text
 User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PVC
           -> Claude explores codebase (Read, Glob, Grep) -> Plan refined
           -> approve_plan tool -> GitHub issue created -> WorkerTask (skip_plan=True)
