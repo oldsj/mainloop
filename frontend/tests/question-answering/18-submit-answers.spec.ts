@@ -1,7 +1,7 @@
 // spec: frontend/tests/question-answering.plan.md
 // seed: frontend/tests/fixtures/seed-data.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 /**
@@ -18,15 +18,12 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 test.describe('Submitting Answers', () => {
   test.setTimeout(30000);
 
-  test('Click Continue button to submit answers', async ({ page }) => {
-    await seedTaskWaitingQuestions(page);
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
+  test('Click Continue button to submit answers', async ({ appPage: page, userId }) => {
+    await seedTaskWaitingQuestions(page, userId);
+    await page.reload();
 
-    await expect(page.getByText('NEEDS INPUT').first()).toBeVisible({ timeout: 10000 });
-    await page.getByText('NEEDS INPUT').first().click();
-
-    await expect(page.locator('text=Which authentication method should we use?')).toBeVisible({ timeout: 10000 });
+    // Task with questions should auto-expand showing the first question
+    await expect(page.locator('text=Which authentication method should we use?').first()).toBeVisible({ timeout: 10000 });
 
     // 5. Answer question 1 with 'JWT tokens' option
     const q1Option = page.locator('button:has-text("JWT tokens")').first();

@@ -1,7 +1,7 @@
 // spec: frontend/tests/question-answering.plan.md
 // seed: frontend/tests/fixtures/seed-data.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 /**
@@ -15,15 +15,10 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
  */
 
 test.describe('Question Viewing and Display', () => {
-  test('Display task with NEEDS INPUT badge', async ({ page }) => {
-    // 1. Seed a task in 'waiting_questions' status with 2 questions using seedTaskWaitingQuestions()
-    await seedTaskWaitingQuestions(page);
-
-    // 2. Navigate to the mainloop app at /
-    await page.goto('/');
-
-    // 3. Wait for the app shell to load (heading '$ mainloop' visible)
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
+  test('Display task with NEEDS INPUT badge', async ({ appPage: page, userId }) => {
+    // Seed and reload to pick up the new task
+    await seedTaskWaitingQuestions(page, userId);
+    await page.reload();
 
     // 4. Verify task appears in inbox with 'NEEDS INPUT' badge
     const needsInputBadge = page.locator('text=NEEDS INPUT').first();

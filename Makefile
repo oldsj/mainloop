@@ -281,12 +281,24 @@ test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
 # Testing (Kind cluster with real Claude)
+# Lesson #1: Single source of truth for ports/URLs
+# Lesson #2: Identical infrastructure locally and in CI (Kind everywhere)
+# Lesson #4: ONE primary test command with clear purpose
+#
 # Backend: 8081, Frontend: 5173
 # No mocking - uses real Claude (haiku for CI, configurable for local)
+#
+# Recommended workflow:
+#   1. Run `make test` - starts Kind cluster + Playwright UI with hot reload
+#   2. Keep it running while you develop (watchexec auto-deploys changes)
+#   3. Use `make test-run` in another terminal for quick headless iterations
+#      (automatically waits for deployments to complete before running)
+#   4. Tests fail fast in CI (maxFailures=1), see all locally
 TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
 
 test: ## Playwright UI with hot reload (Kind cluster, real Claude)
+	@./scripts/test-guard.sh
 	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
 		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set. Add it to .env or run: make setup-claude-creds-mac"; \
 		exit 1; \
@@ -309,9 +321,13 @@ test: ## Playwright UI with hot reload (Kind cluster, real Claude)
 	@echo "Commands:"
 	@echo "  make test-run    - Run all tests headless"
 	@echo "  make test-reset  - Reset DB and task namespaces"
+	@echo "  make test-stop   - Stop all test processes"
 	@echo "  make kind-logs   - Tail backend logs"
 	@echo ""
-	@trap 'echo ""; echo "Cleaning up..."; pkill -P $$$$ 2>/dev/null; kubectl --context=$(KIND_CONTEXT) get ns -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null | xargs -r kubectl --context=$(KIND_CONTEXT) delete --wait=false 2>/dev/null; exit 0' INT TERM; \
+	@trap 'echo ""; echo "Cleaning up..."; \
+		jobs -p | xargs -r kill 2>/dev/null; \
+		kubectl --context=$(KIND_CONTEXT) get ns -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null | xargs -r kubectl --context=$(KIND_CONTEXT) delete --wait=false 2>/dev/null; \
+		exit 0' INT TERM EXIT; \
 	watchexec -w backend/src -w models -e py -i '__pycache__/' \
 		--on-busy-update restart -- make kind-reload-backend & \
 	watchexec -w frontend/src -e ts,svelte,css -i 'node_modules/' \
@@ -319,6 +335,13 @@ test: ## Playwright UI with hot reload (Kind cluster, real Claude)
 	watchexec -w k8s -e yaml \
 		--on-busy-update restart -- make kind-reload-manifests & \
 	cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
+
+test-stop: ## Stop all test processes and clean up
+	@echo "Stopping test processes..."
+	@rm -f /tmp/mainloop-test.lock
+	@pkill -f "watchexec.*kind-reload" || true
+	@pkill -f "playwright test --ui" || true
+	@echo "Test processes stopped"
 
 # Fast reload targets (rebuild single image + rollout restart, no full redeploy)
 KIND_CONTEXT := kind-$(KIND_CLUSTER_NAME)
@@ -340,7 +363,8 @@ kind-reload-frontend: ## Fast reload frontend only
 	@kubectl --context=$(KIND_CONTEXT) rollout status deployment/mainloop-frontend -n mainloop --timeout=60s
 	@until curl -sf $(TEST_FRONTEND_URL) > /dev/null 2>&1; do sleep 1; done
 
-test-run: ## Run all tests headless (against Kind)
+test-run: ## Run all tests headless (waits for latest deployment)
+	@./scripts/wait-for-ready.sh
 	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test
 
 test-reset: ## Reset test state (DB + task namespaces)

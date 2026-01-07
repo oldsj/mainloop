@@ -12,25 +12,23 @@ test.describe('State Persistence', () => {
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    // Verify we're on chat tab by default
-    const chatTab = page.getByTestId('tab-chat');
-    await expect(chatTab).toHaveClass(/text-term-accent/);
+    const chatTab = page.getByRole('button', { name: 'Chat' });
+    const inboxTab = page.getByRole('button', { name: 'Inbox' });
+    const inputField = page.getByRole('textbox', { name: 'Enter command...' });
 
     // 1. Start typing a message in chat
-    const inputField = page.getByTestId('command-input').nth(1); // Get the second one (mobile layout)
+    await expect(inputField).toBeVisible();
     await inputField.fill('test message draft');
     await expect(inputField).toHaveValue('test message draft');
 
-    // 2. Switch to [INBOX] tab
-    const inboxTab = page.getByTestId('tab-inbox');
+    // 2. Switch to [INBOX] tab - verify by content change
     await inboxTab.click();
-    await page.waitForTimeout(100); // Wait for Svelte reactivity
-    await expect(inboxTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
+    await expect(inputField).not.toBeVisible();
+    await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
 
-    // 3. Switch back to [CHAT] tab
+    // 3. Switch back to [CHAT] tab - verify input returns
     await chatTab.click();
-    await page.waitForTimeout(100); // Wait for Svelte reactivity
-    await expect(chatTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
+    await expect(inputField).toBeVisible();
 
     // Expected: Typed text preserved in input field
     await expect(inputField).toHaveValue('test message draft');

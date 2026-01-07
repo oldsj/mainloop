@@ -1,7 +1,7 @@
 // spec: frontend/tests/question-answering.plan.md
 // seed: frontend/tests/fixtures/seed-data.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 /**
@@ -19,15 +19,12 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
  */
 
 test.describe('Custom Text Answers', () => {
-  test('Type custom answer and submit with Enter', async ({ page }) => {
-    await seedTaskWaitingQuestions(page);
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
+  test('Type custom answer and submit with Enter', async ({ appPage: page, userId }) => {
+    await seedTaskWaitingQuestions(page, userId);
+    await page.reload();
 
-    await expect(page.getByText('NEEDS INPUT').first()).toBeVisible({ timeout: 10000 });
-    await page.getByText('NEEDS INPUT').first().click();
-
-    const firstQuestion = page.locator('text=Which authentication method should we use?');
+    // Task with questions should auto-expand showing the first question
+    const firstQuestion = page.locator('text=Which authentication method should we use?').first();
     await expect(firstQuestion).toBeVisible({ timeout: 10000 });
 
     // 5. Locate the custom text input field

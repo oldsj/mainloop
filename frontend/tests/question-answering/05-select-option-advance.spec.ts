@@ -1,7 +1,7 @@
 // spec: frontend/tests/question-answering.plan.md
 // seed: frontend/tests/fixtures/seed-data.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 
 /**
@@ -15,15 +15,12 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
  */
 
 test.describe('Answering Questions with Options', () => {
-  test('Select option and auto-advance to next question', async ({ page }) => {
-    await seedTaskWaitingQuestions(page);
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
+  test('Select option and auto-advance to next question', async ({ appPage: page, userId }) => {
+    await seedTaskWaitingQuestions(page, userId);
+    await page.reload();
 
-    await expect(page.getByText('NEEDS INPUT').first()).toBeVisible({ timeout: 10000 });
-    await page.getByText('NEEDS INPUT').first().click();
-
-    const firstQuestion = page.locator('text=Which authentication method should we use?');
+    // Task with questions should auto-expand showing the first question
+    const firstQuestion = page.locator('text=Which authentication method should we use?').first();
     await expect(firstQuestion).toBeVisible({ timeout: 10000 });
 
     // 5. Click the first option button (e.g., 'JWT tokens')

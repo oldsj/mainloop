@@ -21,8 +21,10 @@ const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : true;
 export default defineConfig({
   testDir: './tests',
 
-  // Run all tests - don't stop on first failure (see all issues)
-  maxFailures: undefined,
+  // Lesson #5: Fail fast on early tests
+  // Set maxFailures=1 in CI to stop immediately on first failure
+  // Locally, run all tests to see full scope of issues
+  maxFailures: process.env.CI ? 1 : undefined,
 
   // Parallel execution with per-worker schema isolation
   fullyParallel: true,
@@ -57,7 +59,8 @@ export default defineConfig({
   },
 
   projects: [
-    // Fast desktop tests - UI and seeded data tests (no Claude API)
+    // Lesson #5: Build tests incrementally - basic connectivity first
+    // Stage 1: Fast desktop tests - UI and seeded data tests (no Claude API)
     {
       name: 'fast',
       testMatch: /(question-answering|basic\/0[2-3]).*\.spec\.ts/,
@@ -65,20 +68,22 @@ export default defineConfig({
       fullyParallel: true
     },
 
-    // Fast mobile tests - UI tests on mobile viewport
+    // Stage 2: Fast mobile tests - depends on fast tests passing
     {
       name: 'mobile',
       testMatch: /mobile\/.*\.spec\.ts/,
       use: { ...devices['Pixel 5'] },
-      fullyParallel: true
+      fullyParallel: true,
+      dependencies: ['fast']
     },
 
-    // Slow E2E tests - real Claude API interactions
+    // Stage 3: Slow E2E tests - real Claude API interactions (run last)
     {
       name: 'slow-e2e',
       testMatch: /(00-create-task|01-send-message|01-conversation-history).*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      fullyParallel: true
+      fullyParallel: true,
+      dependencies: ['mobile']
     }
   ],
 

@@ -13,18 +13,20 @@ test.describe('Tab Navigation', () => {
     // Wait for page to load
     await expect(page.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    const inboxTab = page.getByTestId('tab-inbox');
-    const chatTab = page.getByTestId('tab-chat');
+    const chatTab = page.getByRole('button', { name: 'Chat' });
+    const inboxTab = page.getByRole('button', { name: 'Inbox' });
+    const chatInput = page.getByRole('textbox', { name: 'Enter command...' });
 
-    // Navigate to [INBOX] tab
+    // Verify we start on chat tab (input visible)
+    await expect(chatInput).toBeVisible();
+
+    // Navigate to [INBOX] tab - verify by content change, not CSS
     await inboxTab.click();
-    await page.waitForTimeout(100); // Wait for Svelte reactivity
-    await expect(inboxTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
+    await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
+    await expect(chatInput).not.toBeVisible();
 
-    // Return to [CHAT] tab
+    // Return to [CHAT] tab - verify input is visible again
     await chatTab.click();
-    await page.waitForTimeout(100); // Wait for Svelte reactivity
-    await expect(chatTab).toHaveClass(/text-term-accent/, { timeout: 2000 });
-    await expect(inboxTab).not.toHaveClass(/text-term-accent/);
+    await expect(chatInput).toBeVisible();
   });
 });
