@@ -65,9 +65,21 @@ Mainloop uses a coordinator/worker pattern where a fast main thread agent delega
 1. User sends message via frontend
 2. Backend receives request (authenticated via Cloudflare Access)
 3. Main thread (Haiku) analyzes intent
-4. If task needed: spawn worker (Opus) with task details
-5. Worker executes autonomously, may ask questions via queue
-6. Results flow back to main thread → user
+4. For info requests: use `github` tool directly (list issues, get repo info)
+5. If coding task needed: spawn worker (Opus) with task details
+6. Worker executes autonomously, may ask questions via queue
+7. Results flow back to main thread → user
+
+## Chat Tools
+
+The main thread agent has access to these tools:
+
+| Tool         | Purpose                       | Actions                                                                             |
+| ------------ | ----------------------------- | ----------------------------------------------------------------------------------- |
+| `github`     | Read repo info, manage issues | list_issues, list_prs, get_repo, get_issue, create_issue, update_issue, add_comment |
+| `spawn_task` | Spawn autonomous worker       | Creates worker with full codebase access                                            |
+
+The agent uses `github` for information requests and `spawn_task` for coding work.
 
 ## Model Configuration
 

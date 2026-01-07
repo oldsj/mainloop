@@ -17,6 +17,7 @@ from claude_agent_sdk import (
 from dbos import SetWorkflowID
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.services import github_pr
 from mainloop.services.task_router import (
     extract_keywords,
     find_matching_tasks,
@@ -37,24 +38,33 @@ logger = logging.getLogger(__name__)
 
 def build_chat_system_prompt(recent_repos: list[str] | None = None) -> str:
     """Build the system prompt for chat, including recent repos if available."""
-    base_prompt = """You are a helpful AI assistant that can also spawn autonomous coding agents.
+    base_prompt = """You are a helpful AI assistant that can spawn autonomous coding agents.
 
-When the user requests work that involves modifying code, creating files, making commits, or any development task:
-1. Confirm you understand what they want
-2. Ask them to confirm they want you to spawn a worker agent
-3. If they have recent repos, suggest one; otherwise ask for the GitHub repository URL
-4. Once confirmed, use the spawn_task tool to start the work
+You have access to:
+- github: Read repo info and manage issues (list_issues, list_prs, get_repo, get_issue, create_issue, update_issue, add_comment)
+- spawn_task: Spawn autonomous coding agents for development work
+
+For information requests about a repository (issues, PRs, repo info), use the github tool directly.
+For coding tasks (modify code, create PRs, run tests), use spawn_task after confirming with the user.
+
+When to use github tool:
+- Listing open issues or PRs
+- Getting repository information
+- Getting issue details
+- Creating or updating issues
+- Adding comments to issues
 
 When to use spawn_task:
 - Creating, modifying, or deleting code files
 - Making commits or pull requests
 - Running builds, tests, or deployments
-- Any work that requires access to a codebase
+- Any work that requires modifying a codebase
 
 Do NOT use spawn_task for:
 - Answering questions about how to do something
 - Explaining concepts or providing information
 - General conversation
+- Reading GitHub issues/PRs (use github tool instead)
 
 Always get explicit confirmation before spawning a task."""
 
@@ -227,6 +237,255 @@ def create_spawn_task_tool(
     return spawn_task
 
 
+def create_github_tool():
+    """Create a github tool for reading repo info and managing issues.
+
+    Actions:
+    - list_issues: List open issues for a repository
+    - list_prs: List open PRs for a repository
+    - get_repo: Get repository metadata
+    - get_issue: Get details of a specific issue
+    - create_issue: Create a new issue
+    - update_issue: Update an existing issue
+    - add_comment: Add a comment to an issue
+    """
+
+    async def github_impl(args: dict[str, Any]) -> dict[str, Any]:
+        """Execute a GitHub action."""
+        action = args.get("action", "")
+        repo_url = args.get("repo_url", "")
+
+        if not repo_url:
+            return {
+                "content": [{"type": "text", "text": "Error: repo_url is required"}],
+                "is_error": True,
+            }
+
+        if not repo_url.startswith("https://github.com/"):
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Error: Invalid repo URL format. Expected https://github.com/owner/repo, got: {repo_url}",
+                    }
+                ],
+                "is_error": True,
+            }
+
+        try:
+            if action == "list_issues":
+                limit = args.get("limit", 10)
+                issues = await github_pr.list_open_issues(repo_url, limit=limit)
+                if not issues:
+                    return {
+                        "content": [{"type": "text", "text": "No open issues found."}]
+                    }
+                result = "Open issues:\n" + "\n".join(
+                    f"- #{i.number}: {i.title} (by @{i.author})"
+                    + (f" [{', '.join(i.labels)}]" if i.labels else "")
+                    for i in issues
+                )
+                return {"content": [{"type": "text", "text": result}]}
+
+            elif action == "list_prs":
+                limit = args.get("limit", 10)
+                prs = await github_pr.list_open_prs(repo_url, limit=limit)
+                if not prs:
+                    return {"content": [{"type": "text", "text": "No open PRs found."}]}
+                result = "Open PRs:\n" + "\n".join(
+                    f"- #{p.number}: {p.title} (by @{p.author})" for p in prs
+                )
+                return {"content": [{"type": "text", "text": result}]}
+
+            elif action == "get_repo":
+                metadata = await github_pr.get_repo_metadata(repo_url)
+                if not metadata:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: Repository not found."}
+                        ],
+                        "is_error": True,
+                    }
+                result = (
+                    f"Repository: {metadata.full_name}\n"
+                    f"Description: {metadata.description or 'No description'}\n"
+                    f"Default branch: {metadata.default_branch}\n"
+                    f"Open issues: {metadata.open_issues_count}\n"
+                    f"URL: {metadata.html_url}"
+                )
+                return {"content": [{"type": "text", "text": result}]}
+
+            elif action == "get_issue":
+                issue_number = args.get("issue_number")
+                if not issue_number:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: issue_number is required"}
+                        ],
+                        "is_error": True,
+                    }
+                response = await github_pr.get_issue_status(repo_url, issue_number)
+                if not response.data or response.data.get("state") == "not_found":
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error: Issue #{issue_number} not found.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
+                issue = response.data
+                result = (
+                    f"Issue #{issue['number']}: {issue['title']}\n"
+                    f"State: {issue['state']}\n"
+                    f"Labels: {', '.join(issue['labels']) if issue['labels'] else 'None'}\n"
+                    f"URL: {issue['url']}\n\n"
+                    f"{issue['body'] or 'No description'}"
+                )
+                return {"content": [{"type": "text", "text": result}]}
+
+            elif action == "create_issue":
+                title = args.get("title", "")
+                body = args.get("body", "")
+                labels = args.get("labels", [])
+                if not title:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: title is required"}
+                        ],
+                        "is_error": True,
+                    }
+                created = await github_pr.create_github_issue(
+                    repo_url, title, body, labels
+                )
+                if not created:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: Failed to create issue."}
+                        ],
+                        "is_error": True,
+                    }
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Created issue #{created.number}: {created.title}\nURL: {created.url}",
+                        }
+                    ]
+                }
+
+            elif action == "update_issue":
+                issue_number = args.get("issue_number")
+                if not issue_number:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: issue_number is required"}
+                        ],
+                        "is_error": True,
+                    }
+                success = await github_pr.update_github_issue(
+                    repo_url,
+                    issue_number,
+                    title=args.get("title"),
+                    body=args.get("body"),
+                    state=args.get("state"),
+                    labels=args.get("labels"),
+                )
+                if not success:
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error: Failed to update issue #{issue_number}.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
+                return {
+                    "content": [
+                        {"type": "text", "text": f"Updated issue #{issue_number}."}
+                    ]
+                }
+
+            elif action == "add_comment":
+                issue_number = args.get("issue_number")
+                body = args.get("body", "")
+                if not issue_number:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: issue_number is required"}
+                        ],
+                        "is_error": True,
+                    }
+                if not body:
+                    return {
+                        "content": [
+                            {"type": "text", "text": "Error: body is required"}
+                        ],
+                        "is_error": True,
+                    }
+                success = await github_pr.add_issue_comment(
+                    repo_url, issue_number, body
+                )
+                if not success:
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error: Failed to add comment to issue #{issue_number}.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Added comment to issue #{issue_number}.",
+                        }
+                    ]
+                }
+
+            else:
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Error: Unknown action '{action}'. Valid actions: list_issues, list_prs, get_repo, get_issue, create_issue, update_issue, add_comment",
+                        }
+                    ],
+                    "is_error": True,
+                }
+
+        except Exception as e:
+            logger.error(f"GitHub tool error: {e}")
+            return {
+                "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+                "is_error": True,
+            }
+
+    @tool(
+        "github",
+        "Read repository info and manage GitHub issues. "
+        "Actions: list_issues, list_prs, get_repo, get_issue, create_issue, update_issue, add_comment",
+        {
+            "action": str,
+            "repo_url": str,
+            "issue_number": int,
+            "title": str,
+            "body": str,
+            "state": str,
+            "labels": list,
+            "limit": int,
+        },
+    )
+    async def github(args: dict[str, Any]) -> dict[str, Any]:
+        return await github_impl(args)
+
+    return github
+
+
 def format_conversation_history(messages: list[Message]) -> str:
     """Format conversation history for inclusion in prompt."""
     if not messages:
@@ -321,14 +580,16 @@ async def get_claude_response(
     main_thread_id: str | None = None,
     conversation_id: str | None = None,
 ) -> ClaudeResponse:
-    """Get a response from Claude with conversation context and spawn_task tool.
+    """Get a response from Claude with conversation context and tools.
 
     Context is provided via:
     - summary: Compacted summary of older messages (from PostgreSQL)
     - recent_messages: Recent unsummarized messages (from PostgreSQL)
 
     If user_id, main_thread_id, and conversation_id are provided, Claude
-    will have access to the spawn_task tool to spawn autonomous worker agents.
+    will have access to:
+    - spawn_task: Spawn autonomous worker agents for coding tasks
+    - github: Read repo info and manage GitHub issues
 
     This ensures continuity across sessions, pod restarts, and deployments.
     """
@@ -345,13 +606,15 @@ async def get_claude_response(
             spawn_task_tool = create_spawn_task_tool(
                 user_id, main_thread_id, conversation_id
             )
+            github_tool = create_github_tool()
             mcp_server = create_sdk_mcp_server(
                 name="mainloop",
                 version="1.0.0",
-                tools=[spawn_task_tool],
+                tools=[spawn_task_tool, github_tool],
             )
             mcp_servers["mainloop"] = mcp_server
             allowed_tools.append("mcp__mainloop__spawn_task")
+            allowed_tools.append("mcp__mainloop__github")
 
             # Fetch recent repos for system prompt
             recent_repos = await db.get_recent_repos(main_thread_id)

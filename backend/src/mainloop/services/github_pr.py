@@ -1427,6 +1427,19 @@ class ProjectPRSummary(BaseModel):
     is_mainloop: bool  # Created by mainloop worker
 
 
+class IssueSummary(BaseModel):
+    """Summary of a GitHub issue for listing."""
+
+    number: int
+    title: str
+    state: str
+    author: str
+    created_at: datetime
+    updated_at: datetime
+    url: str
+    labels: list[str] = []
+
+
 async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary]:
     """List open PRs for a repository.
 
@@ -1462,6 +1475,46 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
                 or "feature/" in pr.head.ref,
             )
             for pr in response.parsed_data
+        ]
+    except Exception:
+        return []
+
+
+async def list_open_issues(repo_url: str, limit: int = 10) -> list[IssueSummary]:
+    """List open issues for a repository.
+
+    Args:
+        repo_url: GitHub repository URL
+        limit: Maximum number of issues to return
+
+    Returns:
+        List of IssueSummary objects
+
+    """
+    owner, repo = _parse_repo(repo_url)
+    gh = _get_github()
+
+    try:
+        response = await gh.rest.issues.async_list_for_repo(
+            owner=owner,
+            repo=repo,
+            state="open",
+            per_page=limit,
+        )
+        # Filter out PRs (GitHub API returns PRs as issues too)
+        return [
+            IssueSummary(
+                number=issue.number,
+                title=issue.title,
+                state=issue.state,
+                author=issue.user.login,
+                created_at=issue.created_at,
+                updated_at=issue.updated_at,
+                url=issue.html_url,
+                labels=[label.name for label in issue.labels] if issue.labels else [],
+            )
+            for issue in response.parsed_data
+            if not hasattr(issue, "pull_request") or issue.pull_request is None
         ]
     except Exception:
         return []
