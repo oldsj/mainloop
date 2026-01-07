@@ -49,6 +49,7 @@
     <!-- Header -->
     <header class="border-b border-term-border px-6 py-4">
       <button
+        type="button"
         onclick={() => goto('/')}
         class="mb-3 flex items-center gap-1 text-xs text-term-fg-muted hover:text-term-accent"
       >

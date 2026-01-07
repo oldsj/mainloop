@@ -1,16 +1,16 @@
 <script lang="ts">
+  import { draftMessage } from '$lib/stores/draftMessage';
+
   let {
     disabled = false,
     onsend
   }: { disabled?: boolean; onsend?: (detail: { message: string }) => void } = $props();
 
-  let message = $state('');
-
   function handleSubmit(event: SubmitEvent) {
     event.preventDefault();
-    if (message.trim() && !disabled && onsend) {
-      onsend({ message: message.trim() });
-      message = '';
+    if ($draftMessage.trim() && !disabled && onsend) {
+      onsend({ message: $draftMessage.trim() });
+      draftMessage.set('');
     }
   }
 
@@ -30,7 +30,7 @@
   <span class="shrink-0 text-term-accent">$</span>
   <textarea
     data-testid="command-input"
-    bind:value={message}
+    bind:value={$draftMessage}
     onkeydown={handleKeydown}
     {disabled}
     placeholder="Enter command..."

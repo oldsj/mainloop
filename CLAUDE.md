@@ -34,25 +34,36 @@ make lint-all     # Check for issues
 ## Testing
 
 ```bash
-make test         # Start services + Playwright UI (keep this running)
-make test-run     # Run tests headless (in another terminal)
+make test         # Start services + Playwright UI (keep running)
+make test-run     # Run tests headless (separate terminal)
+make test-reset   # Clear DB + namespaces between runs
 ```
 
 **Workflow:**
 
-1. Run `make test` - starts Kind cluster with backend (:8081) and frontend (:5173)
-2. Keep it running while you develop
-3. Use `make test-run` in another terminal for quick headless iterations
+1. Run `make test` once - starts Kind cluster (backend :8081, frontend :5173)
+2. Wait for pods to be ready before running tests
+3. Use `make test-run` for quick iterations
 
-Tests in `frontend/tests/` use fixtures from `frontend/tests/fixtures.ts`.
-
-**Important:** Tests run against Kind cluster. After code changes, wait for k8s deployments to complete before running tests:
+**Before running tests**, verify deployments are ready:
 
 ```bash
 kubectl get pods -n mainloop --context kind-mainloop-test -w
 ```
 
-Watch for new pods to reach `Running` status and old pods to terminate. The cluster auto-reloads on file changes via watchexec.
+Wait for new pods to show `Running` and old pods to terminate.
+
+**Common issues:**
+
+- Port already in use → kill orphan processes or restart `make test`
+- Tests fail on old code → wait for deployment rollout to complete
+- Flaky tests → use healer agent to fix selectors/timing
+
+**Playwright agents for test maintenance:**
+
+- Don't manually tweak tests - use `playwright-test-healer` to auto-fix failures
+- For new features, use `playwright-test-planner` to explore and generate plans
+- Use `playwright-test-generator` to create tests from plans
 
 ## Key Patterns
 
@@ -60,6 +71,8 @@ Watch for new pods to reach `Running` status and old pods to terminate. The clus
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
 - **API calls**: Use `$lib/api.ts`, never hardcode URLs
 - **DBOS workflows**: Bump `WORKFLOW_VERSION` in `dbos_config.py` when changing workflow logic
+- **HTML**: Be explicit, don't rely on browser defaults (`type="button"`, `rel="noopener"`, etc.)
+- **Responsive layouts**: Use `isMobile` store to conditionally render, not CSS hide (avoids duplicate DOM elements)
 
 ## Deployment
 
@@ -71,22 +84,10 @@ make setup-claude-creds  # Extract Claude credentials from Keychain
 ## Documentation Philosophy
 
 ```text
-README.md     → High-level overview, features (marketing funnel)
-  ↓
-docs/         → Feature-specific documentation
-  ↓
-specs/        → Detailed specifications (links to tests)
-  ↓
-tests/        → Playwright tests verify specs
+README.md → docs/ → specs/ → tests/
 ```
 
-Specs define desired behavior. Tests are the source of truth.
-
-**Playwright agents automate test creation:**
-
-1. `playwright-test-planner` - browses app, explores UI, generates test plan
-2. `playwright-test-generator` - creates tests from plan
-3. `playwright-test-healer` - debugs and fixes failing tests
+Specs define behavior. Tests are the source of truth. Keep docs in sync by running planner agent after feature changes.
 
 ## Important
 

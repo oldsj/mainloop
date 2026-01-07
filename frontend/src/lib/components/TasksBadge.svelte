@@ -11,6 +11,7 @@
 </script>
 
 <button
+  type="button"
   onclick={handleClick}
   class="relative p-2 text-term-fg-muted transition-colors hover:text-term-fg"
   aria-label="Open inbox"

@@ -1,16 +1,7 @@
-// spec: frontend/specs/inbox-management.md
-// seed: frontend/tests/seed.spec.ts
-
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 
 test.describe('Inbox Panel Visibility', () => {
-  test('Desktop Inbox Always Visible', async ({ page }) => {
-    // 1. Load application at desktop viewport (1280x720)
-    await page.goto('/');
-
-    // 2. Wait for app to fully load (header shows "$ mainloop")
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
-
+  test('Desktop Inbox Always Visible', async ({ appPage: page }) => {
     // Verify inbox panel header shows "[INBOX]" with terminal styling
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
 

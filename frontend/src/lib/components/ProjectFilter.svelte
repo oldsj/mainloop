@@ -11,6 +11,7 @@
 
 <div class="relative">
   <button
+    type="button"
     onclick={() => (isOpen = !isOpen)}
     class="flex items-center gap-1 border border-term-border px-2 py-1 text-xs text-term-fg hover:border-term-accent"
   >
@@ -36,6 +37,7 @@
       class="absolute right-0 top-full z-10 mt-1 min-w-40 border border-term-border bg-term-bg shadow-lg"
     >
       <button
+        type="button"
         onclick={() => handleSelect(null)}
         class="w-full px-3 py-2 text-left text-sm text-term-fg hover:bg-term-selection"
       >
@@ -43,6 +45,7 @@
       </button>
       {#each $projectsList as project (project.id)}
         <button
+          type="button"
           onclick={() => handleSelect(project.id)}
           class="w-full px-3 py-2 text-left text-sm hover:bg-term-selection
                  {$selectedProjectId === project.id ? 'text-term-accent' : 'text-term-fg'}"

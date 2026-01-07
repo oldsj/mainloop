@@ -16,10 +16,11 @@
 
 <nav
   data-testid="mobile-tab-bar"
-  class="fixed bottom-0 left-0 right-0 z-40 border-t border-term-border bg-term-bg md:hidden"
+  class="fixed bottom-0 left-0 right-0 z-40 border-t border-term-border bg-term-bg"
 >
   <div class="flex items-center justify-around">
     <button
+      type="button"
       data-testid="tab-chat"
       onclick={() => mobileTab.set('chat')}
       class="flex flex-1 flex-col items-center gap-1 py-3 transition-colors {chatTabClass}"
@@ -44,6 +45,7 @@
     </button>
 
     <button
+      type="button"
       data-testid="tab-inbox"
       onclick={() => mobileTab.set('tasks')}
       class="relative flex flex-1 flex-col items-center gap-1 py-3 transition-colors {inboxTabClass}"

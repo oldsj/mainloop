@@ -1,25 +1,19 @@
-// spec: frontend/specs/mobile-navigation.md
-// seed: tests/seed.spec.ts
-
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 
 test.describe('Tab Bar Display', () => {
-  test('Tab Bar Hidden on Desktop', async ({ page }) => {
-    // Set desktop viewport
+  test('Tab Bar Hidden on Desktop', async ({ appPage: page }) => {
+    // Override to desktop viewport for this test
     await page.setViewportSize({ width: 1280, height: 720 });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
-    // 1. Load application at desktop viewport (1280x720)
-    await page.goto('/');
-
-    // 2. Observe bottom of screen
-    // Expected: Inbox panel always visible on desktop
+    // Inbox panel always visible on desktop
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
 
-    // Expected: Side-by-side layout used instead
+    // Side-by-side layout used instead
     await expect(page.getByRole('textbox', { name: 'Enter command...' })).toBeVisible();
 
-    // Expected: No bottom tab bar visible (mobile tabs are hidden via CSS)
-    // Mobile tab buttons have exact aria-labels "Chat" and "Inbox" and are inside the mobile nav
+    // No bottom tab bar visible (mobile tabs are hidden via CSS)
     const mobileTabBar = page.locator('nav.md\\:hidden');
     await expect(mobileTabBar).not.toBeVisible();
 

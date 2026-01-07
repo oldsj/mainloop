@@ -538,13 +538,22 @@ class Database:
         if not self._pool:
             return task
         async with self.connection() as conn:
+            # Serialize pending_questions to JSON for storage
+            import json
+
+            pending_questions_json = (
+                json.dumps([q.model_dump() for q in task.pending_questions])
+                if task.pending_questions
+                else None
+            )
+
             await conn.execute(
                 """
                 INSERT INTO worker_tasks
                 (id, main_thread_id, user_id, task_type, description, prompt, model,
                  repo_url, branch_name, base_branch, status, created_at,
-                 conversation_id, message_id, keywords, skip_plan, plan_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                 conversation_id, message_id, keywords, skip_plan, plan_text, pending_questions)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 """,
                 task.id,
                 task.main_thread_id,
@@ -563,6 +572,7 @@ class Database:
                 task.keywords,
                 task.skip_plan,
                 task.plan_text,
+                pending_questions_json,
             )
         return task
 

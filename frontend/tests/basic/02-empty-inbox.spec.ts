@@ -1,15 +1,7 @@
-import { test, expect } from '@playwright/test';
-
-/**
- * BASIC STAGE - Verify empty inbox state
- *
- * After basic conversation, inbox should still be empty.
- */
+import { test, expect } from '../fixtures';
 
 test.describe('Basic: Empty Inbox', () => {
-  test('inbox shows empty state', async ({ page }) => {
-    await page.goto('/');
-
+  test('inbox shows empty state', async ({ appPage: page }) => {
     // Verify inbox panel is visible
     await expect(page.getByRole('heading', { name: '[INBOX]' })).toBeVisible();
 

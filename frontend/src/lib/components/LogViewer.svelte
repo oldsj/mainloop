@@ -276,6 +276,7 @@
       <!-- Jump to bottom button - show when user has scrolled up -->
       {#if wasManuallyScrolled && !isUserNearBottom && parsedLogs.length > 0}
         <button
+          type="button"
           onclick={jumpToBottom}
           class="absolute bottom-2 right-2 flex items-center gap-1 rounded border border-term-border bg-term-bg px-2 py-1 text-xs text-term-fg-muted shadow transition-colors hover:bg-term-selection hover:text-term-fg"
         >

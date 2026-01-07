@@ -1,22 +1,26 @@
-import { test, expect } from '@playwright/test';
-import { seedTaskWaitingPlanReview } from '../fixtures/seed-data';
+import { test, expect, seedTask } from '../fixtures';
 
 test.describe('Plan Review Flow', () => {
-  test('Cancel Plan', async ({ page }) => {
-    // Set up dialog handler FIRST
+  test('Cancel Plan', async ({ appPage: page, userId }) => {
+    // Set up dialog handler
     page.on('dialog', (dialog) => dialog.accept());
 
-    // Seed task then navigate
-    await seedTaskWaitingPlanReview(page);
-    await page.goto('/');
+    // Seed a task in "waiting_plan_review" status
+    await seedTask(page, userId, {
+      status: 'waiting_plan_review',
+      description: 'Add user authentication',
+      plan: '# Implementation Plan\n\n## Steps\n1. Create User model\n2. Add auth endpoints'
+    });
 
+    // Refresh to pick up seeded task
+    await page.reload();
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
     // Task should be visible with REVIEW PLAN status
     const reviewPlanBadge = page.locator('text=REVIEW PLAN').first();
     await expect(reviewPlanBadge).toBeVisible({ timeout: 10000 });
 
-    // Plan content should auto-expand (don't click - that would collapse it!)
+    // Plan content should auto-expand
     const planContent = page.locator('.prose-terminal').first();
     await expect(planContent).toBeVisible({ timeout: 5000 });
 

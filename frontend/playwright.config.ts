@@ -15,20 +15,22 @@ import { defineConfig, devices } from '@playwright/test';
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 const apiURL = process.env.API_URL || 'http://localhost:8000';
 
-// Headed by default locally, headless on CI (override with HEADLESS=true/false)
-const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : !!process.env.CI;
+// Headless by default (override with HEADLESS=false for debugging)
+const headless = process.env.HEADLESS ? process.env.HEADLESS === 'true' : true;
 
 export default defineConfig({
   testDir: './tests',
 
-  // Run all tests - don't stop on first failure (see all issues)
-  maxFailures: undefined,
+  // Lesson #5: Fail fast on early tests
+  // Set maxFailures=1 in CI to stop immediately on first failure
+  // Locally, run all tests to see full scope of issues
+  maxFailures: process.env.CI ? 1 : undefined,
 
-  // Tests run sequentially by default (state-dependent)
-  fullyParallel: false,
+  // Parallel execution with per-worker user isolation
+  fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0, // No retries - fail fast, don't hide flakiness
-  workers: 1,
+  workers: 4,
 
   reporter: process.env.CI
     ? [['github'], ['html', { open: 'never' }]]
@@ -44,6 +46,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    colorScheme: 'dark', // Reduce white flashing between tests
     // Pass API_URL to tests via extraHTTPHeaders or use in fixtures
     extraHTTPHeaders: {
       'x-test-api-url': apiURL
@@ -56,18 +59,26 @@ export default defineConfig({
   },
 
   projects: [
-    // Desktop Chrome tests (default)
+    // Stage 1: Fast desktop tests - UI tests with seeded data (no Claude API)
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-      testIgnore: [/mobile\//, /global\.(setup|teardown)\.ts/]
+      name: 'fast',
+      testMatch: /^(?!.*\/(mobile|e2e)\/).*\.spec\.ts$/,
+      use: { ...devices['Desktop Chrome'] }
     },
 
-    // Mobile tests (Pixel 5 viewport)
+    // Stage 2: Mobile tests (run parallel with fast)
     {
       name: 'mobile',
-      use: { ...devices['Pixel 5'] },
-      testMatch: /mobile\/.*\.spec\.ts/
+      testMatch: /mobile\/.*\.spec\.ts/,
+      use: { ...devices['Pixel 5'] }
+    },
+
+    // Stage 3: Full E2E journey - real Claude API (runs after fast+mobile pass)
+    {
+      name: 'e2e',
+      testMatch: /e2e\/.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+      dependencies: ['fast', 'mobile']
     }
   ],
 
