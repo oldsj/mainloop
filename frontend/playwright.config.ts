@@ -26,11 +26,11 @@ export default defineConfig({
   // Locally, run all tests to see full scope of issues
   maxFailures: process.env.CI ? 1 : undefined,
 
-  // Parallel execution with per-worker schema isolation
+  // Parallel execution with per-worker user isolation
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0, // No retries - fail fast, don't hide flakiness
-  workers: undefined, // Per-project configuration
+  workers: 4,
 
   reporter: process.env.CI
     ? [['github'], ['html', { open: 'never' }]]
@@ -59,29 +59,26 @@ export default defineConfig({
   },
 
   projects: [
-    // Lesson #5: Build tests incrementally - basic connectivity first
-    // Stage 1: Fast desktop tests - UI and seeded data tests (no Claude API)
+    // Stage 1: Fast desktop tests - UI tests with seeded data (no Claude API)
     {
       name: 'fast',
-      testMatch: /(question-answering|basic\/0[2-3]).*\.spec\.ts/,
-      use: { ...devices['Desktop Chrome'] },
-      fullyParallel: true
+      testMatch: /^(?!.*\/(mobile|e2e)\/).*\.spec\.ts$/,
+      use: { ...devices['Desktop Chrome'] }
     },
 
-    // Stage 2: Fast mobile tests
+    // Stage 2: Mobile tests (run parallel with fast)
     {
       name: 'mobile',
       testMatch: /mobile\/.*\.spec\.ts/,
-      use: { ...devices['Pixel 5'] },
-      fullyParallel: true
+      use: { ...devices['Pixel 5'] }
     },
 
-    // Stage 3: Slow E2E tests - real Claude API interactions (run serially to avoid backend overload)
+    // Stage 3: Full E2E journey - real Claude API (runs after fast+mobile pass)
     {
-      name: 'slow-e2e',
-      testMatch: /(00-create-task|01-send-message|01-conversation-history).*\.spec\.ts/,
+      name: 'e2e',
+      testMatch: /e2e\/.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      fullyParallel: false // Run serially - Claude API can't handle parallel requests well
+      dependencies: ['fast', 'mobile']
     }
   ],
 

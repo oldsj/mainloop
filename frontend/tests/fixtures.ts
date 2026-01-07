@@ -146,9 +146,11 @@ export async function getMessageCount(page: Page): Promise<number> {
 
 /**
  * Seed a task in specific state. Returns task ID.
+ * userId is required for per-user test isolation.
  */
 export async function seedTask(
   page: Page,
+  userId: string,
   options: {
     status: 'waiting_plan_review' | 'waiting_questions' | 'implementing' | 'ready_to_implement';
     description?: string;
@@ -161,6 +163,7 @@ export async function seedTask(
   }
 ): Promise<string> {
   const response = await page.request.post(`${apiURL}/internal/test/seed-task`, {
+    headers: { 'X-User-ID': userId },
     data: {
       status: options.status,
       task_type: 'feature',

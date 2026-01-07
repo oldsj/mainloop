@@ -19,6 +19,7 @@
 
 <div class="relative">
   <button
+    type="button"
     onclick={() => (isOpen = !isOpen)}
     class="flex h-8 w-8 items-center justify-center border border-term-border bg-term-bg-secondary text-term-fg-muted hover:border-term-accent hover:text-term-accent"
     aria-label="Change theme"
@@ -32,6 +33,7 @@
   {#if isOpen}
     <!-- Backdrop to close dropdown -->
     <button
+      type="button"
       class="fixed inset-0 z-40"
       onclick={() => (isOpen = false)}
       aria-label="Close theme selector"
@@ -42,6 +44,7 @@
     >
       {#each themes as theme}
         <button
+          type="button"
           onclick={() => selectTheme(theme.id)}
           class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-term-selection"
           class:bg-term-selection={$currentTheme === theme.id}

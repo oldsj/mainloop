@@ -5,7 +5,8 @@
   import { inbox } from '$lib/stores/inbox';
   import { tasks } from '$lib/stores/tasks';
   import { themeStore } from '$lib/stores/theme';
-  import { mobileTab, type MobileTab } from '$lib/stores/mobileTab';
+  import { mobileTab } from '$lib/stores/mobileTab';
+  import { isMobile } from '$lib/stores/viewport';
   import { connectSSE, disconnectSSE } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
@@ -42,53 +43,53 @@
   });
 </script>
 
-<!-- Desktop Layout (>=768px) -->
-<div class="hidden h-screen flex-col md:flex">
-  <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
-    <h1 class="text-xl text-term-accent">
-      <span class="text-term-fg-muted">$</span> mainloop
-    </h1>
-    <div class="flex items-center gap-3">
+{#if $isMobile}
+  <!-- Mobile Layout -->
+  <div class="flex h-screen flex-col">
+    <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
+      <h1 class="text-xl text-term-accent">
+        <span class="text-term-fg-muted">$</span> mainloop
+      </h1>
       <ThemeSelector />
-      <TasksBadge />
-    </div>
-  </header>
+    </header>
 
-  <div class="flex flex-1 overflow-hidden">
-    <main class="flex-1 overflow-hidden">
-      {@render children()}
-    </main>
-
-    <!-- Desktop: Always visible side panels -->
-    <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
-      <div class="flex-1 overflow-hidden">
-        <TasksPanel desktop={true} />
-      </div>
-      <ProjectList />
+    <div class="flex-1 overflow-hidden pb-16">
+      {#if activeTab === 'chat'}
+        <div class="h-full overflow-hidden">
+          {@render children()}
+        </div>
+      {:else if activeTab === 'tasks'}
+        <TasksPanel desktop={false} mobile={true} />
+      {/if}
     </div>
+
+    <MobileTabBar />
   </div>
-</div>
+{:else}
+  <!-- Desktop Layout -->
+  <div class="flex h-screen flex-col">
+    <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
+      <h1 class="text-xl text-term-accent">
+        <span class="text-term-fg-muted">$</span> mainloop
+      </h1>
+      <div class="flex items-center gap-3">
+        <ThemeSelector />
+        <TasksBadge />
+      </div>
+    </header>
 
-<!-- Mobile Layout (<768px) -->
-<div class="flex h-screen flex-col md:hidden">
-  <header
-    class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3"
-  >
-    <h1 class="text-xl text-term-accent">
-      <span class="text-term-fg-muted">$</span> mainloop
-    </h1>
-    <ThemeSelector />
-  </header>
-
-  <div class="flex-1 overflow-hidden pb-16">
-    {#if activeTab === 'chat'}
-      <div class="h-full overflow-hidden">
+    <div class="flex flex-1 overflow-hidden">
+      <main class="flex-1 overflow-hidden">
         {@render children()}
-      </div>
-    {:else if activeTab === 'tasks'}
-      <TasksPanel desktop={false} mobile={true} />
-    {/if}
-  </div>
+      </main>
 
-  <MobileTabBar />
-</div>
+      <!-- Desktop: Always visible side panels -->
+      <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
+        <div class="flex-1 overflow-hidden">
+          <TasksPanel desktop={true} />
+        </div>
+        <ProjectList />
+      </div>
+    </div>
+  </div>
+{/if}

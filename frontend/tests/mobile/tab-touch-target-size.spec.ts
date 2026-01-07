@@ -1,24 +1,11 @@
-// spec: frontend/specs/mobile-navigation.md
-// seed: tests/seed.spec.ts
-
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures';
 
 test.describe('Touch Interactions', () => {
-  test('Tab Touch Target Size', async ({ page }) => {
-    // Set mobile viewport (Pixel 5)
-    await page.setViewportSize({ width: 393, height: 851 });
-
-    // 1. On mobile viewport with touch device
-    await page.goto('/');
-
-    // Wait for page to load
-    await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
-
-    // 2. Attempt to tap each tab
+  test('Tab Touch Target Size', async ({ appPage: page }) => {
     const chatTab = page.getByRole('button', { name: 'Chat' });
     const inboxTab = page.getByRole('button', { name: 'Inbox' });
 
-    // Expected: Tabs have adequate touch target size (minimum 44px)
+    // Tabs have adequate touch target size (minimum 44px)
     const chatBox = await chatTab.boundingBox();
     const inboxBox = await inboxTab.boundingBox();
 
@@ -30,7 +17,7 @@ test.describe('Touch Interactions', () => {
       expect(inboxBox.height).toBeGreaterThanOrEqual(44);
     }
 
-    // Expected: Easy to tap without precision - tabs are clickable
+    // Tabs are clickable
     await expect(chatTab).toBeEnabled();
     await expect(inboxTab).toBeEnabled();
     await expect(chatTab).toBeVisible();

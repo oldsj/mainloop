@@ -439,6 +439,7 @@
         <!-- Expand/Collapse all buttons (VSCode style) -->
         {#if activeTasks.length > 0}
           <button
+            type="button"
             onclick={expandAll}
             class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
             aria-label="Expand all"
@@ -449,6 +450,7 @@
             </svg>
           </button>
           <button
+            type="button"
             onclick={collapseAll}
             class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
             aria-label="Collapse all"
@@ -461,6 +463,7 @@
         {/if}
         {#if !desktop && !mobile}
           <button
+            type="button"
             onclick={handleClose}
             class="p-1 text-term-fg-muted transition-colors hover:text-term-fg"
             aria-label="Close panel"
@@ -517,6 +520,7 @@
                   {#if item.item_type === 'plan_review'}
                     <!-- Expandable plan content -->
                     <button
+                      type="button"
                       onclick={() => (expandedPlanId = expandedPlanId === item.id ? null : item.id)}
                       class="mt-2 flex w-full items-center gap-2 text-left text-sm text-term-info hover:underline"
                     >
@@ -575,6 +579,7 @@
                     <div class="mt-3 flex flex-wrap gap-2">
                       {#each item.options as option}
                         <button
+                          type="button"
                           onclick={() => handleInboxOption(item.id, option)}
                           disabled={respondingItemId === item.id}
                           class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50 {option === 'Approve' ? 'border-term-accent-alt text-term-accent-alt hover:bg-term-accent-alt/10' : ''}"
@@ -691,6 +696,7 @@
 
                   <div class="flex items-center gap-1">
                     <button
+                      type="button"
                       onclick={(e) => {
                         e.stopPropagation();
                         handleCancel(task.id);
@@ -749,6 +755,7 @@
                         {#if isAnswered && !isActive}
                           <!-- Answered question - collapsed view, clickable to edit -->
                           <button
+                            type="button"
                             onclick={() => editingQuestionId[task.id] = question.id}
                             class="w-full flex items-center gap-2 p-2 text-left border border-term-border/50 bg-term-bg hover:border-term-accent/50 transition-colors group"
                           >
@@ -802,6 +809,7 @@
                               />
                               {#if customQuestionInputs[task.id]?.[question.id]?.trim()}
                                 <button
+                                  type="button"
                                   onclick={() => editingQuestionId[task.id] = null}
                                   class="border border-term-accent px-3 py-1.5 text-sm text-term-accent hover:bg-term-accent/10"
                                 >
@@ -823,6 +831,7 @@
                       {#if allQuestionsAnswered(task)}
                         <div class="flex gap-2 pt-3 mt-2 border-t border-term-border">
                           <button
+                            type="button"
                             onclick={() => submitAnswers(task.id)}
                             disabled={submittingTaskId === task.id}
                             class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
@@ -830,6 +839,7 @@
                             {submittingTaskId === task.id ? 'Submitting...' : 'Continue →'}
                           </button>
                           <button
+                            type="button"
                             onclick={() => tasks.cancelQuestions(task.id)}
                             disabled={submittingTaskId === task.id}
                             class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
@@ -850,6 +860,7 @@
                       <!-- Approve/Revise buttons -->
                       <div class="flex gap-2 pt-2">
                         <button
+                          type="button"
                           onclick={() => handleApprovePlan(task.id)}
                           disabled={submittingTaskId === task.id}
                           class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
@@ -857,6 +868,7 @@
                           {submittingTaskId === task.id ? 'Approving...' : 'Approve Plan'}
                         </button>
                         <button
+                          type="button"
                           onclick={() => tasks.cancelTask(task.id)}
                           disabled={submittingTaskId === task.id}
                           class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
@@ -874,6 +886,7 @@
                           class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
                         />
                         <button
+                          type="button"
                           onclick={() => handleRevisePlan(task.id)}
                           disabled={submittingTaskId === task.id || !planRevisionText[task.id]?.trim()}
                           class="border border-term-border px-4 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
@@ -901,6 +914,7 @@
                       <!-- Start Implementation button -->
                       <div class="flex gap-2 pt-2">
                         <button
+                          type="button"
                           onclick={() => handleStartImplementation(task.id)}
                           disabled={submittingTaskId === task.id}
                           class="border border-term-accent-alt bg-term-accent-alt/10 px-4 py-2 text-sm text-term-accent-alt transition-colors hover:bg-term-accent-alt/20 disabled:opacity-50"
@@ -908,6 +922,7 @@
                           {submittingTaskId === task.id ? 'Starting...' : 'Start Implementation →'}
                         </button>
                         <button
+                          type="button"
                           onclick={() => tasks.cancelTask(task.id)}
                           disabled={submittingTaskId === task.id}
                           class="border border-term-border px-4 py-2 text-sm text-term-fg-muted transition-colors hover:border-term-error hover:text-term-error disabled:opacity-50"
@@ -978,6 +993,7 @@
                   </div>
                   {#if task.status === 'failed'}
                     <button
+                      type="button"
                       onclick={() => handleRetry(task.id)}
                       class="p-1 text-term-fg-muted transition-colors hover:text-term-info"
                       aria-label="Retry task"
@@ -1008,6 +1024,7 @@
           {#if olderTerminalTasks.length > 0}
             <div class="border-b border-term-border">
               <button
+                type="button"
                 onclick={() => (showRecent = !showRecent)}
                 class="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-term-fg-muted hover:bg-term-selection"
               >
@@ -1061,6 +1078,7 @@
                         </div>
                         {#if task.status === 'failed'}
                           <button
+                            type="button"
                             onclick={() => handleRetry(task.id)}
                             class="p-1 text-term-fg-muted transition-colors hover:text-term-info"
                             aria-label="Retry task"

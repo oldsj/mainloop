@@ -140,6 +140,7 @@
   <!-- Scroll to bottom button -->
   {#if showScrollButton}
     <button
+      type="button"
       onclick={scrollToBottom}
       class="absolute bottom-24 right-4 flex h-10 w-10 items-center justify-center border border-term-border bg-term-bg-secondary text-term-fg-muted transition-colors hover:border-term-accent hover:text-term-accent"
       aria-label="Scroll to bottom"

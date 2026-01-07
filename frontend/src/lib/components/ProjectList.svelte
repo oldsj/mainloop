@@ -20,6 +20,7 @@
   <div class="max-h-48 overflow-y-auto" data-testid="projects-list">
     {#each $projectsList as project (project.id)}
       <button
+        type="button"
         onclick={() => handleClick(project.id)}
         class="flex w-full items-center gap-2 truncate px-4 py-2 text-left text-sm text-term-fg hover:bg-term-selection"
       >

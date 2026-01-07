@@ -7,6 +7,9 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
 KIND_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 TEST_API_URL="${TEST_API_URL:-http://localhost:8081}"
 
+# Give watchexec time to detect changes and trigger rebuild
+sleep 2
+
 echo "Waiting for deployments to be ready..."
 
 # Wait for backend deployment (most critical)

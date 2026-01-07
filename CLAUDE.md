@@ -71,6 +71,8 @@ Wait for new pods to show `Running` and old pods to terminate.
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
 - **API calls**: Use `$lib/api.ts`, never hardcode URLs
 - **DBOS workflows**: Bump `WORKFLOW_VERSION` in `dbos_config.py` when changing workflow logic
+- **HTML**: Be explicit, don't rely on browser defaults (`type="button"`, `rel="noopener"`, etc.)
+- **Responsive layouts**: Use `isMobile` store to conditionally render, not CSS hide (avoids duplicate DOM elements)
 
 ## Deployment
 
