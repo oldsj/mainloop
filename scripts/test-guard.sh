@@ -22,4 +22,4 @@ fi
 echo $$ >"${LOCKFILE}"
 
 # Cleanup on exit
-trap "rm -f ${LOCKFILE}" EXIT
+trap 'rm -f ${LOCKFILE}' EXIT
