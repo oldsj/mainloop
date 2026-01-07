@@ -12,6 +12,10 @@ import { test as base, expect, type Page } from '@playwright/test';
 // API URL from environment (set by make test or CI)
 export const apiURL = process.env.API_URL || 'http://localhost:8000';
 
+// Test repo URL for real GitHub integration tests (optional)
+// Set to a repo you own (e.g., 'https://github.com/oldsj/testrepo')
+export const testRepoUrl = process.env.TEST_REPO_URL || '';
+
 /**
  * Generate a unique user ID for this test.
  * Each test gets its own user ID for isolation.

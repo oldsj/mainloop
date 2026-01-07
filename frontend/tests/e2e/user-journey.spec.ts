@@ -1,4 +1,4 @@
-import { test, expect, apiURL } from '../fixtures';
+import { test, expect, apiURL, testRepoUrl } from '../fixtures';
 
 /**
  * Full user journey E2E test - real Claude API calls.
@@ -94,20 +94,30 @@ test.describe('User Journey (E2E)', () => {
     await expect(messages).toHaveCount(countBefore + 2, { timeout: 5000 });
   });
 
-  // Skip: Requires external network access to GitHub for planning mode repo cache
-  // The new in-thread planning flow clones repos before planning, which fails in Kind cluster
-  test.skip('4. create task via conversation', async () => {
+  // Requires TEST_REPO_URL env var and real GitHub access
+  // Set TEST_REPO_URL=https://github.com/oldsj/testrepo to enable
+  test('4. create task via conversation', async () => {
+    test.skip(!testRepoUrl, 'TEST_REPO_URL not set - skipping real GitHub test');
+
     const page = sharedPage;
     const input = page.getByPlaceholder('Enter command...').first();
 
+    // Extract repo name for sidebar check (e.g., 'oldsj/testrepo' from URL)
+    const repoName = testRepoUrl.replace('https://github.com/', '').replace('.git', '');
+
     await input.fill(
-      'Spawn a task to update the README on https://github.com/oldsj/mainloop - add a quick start section. I confirm, please spawn now.'
+      `Start planning to update the README on ${testRepoUrl} - add a quick start section.`
     );
     await input.press('Enter');
 
-    // Wait for task to appear in sidebar
+    // Wait for planning to start (Claude should acknowledge and start exploring)
     await expect(
-      page.locator('[data-testid="projects-list"]').getByText('oldsj/mainloop')
-    ).toBeVisible({ timeout: 30000 });
+      page.locator('.message.bg-term-bg-secondary').last()
+    ).toContainText(/planning|explore|repository|codebase/i, { timeout: 60000 });
+
+    // If a project appears in sidebar, planning succeeded
+    await expect(
+      page.locator('[data-testid="projects-list"]').getByText(repoName)
+    ).toBeVisible({ timeout: 60000 });
   });
 });

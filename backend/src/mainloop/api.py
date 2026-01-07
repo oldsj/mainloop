@@ -1270,7 +1270,7 @@ async def reset_test_data():
             """
             TRUNCATE TABLE
                 queue_items, messages, worker_tasks, projects,
-                conversations, main_threads
+                conversations, main_threads, planning_sessions
             CASCADE
         """
         )
