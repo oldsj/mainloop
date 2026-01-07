@@ -68,22 +68,20 @@ export default defineConfig({
       fullyParallel: true
     },
 
-    // Stage 2: Fast mobile tests - depends on fast tests passing
+    // Stage 2: Fast mobile tests
     {
       name: 'mobile',
       testMatch: /mobile\/.*\.spec\.ts/,
       use: { ...devices['Pixel 5'] },
-      fullyParallel: true,
-      dependencies: ['fast']
+      fullyParallel: true
     },
 
-    // Stage 3: Slow E2E tests - real Claude API interactions (run last)
+    // Stage 3: Slow E2E tests - real Claude API interactions (run serially to avoid backend overload)
     {
       name: 'slow-e2e',
       testMatch: /(00-create-task|01-send-message|01-conversation-history).*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      fullyParallel: true,
-      dependencies: ['mobile']
+      fullyParallel: false  // Run serially - Claude API can't handle parallel requests well
     }
   ],
 

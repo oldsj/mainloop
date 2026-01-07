@@ -363,9 +363,10 @@ kind-reload-frontend: ## Fast reload frontend only
 	@kubectl --context=$(KIND_CONTEXT) rollout status deployment/mainloop-frontend -n mainloop --timeout=60s
 	@until curl -sf $(TEST_FRONTEND_URL) > /dev/null 2>&1; do sleep 1; done
 
-test-run: ## Run all tests headless (waits for latest deployment)
+test-run: ## Run tests headless (waits for latest deployment). Use TEST_ARGS for options.
 	@./scripts/wait-for-ready.sh
-	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test
+	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --project=fast --project=mobile $(TEST_ARGS)
+	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --project=slow-e2e --workers=1 $(TEST_ARGS)
 
 test-reset: ## Reset test state (DB + task namespaces)
 	@./scripts/kind/reset-data.sh

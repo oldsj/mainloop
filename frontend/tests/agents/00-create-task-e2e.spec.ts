@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { setupConversation } from '../fixtures';
+import { test, expect, setupConversation } from '../fixtures';
 
 /**
  * AGENTS STAGE - End-to-end task creation
@@ -12,8 +11,8 @@ test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run s
 test.describe('Agents: Create Task (E2E)', () => {
   test.setTimeout(60000); // 1 min - haiku is fast
 
-  test('create task via conversation', async ({ page }) => {
-    await page.goto('/');
+  test('create task via conversation', async ({ appPage: page }) => {
+    // appPage already navigated to / and verified app is ready
     await expect(page.getByRole('heading', { name: '$ mainloop' })).toBeVisible();
 
     // Set up conversation state

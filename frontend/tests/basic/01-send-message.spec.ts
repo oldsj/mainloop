@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { setupConversation } from '../fixtures';
+import { test, expect, setupConversation } from '../fixtures';
 
 /**
  * BASIC STAGE - Send a message test
@@ -8,8 +7,8 @@ import { setupConversation } from '../fixtures';
 test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run serially
 
 test.describe('Basic: Send Message', () => {
-  test('send message and receive response', async ({ page }) => {
-    await page.goto('/');
+  test('send message and receive response', async ({ appPage: page }) => {
+    // appPage already navigated to / and verified app is ready
 
     // Use the setupConversation fixture which handles the full flow
     await setupConversation(page);

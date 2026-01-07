@@ -1,5 +1,4 @@
-import { test, expect } from '@playwright/test';
-import { setupConversation } from '../fixtures';
+import { test, expect, setupConversation } from '../fixtures';
 
 /**
  * CONTEXT STAGE - Verify conversation history
@@ -10,8 +9,8 @@ import { setupConversation } from '../fixtures';
 test.describe.configure({ mode: 'serial' }); // Real Claude API calls must run serially
 
 test.describe('Context: Conversation History', () => {
-  test('messages are visible after sending', async ({ page }) => {
-    await page.goto('/');
+  test('messages are visible after sending', async ({ appPage: page }) => {
+    // appPage already navigated to / and verified app is ready
 
     // Set up conversation (self-contained)
     await setupConversation(page);
@@ -24,8 +23,8 @@ test.describe('Context: Conversation History', () => {
     expect(await messages.count()).toBeGreaterThan(0);
   });
 
-  test('send another message maintains history', async ({ page }) => {
-    await page.goto('/');
+  test('send another message maintains history', async ({ appPage: page }) => {
+    // appPage already navigated to / and verified app is ready
 
     // Set up initial conversation (self-contained)
     await setupConversation(page);
