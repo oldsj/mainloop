@@ -126,10 +126,10 @@ export async function sendMessage(page: Page, message: string): Promise<void> {
  * Wait for an assistant response to appear after sending a message.
  * Returns the response text.
  */
-export async function waitForResponse(page: Page): Promise<string> {
+export async function waitForResponse(page: Page, timeout = 60000): Promise<string> {
   // Wait for assistant message to appear (identified by bg-term-bg-secondary class)
   const assistantMessage = page.locator('.message.bg-term-bg-secondary').last();
-  await expect(assistantMessage).toBeVisible({ timeout: 30000 });
+  await expect(assistantMessage).toBeVisible({ timeout });
 
   return (await assistantMessage.textContent()) || '';
 }

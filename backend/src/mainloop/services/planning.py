@@ -123,10 +123,43 @@ async def start_planning_session(
     # Record this repo as recently used
     await db.add_recent_repo(main_thread_id, repo_url)
 
+    # Get initial directory listing for context
+    dir_listing = ""
+    try:
+        import os
+
+        files = []
+        for root, dirs, filenames in os.walk(repo_path):
+            # Skip hidden directories
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in filenames:
+                if not f.startswith("."):
+                    rel_path = os.path.relpath(os.path.join(root, f), repo_path)
+                    files.append(rel_path)
+            # Limit depth to avoid huge listings
+            if root.count(os.sep) - str(repo_path).count(os.sep) >= 3:
+                dirs.clear()
+
+        if files:
+            # Sort and limit to top 50 files
+            files.sort()
+            dir_listing = "\n".join(files[:50])
+            if len(files) > 50:
+                dir_listing += f"\n... and {len(files) - 50} more files"
+    except Exception as e:
+        logger.warning(f"Failed to get directory listing: {e}")
+
     initial_message = (
         f"Starting planning for: **{task_description}**\n\n"
         f"Repository: {repo_url}\n\n"
-        f"I'll explore the codebase and create an implementation plan."
+    )
+
+    if dir_listing:
+        initial_message += f"## Repository Structure\n```\n{dir_listing}\n```\n\n"
+
+    initial_message += (
+        "You now have read-only access to explore this codebase using Read, Glob, Grep, and LS tools. "
+        "Start by examining relevant files to understand the architecture, then create a plan."
     )
 
     return session, initial_message

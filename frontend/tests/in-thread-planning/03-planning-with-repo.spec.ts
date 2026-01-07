@@ -52,18 +52,24 @@ test.describe('Planning with Fixture Repo', () => {
     await seedRepo(page);
 
     const input = page.getByPlaceholder('Enter command...').first();
-    // Must explicitly ask to "start planning" to trigger planning tools
-    await input.fill(
-      `Start planning on ${fixtureRepoUrl} - I want to understand the existing code. ` +
-        `Please explore the repo and tell me about the existing functions and patterns.`
-    );
+    // First message: start planning to create the session
+    await input.fill(`Start planning on ${fixtureRepoUrl} - I want to explore the codebase.`);
     await input.press('Enter');
 
-    // Wait for response (planning takes time as Claude explores)
-    const response = page.locator('.message.bg-term-bg-secondary').last();
-    await expect(response).toBeVisible({ timeout: 120000 });
+    // Wait for first response (session created)
+    await expect(page.locator('.message.bg-term-bg-secondary').last()).toBeVisible({
+      timeout: 60000
+    });
 
-    const responseText = (await response.textContent()) || '';
+    // Second message: ask to explore - NOW Claude has file tools with correct cwd
+    await input.fill('Please read the main source files and tell me about the functions.');
+    await input.press('Enter');
+
+    // Wait for second response
+    const messages = page.locator('.message.bg-term-bg-secondary');
+    await expect(messages).toHaveCount(2, { timeout: 120000 });
+
+    const responseText = (await messages.last().textContent()) || '';
 
     // Claude should identify the actual functions in the fixture repo:
     // - hello() in main.py

@@ -17,6 +17,7 @@ This test plan covers the in-thread planning workflow in mainloop, where plannin
 The UI implements planning as regular chat messages - no special UI required. Planning status is tracked via PlanningSession in the database.
 
 Key differences from old async planning:
+
 - Planning dialogue is inline in chat (not in worker logs)
 - GitHub issue created only on approval (not before planning)
 - Worker task starts at READY_TO_IMPLEMENT (skips planning phase)
@@ -42,6 +43,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/01-start-planning.spec.ts`
 
 **Steps:**
+
 1. Navigate to the app
 2. Send a chat message requesting code work: "Add user authentication to https://github.com/test/repo"
 3. Wait for Claude to respond
@@ -50,6 +52,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify planning session created in database
 
 **Expected Results:**
+
 - Claude recognizes this is a code task
 - start_planning tool is invoked
 - Response indicates planning has begun
@@ -61,6 +64,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/02-ask-for-repo.spec.ts`
 
 **Steps:**
+
 1. Navigate to the app
 2. Send a chat message: "Add user authentication"
 3. Wait for Claude to respond
@@ -69,6 +73,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify planning session starts
 
 **Expected Results:**
+
 - Claude doesn't start planning without repo URL
 - Claude asks for repository information
 - After receiving URL, planning starts
@@ -78,6 +83,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/03-suggest-recent-repos.spec.ts`
 
 **Steps:**
+
 1. Seed recent_repos for the main thread with 2-3 repos
 2. Navigate to the app
 3. Send a chat message: "Add logging to the backend"
@@ -86,6 +92,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify planning starts with that repo
 
 **Expected Results:**
+
 - Claude sees recent repos in system prompt
 - Claude suggests using a recent repo
 - User can confirm without typing full URL
@@ -99,6 +106,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/04-explore-codebase.spec.ts`
 
 **Steps:**
+
 1. Start a planning session via chat
 2. Claude begins exploring the codebase
 3. Verify response includes file structure observations
@@ -107,6 +115,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify Claude can answer using codebase access
 
 **Expected Results:**
+
 - Claude uses Read, Glob, Grep tools on cached repo
 - Claude provides accurate codebase analysis
 - Follow-up questions work with repo context
@@ -117,6 +126,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/05-refine-plan.spec.ts`
 
 **Steps:**
+
 1. Start planning session
 2. Wait for Claude to present initial plan
 3. Send feedback: "I'd prefer to use JWT instead of sessions"
@@ -124,6 +134,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 5. Verify plan reflects user feedback
 
 **Expected Results:**
+
 - Claude accepts refinement requests
 - Plan is updated based on feedback
 - User can iterate on plan details
@@ -138,6 +149,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/06-approve-creates-issue.spec.ts`
 
 **Steps:**
+
 1. Have an active planning session with a finalized plan
 2. Send message: "Looks good, let's do it"
 3. Verify Claude uses approve_plan tool
@@ -146,6 +158,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify WorkerTask is created with skip_plan=True
 
 **Expected Results:**
+
 - approve_plan tool is invoked with plan text
 - GitHub API called to create issue
 - Issue contains the plan details
@@ -158,6 +171,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/07-approve-spawns-worker.spec.ts`
 
 **Steps:**
+
 1. Approve a plan (continue from 3.1)
 2. Verify WorkerTask is created
 3. Verify task has status=READY_TO_IMPLEMENT
@@ -166,6 +180,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify task appears in Tasks panel
 
 **Expected Results:**
+
 - WorkerTask created immediately on approval
 - Task skips planning phase (skip_plan=True)
 - Task has pre-populated issue details
@@ -176,12 +191,14 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/08-compress-context.spec.ts`
 
 **Steps:**
+
 1. Have a long planning conversation (multiple exchanges)
 2. Approve the plan
 3. Verify planning messages are tracked
 4. Verify compression can be triggered
 
 **Expected Results:**
+
 - Planning message IDs are recorded
 - Compression service can summarize planning dialogue
 - Main conversation doesn't become bloated
@@ -195,6 +212,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/09-cancel-no-issue.spec.ts`
 
 **Steps:**
+
 1. Start a planning session
 2. Send message: "Actually, let's cancel this"
 3. Verify Claude uses cancel_planning tool
@@ -203,6 +221,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify no WorkerTask was created
 
 **Expected Results:**
+
 - cancel_planning tool is invoked
 - PlanningSession status="cancelled"
 - No GitHub API calls made
@@ -214,6 +233,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/10-cancel-mid-conversation.spec.ts`
 
 **Steps:**
+
 1. Start planning session
 2. Have 2-3 exchanges about the plan
 3. Send: "Never mind, I changed my mind"
@@ -222,6 +242,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 6. Verify new conversation works normally
 
 **Expected Results:**
+
 - Cancellation works at any point
 - Previous planning state is cleared
 - New requests work normally
@@ -236,12 +257,14 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/11-invalid-repo-url.spec.ts`
 
 **Steps:**
+
 1. Send message: "Add auth to not-a-valid-url"
 2. Verify start_planning fails gracefully
 3. Verify user gets helpful error message
 4. Verify user can retry with valid URL
 
 **Expected Results:**
+
 - Invalid URLs are rejected
 - Error message explains the issue
 - No PlanningSession created for invalid URL
@@ -252,6 +275,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/12-clone-failure.spec.ts`
 
 **Steps:**
+
 1. Send message with private/inaccessible repo URL
 2. Verify clone fails
 3. Verify PlanningSession marked as cancelled
@@ -259,6 +283,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 5. Verify user can try different repo
 
 **Expected Results:**
+
 - Clone failures are caught
 - Session is cancelled (not left hanging)
 - Error message explains git clone failed
@@ -269,6 +294,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/13-issue-creation-failure.spec.ts`
 
 **Steps:**
+
 1. Have active planning session
 2. Mock GitHub API to fail
 3. Attempt to approve plan
@@ -276,6 +302,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 5. Verify user can retry
 
 **Expected Results:**
+
 - Issue creation failure is caught
 - Error message shown to user
 - Planning session not incorrectly marked approved
@@ -290,11 +317,13 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/14-single-active-session.spec.ts`
 
 **Steps:**
+
 1. Start planning session for repo A
 2. Before approving/canceling, try to start planning for repo B
 3. Verify behavior (either reject or auto-cancel previous)
 
 **Expected Results:**
+
 - Only one active planning session per conversation
 - Clear behavior for conflicting requests
 - No orphaned sessions
@@ -304,12 +333,14 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/15-session-persistence.spec.ts`
 
 **Steps:**
+
 1. Start planning session
 2. Refresh the page
 3. Send follow-up message about the plan
 4. Verify planning context is maintained
 
 **Expected Results:**
+
 - PlanningSession stored in database
 - Claude session ID enables resumption
 - User can continue planning after refresh
@@ -323,12 +354,14 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/16-no-planning-for-chat.spec.ts`
 
 **Steps:**
+
 1. Send general question: "What is the capital of France?"
 2. Verify Claude answers normally
 3. Verify no planning tools are invoked
 4. Verify no PlanningSession created
 
 **Expected Results:**
+
 - Non-code questions answered normally
 - Planning tools not triggered
 - Regular chat flow maintained
@@ -338,6 +371,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 **File:** `frontend/tests/in-thread-planning/17-end-to-end.spec.ts`
 
 **Steps:**
+
 1. Start planning session for test repo
 2. Get plan from Claude
 3. Approve plan
@@ -347,6 +381,7 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 7. Verify implementation proceeds (not planning again)
 
 **Expected Results:**
+
 - Full flow works end-to-end
 - Worker starts at implementation phase
 - Uses the plan from planning session
@@ -354,14 +389,14 @@ User Chat -> start_planning tool -> PlanningSession created -> Repo cached on PV
 
 ## Files Involved
 
-| File | Role |
-|------|------|
-| `backend/src/mainloop/services/planning.py` | Core planning service |
+| File                                            | Role                                  |
+| ----------------------------------------------- | ------------------------------------- |
+| `backend/src/mainloop/services/planning.py`     | Core planning service                 |
 | `backend/src/mainloop/services/chat_handler.py` | Planning tools (start/approve/cancel) |
-| `backend/src/mainloop/services/repo_cache.py` | PVC-based repo caching |
-| `backend/src/mainloop/db/postgres.py` | PlanningSession CRUD |
-| `models/src/models/workflow.py` | PlanningSession model |
-| `backend/src/mainloop/workflows/worker.py` | skip_plan handling |
+| `backend/src/mainloop/services/repo_cache.py`   | PVC-based repo caching                |
+| `backend/src/mainloop/db/postgres.py`           | PlanningSession CRUD                  |
+| `models/src/models/workflow.py`                 | PlanningSession model                 |
+| `backend/src/mainloop/workflows/worker.py`      | skip_plan handling                    |
 
 ## Test Environment Notes
 

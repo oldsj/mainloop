@@ -1246,6 +1246,62 @@ class Database:
             )
         return conversation
 
+    async def create_conversation_with_message(
+        self, user_id: str, message_content: str, title: str | None = None
+    ) -> tuple[Conversation, Message]:
+        """Create a conversation and first message atomically in a transaction.
+
+        This prevents FK violations that can occur when creating them separately.
+        """
+        import uuid
+
+        conversation = Conversation(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            title=title or "New Conversation",
+            message_count=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        message = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="user",
+            content=message_content,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        if not self._pool:
+            return conversation, message
+
+        async with self.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO conversations (id, user_id, title, message_count, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    conversation.id,
+                    conversation.user_id,
+                    conversation.title,
+                    conversation.message_count,
+                    conversation.created_at,
+                    conversation.updated_at,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO messages (id, conversation_id, role, content, created_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    message.id,
+                    message.conversation_id,
+                    message.role,
+                    message.content,
+                    message.created_at,
+                )
+
+        return conversation, message
+
     async def get_conversation(self, conversation_id: str) -> Conversation | None:
         """Get a conversation by ID."""
         if not self._pool:

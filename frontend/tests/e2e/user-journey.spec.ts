@@ -111,13 +111,14 @@ test.describe('User Journey (E2E)', () => {
     await input.press('Enter');
 
     // Wait for planning to start (Claude should acknowledge and start exploring)
-    await expect(
-      page.locator('.message.bg-term-bg-secondary').last()
-    ).toContainText(/planning|explore|repository|codebase/i, { timeout: 60000 });
+    await expect(page.locator('.message.bg-term-bg-secondary').last()).toContainText(
+      /planning|explore|repository|codebase/i,
+      { timeout: 60000 }
+    );
 
     // If a project appears in sidebar, planning succeeded
-    await expect(
-      page.locator('[data-testid="projects-list"]').getByText(repoName)
-    ).toBeVisible({ timeout: 60000 });
+    await expect(page.locator('[data-testid="projects-list"]').getByText(repoName)).toBeVisible({
+      timeout: 60000
+    });
   });
 });

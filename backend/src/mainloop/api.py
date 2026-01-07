@@ -249,12 +249,19 @@ async def chat(
     main_thread_id = get_or_start_main_thread(user_id)
 
     # Get or create conversation
+    is_new_conversation = False
     if request.conversation_id:
         conversation = await db.get_conversation(request.conversation_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        conversation = await db.create_conversation(user_id)
+        # Create new conversation with first message atomically
+        # This prevents FK violations from race conditions
+        conversation, _user_msg = await db.create_conversation_with_message(
+            user_id=user_id,
+            message_content=request.message,
+        )
+        is_new_conversation = True
 
     # Load context: summary + recent messages after last summarized point
     recent_messages = await db.get_messages_after(
@@ -263,13 +270,14 @@ async def chat(
         limit=20,
     )
 
-    # Save user message and increment count
-    await db.create_message(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message,
-    )
-    await db.increment_message_count(conversation.id)
+    # Save user message and increment count (only for existing conversations)
+    if not is_new_conversation:
+        await db.create_message(
+            conversation_id=conversation.id,
+            role="user",
+            content=request.message,
+        )
+        await db.increment_message_count(conversation.id)
 
     # Get or create main thread record
     main_thread = await db.get_main_thread_by_user(user_id)
@@ -1311,7 +1319,6 @@ async def seed_repo_for_testing(request: SeedRepoRequest):
         )
 
     import subprocess
-    from pathlib import Path
 
     from mainloop.services.repo_cache import get_repo_cache
 
@@ -1372,7 +1379,7 @@ def test_add():
     assert add(1, 2) == 3
     assert add(-1, 1) == 0
 ''',
-        "pyproject.toml": '''[project]
+        "pyproject.toml": """[project]
 name = "fixture-repo"
 version = "0.1.0"
 description = "Test fixture repository"
@@ -1380,7 +1387,7 @@ requires-python = ">=3.10"
 
 [project.optional-dependencies]
 dev = ["pytest"]
-''',
+""",
     }
 
     # Write files

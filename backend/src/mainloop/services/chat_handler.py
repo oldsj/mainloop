@@ -42,11 +42,25 @@ def build_chat_system_prompt(
 ) -> str:
     """Build the system prompt for chat, including recent repos if available."""
     if planning_active:
-        # During active planning, use a focused prompt
+        # During active planning, use a focused prompt that directs Claude to explore
         return """You are in planning mode, helping design an implementation approach.
 
-Continue exploring the codebase and refining the plan based on user feedback.
-When the plan is ready for approval, ask the user if they want to:
+IMPORTANT: You have read-only access to the codebase via these tools:
+- Read: Read file contents
+- Glob: Find files by pattern (e.g., "**/*.py", "src/**/*.ts")
+- Grep: Search file contents with regex
+- LS: List directory contents
+
+ALWAYS explore the codebase first using these tools before asking clarifying questions.
+Start by examining the project structure with Glob or LS, then Read relevant files.
+
+When you've finished exploring and understand the codebase, present your plan:
+1. **Summary**: Brief overview of the approach
+2. **Files to Modify**: List of files that need changes
+3. **Implementation Steps**: Numbered steps to complete the task
+4. **Considerations**: Any trade-offs, risks, or alternatives
+
+After presenting the plan, ask the user if they want to:
 - Approve the plan (use approve_plan tool)
 - Request changes (continue refining)
 - Cancel planning (use cancel_planning tool)
@@ -369,6 +383,7 @@ async def get_claude_response(
     """
     try:
         # Check for active planning session
+        active_session = None
         planning_active = False
         if conversation_id:
             active_session = await db.get_active_planning_session(conversation_id)
@@ -381,6 +396,8 @@ async def get_claude_response(
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
+        cwd = None
+        permission_mode = "bypassPermissions"
 
         if user_id and main_thread_id and conversation_id:
             planning_tools = create_planning_tools(
@@ -406,12 +423,29 @@ async def get_claude_response(
                 recent_repos, planning_active=planning_active
             )
 
+        # When planning is active, enable file system tools with read-only access
+        if planning_active and active_session:
+            from mainloop.services.repo_cache import get_repo_cache
+
+            repo_cache = get_repo_cache()
+            repo_path = repo_cache.get_repo_path(active_session.repo_url)
+
+            if repo_path.exists():
+                cwd = str(repo_path)
+                permission_mode = "plan"  # Read-only filesystem access
+                # Add file system tools for exploring the codebase
+                allowed_tools.extend(["Read", "Glob", "Grep", "LS"])
+                logger.info(
+                    f"Planning mode: cwd={cwd}, added file tools for session {active_session.id}"
+                )
+
         options = ClaudeAgentOptions(
             model=model,
-            permission_mode="bypassPermissions",
+            permission_mode=permission_mode,
             system_prompt=system_prompt,
             mcp_servers=mcp_servers if mcp_servers else None,
             allowed_tools=allowed_tools if allowed_tools else None,
+            cwd=cwd,
         )
 
         print(
