@@ -144,9 +144,9 @@ from mainloop.services.github_pr import (  # noqa: E402
     CreatedIssue,
     IssueSummary,
     PRComment,
+    ProjectPRSummary,
     PRReview,
     PRStatus,
-    ProjectPRSummary,
     RepoMetadata,
 )
 
