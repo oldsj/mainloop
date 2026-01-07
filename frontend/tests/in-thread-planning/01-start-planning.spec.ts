@@ -8,6 +8,7 @@ import { test, expect, chat } from '../fixtures';
  */
 
 test.describe('In-Thread Planning', () => {
+  test.describe.configure({ mode: 'serial' });
   test.setTimeout(120000); // 2 min for Claude responses
 
   test('basic chat works (sanity check)', async ({ appPage: page }) => {
