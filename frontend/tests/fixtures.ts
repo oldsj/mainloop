@@ -12,6 +12,13 @@ import { test as base, expect, type Page } from '@playwright/test';
 // API URL from environment (set by make test or CI)
 export const apiURL = process.env.API_URL || 'http://localhost:8000';
 
+// Test repo URL for real GitHub integration tests (optional)
+// Set to a repo you own (e.g., 'https://github.com/oldsj/testrepo')
+export const testRepoUrl = process.env.TEST_REPO_URL || '';
+
+// Fixture repo URL (seeded locally, no network needed)
+export const fixtureRepoUrl = 'https://github.com/test/fixture-repo';
+
 /**
  * Generate a unique user ID for this test.
  * Each test gets its own user ID for isolation.
@@ -119,10 +126,10 @@ export async function sendMessage(page: Page, message: string): Promise<void> {
  * Wait for an assistant response to appear after sending a message.
  * Returns the response text.
  */
-export async function waitForResponse(page: Page): Promise<string> {
+export async function waitForResponse(page: Page, timeout = 60000): Promise<string> {
   // Wait for assistant message to appear (identified by bg-term-bg-secondary class)
   const assistantMessage = page.locator('.message.bg-term-bg-secondary').last();
-  await expect(assistantMessage).toBeVisible({ timeout: 30000 });
+  await expect(assistantMessage).toBeVisible({ timeout });
 
   return (await assistantMessage.textContent()) || '';
 }
@@ -180,6 +187,35 @@ export async function seedTask(
 
   const data = await response.json();
   return data.task_id;
+}
+
+/**
+ * Seed a fixture git repo in the backend cache for testing.
+ * This allows planning tests without network access to GitHub.
+ *
+ * @returns Object with repo_url and list of files
+ */
+export async function seedRepo(
+  page: Page,
+  options?: {
+    owner?: string;
+    name?: string;
+    files?: Record<string, string>;
+  }
+): Promise<{ repo_url: string; files: string[] }> {
+  const response = await page.request.post(`${apiURL}/internal/test/seed-repo`, {
+    data: {
+      owner: options?.owner || 'test',
+      name: options?.name || 'fixture-repo',
+      files: options?.files
+    }
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to seed repo: ${response.status()}`);
+  }
+
+  return await response.json();
 }
 
 /**

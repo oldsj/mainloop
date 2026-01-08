@@ -7,6 +7,8 @@ from models.workflow import (
     GitHubPR,
     GitHubRepo,
     MainThread,
+    PlanningSession,
+    PlanningSessionStatus,
     Project,
     QuestionOption,
     QueueItem,
@@ -42,4 +44,7 @@ __all__ = [
     "GitHubRepo",
     "GitHubPR",
     "Project",
+    # Planning models
+    "PlanningSession",
+    "PlanningSessionStatus",
 ]

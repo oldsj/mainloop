@@ -27,10 +27,11 @@ export default defineConfig({
   maxFailures: process.env.CI ? 1 : undefined,
 
   // Parallel execution with per-worker user isolation
+  // Use 2 workers to balance speed vs backend contention
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0, // No retries - fail fast, don't hide flakiness
-  workers: 4,
+  workers: process.env.CI ? 2 : 2,
 
   reporter: process.env.CI
     ? [['github'], ['html', { open: 'never' }]]
@@ -62,7 +63,7 @@ export default defineConfig({
     // Stage 1: Fast desktop tests - UI tests with seeded data (no Claude API)
     {
       name: 'fast',
-      testMatch: /^(?!.*\/(mobile|e2e)\/).*\.spec\.ts$/,
+      testMatch: /^(?!.*\/(mobile|e2e|in-thread-planning)\/).*\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'] }
     },
 
@@ -73,7 +74,18 @@ export default defineConfig({
       use: { ...devices['Pixel 5'] }
     },
 
-    // Stage 3: Full E2E journey - real Claude API (runs after fast+mobile pass)
+    // Stage 3: Planning tests - real Claude API, skip in CI (too flaky)
+    // Run locally with: pnpm exec playwright test --project=planning
+    {
+      name: 'planning',
+      testMatch: /in-thread-planning\/.*\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+      fullyParallel: false,
+      retries: 0,
+      dependencies: ['fast']
+    },
+
+    // Stage 4: Full E2E journey - real Claude API
     {
       name: 'e2e',
       testMatch: /e2e\/.*\.spec\.ts/,

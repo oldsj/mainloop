@@ -183,7 +183,9 @@ jobs:
       - name: Run Playwright tests
         run: |
           cd frontend
-          PLAYWRIGHT_BASE_URL=http://localhost:5173 API_URL=http://localhost:8081 pnpm exec playwright test
+          # Skip planning tests in CI - they hit real Claude API and are flaky
+          PLAYWRIGHT_BASE_URL=http://localhost:5173 API_URL=http://localhost:8081 \
+            pnpm exec playwright test --project=fast --project=mobile --project=e2e
         env:
           CI: true
 

@@ -34,6 +34,10 @@ lint:
         - backend/src/mainloop/db/postgres.py
         - backend/src/mainloop/services/github_pr.py
         - claude-agent/server.py
+    # B101: Asserts are expected in test files
+    - linters: [bandit]
+      paths:
+        - backend/tests/**
     # DL3008: Pinning apt versions causes build failures when versions are removed from repos
     - linters: [hadolint]
       paths:

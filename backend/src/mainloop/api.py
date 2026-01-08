@@ -249,12 +249,19 @@ async def chat(
     main_thread_id = get_or_start_main_thread(user_id)
 
     # Get or create conversation
+    is_new_conversation = False
     if request.conversation_id:
         conversation = await db.get_conversation(request.conversation_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        conversation = await db.create_conversation(user_id)
+        # Create new conversation with first message atomically
+        # This prevents FK violations from race conditions
+        conversation, _user_msg = await db.create_conversation_with_message(
+            user_id=user_id,
+            message_content=request.message,
+        )
+        is_new_conversation = True
 
     # Load context: summary + recent messages after last summarized point
     recent_messages = await db.get_messages_after(
@@ -263,13 +270,14 @@ async def chat(
         limit=20,
     )
 
-    # Save user message and increment count
-    await db.create_message(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message,
-    )
-    await db.increment_message_count(conversation.id)
+    # Save user message and increment count (only for existing conversations)
+    if not is_new_conversation:
+        await db.create_message(
+            conversation_id=conversation.id,
+            role="user",
+            content=request.message,
+        )
+        await db.increment_message_count(conversation.id)
 
     # Get or create main thread record
     main_thread = await db.get_main_thread_by_user(user_id)
@@ -1270,7 +1278,7 @@ async def reset_test_data():
             """
             TRUNCATE TABLE
                 queue_items, messages, worker_tasks, projects,
-                conversations, main_threads
+                conversations, main_threads, planning_sessions
             CASCADE
         """
         )
@@ -1286,6 +1294,149 @@ async def reset_test_data():
         mock_state.reset()
 
     return {"status": "reset"}
+
+
+class SeedRepoRequest(BaseModel):
+    """Request to seed a fixture repo for testing."""
+
+    owner: str = "test"
+    name: str = "fixture-repo"
+    files: dict[str, str] | None = None  # filename -> content
+
+
+@app.post("/internal/test/seed-repo")
+async def seed_repo_for_testing(request: SeedRepoRequest):
+    """Create a fixture git repo in the cache for E2E testing.
+
+    This creates a real git repo with the specified files, allowing
+    planning tests to work without network access to GitHub.
+
+    WARNING: Only available in test environments. Do not use in production.
+    """
+    if not settings.is_test_env:
+        raise HTTPException(
+            status_code=403, detail="Only available in test environment"
+        )
+
+    import subprocess  # nosec B404 - test-only endpoint
+
+    from mainloop.services.repo_cache import get_repo_cache
+
+    repo_cache = get_repo_cache()
+    repo_path = repo_cache.cache_path / request.owner / request.name
+
+    # Clean up existing repo if present
+    if repo_path.exists():
+        import shutil
+
+        shutil.rmtree(repo_path)
+
+    # Create repo directory
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    # Default test files if none provided
+    files = request.files or {
+        "README.md": "# Test Fixture Repo\n\nThis is a test repository for E2E testing.\n",
+        "src/main.py": '''"""Main application module."""
+
+
+def hello(name: str = "World") -> str:
+    """Return a greeting message."""
+    return f"Hello, {name}!"
+
+
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+
+
+if __name__ == "__main__":
+    print(hello())
+''',
+        "src/utils.py": '''"""Utility functions."""
+
+
+def format_name(first: str, last: str) -> str:
+    """Format a full name."""
+    return f"{first} {last}"
+
+
+def validate_email(email: str) -> bool:
+    """Basic email validation."""
+    return "@" in email and "." in email
+''',
+        "tests/test_main.py": '''"""Tests for main module."""
+
+from src.main import hello, add
+
+
+def test_hello():
+    assert hello() == "Hello, World!"
+    assert hello("Test") == "Hello, Test!"
+
+
+def test_add():
+    assert add(1, 2) == 3
+    assert add(-1, 1) == 0
+''',
+        "pyproject.toml": """[project]
+name = "fixture-repo"
+version = "0.1.0"
+description = "Test fixture repository"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+""",
+    }
+
+    # Write files
+    for filepath, content in files.items():
+        file_path = repo_path / filepath
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
+
+    # Initialize git repo (nosec: test-only endpoint with fixed commands)
+    subprocess.run(
+        ["git", "init"], cwd=repo_path, capture_output=True, check=True
+    )  # nosec B603 B607
+    subprocess.run(  # nosec B603 B607
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(  # nosec B603 B607
+        ["git", "config", "user.name", "Test User"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "."], cwd=repo_path, capture_output=True, check=True
+    )  # nosec B603 B607
+    subprocess.run(  # nosec B603 B607
+        ["git", "commit", "-m", "Initial commit"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    # Add a dummy remote so pull operations don't fail
+    # (the repo cache tries to pull on existing repos)
+    dummy_remote = f"https://github.com/{request.owner}/{request.name}.git"
+    subprocess.run(  # nosec B603 B607
+        ["git", "remote", "add", "origin", dummy_remote],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+
+    return {
+        "status": "created",
+        "repo_url": f"https://github.com/{request.owner}/{request.name}",
+        "path": str(repo_path),
+        "files": list(files.keys()),
+    }
 
 
 # ============= Run =============

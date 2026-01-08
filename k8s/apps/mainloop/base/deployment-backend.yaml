@@ -64,6 +64,9 @@ spec:
             limits:
               memory: 2Gi
               cpu: 1000m
+          volumeMounts:
+            - name: repo-cache
+              mountPath: /repos
           livenessProbe:
             httpGet:
               path: /health
@@ -80,3 +83,7 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+      volumes:
+        - name: repo-cache
+          persistentVolumeClaim:
+            claimName: repo-cache

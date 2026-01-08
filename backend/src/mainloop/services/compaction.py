@@ -161,3 +161,95 @@ def trigger_compaction(conversation_id: str, message_count: int) -> None:
     # Schedule compaction as a background task
     asyncio.create_task(compact_conversation(conversation_id))
     logger.debug(f"Scheduled compaction for conversation {conversation_id}")
+
+
+async def compress_planning_session(
+    conversation_id: str,
+    planning_message_ids: list[str],
+    plan_text: str,
+) -> str:
+    """Compress planning session messages into a summary.
+
+    After a planning session completes (approved or cancelled), we compress
+    the verbose planning dialogue into a concise summary to avoid polluting
+    the main conversation context.
+
+    Args:
+        conversation_id: Conversation ID
+        planning_message_ids: IDs of messages from the planning session
+        plan_text: The final approved plan (if any)
+
+    Returns:
+        Compressed summary of the planning session
+
+    """
+    if not planning_message_ids:
+        return f"[Planning completed with plan:\n{plan_text}]" if plan_text else ""
+
+    try:
+        # Get the planning messages
+        messages_to_compress = []
+        async with db.connection() as conn:
+            for msg_id in planning_message_ids:
+                row = await conn.fetchrow(
+                    "SELECT * FROM messages WHERE id = $1", msg_id
+                )
+                if row:
+                    messages_to_compress.append(
+                        Message(
+                            id=row["id"],
+                            conversation_id=row["conversation_id"],
+                            role=row["role"],
+                            content=row["content"],
+                            created_at=row["created_at"],
+                        )
+                    )
+
+        if not messages_to_compress:
+            return f"[Planning completed with plan:\n{plan_text}]" if plan_text else ""
+
+        # Create a planning-specific summarization prompt
+        formatted = []
+        for msg in messages_to_compress:
+            role = "User" if msg.role == "user" else "Assistant"
+            formatted.append(f"{role}: {msg.content}")
+
+        conversation_text = "\n\n".join(formatted)
+
+        prompt = f"""Summarize this planning session concisely:
+
+{conversation_text}
+
+The final plan was:
+{plan_text or "(no plan created)"}
+
+Create a brief summary (2-3 sentences) that captures:
+- What task was being planned
+- Key decisions made
+- The outcome (plan approved/cancelled)
+
+Format as: [Planning Session Summary: ...]"""
+
+        options = ClaudeAgentOptions(
+            model=settings.claude_model,
+            permission_mode="bypassPermissions",
+        )
+
+        collected_text: list[str] = []
+        async for msg in query(prompt=prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        collected_text.append(block.text)
+            elif isinstance(msg, ResultMessage):
+                if msg.is_error:
+                    logger.error(f"Planning compression error: {msg.result}")
+                    return f"[Planning completed with plan:\n{plan_text}]"
+
+        return (
+            "\n".join(collected_text) or f"[Planning completed with plan:\n{plan_text}]"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to compress planning session: {e}")
+        return f"[Planning completed with plan:\n{plan_text}]" if plan_text else ""

@@ -12,6 +12,8 @@ from models import (
     Conversation,
     MainThread,
     Message,
+    PlanningSession,
+    PlanningSessionStatus,
     Project,
     QueueItem,
     QueueItemPriority,
@@ -152,6 +154,26 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used_at DESC);
+
+-- Planning sessions (in-thread planning before WorkerTask creation)
+CREATE TABLE IF NOT EXISTS planning_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    main_thread_id TEXT NOT NULL REFERENCES main_threads(id),
+    repo_url TEXT NOT NULL,
+    task_description TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    plan_text TEXT,
+    planning_message_ids TEXT[] DEFAULT '{}',
+    claude_session_id TEXT,
+    worker_task_id TEXT REFERENCES worker_tasks(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_planning_sessions_user_id ON planning_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_planning_sessions_conversation ON planning_sessions(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_planning_sessions_status ON planning_sessions(status);
 """
 
 # Migration SQL for adding new columns to existing tables
@@ -1224,6 +1246,62 @@ class Database:
             )
         return conversation
 
+    async def create_conversation_with_message(
+        self, user_id: str, message_content: str, title: str | None = None
+    ) -> tuple[Conversation, Message]:
+        """Create a conversation and first message atomically in a transaction.
+
+        This prevents FK violations that can occur when creating them separately.
+        """
+        import uuid
+
+        conversation = Conversation(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            title=title or "New Conversation",
+            message_count=1,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        message = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="user",
+            content=message_content,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        if not self._pool:
+            return conversation, message
+
+        async with self.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO conversations (id, user_id, title, message_count, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    conversation.id,
+                    conversation.user_id,
+                    conversation.title,
+                    conversation.message_count,
+                    conversation.created_at,
+                    conversation.updated_at,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO messages (id, conversation_id, role, content, created_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    message.id,
+                    message.conversation_id,
+                    message.role,
+                    message.content,
+                    message.created_at,
+                )
+
+        return conversation, message
+
     async def get_conversation(self, conversation_id: str) -> Conversation | None:
         """Get a conversation by ID."""
         if not self._pool:
@@ -1465,6 +1543,158 @@ class Database:
             role=row["role"],  # type: ignore
             content=row["content"],
             created_at=row["created_at"],
+        )
+
+    # ============= Planning Session Operations =============
+
+    async def create_planning_session(
+        self, session: PlanningSession
+    ) -> PlanningSession:
+        """Create a new planning session."""
+        if not self._pool:
+            return session
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO planning_sessions
+                (id, user_id, conversation_id, main_thread_id, repo_url, task_description,
+                 status, plan_text, planning_message_ids, claude_session_id, worker_task_id,
+                 created_at, completed_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                """,
+                session.id,
+                session.user_id,
+                session.conversation_id,
+                session.main_thread_id,
+                session.repo_url,
+                session.task_description,
+                session.status.value,
+                session.plan_text,
+                session.planning_message_ids,
+                session.claude_session_id,
+                session.worker_task_id,
+                session.created_at,
+                session.completed_at,
+            )
+        return session
+
+    async def get_planning_session(self, session_id: str) -> PlanningSession | None:
+        """Get a planning session by ID."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM planning_sessions WHERE id = $1", session_id
+            )
+        if not row:
+            return None
+        return self._row_to_planning_session(row)
+
+    async def get_active_planning_session(
+        self, conversation_id: str
+    ) -> PlanningSession | None:
+        """Get the active planning session for a conversation."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM planning_sessions
+                WHERE conversation_id = $1 AND status = 'active'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                conversation_id,
+            )
+        if not row:
+            return None
+        return self._row_to_planning_session(row)
+
+    async def update_planning_session(
+        self,
+        session_id: str,
+        status: PlanningSessionStatus | None = None,
+        plan_text: str | None = None,
+        planning_message_ids: list[str] | None = None,
+        claude_session_id: str | None = None,
+        worker_task_id: str | None = None,
+        completed_at: datetime | None = None,
+    ):
+        """Update planning session fields."""
+        if not self._pool:
+            return
+        updates = []
+        params = []
+        param_idx = 1
+
+        if status is not None:
+            updates.append(f"status = ${param_idx}")
+            params.append(status.value)
+            param_idx += 1
+        if plan_text is not None:
+            updates.append(f"plan_text = ${param_idx}")
+            params.append(plan_text)
+            param_idx += 1
+        if planning_message_ids is not None:
+            updates.append(f"planning_message_ids = ${param_idx}")
+            params.append(planning_message_ids)
+            param_idx += 1
+        if claude_session_id is not None:
+            updates.append(f"claude_session_id = ${param_idx}")
+            params.append(claude_session_id)
+            param_idx += 1
+        if worker_task_id is not None:
+            updates.append(f"worker_task_id = ${param_idx}")
+            params.append(worker_task_id)
+            param_idx += 1
+        if completed_at is not None:
+            updates.append(f"completed_at = ${param_idx}")
+            params.append(completed_at)
+            param_idx += 1
+
+        params.append(session_id)
+
+        if updates:
+            async with self.connection() as conn:
+                await conn.execute(
+                    f"UPDATE planning_sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
+                    *params,
+                )
+
+    async def add_planning_message_id(self, session_id: str, message_id: str):
+        """Add a message ID to the planning session's message list."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                UPDATE planning_sessions
+                SET planning_message_ids = array_append(planning_message_ids, $1)
+                WHERE id = $2
+                """,
+                message_id,
+                session_id,
+            )
+
+    def _row_to_planning_session(self, row: asyncpg.Record) -> PlanningSession:
+        return PlanningSession(
+            id=row["id"],
+            user_id=row["user_id"],
+            conversation_id=row["conversation_id"],
+            main_thread_id=row["main_thread_id"],
+            repo_url=row["repo_url"],
+            task_description=row["task_description"],
+            status=PlanningSessionStatus(row["status"]),
+            plan_text=row.get("plan_text"),
+            planning_message_ids=(
+                list(row["planning_message_ids"])
+                if row.get("planning_message_ids")
+                else []
+            ),
+            claude_session_id=row.get("claude_session_id"),
+            worker_task_id=row.get("worker_task_id"),
+            created_at=row["created_at"],
+            completed_at=row.get("completed_at"),
         )
 
 
