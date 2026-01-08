@@ -65,6 +65,64 @@ Wait for new pods to show `Running` and old pods to terminate.
 - For new features, use `playwright-test-planner` to explore and generate plans
 - Use `playwright-test-generator` to create tests from plans
 
+### Test Architecture (Flakiness Prevention)
+
+Tests are organized into projects by execution mode:
+
+| Project    | Claude API  | Execution           | Purpose                        |
+| ---------- | ----------- | ------------------- | ------------------------------ |
+| `fast`     | No (seeded) | Parallel            | UI components, seeded states   |
+| `mobile`   | No (seeded) | Parallel            | Mobile viewport tests          |
+| `e2e`      | Yes (real)  | Serial, shared page | Full user journey              |
+| `planning` | Yes (real)  | Serial, shared page | Planning workflow (local only) |
+
+**Key learnings from flaky test debugging:**
+
+1. **Real Claude API tests must use shared page pattern:**
+
+   ```typescript
+   test.describe('Journey', () => {
+     let sharedPage: Page;
+     test.beforeAll(async ({ browser }) => {
+       sharedPage = await browser.newContext().then((c) => c.newPage());
+       // Set up user isolation once
+     });
+     test('step 1', async () => {
+       /* uses sharedPage */
+     });
+     test('step 2', async () => {
+       /* builds on step 1 */
+     });
+   });
+   ```
+
+2. **Never create multiple test files for real Claude API** - Each file creates new page/user, causing:
+   - More API calls (slower, more flaky)
+   - No shared context between tests
+   - Race conditions when files run in parallel
+
+3. **Always verify submission before waiting for response:**
+
+   ```typescript
+   await input.fill('message');
+   await execButton.click();
+   await expect(page.getByText('message')).toBeVisible(); // Confirms submission
+   await expect(response).toBeVisible({ timeout: 60000 }); // Then wait for AI
+   ```
+
+4. **Use button click, not Enter key** - `input.press('Enter')` is flaky; use `button.click()`
+
+5. **Wait for input to be enabled between messages:**
+
+   ```typescript
+   await expect(input).toBeEnabled({ timeout: 10000 });
+   ```
+
+6. **CI skips planning tests** - Too flaky with real Claude API. Run locally:
+   ```bash
+   pnpm exec playwright test --project=planning
+   ```
+
 ## Key Patterns
 
 - **Pydantic models** in `models/` shared between frontend types and backend
