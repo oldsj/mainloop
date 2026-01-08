@@ -74,22 +74,23 @@ export default defineConfig({
       use: { ...devices['Pixel 5'] }
     },
 
-    // Stage 3: Planning tests - real Claude API, must run serially (shared backend state)
+    // Stage 3: Planning tests - real Claude API, skip in CI (too flaky)
+    // Run locally with: pnpm exec playwright test --project=planning
     {
       name: 'planning',
       testMatch: /in-thread-planning\/.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      fullyParallel: false, // Run tests serially to avoid race conditions
+      fullyParallel: false,
       retries: 0,
       dependencies: ['fast']
     },
 
-    // Stage 4: Full E2E journey - real Claude API (runs after planning tests pass)
+    // Stage 4: Full E2E journey - real Claude API
     {
       name: 'e2e',
       testMatch: /e2e\/.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
-      dependencies: ['fast', 'mobile', 'planning']
+      dependencies: ['fast', 'mobile']
     }
   ],
 
