@@ -22,11 +22,18 @@ test.describe('Planning with Fixture Repo', () => {
 
     // Ask Claude to plan a feature for this repo
     const input = page.getByPlaceholder('Enter command...').first();
+    const execButton = page.getByRole('button', { name: 'EXEC' });
+
+    await expect(input).toBeVisible();
+    await expect(input).toBeEnabled();
     await input.fill(
       `I want to add a new function to ${repo_url} - please start planning. ` +
         `The function should calculate the factorial of a number.`
     );
-    await input.press('Enter');
+    await execButton.click();
+
+    // Wait for user message to appear (confirms submission)
+    await expect(page.getByText('add a new function').first()).toBeVisible({ timeout: 10000 });
 
     // Wait for Claude's response (may take a while as it explores)
     const response = page.locator('.message.bg-term-bg-secondary').last();
@@ -52,18 +59,32 @@ test.describe('Planning with Fixture Repo', () => {
     await seedRepo(page);
 
     const input = page.getByPlaceholder('Enter command...').first();
-    // First message: start planning to create the session
-    await input.fill(`Start planning on ${fixtureRepoUrl} - I want to explore the codebase.`);
-    await input.press('Enter');
+    const execButton = page.getByRole('button', { name: 'EXEC' });
 
-    // Wait for first response (session created)
+    // First message: start planning to create the session
+    await expect(input).toBeVisible();
+    await expect(input).toBeEnabled();
+    await input.fill(`Start planning on ${fixtureRepoUrl} - I want to explore the codebase.`);
+    await execButton.click();
+
+    // Wait for user message and first response (session created)
+    await expect(page.getByText('Start planning on').first()).toBeVisible({ timeout: 10000 });
     await expect(page.locator('.message.bg-term-bg-secondary').last()).toBeVisible({
       timeout: 60000
     });
 
+    // Wait for input to be ready again before sending second message
+    await expect(input).toBeEnabled({ timeout: 10000 });
+
     // Second message: ask to explore - NOW Claude has file tools with correct cwd
     await input.fill('Please read the main source files and tell me about the functions.');
-    await input.press('Enter');
+    await expect(input).toHaveValue(/read the main source files/);
+    await execButton.click();
+
+    // Wait for second user message to confirm submission
+    await expect(page.getByText('read the main source files').first()).toBeVisible({
+      timeout: 10000
+    });
 
     // Wait for second response
     const messages = page.locator('.message.bg-term-bg-secondary');
@@ -96,24 +117,37 @@ test.describe('Planning with Fixture Repo', () => {
     await seedRepo(page);
 
     const input = page.getByPlaceholder('Enter command...').first();
+    const execButton = page.getByRole('button', { name: 'EXEC' });
 
     // Start planning
+    await expect(input).toBeVisible();
+    await expect(input).toBeEnabled();
     await input.fill(
       `Start planning to add a multiply function to ${fixtureRepoUrl}. ` +
         `Keep it simple - just add a multiply(a, b) function to main.py.`
     );
-    await input.press('Enter');
+    await execButton.click();
 
-    // Wait for planning response
+    // Wait for user message and planning response
+    await expect(page.getByText('Start planning to add a multiply').first()).toBeVisible({
+      timeout: 10000
+    });
     await expect(page.locator('.message.bg-term-bg-secondary').last()).toBeVisible({
       timeout: 120000
     });
+
+    // Wait for input to be ready
+    await expect(input).toBeEnabled({ timeout: 10000 });
 
     // Ask Claude to approve/proceed
     await input.fill(
       'That looks good. Please approve this plan and create a task to implement it.'
     );
-    await input.press('Enter');
+    await expect(input).toHaveValue(/approve this plan/);
+    await execButton.click();
+
+    // Wait for second user message to confirm submission
+    await expect(page.getByText('approve this plan').first()).toBeVisible({ timeout: 10000 });
 
     // Wait for approval response
     const messages = page.locator('.message.bg-term-bg-secondary');
