@@ -55,15 +55,15 @@ clean: ## Clean build artifacts
 	rm -rf backend/.venv models/.venv
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
-lint: ## Lint staged files
-	trunk check
+lint: ## Lint files changed since main
+	trunk check --upstream origin/main
 
 lint-all: ## Lint all files
 	trunk check -a
 
-fmt: ## Format and fix staged files
-	trunk fmt
-	trunk check -y
+fmt: ## Format and fix files changed since main
+	trunk fmt --upstream origin/main
+	trunk check --upstream origin/main -y
 
 fmt-all: ## Format and fix all files
 	trunk fmt -a
