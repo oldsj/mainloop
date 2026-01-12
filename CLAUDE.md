@@ -21,11 +21,16 @@ mainloop/
 
 ## Development
 
+**Prerequisites:** `brew install devspace kind`
+
 ```bash
-make dev          # Start all services (frontend :3000, backend :8000)
+make dev          # Start DevSpace with hot reload (frontend :5173, backend :8081)
+make dev-stop     # Stop DevSpace
+make dev-reset    # Reset database
 make fmt          # Format before committing
-make lint-all     # Check for issues
 ```
+
+DevSpace syncs files directly to containers - code changes appear in <2s without rebuilding images.
 
 **Backend:** `uv add <package>` for dependencies (never edit pyproject.toml manually)
 
@@ -34,36 +39,74 @@ make lint-all     # Check for issues
 ## Testing
 
 ```bash
-make test         # Start services + Playwright UI (keep running)
-make test-run     # Run tests headless (separate terminal)
+make test         # Deploy to Kind + open Playwright UI
+make test-run     # Run tests headless
 make test-reset   # Clear DB + namespaces between runs
 ```
-
-**Workflow:**
-
-1. Run `make test` once - starts Kind cluster (backend :8081, frontend :5173)
-2. Wait for pods to be ready before running tests
-3. Use `make test-run` for quick iterations
-
-**Before running tests**, verify deployments are ready:
-
-```bash
-kubectl get pods -n mainloop --context kind-mainloop-test -w
-```
-
-Wait for new pods to show `Running` and old pods to terminate.
-
-**Common issues:**
-
-- Port already in use → kill orphan processes or restart `make test`
-- Tests fail on old code → wait for deployment rollout to complete
-- Flaky tests → use healer agent to fix selectors/timing
 
 **Playwright agents for test maintenance:**
 
 - Don't manually tweak tests - use `playwright-test-healer` to auto-fix failures
 - For new features, use `playwright-test-planner` to explore and generate plans
 - Use `playwright-test-generator` to create tests from plans
+
+### Test Architecture (Flakiness Prevention)
+
+Tests are organized into projects by execution mode:
+
+| Project    | Claude API  | Execution           | Purpose                        |
+| ---------- | ----------- | ------------------- | ------------------------------ |
+| `fast`     | No (seeded) | Parallel            | UI components, seeded states   |
+| `mobile`   | No (seeded) | Parallel            | Mobile viewport tests          |
+| `e2e`      | Yes (real)  | Serial, shared page | Full user journey              |
+| `planning` | Yes (real)  | Serial, shared page | Planning workflow (local only) |
+
+**Key learnings from flaky test debugging:**
+
+1. **Real Claude API tests must use shared page pattern:**
+
+   ```typescript
+   test.describe('Journey', () => {
+     let sharedPage: Page;
+     test.beforeAll(async ({ browser }) => {
+       sharedPage = await browser.newContext().then((c) => c.newPage());
+       // Set up user isolation once
+     });
+     test('step 1', async () => {
+       /* uses sharedPage */
+     });
+     test('step 2', async () => {
+       /* builds on step 1 */
+     });
+   });
+   ```
+
+2. **Never create multiple test files for real Claude API** - Each file creates new page/user, causing:
+   - More API calls (slower, more flaky)
+   - No shared context between tests
+   - Race conditions when files run in parallel
+
+3. **Always verify submission before waiting for response:**
+
+   ```typescript
+   await input.fill('message');
+   await execButton.click();
+   await expect(page.getByText('message')).toBeVisible(); // Confirms submission
+   await expect(response).toBeVisible({ timeout: 60000 }); // Then wait for AI
+   ```
+
+4. **Use button click, not Enter key** - `input.press('Enter')` is flaky; use `button.click()`
+
+5. **Wait for input to be enabled between messages:**
+
+   ```typescript
+   await expect(input).toBeEnabled({ timeout: 10000 });
+   ```
+
+6. **CI skips planning tests** - Too flaky with real Claude API. Run locally:
+   ```bash
+   pnpm exec playwright test --project=planning
+   ```
 
 ## Key Patterns
 

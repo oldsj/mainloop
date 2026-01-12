@@ -1,0 +1,33 @@
+# Patch frontend deployment for dev mode
+# DevSpace handles the command override and env vars via dev section
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      # Remove GHCR image pull secrets (using local images)
+      imagePullSecrets: []
+      containers:
+        - name: frontend
+          # Use locally loaded image, never try to pull
+          imagePullPolicy: Never
+          # More resources for faster Vite startup
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # Vite dev server takes ~60s to start, increase probe delays
+          livenessProbe:
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 6

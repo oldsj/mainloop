@@ -26,8 +26,52 @@ COPY backend/src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
-# Runtime stage
-FROM python:3.13-slim
+# Development stage - includes uv for live dependency updates
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS dev
+
+# Install Node.js and Claude CLI (required by claude-agent-sdk)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code@latest \
+    && npm cache clean --force \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm
+
+# Create non-root user for Claude and workspace directory
+RUN useradd -m -s /bin/bash claude \
+    && mkdir -p /home/claude/.claude /workspace \
+    && chown -R claude:claude /home/claude /workspace
+
+WORKDIR /app
+
+# Copy dependency files (owned by claude for live updates)
+COPY --from=builder --chown=claude:claude /app/.venv /app/.venv
+COPY --chown=claude:claude backend/pyproject.toml backend/uv.lock backend/README.md ./
+
+# Copy source code (owned by claude)
+COPY --chown=claude:claude backend/src ./src
+
+# Copy shared models package (owned by claude)
+COPY --chown=claude:claude models ../models
+
+# Copy entrypoint script
+COPY --chown=claude:claude backend/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Set up PATH for venv and uv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Switch to non-root user
+USER claude
+
+EXPOSE 8000
+
+CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+
+# Runtime stage (production)
+FROM python:3.13-slim AS prod
 
 # Install Node.js and Claude CLI (required by claude-agent-sdk)
 RUN apt-get update \
