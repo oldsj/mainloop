@@ -163,6 +163,9 @@ async def event_stream(
                     event=EventType.HEARTBEAT,
                     data={"timestamp": datetime.utcnow().isoformat()},
                 ).encode()
+    except asyncio.CancelledError:
+        # Graceful shutdown - don't propagate as error
+        pass
     finally:
         await event_bus.unsubscribe_user(user_id, queue)
 
@@ -234,6 +237,9 @@ async def task_log_stream(
                 break
 
             await asyncio.sleep(poll_interval)
+    except asyncio.CancelledError:
+        # Graceful shutdown - don't propagate as error
+        pass
     finally:
         await event_bus.unsubscribe_task(task_id, queue)
 

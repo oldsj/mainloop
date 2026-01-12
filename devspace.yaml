@@ -83,14 +83,18 @@ dev:
         onUpload:
           execRemote:
             command: sh
-            args: ['-c', 'cd /app && uv sync']
+            args:
+              - -c
+              - cd /app && uv sync
       - path: ./backend/uv.lock:/app/uv.lock
         file: true
         disableDownload: true
         onUpload:
           execRemote:
             command: sh
-            args: ['-c', 'cd /app && uv sync']
+            args:
+              - -c
+              - cd /app && uv sync
     # Override command for dev mode with hot reload
     command:
       - uvicorn
@@ -104,6 +108,8 @@ dev:
       - /app/src
       - --reload-dir
       - /models
+      - --timeout-graceful-shutdown
+      - '3'
     logs: {}
 
   frontend:
@@ -130,14 +136,18 @@ dev:
         onUpload:
           execRemote:
             command: sh
-            args: ['-c', 'cd /app && pnpm install --frozen-lockfile || pnpm install']
+            args:
+              - -c
+              - cd /app && pnpm install --frozen-lockfile || pnpm install
       - path: ./pnpm-lock.yaml:/app/pnpm-lock.yaml
         file: true
         disableDownload: true
         onUpload:
           execRemote:
             command: sh
-            args: ['-c', 'cd /app && pnpm install --frozen-lockfile || pnpm install']
+            args:
+              - -c
+              - cd /app && pnpm install --frozen-lockfile || pnpm install
     command:
       - pnpm
       - dev
@@ -188,9 +198,9 @@ hooks:
       - after:build
     command: |
       echo "Loading images into Kind..."
-      kind load docker-image mainloop-backend:dev --name mainloop-test 2>/dev/null || true
-      kind load docker-image mainloop-frontend:dev --name mainloop-test 2>/dev/null || true
-      kind load docker-image mainloop-agent-controller:dev --name mainloop-test 2>/dev/null || true
+      kind load docker-image mainloop-backend:dev --name mainloop-test
+      kind load docker-image mainloop-frontend:dev --name mainloop-test
+      kind load docker-image mainloop-agent-controller:dev --name mainloop-test
 
 # Commands
 commands:

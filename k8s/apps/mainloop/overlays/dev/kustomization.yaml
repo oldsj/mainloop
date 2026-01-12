@@ -29,14 +29,14 @@ patches:
       kind: Deployment
       name: mainloop-agent-controller
 
-# Override images to use local dev-tagged images
+# Override images to use local dev-tagged images (loaded into Kind, no registry)
 images:
-  - name: ghcr.io/yourusername/mainloop-backend
+  - name: ghcr.io/oldsj/mainloop-backend
     newName: mainloop-backend
     newTag: dev
-  - name: ghcr.io/yourusername/mainloop-frontend
+  - name: ghcr.io/oldsj/mainloop-frontend
     newName: mainloop-frontend
     newTag: dev
-  - name: ghcr.io/yourusername/mainloop-agent-controller
+  - name: ghcr.io/oldsj/mainloop-agent-controller
     newName: mainloop-agent-controller
     newTag: dev
