@@ -1,4 +1,4 @@
-.PHONY: help dev build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci test-real-claude
+.PHONY: help dev dev-reset db-clear build deploy deploy-loop deploy-loop-all deploy-frontend deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests build-backend push-backend build-all-parallel push-all-parallel install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s debug-tasks debug-task debug-retry debug-logs debug-db kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test-k8s test-k8s-components test-k8s-job test-e2e test-e2e-ui test-e2e-debug test-e2e-setup test-e2e-dev test-e2e-report test test-run test-ci test-real-claude
 
 # Load .env file if it exists
 -include .env
@@ -19,6 +19,13 @@ help: ## Show this help message
 # Development commands
 dev: ## Start all services with hot reload
 	docker compose up --build --watch
+
+dev-reset: ## Reset dev database (stops services, removes volumes)
+	docker compose down -v
+	@echo "Dev database reset. Run 'make dev' to restart."
+
+db-clear: ## Clear database while services running
+	@docker exec mainloop-postgres psql -U mainloop -d mainloop -c "TRUNCATE TABLE queue_items, messages, worker_tasks, projects, conversations, main_threads, planning_sessions CASCADE" && echo "Database cleared"
 
 install: ## Install all dependencies
 	pnpm install

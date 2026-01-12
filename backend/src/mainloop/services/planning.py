@@ -32,6 +32,144 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+async def create_pending_task(
+    user_id: str,
+    main_thread_id: str,
+    conversation_id: str,
+    description: str,
+    repo_url: str,
+) -> WorkerTask:
+    """Create a task immediately with PENDING status.
+
+    This is called before any Claude call to ensure the task appears
+    in the UI immediately with a short ACK response.
+
+    Args:
+        user_id: User ID
+        main_thread_id: Main thread ID
+        conversation_id: Conversation ID
+        description: Task description
+        repo_url: GitHub repository URL
+
+    Returns:
+        WorkerTask with status=PENDING
+
+    """
+    # Create project if needed
+    project = await db.get_or_create_project_from_url(user_id, repo_url)
+
+    # Extract keywords for task routing
+    keywords = extract_keywords(description)
+
+    # Create WorkerTask with PENDING status (not PLANNING yet)
+    task = WorkerTask(
+        main_thread_id=main_thread_id,
+        user_id=user_id,
+        task_type="feature",
+        description=description,
+        prompt=description,
+        repo_url=repo_url,
+        project_id=project.id,
+        status=TaskStatus.PENDING,  # Will transition to PLANNING when workflow starts
+        conversation_id=conversation_id,
+        keywords=keywords,
+    )
+    task = await db.create_worker_task(task)
+    logger.info(f"Created pending task {task.id}")
+
+    # Record this repo as recently used
+    await db.add_recent_repo(main_thread_id, repo_url)
+
+    return task
+
+
+async def start_planning_for_task(
+    task: WorkerTask,
+) -> tuple[PlanningSession, str]:
+    """Start planning for an existing task (created by create_pending_task).
+
+    This is called by the planning workflow to begin the actual planning process.
+    The task already exists with PENDING status.
+
+    Args:
+        task: Existing WorkerTask with status=PENDING
+
+    Returns:
+        Tuple of (PlanningSession, initial_message)
+
+    """
+    # Update task status to PLANNING
+    await db.update_worker_task(task.id, status=TaskStatus.PLANNING)
+
+    # Validate repo URL
+    if not task.repo_url or not task.repo_url.startswith("https://github.com/"):
+        raise ValueError(f"Invalid GitHub repo URL: {task.repo_url}")
+
+    # Create planning session linked to the task
+    session = PlanningSession(
+        user_id=task.user_id,
+        conversation_id=task.conversation_id,
+        main_thread_id=task.main_thread_id,
+        repo_url=task.repo_url,
+        task_description=task.description,
+        worker_task_id=task.id,
+    )
+    session = await db.create_planning_session(session)
+
+    # Cache the repo
+    repo_cache = get_repo_cache()
+    try:
+        repo_path = await repo_cache.ensure_fresh(task.repo_url)
+        logger.info(f"Repo cached at {repo_path} for planning session {session.id}")
+    except Exception as e:
+        logger.error(f"Failed to cache repo {task.repo_url}: {e}")
+        await db.update_planning_session(
+            session.id,
+            status=PlanningSessionStatus.CANCELLED,
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.update_worker_task(task.id, status=TaskStatus.FAILED, error=str(e))
+        raise ValueError(f"Failed to clone repository: {e}") from e
+
+    # Get initial directory listing for context
+    dir_listing = ""
+    try:
+        import os
+
+        files = []
+        for root, dirs, filenames in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in filenames:
+                if not f.startswith("."):
+                    rel_path = os.path.relpath(os.path.join(root, f), repo_path)
+                    files.append(rel_path)
+            if root.count(os.sep) - str(repo_path).count(os.sep) >= 3:
+                dirs.clear()
+
+        if files:
+            files.sort()
+            dir_listing = "\n".join(files[:50])
+            if len(files) > 50:
+                dir_listing += f"\n... and {len(files) - 50} more files"
+    except Exception as e:
+        logger.warning(f"Failed to get directory listing: {e}")
+
+    initial_message = (
+        f"Starting planning for: **{task.description}**\n\n"
+        f"Repository: {task.repo_url}\n\n"
+    )
+
+    if dir_listing:
+        initial_message += f"## Repository Structure\n```\n{dir_listing}\n```\n\n"
+
+    initial_message += (
+        "You now have read-only access to explore this codebase using Read, Glob, Grep, and LS tools. "
+        "Start by examining relevant files to understand the architecture, then create a plan."
+    )
+
+    return session, initial_message
+
+
 def build_planning_system_prompt(repo_url: str, task_description: str) -> str:
     """Build the system prompt for planning mode."""
     return f"""You are helping plan an implementation for a coding task.
@@ -77,7 +215,7 @@ async def start_planning_session(
     conversation_id: str,
     repo_url: str,
     task_description: str,
-) -> tuple[PlanningSession, str]:
+) -> tuple[PlanningSession, str, WorkerTask]:
     """Start a new planning session.
 
     Args:
@@ -88,20 +226,43 @@ async def start_planning_session(
         task_description: What the user wants to accomplish
 
     Returns:
-        Tuple of (PlanningSession, initial_message)
+        Tuple of (PlanningSession, initial_message, WorkerTask)
 
     """
     # Validate repo URL
     if not repo_url.startswith("https://github.com/"):
         raise ValueError(f"Invalid GitHub repo URL: {repo_url}")
 
-    # Create planning session
+    # Create project if needed
+    project = await db.get_or_create_project_from_url(user_id, repo_url)
+
+    # Extract keywords for task routing
+    keywords = extract_keywords(task_description)
+
+    # Create WorkerTask immediately so thread appears in UI
+    task = WorkerTask(
+        main_thread_id=main_thread_id,
+        user_id=user_id,
+        task_type="feature",
+        description=task_description,
+        prompt=task_description,
+        repo_url=repo_url,
+        project_id=project.id,
+        status=TaskStatus.PLANNING,  # Will show as "active" thread
+        conversation_id=conversation_id,
+        keywords=keywords,
+    )
+    task = await db.create_worker_task(task)
+    logger.info(f"Created WorkerTask {task.id} for planning session")
+
+    # Create planning session linked to the task
     session = PlanningSession(
         user_id=user_id,
         conversation_id=conversation_id,
         main_thread_id=main_thread_id,
         repo_url=repo_url,
         task_description=task_description,
+        worker_task_id=task.id,
     )
     session = await db.create_planning_session(session)
 
@@ -112,12 +273,13 @@ async def start_planning_session(
         logger.info(f"Repo cached at {repo_path} for planning session {session.id}")
     except Exception as e:
         logger.error(f"Failed to cache repo {repo_url}: {e}")
-        # Update session to cancelled
+        # Update session to cancelled and task to failed
         await db.update_planning_session(
             session.id,
             status=PlanningSessionStatus.CANCELLED,
             completed_at=datetime.now(timezone.utc),
         )
+        await db.update_worker_task(task.id, status=TaskStatus.FAILED, error=str(e))
         raise ValueError(f"Failed to clone repository: {e}") from e
 
     # Record this repo as recently used
@@ -162,7 +324,7 @@ async def start_planning_session(
         "Start by examining relevant files to understand the architecture, then create a plan."
     )
 
-    return session, initial_message
+    return session, initial_message, task
 
 
 async def run_planning_query(
@@ -243,84 +405,57 @@ async def approve_plan(
     session: PlanningSession,
     plan_text: str,
 ) -> tuple[WorkerTask, str]:
-    """Approve a plan and create GitHub issue + WorkerTask.
+    """Approve a plan and create GitHub issue, update existing WorkerTask.
 
     Args:
-        session: Active planning session
+        session: Active planning session (must have worker_task_id)
         plan_text: The approved plan text
 
     Returns:
         Tuple of (WorkerTask, result_message)
 
     """
-    # Parse owner/repo from URL
-    repo_url_clean = session.repo_url.replace("https://github.com/", "").replace(
-        ".git", ""
-    )
-    parts = repo_url_clean.split("/")
-    if len(parts) < 2:
-        raise ValueError(f"Invalid GitHub URL: {session.repo_url}")
-    owner, repo = parts[0], parts[1]
+    if not session.worker_task_id:
+        raise ValueError("Planning session has no associated worker task")
 
-    # Create GitHub issue with the plan
-    issue_title = f"[Mainloop] {session.task_description[:80]}"
-    issue_body = f"""## Task
-{session.task_description}
+    # Skip GitHub issue creation in dev/test - just proceed with the plan
+    from mainloop.config import settings
 
-## Implementation Plan
-{plan_text}
+    issue_url = None
+    issue_number = None
 
----
-*Created by [Mainloop](https://github.com/oldsj/mainloop)*
-"""
+    if not settings.is_test_env and settings.github_token:
+        # Create GitHub issue with the plan (production only)
+        try:
+            issue_result = await create_github_issue(
+                repo_url=session.repo_url,
+                title=f"[Mainloop] {session.task_description[:80]}",
+                body=f"## Task\n{session.task_description}\n\n## Plan\n{plan_text}",
+                labels=["mainloop-plan"],
+            )
+            if issue_result:
+                issue_url = issue_result.get("html_url", "")
+                issue_number = issue_result.get("number")
+                logger.info(f"Created GitHub issue: {issue_url}")
+        except Exception as e:
+            logger.warning(f"Skipping GitHub issue creation: {e}")
 
-    try:
-        issue_result = await create_github_issue(
-            owner=owner,
-            repo=repo,
-            title=issue_title,
-            body=issue_body,
-            labels=["mainloop-plan"],
-        )
-        issue_url = issue_result.get("html_url", "")
-        issue_number = issue_result.get("number")
-        logger.info(f"Created GitHub issue: {issue_url}")
-    except Exception as e:
-        logger.error(f"Failed to create GitHub issue: {e}")
-        raise ValueError(f"Failed to create GitHub issue: {e}") from e
-
-    # Create project if needed
-    project = await db.get_or_create_project_from_url(session.user_id, session.repo_url)
-
-    # Extract keywords for task routing
-    keywords = extract_keywords(session.task_description)
-
-    # Create WorkerTask with skip_plan=True (already have plan)
-    task = WorkerTask(
-        main_thread_id=session.main_thread_id,
-        user_id=session.user_id,
-        task_type="feature",
-        description=session.task_description,
-        prompt=session.task_description,
-        repo_url=session.repo_url,
-        project_id=project.id,
-        status=TaskStatus.READY_TO_IMPLEMENT,  # Skip planning phase
-        conversation_id=session.conversation_id,
-        keywords=keywords,
+    # Update existing WorkerTask with plan details and advance to ready_to_implement
+    task = await db.update_worker_task(
+        session.worker_task_id,
+        status=TaskStatus.READY_TO_IMPLEMENT,
         skip_plan=True,
         plan_text=plan_text,
         issue_url=issue_url,
         issue_number=issue_number,
     )
-    task = await db.create_worker_task(task)
-    logger.info(f"Created WorkerTask {task.id} from planning session {session.id}")
+    logger.info(f"Updated WorkerTask {task.id} to ready_to_implement")
 
     # Update planning session
     await db.update_planning_session(
         session.id,
         status=PlanningSessionStatus.APPROVED,
         plan_text=plan_text,
-        worker_task_id=task.id,
         completed_at=datetime.now(timezone.utc),
     )
 
@@ -340,6 +475,115 @@ async def approve_plan(
     return task, result_message
 
 
+async def run_planning_query_streaming(
+    session: PlanningSession,
+    user_message: str,
+    user_id: str,
+    task_id: str,
+) -> str:
+    """Run a planning query with streaming progress via SSE.
+
+    This is like run_planning_query but sends progress updates to the frontend
+    via SSE as Claude explores the codebase.
+
+    Args:
+        session: Active planning session
+        user_message: User's message/question
+        user_id: User ID for SSE notifications
+        task_id: Task ID for updates
+
+    Returns:
+        Claude's response text
+
+    """
+    from mainloop.sse import notify_task_updated
+
+    # Get repo path
+    repo_cache = get_repo_cache()
+    repo_path = repo_cache.get_repo_path(session.repo_url)
+
+    if not repo_path.exists():
+        # Re-cache if somehow missing
+        repo_path = await repo_cache.ensure_fresh(session.repo_url)
+
+    # Build system prompt
+    system_prompt = build_planning_system_prompt(
+        session.repo_url, session.task_description
+    )
+
+    # Build Claude options with codebase tools
+    options = ClaudeAgentOptions(
+        model="sonnet",
+        permission_mode="plan",  # Read-only filesystem access
+        cwd=str(repo_path),
+        system_prompt=system_prompt,
+        allowed_tools=["Read", "Glob", "Grep", "LS", "WebSearch"],
+        resume=session.claude_session_id,
+    )
+
+    logger.info(
+        f"Running streaming planning query for session {session.id} with cwd={repo_path}"
+    )
+
+    collected_text: list[str] = []
+    new_session_id: str | None = None
+    last_update_len = 0
+
+    try:
+        async for msg in query(prompt=user_message, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        collected_text.append(block.text)
+
+                        # Send SSE update every ~500 chars of new content
+                        current_len = sum(len(t) for t in collected_text)
+                        if current_len - last_update_len > 500:
+                            last_update_len = current_len
+                            # Update task with partial exploration text
+                            await db.update_worker_task(
+                                task_id,
+                                plan_text="\n".join(collected_text),
+                            )
+                            await notify_task_updated(user_id, task_id, "planning")
+
+            elif isinstance(msg, ResultMessage):
+                if msg.is_error:
+                    logger.error(f"Planning query error: {msg.result}")
+                    error_text = f"Error during planning: {msg.result}"
+                    await db.update_worker_task(task_id, error=error_text)
+                    await notify_task_updated(user_id, task_id, "planning")
+                    return error_text
+                if hasattr(msg, "session_id"):
+                    new_session_id = msg.session_id
+
+            elif isinstance(msg, SystemMessage):
+                if msg.subtype == "init" and msg.data:
+                    new_session_id = msg.data.get("session_id")
+
+        # Update session with Claude session ID for resumption
+        if new_session_id and new_session_id != session.claude_session_id:
+            await db.update_planning_session(
+                session.id, claude_session_id=new_session_id
+            )
+
+        # Final update with complete exploration
+        final_text = (
+            "\n".join(collected_text) if collected_text else "No response generated."
+        )
+        await db.update_worker_task(task_id, plan_text=final_text)
+        await notify_task_updated(user_id, task_id, "planning")
+
+        return final_text
+
+    except Exception as e:
+        logger.error(f"Planning query failed: {e}")
+        error_text = f"Error during planning: {str(e)}"
+        await db.update_worker_task(task_id, error=error_text)
+        await notify_task_updated(user_id, task_id, "planning")
+        return error_text
+
+
 async def cancel_planning(session: PlanningSession) -> str:
     """Cancel an active planning session.
 
@@ -355,6 +599,15 @@ async def cancel_planning(session: PlanningSession) -> str:
         status=PlanningSessionStatus.CANCELLED,
         completed_at=datetime.now(timezone.utc),
     )
+
+    # Also cancel the associated task
+    if session.worker_task_id:
+        await db.update_worker_task(
+            session.worker_task_id,
+            status=TaskStatus.CANCELLED,
+        )
+        logger.info(f"Cancelled task {session.worker_task_id}")
+
     logger.info(f"Cancelled planning session {session.id}")
 
     return "Planning cancelled. No GitHub issue was created."

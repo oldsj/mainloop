@@ -19,7 +19,6 @@ from mainloop.db import db
 from mainloop.services.planning import (
     approve_plan,
     cancel_planning,
-    start_planning_session,
 )
 from mainloop.services.task_router import (
     find_matching_tasks,
@@ -66,42 +65,31 @@ After presenting the plan, ask the user if they want to:
 - Cancel planning (use cancel_planning tool)
 """
 
-    base_prompt = """You are a helpful AI assistant that can help with coding tasks.
+    base_prompt = """You are an AI assistant in a chat interface with background workers.
 
-When the user requests work that involves modifying code, creating files, making commits, or any development task:
-1. Confirm you understand what they want
-2. Ask for the GitHub repository URL if not already known
-3. Use the start_planning tool to begin planning the implementation
+RESPOND DIRECTLY (no tools) for:
+- Questions & answers ("How does X work?")
+- Clarifying context ("What repo?" / "Which file?")
+- Planning discussion ("Here's my approach...")
+- Quick confirmations ("Should I use TypeScript?")
 
-The planning flow:
-1. start_planning: Begins an interactive planning session where you explore the codebase
-2. During planning, you'll have read-only access to the repo to understand the architecture
-3. You'll create an implementation plan together with the user
-4. approve_plan: Creates a GitHub issue and spawns a worker to implement
-5. cancel_planning: Cancels if the user changes their mind
+USE start_planning TOOL when user wants CODE CHANGES:
+- Implementation tasks ("Add dark mode", "Fix the login bug")
+- PR creation, commits, file modifications
+- Long-running work (refactors, migrations)
 
-When to use start_planning:
-- Creating, modifying, or deleting code files
-- Making commits or pull requests
-- Any work that requires access to a codebase
+The tool spawns a background worker. You'll explore the codebase, propose a plan,
+and after approval the worker implements autonomously while the user continues chatting.
 
-Do NOT use planning tools for:
-- Answering questions about how to do something
-- Explaining concepts or providing information
-- General conversation"""
+Be concise. If a task needs a repo URL and you don't have one, ask briefly: "Which repo?"
+"""
 
     if recent_repos:
         repos_list = "\n".join(f"  - {repo}" for repo in recent_repos)
         base_prompt += f"""
-
-The user has recently worked with these repositories:
+Recent repositories:
 {repos_list}
-
-If relevant to their request, suggest using one of these repos."""
-    else:
-        base_prompt += """
-
-Ask for the GitHub repo URL before starting planning."""
+"""
 
     return base_prompt
 
@@ -118,16 +106,22 @@ def create_planning_tools(
 
     @tool(
         "start_planning",
-        "Start an interactive planning session to design an implementation approach. "
-        "Use this when the user wants to work on a coding task. "
-        "You'll get read-only access to explore the codebase and create a plan.",
+        "Start a background task for code changes. "
+        "This creates a thread under the user's message - DO NOT respond after calling this. "
+        "The thread handles all progress display.",
         {
             "repo_url": str,
             "task_description": str,
         },
     )
     async def start_planning_tool(args: dict[str, Any]) -> dict[str, Any]:
-        """Start a planning session."""
+        """Start a planning session and create thread immediately."""
+        from dbos import SetWorkflowID
+        from mainloop.services.planning import create_pending_task
+        from mainloop.sse import notify_task_updated
+        from mainloop.workflows.dbos_config import planning_queue
+        from mainloop.workflows.planning_workflow import planning_workflow
+
         repo_url = args.get("repo_url", "")
         task_description = args.get("task_description", "")
 
@@ -151,23 +145,44 @@ def create_planning_tools(
             }
 
         try:
-            session, initial_message = await start_planning_session(
+            # Create task immediately
+            task = await create_pending_task(
                 user_id=user_id,
                 main_thread_id=main_thread_id,
                 conversation_id=conversation_id,
+                description=task_description,
                 repo_url=repo_url,
-                task_description=task_description,
             )
-            logger.info(f"Started planning session {session.id}")
+
+            # Create assistant message with short ACK
+            assistant_message = await db.create_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content="On it!",
+            )
+            await db.increment_message_count(conversation_id)
+
+            # Link task to message so thread appears under it
+            await db.update_worker_task(
+                task.id, originating_message_id=assistant_message.id
+            )
+
+            # Notify frontend
+            await notify_task_updated(user_id, task.id, "pending")
+
+            # Enqueue async planning workflow
+            with SetWorkflowID(task.id):
+                planning_queue.enqueue(planning_workflow, task.id)
+
+            logger.info(
+                f"Started task {task.id} with thread under message {assistant_message.id}"
+            )
 
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Planning session started (ID: {session.id[:8]})\n\n"
-                        f"{initial_message}\n\n"
-                        "You now have read-only access to the codebase. "
-                        "Explore the code structure and create an implementation plan.",
+                        "text": "Thread created. Do not respond further - the thread shows progress.",
                     }
                 ]
             }
@@ -331,6 +346,8 @@ class ChatResult:
     task_id: str | None = None
     needs_inbox_action: bool = False
     queue_item: QueueItem | None = None
+    message_already_created: bool = False  # Tool already created the assistant message
+    message_id: str | None = None  # ID of message created by tool
 
 
 @dataclass
@@ -382,13 +399,6 @@ async def get_claude_response(
     This ensures continuity across sessions, pod restarts, and deployments.
     """
     try:
-        # Check for active planning session
-        active_session = None
-        planning_active = False
-        if conversation_id:
-            active_session = await db.get_active_planning_session(conversation_id)
-            planning_active = active_session is not None
-
         # Build prompt with summary and recent messages
         prompt_text = build_context_prompt(summary, recent_messages or [], message)
 
@@ -396,7 +406,6 @@ async def get_claude_response(
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
-        cwd = None
         permission_mode = "bypassPermissions"
 
         if user_id and main_thread_id and conversation_id:
@@ -419,25 +428,8 @@ async def get_claude_response(
 
             # Fetch recent repos for system prompt
             recent_repos = await db.get_recent_repos(main_thread_id)
-            system_prompt = build_chat_system_prompt(
-                recent_repos, planning_active=planning_active
-            )
-
-        # When planning is active, enable file system tools with read-only access
-        if planning_active and active_session:
-            from mainloop.services.repo_cache import get_repo_cache
-
-            repo_cache = get_repo_cache()
-            repo_path = repo_cache.get_repo_path(active_session.repo_url)
-
-            if repo_path.exists():
-                cwd = str(repo_path)
-                permission_mode = "plan"  # Read-only filesystem access
-                # Add file system tools for exploring the codebase
-                allowed_tools.extend(["Read", "Glob", "Grep", "LS"])
-                logger.info(
-                    f"Planning mode: cwd={cwd}, added file tools for session {active_session.id}"
-                )
+            # Main thread always uses normal chat mode - planning runs in background
+            system_prompt = build_chat_system_prompt(recent_repos, planning_active=False)
 
         options = ClaudeAgentOptions(
             model=model,
@@ -445,7 +437,6 @@ async def get_claude_response(
             system_prompt=system_prompt,
             mcp_servers=mcp_servers if mcp_servers else None,
             allowed_tools=allowed_tools if allowed_tools else None,
-            cwd=cwd,
         )
 
         print(
@@ -576,7 +567,26 @@ async def process_message(
         conversation_id=conversation_id,
     )
 
-    return ChatResult(response=claude_response.text)
+    # Check if start_planning tool created a task with message already
+    # (tool creates "On it!" message and links task to it)
+    task_id = None
+    message_already_created = False
+    message_id = None
+
+    # Get most recent task for this conversation
+    recent_task = await db.get_recent_task_for_conversation(conversation_id)
+    if recent_task and recent_task.originating_message_id:
+        # Tool already created the message - don't create another
+        task_id = recent_task.id
+        message_already_created = True
+        message_id = recent_task.originating_message_id
+
+    return ChatResult(
+        response=claude_response.text,
+        task_id=task_id,
+        message_already_created=message_already_created,
+        message_id=message_id,
+    )
 
 
 async def _create_routing_queue_item(

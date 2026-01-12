@@ -590,7 +590,7 @@ class Database:
                 task.status.value,
                 task.created_at,
                 task.conversation_id,
-                task.message_id,
+                task.originating_message_id,
                 task.keywords,
                 task.skip_plan,
                 task.plan_text,
@@ -605,6 +605,24 @@ class Database:
         async with self.connection() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM worker_tasks WHERE id = $1", task_id
+            )
+        if not row:
+            return None
+        return self._row_to_worker_task(row)
+
+    async def get_recent_task_for_conversation(
+        self, conversation_id: str
+    ) -> WorkerTask | None:
+        """Get the most recently created task for a conversation."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """SELECT * FROM worker_tasks
+                WHERE conversation_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1""",
+                conversation_id,
             )
         if not row:
             return None
@@ -665,6 +683,8 @@ class Database:
         # Interactive planning fields
         pending_questions: list[dict] | None = None,
         plan_text: str | None = None,
+        skip_plan: bool | None = None,
+        originating_message_id: str | None = None,
     ):
         """Update worker task fields."""
         if not self._pool:
@@ -757,6 +777,14 @@ class Database:
             updates.append(f"plan_text = ${param_idx}")
             params.append(plan_text)
             param_idx += 1
+        if skip_plan is not None:
+            updates.append(f"skip_plan = ${param_idx}")
+            params.append(skip_plan)
+            param_idx += 1
+        if originating_message_id is not None:
+            updates.append(f"message_id = ${param_idx}")
+            params.append(originating_message_id)
+            param_idx += 1
 
         params.append(task_id)
 
@@ -766,6 +794,9 @@ class Database:
                     f"UPDATE worker_tasks SET {', '.join(updates)} WHERE id = ${param_idx}",
                     *params,
                 )
+
+        # Return updated task
+        return await self.get_worker_task(task_id)
 
     def _row_to_worker_task(self, row: asyncpg.Record) -> WorkerTask:
         return WorkerTask(
@@ -804,7 +835,7 @@ class Database:
             pr_last_modified=row.get("pr_last_modified"),
             commit_sha=row["commit_sha"],
             conversation_id=row.get("conversation_id"),
-            message_id=row.get("message_id"),
+            originating_message_id=row.get("message_id"),
             keywords=list(row["keywords"]) if row.get("keywords") else [],
             skip_plan=row.get("skip_plan", False),
             # Interactive planning state
@@ -1418,6 +1449,24 @@ class Database:
                 conversation_id,
             )
         return message
+
+    async def get_message(self, message_id: str) -> Message | None:
+        """Get a single message by ID."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM messages WHERE id = $1", message_id
+            )
+        if not row:
+            return None
+        return Message(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            role=row["role"],  # type: ignore
+            content=row["content"],
+            created_at=row["created_at"],
+        )
 
     async def get_messages(self, conversation_id: str) -> list[Message]:
         """Get all messages for a conversation."""

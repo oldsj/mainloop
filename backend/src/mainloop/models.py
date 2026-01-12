@@ -31,3 +31,4 @@ class ChatResponse(BaseModel):
 
     conversation_id: str
     message: Message
+    task_id: str | None = None  # Set if a planning task was started

@@ -40,6 +40,7 @@ from mainloop.workflows.main_thread import (
     get_or_start_main_thread,
 )
 from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
+from mainloop.workflows.planning_workflow import planning_workflow  # noqa: F401
 from pydantic import BaseModel
 
 from models import (
@@ -239,14 +240,24 @@ async def chat(
     request: ChatRequest,
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
-    """Send a message and get an immediate response."""
-    from mainloop.services.compaction import trigger_compaction
+    """Send a message and get a response.
 
+    Claude decides when to spawn background tasks via start_planning tool.
+    """
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
     # Ensure main thread is running (for background coordination)
     main_thread_id = get_or_start_main_thread(user_id)
+
+    # Get or create main thread record
+    main_thread = await db.get_main_thread_by_user(user_id)
+    if not main_thread:
+        from models import MainThread
+
+        main_thread = MainThread(user_id=user_id, workflow_run_id=main_thread_id)
+        main_thread = await db.create_main_thread(main_thread)
+    thread_id = main_thread.id
 
     # Get or create conversation
     is_new_conversation = False
@@ -255,20 +266,11 @@ async def chat(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        # Create new conversation with first message atomically
-        # This prevents FK violations from race conditions
         conversation, _user_msg = await db.create_conversation_with_message(
             user_id=user_id,
             message_content=request.message,
         )
         is_new_conversation = True
-
-    # Load context: summary + recent messages after last summarized point
-    recent_messages = await db.get_messages_after(
-        conversation.id,
-        conversation.summarized_through_id,
-        limit=20,
-    )
 
     # Save user message and increment count (only for existing conversations)
     if not is_new_conversation:
@@ -279,27 +281,54 @@ async def chat(
         )
         await db.increment_message_count(conversation.id)
 
-    # Get or create main thread record
-    main_thread = await db.get_main_thread_by_user(user_id)
-    if not main_thread:
-        # Create main thread record if it doesn't exist (e.g., after DB reset)
-        from models import MainThread
-
-        main_thread = MainThread(user_id=user_id, workflow_run_id=main_thread_id)
-        main_thread = await db.create_main_thread(main_thread)
-    thread_id = main_thread.id
-
-    # Process message with summary + recent messages for context
-    result = await process_message(
+    # Claude responds directly and uses start_planning tool when appropriate
+    return await _handle_inline_chat(
         user_id=user_id,
         message=request.message,
+        conversation=conversation,
+        thread_id=thread_id,
+        is_new_conversation=is_new_conversation,
+    )
+
+
+async def _handle_inline_chat(
+    user_id: str,
+    message: str,
+    conversation,
+    thread_id: str,
+    is_new_conversation: bool,
+) -> ChatResponse:
+    """Handle inline chat messages (not routed to thread)."""
+    from mainloop.services.compaction import trigger_compaction
+
+    # Load context for Claude
+    recent_messages = await db.get_messages_after(
+        conversation.id,
+        conversation.summarized_through_id,
+        limit=20,
+    )
+
+    # Get Claude response with planning tools available
+    result = await process_message(
+        user_id=user_id,
+        message=message,
         conversation_id=conversation.id,
         main_thread_id=thread_id,
         summary=conversation.summary,
         recent_messages=recent_messages,
     )
 
-    # Save assistant response and increment count
+    # If tool already created the message (start_planning), use that
+    if result.message_already_created and result.message_id:
+        assistant_message = await db.get_message(result.message_id)
+        if assistant_message:
+            return ChatResponse(
+                conversation_id=conversation.id,
+                message=assistant_message,
+                task_id=result.task_id,
+            )
+
+    # Save assistant response
     assistant_message = await db.create_message(
         conversation_id=conversation.id,
         role="assistant",
@@ -307,12 +336,13 @@ async def chat(
     )
     new_count = await db.increment_message_count(conversation.id)
 
-    # Trigger async compaction if needed (fire-and-forget)
+    # Trigger compaction
     trigger_compaction(conversation.id, new_count)
 
     return ChatResponse(
         conversation_id=conversation.id,
         message=assistant_message,
+        task_id=result.task_id,
     )
 
 

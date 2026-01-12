@@ -36,6 +36,7 @@ services:
       - DB_PASSWORD=mainloop
     volumes:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
+      - repo-cache:/repos
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,3 +102,4 @@ services:
 volumes:
   claude-workdir: {}
   postgres-data: {}
+  repo-cache: {}

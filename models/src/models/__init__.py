@@ -7,6 +7,8 @@ from models.workflow import (
     GitHubPR,
     GitHubRepo,
     MainThread,
+    Notification,
+    NotificationType,
     PlanningSession,
     PlanningSessionStatus,
     Project,
@@ -23,28 +25,34 @@ from models.workflow import (
 )
 
 __all__ = [
-    # Existing
+    # Core
     "Conversation",
     "Message",
     "AgentTask",
     "AgentResponse",
-    # Workflow models
+    # The Loop (meta thread + tasks)
     "MainThread",
     "WorkerTask",
     "WorkerTaskCreate",
     "TaskStatus",
     "TaskQuestion",
     "QuestionOption",
+    # Notifications (simple read/clear)
+    "Notification",
+    "NotificationType",
+    # Queue (legacy, may deprecate)
     "QueueItem",
     "QueueItemResponse",
     "QueueItemType",
     "QueueItemPriority",
+    # Workflow events
     "WorkflowEvent",
     "EventTypes",
+    # GitHub
     "GitHubRepo",
     "GitHubPR",
     "Project",
-    # Planning models
+    # Planning
     "PlanningSession",
     "PlanningSessionStatus",
 ]

@@ -6,34 +6,94 @@ Your main conversation thread is the closest digital mapping to your own interna
 
 Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI workers and let them handle the work while you stay in flow.
 
-  | Desktop | Mobile |
-  |---------|--------|
-  | <img width="600" alt="mainloop desktop" src="https://github.com/user-attachments/assets/49971afd-c155-4855-a292-5b0c59570066" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
+| Desktop                                                                                                                          | Mobile                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| <img width="600" alt="mainloop desktop" src="https://github.com/user-attachments/assets/49971afd-c155-4855-a292-5b0c59570066" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
 
-## How It Works
+## Conversation Model
+
+Think of it like **Slack**: the main conversation is a channel, and autonomous work happens in threads.
 
 ```text
-You (phone/laptop)
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│                   Chat Interface                     │
-│           Claude with spawn_task tool               │
-│                                                      │
-│   "Should I spawn a worker for this? (confirms)"    │
-└──────────────┬────────────────┬─────────────────────┘
-               │                │
-       ┌───────▼──────┐  ┌──────▼───────┐
-       │   Worker 1   │  │   Worker 2   │  ...
-       │   (Opus)     │  │   (Opus)     │
-       │              │  │              │
-       │  Feature dev │  │  Bug fix     │
-       └──────────────┘  └──────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  MAIN THREAD (Channel)                                          │
+│                                                                 │
+│  You: "Add a quickstart to the README"                         │
+│                                                                 │
+│  Claude: "I'll help with that. What's the repo URL?"           │
+│                                                                 │
+│  You: "github.com/foo/mainloop"                                │
+│                                                                 │
+│  Claude: "Got it. Let me explore the codebase..."              │
+│          [Planning: explores repo, proposes approach]           │
+│          "Here's my plan: ... Ready to implement?"             │
+│                                                                 │
+│  You: "Looks good, go ahead"                                   │
+│                                                                 │
+│  Claude: "Starting implementation."                             │
+│          ┌─────────────────────────────────────────┐           │
+│          │ 🧵 THREAD: Add quickstart to README     │           │
+│          │    ⟳ Working · 3 messages              │           │
+│          └─────────────────────────────────────────┘           │
+│                                                                 │
+│  You: "Also, can you explain how DBOS works?"                  │
+│                                                                 │
+│  Claude: "DBOS is a durable execution framework..."            │
+│          [Immediate response - no thread needed]                │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-- **Main thread**: One continuous conversation — Claude responds naturally, spawns workers when you confirm
-- **Workers**: Opus models handle complex tasks in isolated K8s namespaces
-- **Inbox**: Unified attention queue — what needs you surfaces; everything else folds away
+### When Work Stays in Main Thread
+
+| Situation           | Example                      | Why                           |
+| ------------------- | ---------------------------- | ----------------------------- |
+| Questions & answers | "How does X work?"           | Immediate, no autonomous work |
+| Clarifying context  | "What repo?" / "Which file?" | Gathering info for a task     |
+| Planning discussion | "Here's my approach..."      | Interactive refinement        |
+| Quick confirmations | "Should I use TypeScript?"   | Needs your input to proceed   |
+
+### When Work Becomes a Thread
+
+| Situation           | Example                      | Why                        |
+| ------------------- | ---------------------------- | -------------------------- |
+| Code implementation | Writing files, running tests | Minutes of autonomous work |
+| PR creation         | Commits, pushes, CI checks   | Runs in background         |
+| Long-running tasks  | Large refactors, migrations  | You shouldn't wait         |
+
+### The Handoff
+
+```text
+Main Thread                              Thread
+────────────                             ──────
+  │
+  │  "Add dark mode"
+  │       │
+  │  "What repo?"
+  │       │
+  │  "github.com/x/y"
+  │       │
+  │  [Explores codebase]
+  │  [Proposes plan]
+  │       │
+  │  "Approved"
+  │       │
+  └───────┼─────────────────────────────► Thread spawns
+          │                               │
+          │ (you continue chatting)       │ Implements changes
+          │                               │ Runs tests
+          │                               │ Creates PR
+          │                               │
+          │◄──────────────────────────────┤ "Done! PR #42 ready"
+          │
+```
+
+**Key insight**: Planning is synchronous (needs your input), implementation is asynchronous (runs in background).
+
+## Architecture
+
+- **Main thread**: One continuous conversation — Claude responds naturally, spawns threads when you approve
+- **Threads**: Opus models handle complex tasks in isolated K8s namespaces
+- **Inbox pane**: Shows all active threads — click to expand and interact
 - **Persistence**: Conversations and tasks survive restarts via compaction + [DBOS](docs/DBOS.md)
 
 ## Quick Start

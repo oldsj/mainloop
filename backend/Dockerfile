@@ -30,20 +30,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:3.13-slim
 
 # Install Node.js, git, and Claude CLI (required by claude-agent-sdk and gitpython)
+# Note: ca-certificates must remain installed for git HTTPS to work
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates git \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code@latest \
     && npm cache clean --force \
-    && apt-get purge -y --auto-remove ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm
 
-# Create non-root user for Claude and workspace directory
+# Create non-root user for Claude, workspace, and repo cache directory
 RUN useradd -m -s /bin/bash claude \
-    && mkdir -p /home/claude/.claude /workspace \
-    && chown -R claude:claude /home/claude /workspace
+    && mkdir -p /home/claude/.claude /workspace /repos \
+    && chown -R claude:claude /home/claude /workspace /repos
 
 WORKDIR /app
 

@@ -79,11 +79,22 @@ class QueueItemPriority(str, Enum):
 
 
 class MainThread(BaseModel):
-    """Represents a user's main conversation thread (durable workflow)."""
+    """The Loop - user's singleton meta thread that orchestrates everything.
+
+    The meta thread:
+    - Tracks focus/pace across all tasks
+    - Spawns and monitors tasks
+    - Holds project-level context (rules like "use Tailwind")
+    - Has its own conversation for high-level dialogue
+    - Never gets polluted with task-level details (file contents, logs)
+    """
 
     id: str = Field(default_factory=_uuid, description="Unique thread ID")
     user_id: str = Field(..., description="User ID from Cloudflare Access")
-    workflow_run_id: str | None = Field(None, description="Absurd workflow run ID")
+    conversation_id: str | None = Field(
+        None, description="Meta thread's own conversation for focus/pace dialogue"
+    )
+    workflow_run_id: str | None = Field(None, description="DBOS workflow run ID")
     status: Literal["active", "paused", "error"] = Field(
         default="active", description="Thread status"
     )
@@ -97,16 +108,37 @@ class MainThread(BaseModel):
         default_factory=list, description="IDs of active worker tasks"
     )
     context: dict[str, Any] = Field(
-        default_factory=dict, description="Accumulated context/memory"
+        default_factory=dict,
+        description="Project rules, preferences, accumulated memory",
     )
 
 
 class WorkerTask(BaseModel):
-    """A task assigned to a worker agent."""
+    """A task with its own conversation - first-class entity for user interaction.
+
+    Each task:
+    - Has its own full conversation (back-and-forth with Claude)
+    - Maintains isolated context (doesn't pollute meta thread)
+    - Can show logs, status, artifacts
+    - Is where most user interaction happens
+    """
 
     id: str = Field(default_factory=_uuid, description="Unique task ID")
-    main_thread_id: str = Field(..., description="Parent main thread ID")
+    main_thread_id: str = Field(..., description="Parent meta thread ID")
     user_id: str = Field(..., description="User ID")
+
+    # Task's own conversation (first-class, not just a link)
+    conversation_id: str | None = Field(
+        None, description="Task's own conversation for back-and-forth dialogue"
+    )
+    claude_session_id: str | None = Field(
+        None, description="Claude Agent SDK session ID for resumption"
+    )
+
+    # Where this task originated (for reference/routing)
+    originating_message_id: str | None = Field(
+        None, description="Message ID that spawned this task"
+    )
 
     # Task definition
     task_type: str = Field(
@@ -118,6 +150,12 @@ class WorkerTask(BaseModel):
         None, description="Claude model to use (haiku, sonnet, opus)"
     )
 
+    # Context injected from meta thread
+    injected_context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Project rules/context passed from meta thread when spawning",
+    )
+
     # Repository context
     repo_url: str | None = Field(None, description="GitHub repository URL")
     project_id: str | None = Field(None, description="Associated project ID")
@@ -127,7 +165,7 @@ class WorkerTask(BaseModel):
     # Execution state
     status: TaskStatus = Field(default=TaskStatus.PENDING, description="Task status")
     workflow_run_id: str | None = Field(
-        None, description="Absurd workflow run ID for this task"
+        None, description="DBOS workflow run ID for this task"
     )
     worker_pod_name: str | None = Field(None, description="K8s pod running this task")
 
@@ -159,9 +197,7 @@ class WorkerTask(BaseModel):
     )
     commit_sha: str | None = Field(None, description="Final commit SHA")
 
-    # Conversation linking (for routing)
-    conversation_id: str | None = Field(None, description="Originating conversation ID")
-    message_id: str | None = Field(None, description="Originating message ID")
+    # Task routing/discovery
     keywords: list[str] = Field(
         default_factory=list, description="Keywords for task routing"
     )
@@ -234,6 +270,48 @@ class QueueItemResponse(BaseModel):
     response: str = Field(..., description="Response text")
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Optional metadata"
+    )
+
+
+class NotificationType(str, Enum):
+    """Types of notifications (macOS-style, read/clear)."""
+
+    TASK_COMPLETED = "task_completed"  # Task finished successfully
+    TASK_FAILED = "task_failed"  # Task encountered error
+    TASK_WAITING = "task_waiting"  # Task needs attention (question, review)
+    MENTION = "mention"  # Worker mentioned user in conversation
+    SYSTEM = "system"  # System notification
+
+
+class Notification(BaseModel):
+    """Simple notification - macOS style read/clear.
+
+    Unlike QueueItem (which requires response), notifications are:
+    - Ephemeral (read and dismiss)
+    - Non-blocking (informational only)
+    - Lightweight (no response workflow)
+
+    For interactive items (questions, approvals), the user navigates
+    to the task conversation directly.
+    """
+
+    id: str = Field(default_factory=_uuid, description="Unique notification ID")
+    user_id: str = Field(..., description="User ID")
+    notification_type: NotificationType = Field(..., description="Notification type")
+
+    # What triggered this
+    task_id: str | None = Field(None, description="Related task ID")
+    main_thread_id: str | None = Field(None, description="Related meta thread ID")
+
+    # Content
+    title: str = Field(..., description="Short title")
+    body: str | None = Field(None, description="Optional body text")
+
+    # State
+    read: bool = Field(default=False, description="Has been read")
+    read_at: datetime | None = Field(None, description="When notification was read")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
     )
 
 

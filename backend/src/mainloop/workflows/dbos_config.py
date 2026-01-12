@@ -35,3 +35,10 @@ main_thread_queue = Queue(
     partition_queue=True,  # Partition by user_id
     concurrency=1,  # One active main thread per user at a time
 )
+
+# Queue for planning workflows - runs async planning sessions
+# Lower concurrency since planning involves Claude API calls
+planning_queue = Queue(
+    "planning",
+    concurrency=2,  # Max 2 planning sessions at once
+)
