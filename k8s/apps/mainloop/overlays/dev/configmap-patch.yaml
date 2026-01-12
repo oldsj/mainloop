@@ -12,3 +12,6 @@ data:
   FRONTEND_DOMAIN: localhost:3000
   # Backend internal URL for K8s Job callbacks
   BACKEND_INTERNAL_URL: http://mainloop-backend.mainloop.svc.cluster.local:8000
+  # Use local worker image for dev (loaded into Kind)
+  WORKER_IMAGE: mainloop-agent-controller:dev
+  WORKER_IMAGE_PULL_POLICY: Never
