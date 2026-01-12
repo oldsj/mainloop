@@ -26,8 +26,11 @@ dev: ## Start dev environment with hot reload (DevSpace + Kind)
 dev-stop: ## Stop DevSpace and purge resources
 	devspace purge --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
-dev-reset: ## Reset database and task namespaces
-	@./scripts/kind/reset-data.sh
+dev-reset: ## Reset ALL data (database + task namespaces)
+	@./scripts/kind/reset-data.sh --all
+	@echo "Restarting backend to clear workflow state..."
+	@kubectl rollout restart deployment/mainloop-backend-devspace -n mainloop --context kind-$(KIND_CLUSTER_NAME)
+	@kubectl rollout status deployment/mainloop-backend-devspace -n mainloop --context kind-$(KIND_CLUSTER_NAME) --timeout=60s
 
 dev-logs: ## Tail backend logs
 	devspace logs -f --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop

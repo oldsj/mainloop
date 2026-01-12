@@ -1,26 +1,35 @@
 #!/usr/bin/env bash
-# Reset data between test runs (keep cluster, reset DB + task namespaces)
+# Reset data between runs
+#
+# Usage:
+#   ./reset-data.sh        # Reset test data only (preserves dev user data)
+#   ./reset-data.sh --all  # Reset ALL data (dev + test)
+#
+# The API cleans up both database and K8s namespaces.
 set -euo pipefail
 
-KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
-KIND_CONTEXT="kind-${KIND_CLUSTER_NAME}"
+API_URL="${API_URL:-http://localhost:8081}"
+RESET_ALL="${1-}"
 
-echo "=== Resetting data (context: ${KIND_CONTEXT}) ==="
+if [[ ${RESET_ALL} == "--all" ]]; then
+  echo "=== Resetting ALL data (dev + test) ==="
+  QUERY="?all=true"
+else
+  echo "=== Resetting test data only (preserving dev data) ==="
+  QUERY=""
+fi
 
-# Delete all task namespaces (created by worker_task_workflow)
-echo "Deleting task namespaces..."
-kubectl --context="${KIND_CONTEXT}" get namespaces -l app.kubernetes.io/managed-by=mainloop -o name 2>/dev/null |
-  xargs -r kubectl --context="${KIND_CONTEXT}" delete --wait=false || true
+echo "Calling API to reset data..."
+if curl -sf "${API_URL}/health" >/dev/null 2>&1; then
+  response=$(curl -sf -X POST "${API_URL}/internal/test/reset${QUERY}" 2>&1) || {
+    echo "Warning: API reset failed - backend may not be in test mode"
+    echo "Response: ${response:-none}"
+    exit 1
+  }
+  echo "API response: ${response}"
+else
+  echo "Error: Backend not reachable at ${API_URL}"
+  exit 1
+fi
 
-# Reset PostgreSQL database
-echo "Resetting PostgreSQL database..."
-kubectl --context="${KIND_CONTEXT}" exec -n mainloop statefulset/postgres -- \
-  psql -U mainloop -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null ||
-  echo "PostgreSQL not ready or not running"
-
-# Restart backend to clear in-memory state and re-run migrations
-echo "Restarting backend..."
-kubectl --context="${KIND_CONTEXT}" rollout restart deployment/mainloop-backend -n mainloop 2>/dev/null || true
-kubectl --context="${KIND_CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=60s 2>/dev/null || true
-
-echo "=== Data reset complete ==="
+echo "=== Reset complete ==="
