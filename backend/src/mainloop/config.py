@@ -46,6 +46,10 @@ class Settings(BaseSettings):
         "http://mainloop-backend.mainloop.svc.cluster.local:8000"
     )
 
+    # Worker image for K8s Jobs (use local image for dev)
+    worker_image: str = "ghcr.io/oldsj/mainloop-agent-controller:latest"
+    worker_image_pull_policy: str = "IfNotPresent"  # Use "Never" for local dev
+
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False
 

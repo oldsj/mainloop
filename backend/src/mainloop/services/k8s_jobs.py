@@ -11,7 +11,6 @@ from mainloop.services.k8s_namespace import WORKER_SERVICE_ACCOUNT, get_k8s_clie
 logger = logging.getLogger(__name__)
 
 # Job configuration
-WORKER_IMAGE = "ghcr.io/oldsj/mainloop-agent-controller:latest"
 JOB_TTL_SECONDS = 3600  # Keep completed jobs for 1 hour
 
 
@@ -149,13 +148,17 @@ async def create_worker_job(
                 spec=client.V1PodSpec(
                     restart_policy="Never",
                     service_account_name=WORKER_SERVICE_ACCOUNT,
-                    image_pull_secrets=[
-                        client.V1LocalObjectReference(name="ghcr-secret"),
-                    ],
+                    # Only use image pull secrets for remote registries
+                    image_pull_secrets=(
+                        [client.V1LocalObjectReference(name="ghcr-secret")]
+                        if settings.worker_image.startswith("ghcr.io/")
+                        else None
+                    ),
                     containers=[
                         client.V1Container(
                             name="claude-agent",
-                            image=WORKER_IMAGE,
+                            image=settings.worker_image,
+                            image_pull_policy=settings.worker_image_pull_policy,
                             command=["/app/.venv/bin/python", "/app/job_runner.py"],
                             env=env_vars,
                             resources=client.V1ResourceRequirements(

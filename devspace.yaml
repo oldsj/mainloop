@@ -1,0 +1,229 @@
+version: v2beta1
+name: mainloop
+
+# Variables from .env
+vars:
+  CLAUDE_CODE_OAUTH_TOKEN:
+    source: env
+  GITHUB_TOKEN:
+    source: env
+    default: ''
+
+# Images - build locally, load into Kind
+images:
+  backend:
+    image: mainloop-backend
+    tags:
+      - dev
+    dockerfile: backend/Dockerfile
+    context: .
+    rebuildStrategy: ignoreContextChanges
+    docker:
+      useBuildKit: true
+      args:
+        - --target=dev
+
+  frontend:
+    image: mainloop-frontend
+    tags:
+      - dev
+    dockerfile: frontend/Dockerfile
+    context: .
+    rebuildStrategy: ignoreContextChanges
+    docker:
+      useBuildKit: true
+      args:
+        - --target=dev
+
+  agent-controller:
+    image: mainloop-agent-controller
+    tags:
+      - dev
+    dockerfile: claude-agent/Dockerfile
+    context: claude-agent
+    rebuildStrategy: ignoreContextChanges
+    docker:
+      useBuildKit: true
+
+# Deployments using Kustomize
+deployments:
+  mainloop:
+    namespace: mainloop
+    kubectl:
+      kustomize: true
+      manifests:
+        - k8s/apps/mainloop/overlays/dev
+
+# Development mode configuration
+dev:
+  backend:
+    labelSelector:
+      app: mainloop-backend
+    namespace: mainloop
+    devImage: mainloop-backend:dev
+    # Sync source files for hot reload
+    sync:
+      - path: ./backend/src:/app/src
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .pytest_cache/
+          - .venv/
+        disableDownload: true
+      - path: ./models:/models
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .venv/
+        disableDownload: true
+      # Auto-install deps when pyproject.toml or uv.lock changes
+      - path: ./backend/pyproject.toml:/app/pyproject.toml
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && uv sync
+      - path: ./backend/uv.lock:/app/uv.lock
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && uv sync
+    # Override command for dev mode with hot reload
+    command:
+      - uvicorn
+      - mainloop.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8000'
+      - --reload
+      - --reload-dir
+      - /app/src
+      - --reload-dir
+      - /models
+      - --timeout-graceful-shutdown
+      - '3'
+    logs: {}
+
+  frontend:
+    labelSelector:
+      app: mainloop-frontend
+    namespace: mainloop
+    container: frontend
+    devImage: mainloop-frontend:dev
+    sync:
+      - path: ./frontend/src:/app/frontend/src
+        excludePaths:
+          - .svelte-kit/
+          - node_modules/
+        disableDownload: true
+      - path: ./packages:/app/packages
+        excludePaths:
+          - __pycache__/
+          - node_modules/
+        disableDownload: true
+      # Auto-install deps when package files change
+      - path: ./frontend/package.json:/app/frontend/package.json
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && pnpm install --frozen-lockfile || pnpm install
+      - path: ./pnpm-lock.yaml:/app/pnpm-lock.yaml
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && pnpm install --frozen-lockfile || pnpm install
+    command:
+      - pnpm
+      - dev
+      - --host
+      - 0.0.0.0
+      - --port
+      - '3000'
+    env:
+      - name: VITE_API_URL
+        value: http://localhost:8081
+    logs: {}
+
+  agent-controller:
+    labelSelector:
+      app: mainloop-agent-controller
+    namespace: mainloop
+    devImage: mainloop-agent-controller:dev
+    sync:
+      - path: ./claude-agent:/app
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .venv/
+        disableDownload: true
+    command:
+      - /entrypoint.sh
+    logs: {}
+
+# Hooks for Kind cluster management
+hooks:
+  - name: ensure-kind-cluster
+    events:
+      - before:deploy
+      - before:dev
+    command: |
+      if ! kind get clusters 2>/dev/null | grep -q "^mainloop-test$"; then
+        echo "Creating Kind cluster..."
+        ./scripts/kind/create-cluster.sh
+      fi
+
+  - name: create-secrets
+    events:
+      - before:deploy
+    command: ./scripts/kind/create-secrets.sh
+
+  - name: load-images
+    events:
+      - after:build
+    command: |
+      echo "Loading images into Kind..."
+      kind load docker-image mainloop-backend:dev --name mainloop-test
+      kind load docker-image mainloop-frontend:dev --name mainloop-test
+      kind load docker-image mainloop-agent-controller:dev --name mainloop-test
+
+# Commands
+commands:
+  reset:
+    command: ./scripts/kind/reset-data.sh
+    description: Reset database and task namespaces
+
+  logs:
+    command: kubectl --context kind-mainloop-test logs -n mainloop deployment/mainloop-backend -f
+    description: Tail backend logs
+
+  shell:
+    command: kubectl --context kind-mainloop-test exec -it -n mainloop deployment/mainloop-backend -- bash
+    description: Open shell in backend pod
+
+# Profiles
+profiles:
+  # Test profile - deploy only, no sync (for CI and Playwright)
+  - name: test
+    patches:
+      - op: replace
+        path: deployments.mainloop.kubectl.manifests
+        value:
+          - k8s/apps/mainloop/overlays/test
+      - op: remove
+        path: dev

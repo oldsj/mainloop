@@ -1,0 +1,50 @@
+# Patch backend deployment for dev mode with hot reload
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      # Remove GHCR image pull secrets (using local images)
+      imagePullSecrets: []
+      # Wait for postgres to be ready before starting backend
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h mainloop-db-pooler -p 5432 -U mainloop; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+              echo "Postgres is ready!"
+      containers:
+        - name: backend
+          # Use locally loaded image, never try to pull
+          imagePullPolicy: Never
+          # Override command for uvicorn hot reload
+          command:
+            - uvicorn
+            - mainloop.api:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - '8000'
+            - --reload
+            - --reload-dir
+            - /app/src
+            - --reload-dir
+            - /models
+          env:
+            - name: IS_TEST_ENV
+              value: 'true'
+            # Use cheapest/fastest model for dev
+            - name: CLAUDE_MODEL
+              value: haiku
+            # Mock GitHub API
+            - name: USE_MOCK_GITHUB
+              value: 'true'

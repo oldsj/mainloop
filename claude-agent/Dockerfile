@@ -52,6 +52,9 @@ RUN chmod +x /entrypoint.sh /app/server.py /app/job_runner.py
 # Place venv executables at front of path
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Make /app writable by claude for DevSpace sync
+RUN chown -R claude:claude /app
+
 # Reset entrypoint (don't invoke uv)
 ENTRYPOINT []
 

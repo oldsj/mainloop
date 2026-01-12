@@ -35,7 +35,9 @@ lint:
         - backend/src/mainloop/services/github_pr.py
         - claude-agent/server.py
     # DL3008: Pinning apt versions causes build failures when versions are removed from repos
-    - linters: [hadolint]
+    # Terrascan Docker checks have platform differences (Linux vs macOS) and false positives
+    # for multi-stage builds with --chown flags
+    - linters: [hadolint, terrascan]
       paths:
         - '**/*Dockerfile*'
   enabled:

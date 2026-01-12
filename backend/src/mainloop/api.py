@@ -1,5 +1,6 @@
 """FastAPI application with DBOS durable workflows."""
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -51,6 +52,8 @@ from models import (
     TaskStatus,
     WorkerTask,
 )
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Mainloop API",
@@ -1254,30 +1257,142 @@ async def seed_task_for_testing(
 
 
 @app.post("/internal/test/reset")
-async def reset_test_data():
-    """Clear all data for fresh test runs.
+async def reset_test_data(all: bool = False):
+    """Clear test data, optionally including dev user data.
+
+    Args:
+        all: If True, clears ALL data (dev + test). If False (default),
+             only clears test user data (user_id LIKE 'test-%').
 
     WARNING: Only available in test environments. Do not use in production.
+
     """
     if not settings.is_test_env:
         raise HTTPException(
             status_code=403, detail="Only available in test environment"
         )
 
-    # Truncate all app tables (CASCADE handles foreign keys)
+    deleted_namespaces = []
+
+    if all:
+        # Full reset - truncate everything
+        async with db.connection() as conn:
+            await conn.execute(
+                """
+                TRUNCATE TABLE
+                    queue_items, messages, worker_tasks, projects,
+                    conversations, main_threads
+                CASCADE
+                """
+            )
+            await conn.execute(
+                "TRUNCATE TABLE dbos.workflow_events, dbos.operation_outputs, dbos.workflow_status CASCADE"
+            )
+
+        # Delete ALL task namespaces
+        try:
+            from kubernetes.client.rest import ApiException
+            from mainloop.services.k8s_namespace import get_k8s_client
+
+            core_v1, _ = get_k8s_client()
+            namespaces = core_v1.list_namespace(
+                label_selector="app.kubernetes.io/managed-by=mainloop"
+            )
+            for ns in namespaces.items:
+                try:
+                    core_v1.delete_namespace(name=ns.metadata.name)
+                    deleted_namespaces.append(ns.metadata.name)
+                except ApiException as e:
+                    if e.status != 404:
+                        logger.warning(f"Failed to delete namespace: {e}")
+        except Exception as e:
+            logger.debug(f"K8s namespace cleanup skipped: {e}")
+
+        if settings.use_mock_github:
+            from mainloop.services.github_mock import mock_state
+
+            mock_state.reset()
+
+        return {
+            "status": "reset",
+            "scope": "all",
+            "deleted_namespaces": deleted_namespaces,
+        }
+
+    # Test-only reset
     async with db.connection() as conn:
-        await conn.execute(
+        # Get task IDs and workflow IDs for test users before deleting
+        test_tasks = await conn.fetch(
+            "SELECT id FROM worker_tasks WHERE user_id LIKE 'test-%'"
+        )
+        test_task_ids = [row["id"] for row in test_tasks]
+
+        test_workflow_ids = await conn.fetch(
             """
-            TRUNCATE TABLE
-                queue_items, messages, worker_tasks, projects,
-                conversations, main_threads
-            CASCADE
-        """
+            SELECT workflow_run_id FROM main_threads
+            WHERE user_id LIKE 'test-%' AND workflow_run_id IS NOT NULL
+            """
         )
-        # Clear DBOS workflow state
+        workflow_ids = [row["workflow_run_id"] for row in test_workflow_ids]
+
+        # Delete app data for test users only (order matters for foreign keys)
+        await conn.execute("DELETE FROM queue_items WHERE user_id LIKE 'test-%'")
         await conn.execute(
-            "TRUNCATE TABLE dbos.workflow_events, dbos.operation_outputs, dbos.workflow_status CASCADE"
+            "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id LIKE 'test-%')"
         )
+        await conn.execute("DELETE FROM worker_tasks WHERE user_id LIKE 'test-%'")
+        await conn.execute("DELETE FROM projects WHERE user_id LIKE 'test-%'")
+        await conn.execute("DELETE FROM conversations WHERE user_id LIKE 'test-%'")
+        await conn.execute("DELETE FROM main_threads WHERE user_id LIKE 'test-%'")
+
+        # Clear DBOS workflow state for test user workflows
+        if workflow_ids:
+            await conn.execute(
+                """
+                DELETE FROM dbos.workflow_events
+                WHERE workflow_uuid = ANY($1::text[])
+                """,
+                workflow_ids,
+            )
+            await conn.execute(
+                """
+                DELETE FROM dbos.operation_outputs
+                WHERE workflow_uuid = ANY($1::text[])
+                """,
+                workflow_ids,
+            )
+            await conn.execute(
+                """
+                DELETE FROM dbos.workflow_status
+                WHERE workflow_uuid = ANY($1::text[])
+                """,
+                workflow_ids,
+            )
+
+    # Delete K8s namespaces for test tasks
+    if test_task_ids:
+        try:
+            from kubernetes.client.rest import ApiException
+            from mainloop.services.k8s_namespace import get_k8s_client
+
+            core_v1, _ = get_k8s_client()
+
+            # Get all mainloop-managed namespaces
+            namespaces = core_v1.list_namespace(
+                label_selector="app.kubernetes.io/managed-by=mainloop"
+            )
+
+            for ns in namespaces.items:
+                task_id = ns.metadata.labels.get("mainloop.dev/task-id", "")
+                if task_id in test_task_ids:
+                    try:
+                        core_v1.delete_namespace(name=ns.metadata.name)
+                        deleted_namespaces.append(ns.metadata.name)
+                    except ApiException as e:
+                        if e.status != 404:  # Ignore not found
+                            logger.warning(f"Failed to delete namespace: {e}")
+        except Exception as e:
+            logger.debug(f"K8s namespace cleanup skipped: {e}")
 
     # Reset mock state if mocking is enabled
     if settings.use_mock_github:
@@ -1285,7 +1400,11 @@ async def reset_test_data():
 
         mock_state.reset()
 
-    return {"status": "reset"}
+    return {
+        "status": "reset",
+        "preserved": "non-test users",
+        "deleted_namespaces": deleted_namespaces,
+    }
 
 
 # ============= Run =============
