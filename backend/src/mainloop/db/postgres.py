@@ -1374,15 +1374,16 @@ class Database:
     async def list_conversations(
         self, user_id: str, limit: int = 50
     ) -> list[Conversation]:
-        """List conversations for a user."""
+        """List main thread conversations for a user (excludes session conversations)."""
         if not self._pool:
             return []
         async with self.connection() as conn:
             rows = await conn.fetch(
                 """
-                SELECT * FROM conversations
-                WHERE user_id = $1
-                ORDER BY updated_at DESC
+                SELECT c.* FROM conversations c
+                WHERE c.user_id = $1
+                AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.conversation_id = c.id)
+                ORDER BY c.updated_at DESC
                 LIMIT $2
                 """,
                 user_id,
