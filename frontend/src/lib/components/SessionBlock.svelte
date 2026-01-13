@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Session, type Message } from '$lib/api';
   import { navigationContext } from '$lib/stores/navigationContext';
+  import { marked } from 'marked';
 
   let {
     session,
@@ -17,9 +18,10 @@
   let messagesLoading = $state(false);
   let lastFetchedSessionId = $state<string | null>(null);
 
-  // Expanded by default - only collapse completed/cancelled sessions
+  // Expanded by default - collapse for terminal states OR when this session is focused
+  // (when focused, the inline thread section at bottom shows the conversation)
   const isExpanded = $derived(
-    !['completed', 'failed', 'cancelled'].includes(session.status)
+    !['completed', 'failed', 'cancelled'].includes(session.status) && !isActive
   );
 
   // Fetch messages when expanded
@@ -29,9 +31,13 @@
     }
   });
 
-  // Auto-refresh messages while session is running
+  // Auto-refresh messages for any non-terminal session (skip if focused - sessionMessages store handles that)
+  const isTerminal = $derived(
+    ['completed', 'failed', 'cancelled'].includes(session.status)
+  );
+
   $effect(() => {
-    if (isExpanded && ['pending', 'active', 'planning', 'implementing'].includes(session.status)) {
+    if (isExpanded && !isTerminal && !isActive) {
       const interval = setInterval(fetchMessages, 2000);
       return () => clearInterval(interval);
     }
@@ -50,6 +56,12 @@
       messagesLoading = false;
     }
   }
+
+  // Configure marked for terminal aesthetic
+  marked.setOptions({
+    breaks: true,
+    gfm: true
+  });
 
   // Determine the border/accent color
   const sessionColor = $derived(session.color || 'var(--term-cyan)');
@@ -159,7 +171,7 @@
     </div>
   {/if}
 
-  <!-- Expanded content: session messages -->
+  <!-- Expanded content: session messages as full message bubbles -->
   {#if isExpanded}
     <div class="border-t border-term-border">
       {#if messages.length === 0}
@@ -171,22 +183,36 @@
           {/if}
         </div>
       {:else}
-        <div class="max-h-48 space-y-1 overflow-y-auto px-3 py-2">
-          {#each messages.slice(-5) as msg (msg.id)}
-            <div class="text-xs">
-              <span class="font-medium {msg.role === 'user' ? 'text-term-green' : 'text-term-cyan'}">
-                {msg.role === 'user' ? 'You' : 'Agent'}:
-              </span>
-              <span class="text-term-fg">
-                {msg.content.length > 200 ? msg.content.slice(0, 200) + '...' : msg.content}
-              </span>
+        <div class="space-y-2 py-2">
+          {#each messages as msg (msg.id)}
+            {@const isUser = msg.role === 'user'}
+            {@const htmlContent = marked.parse(msg.content)}
+            <div
+              class="message w-full border-l-2 px-3 py-2 {isUser
+                ? 'border-term-accent-alt bg-transparent'
+                : 'border-term-accent bg-term-bg'}"
+            >
+              <div class="flex flex-col gap-1">
+                <span class="text-xs {isUser ? 'text-term-accent-alt' : 'text-term-accent'}">
+                  {isUser ? '$ user@session' : '> agent@session'}
+                </span>
+                <div class="prose-terminal text-sm text-term-fg">
+                  {@html htmlContent}
+                </div>
+                <time class="text-xs text-term-fg-muted">
+                  {new Date(msg.created_at).toLocaleTimeString()}
+                </time>
+              </div>
             </div>
           {/each}
-          {#if messages.length > 5}
-            <div class="text-xs text-term-fg-muted italic">
-              ... {messages.length - 5} more messages
-            </div>
-          {/if}
+        </div>
+      {/if}
+
+      <!-- Processing indicator -->
+      {#if isRunning && messages.length > 0}
+        <div class="flex items-center gap-2 border-t border-term-border px-3 py-2 text-xs text-term-cyan">
+          <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
+          <span>Processing...</span>
         </div>
       {/if}
 
@@ -200,3 +226,56 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* Terminal-styled markdown for session messages */
+  .prose-terminal :global(p) {
+    margin: 0 0 0.5em 0;
+  }
+  .prose-terminal :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .prose-terminal :global(code) {
+    background: var(--term-bg);
+    border: 1px solid var(--term-border);
+    padding: 0.125em 0.375em;
+    font-size: 0.9em;
+    word-break: break-word;
+  }
+  .prose-terminal :global(pre) {
+    background: var(--term-bg);
+    border: 1px solid var(--term-border);
+    padding: 0.75em;
+    margin: 0.5em 0;
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .prose-terminal :global(pre code) {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .prose-terminal :global(ul),
+  .prose-terminal :global(ol) {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+  }
+  .prose-terminal :global(li) {
+    margin: 0.25em 0;
+  }
+  .prose-terminal :global(ul) {
+    list-style-type: disc;
+  }
+  .prose-terminal :global(ol) {
+    list-style-type: decimal;
+  }
+  .prose-terminal :global(strong) {
+    color: var(--term-accent);
+    font-weight: 600;
+  }
+  .prose-terminal :global(a) {
+    color: var(--term-info);
+    text-decoration: underline;
+  }
+</style>

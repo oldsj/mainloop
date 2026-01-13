@@ -4,10 +4,24 @@
   import { projects } from '$lib/stores/projects';
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
+  import { sessionMessages } from '$lib/stores/sessionMessages';
   import { api } from '$lib/api';
   import ConversationView from './ConversationView.svelte';
 
   let { messages, isLoading } = $derived($conversationStore);
+
+  // Load session messages when focusing on a session
+  $effect(() => {
+    const session = $currentSession;
+    if (session) {
+      sessionMessages.loadMessages(session.id);
+      sessionMessages.startPolling(2000);
+    } else {
+      sessionMessages.clear();
+    }
+
+    return () => sessionMessages.stopPolling();
+  });
 
   onMount(async () => {
     // Load the most recent conversation on startup
@@ -93,10 +107,21 @@
     const session = $currentSession;
     if (!session) return;
 
+    // Optimistic: Add user message immediately to session messages
+    sessionMessages.addOptimistic({
+      id: `temp-${Date.now()}`,
+      conversation_id: session.conversation_id,
+      role: 'user',
+      content: userMessage,
+      created_at: new Date().toISOString()
+    });
+
     try {
       await api.sendSessionMessage(session.id, userMessage);
-      // Refresh session status - SessionBlock will auto-refresh its messages
+      // Refresh session status and messages
       sessions.fetchSessions();
+      // Force immediate refresh to get real message ID and any quick response
+      sessionMessages.refresh();
     } catch (error) {
       console.error('Failed to send session message:', error);
     }

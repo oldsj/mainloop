@@ -2,7 +2,9 @@
   import { tick } from 'svelte';
   import type { Message, Session } from '$lib/api';
   import { sessions } from '$lib/stores/sessions';
-  import { navigationContext } from '$lib/stores/navigationContext';
+  import { navigationContext, currentSession } from '$lib/stores/navigationContext';
+  import { currentSessionMessages } from '$lib/stores/sessionMessages';
+  import { marked } from 'marked';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
   import SessionBlock from './SessionBlock.svelte';
@@ -46,6 +48,12 @@
     return $sessions.sessions.filter(s => !s.anchor_message_id);
   });
 
+  // Configure marked for terminal aesthetic
+  marked.setOptions({
+    breaks: true,
+    gfm: true
+  });
+
   let messagesContainer: HTMLDivElement;
   let showScrollButton = $state(false);
 
@@ -71,6 +79,7 @@
     // Track these values to trigger effect
     messages;
     isLoading;
+    $currentSessionMessages;
 
     // Scroll after DOM updates
     tick().then(() => {
@@ -129,6 +138,64 @@
           {/each}
         </div>
       {/if}
+
+      <!-- Inline thread replies when focused on a session -->
+      {#if $currentSession && $currentSessionMessages.length > 0}
+        {@const sessionColor = $currentSession.color || 'var(--term-cyan)'}
+        <div
+          class="mt-4 border-l-4 bg-term-bg-secondary/50"
+          style="border-color: {sessionColor};"
+        >
+          <!-- Thread header -->
+          <div class="flex items-center gap-2 border-b border-term-border px-3 py-2">
+            <span
+              class="h-2 w-2 rounded-full"
+              style="background-color: {sessionColor};"
+            ></span>
+            <span class="text-xs text-term-fg-muted">
+              Thread: <span style="color: {sessionColor};">{$currentSession.title}</span>
+            </span>
+          </div>
+
+          <!-- Thread messages -->
+          <div class="space-y-2 py-2">
+            {#each $currentSessionMessages as msg (msg.id)}
+              {@const isUser = msg.role === 'user'}
+              {@const htmlContent = marked.parse(msg.content)}
+              <div
+                class="message w-full border-l-2 px-3 py-2 {isUser
+                  ? 'border-term-accent-alt bg-transparent'
+                  : 'border-term-accent bg-term-bg'}"
+              >
+                <div class="flex flex-col gap-1">
+                  <span class="text-xs {isUser ? 'text-term-accent-alt' : 'text-term-accent'}">
+                    {isUser ? '$ user@session' : '> agent@session'}
+                  </span>
+                  <div class="prose-terminal text-sm text-term-fg">
+                    {@html htmlContent}
+                  </div>
+                  <time class="text-xs text-term-fg-muted">
+                    {new Date(msg.created_at).toLocaleTimeString()}
+                  </time>
+                </div>
+              </div>
+            {/each}
+          </div>
+
+          <!-- Session status indicator -->
+          {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
+            <div class="flex items-center gap-2 border-t border-term-border px-3 py-2 text-xs text-term-cyan">
+              <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
+              <span>Processing...</span>
+            </div>
+          {:else if ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes($currentSession.status)}
+            <div class="flex items-center gap-1 border-t border-term-border px-3 py-2 text-xs text-term-magenta">
+              <span class="animate-pulse">*</span>
+              <span>Waiting for your input</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
     {/if}
 
     {#if isLoading}
@@ -173,3 +240,56 @@
     <InputBar onsend={handleSend} disabled={isLoading} {placeholder} />
   </div>
 </div>
+
+<style>
+  /* Terminal-styled markdown for thread messages */
+  .prose-terminal :global(p) {
+    margin: 0 0 0.5em 0;
+  }
+  .prose-terminal :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .prose-terminal :global(code) {
+    background: var(--term-bg);
+    border: 1px solid var(--term-border);
+    padding: 0.125em 0.375em;
+    font-size: 0.9em;
+    word-break: break-word;
+  }
+  .prose-terminal :global(pre) {
+    background: var(--term-bg);
+    border: 1px solid var(--term-border);
+    padding: 0.75em;
+    margin: 0.5em 0;
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .prose-terminal :global(pre code) {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .prose-terminal :global(ul),
+  .prose-terminal :global(ol) {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+  }
+  .prose-terminal :global(li) {
+    margin: 0.25em 0;
+  }
+  .prose-terminal :global(ul) {
+    list-style-type: disc;
+  }
+  .prose-terminal :global(ol) {
+    list-style-type: decimal;
+  }
+  .prose-terminal :global(strong) {
+    color: var(--term-accent);
+    font-weight: 600;
+  }
+  .prose-terminal :global(a) {
+    color: var(--term-info);
+    text-decoration: underline;
+  }
+</style>
