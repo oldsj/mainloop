@@ -8,6 +8,7 @@
   import { themeStore } from '$lib/stores/theme';
   import { mobileTab } from '$lib/stores/mobileTab';
   import { isMobile } from '$lib/stores/viewport';
+  import { navigationContext, isZoomed } from '$lib/stores/navigationContext';
   import { connectSSE, disconnectSSE, getSSEClient } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
@@ -16,7 +17,10 @@
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
   import ThemeSelector from '$lib/components/ThemeSelector.svelte';
   import NotificationToast from '$lib/components/NotificationToast.svelte';
+  import SessionPicker from '$lib/components/SessionPicker.svelte';
+  import ZoomedSessionView from '$lib/components/ZoomedSessionView.svelte';
   import { beforeNavigate } from '$app/navigation';
+  import { page } from '$app/stores';
 
   let { children, data }: { children: any; data: LayoutData } = $props();
 
@@ -27,6 +31,42 @@
   beforeNavigate(() => {
     mobileTab.set('chat');
   });
+
+  // Initialize navigation context from URL (for zoom mode persistence)
+  $effect(() => {
+    const searchParams = $page.url.searchParams;
+    navigationContext.initFromUrl(searchParams);
+  });
+
+  // Global keyboard handler for session navigation
+  function handleGlobalKeydown(e: KeyboardEvent) {
+    // Don't intercept if in an input/textarea (except for Tab shortcuts)
+    const target = e.target;
+    const isInput = target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement;
+
+    if (e.key === 'Tab') {
+      if (isInput) {
+        // Tab opens picker, Shift+Tab returns to main
+        if (!e.shiftKey) {
+          e.preventDefault();
+          navigationContext.togglePicker();
+        } else {
+          e.preventDefault();
+          navigationContext.switchToMain();
+        }
+      }
+      return;
+    }
+
+    // Escape closes picker or exits zoom
+    if (e.key === 'Escape') {
+      if ($navigationContext.pickerOpen) {
+        navigationContext.closePicker();
+      } else if ($navigationContext.zoomedSession) {
+        navigationContext.exitZoom();
+      }
+    }
+  }
 
   onMount(() => {
     themeStore.initialize();
@@ -73,6 +113,13 @@
   });
 </script>
 
+<svelte:window onkeydown={handleGlobalKeydown} />
+
+<!-- Session picker (global overlay) -->
+{#if $navigationContext.pickerOpen}
+  <SessionPicker onClose={() => navigationContext.closePicker()} />
+{/if}
+
 <!-- Notification toasts -->
 <NotificationToast />
 
@@ -87,7 +134,9 @@
     </header>
 
     <div class="flex-1 overflow-hidden pb-16">
-      {#if activeTab === 'chat'}
+      {#if $navigationContext.zoomedSession}
+        <ZoomedSessionView sessionId={$navigationContext.zoomedSession} />
+      {:else if activeTab === 'chat'}
         <div class="h-full overflow-hidden">
           {@render children()}
         </div>
@@ -113,21 +162,27 @@
 
     <div class="flex flex-1 overflow-hidden">
       <main class="flex-1 overflow-hidden">
-        {@render children()}
+        {#if $navigationContext.zoomedSession}
+          <ZoomedSessionView sessionId={$navigationContext.zoomedSession} />
+        {:else}
+          {@render children()}
+        {/if}
       </main>
 
-      <!-- Desktop: Always visible side panels -->
-      <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
-        <div class="h-1/3 overflow-hidden border-b border-term-border">
-          <SessionList />
+      <!-- Desktop: Always visible side panels (hidden in zoom mode) -->
+      {#if !$navigationContext.zoomedSession}
+        <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
+          <div class="flex-1 overflow-hidden border-b border-term-border">
+            <SessionList />
+          </div>
+          <div class="h-1/4 overflow-hidden border-b border-term-border">
+            <TasksPanel desktop={true} />
+          </div>
+          <div class="h-1/4 overflow-hidden">
+            <ProjectList />
+          </div>
         </div>
-        <div class="h-1/3 overflow-hidden border-b border-term-border">
-          <TasksPanel desktop={true} />
-        </div>
-        <div class="h-1/3 overflow-hidden">
-          <ProjectList />
-        </div>
-      </div>
+      {/if}
     </div>
   </div>
 {/if}

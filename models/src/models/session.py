@@ -129,6 +129,14 @@ class Session(BaseModel):
     )
     commit_sha: str | None = Field(None, description="Final commit SHA")
 
+    # Inline thread anchoring
+    anchor_message_id: str | None = Field(
+        None, description="Main thread message ID that triggered this session"
+    )
+    color: str | None = Field(
+        None, description="Assigned color for inline display (hex or name)"
+    )
+
     # Routing and task metadata
     keywords: list[str] = Field(
         default_factory=list, description="Keywords for task routing"
@@ -174,6 +182,11 @@ class SessionCreate(BaseModel):
         None, description="GitHub repository URL for code work"
     )
     skip_plan: bool = Field(default=False, description="Skip planning phase")
+
+    # Optional: for inline threading
+    anchor_message_id: str | None = Field(
+        None, description="Main thread message ID to anchor this session to"
+    )
 
 
 class SessionNotification(BaseModel):

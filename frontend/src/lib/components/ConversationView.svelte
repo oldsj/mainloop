@@ -1,8 +1,11 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import type { Message } from '$lib/api';
+  import type { Message, Session } from '$lib/api';
+  import { sessions } from '$lib/stores/sessions';
+  import { navigationContext } from '$lib/stores/navigationContext';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
+  import SessionBlock from './SessionBlock.svelte';
 
   let {
     messages = [],
@@ -10,7 +13,8 @@
     onSendMessage,
     placeholder = 'Enter command...',
     emptyStateTitle = '$ mainloop --help',
-    emptyStateMessage = 'Start a conversation to begin'
+    emptyStateMessage = 'Start a conversation to begin',
+    showInlineSessions = true
   }: {
     messages: Message[];
     isLoading: boolean;
@@ -18,7 +22,29 @@
     placeholder?: string;
     emptyStateTitle?: string;
     emptyStateMessage?: string;
+    showInlineSessions?: boolean;
   } = $props();
+
+  // Map of anchor_message_id -> sessions for inline rendering
+  const sessionsByAnchor = $derived(() => {
+    if (!showInlineSessions) return new Map<string, Session[]>();
+
+    const map = new Map<string, Session[]>();
+    for (const session of $sessions.sessions) {
+      if (session.anchor_message_id) {
+        const existing = map.get(session.anchor_message_id) || [];
+        existing.push(session);
+        map.set(session.anchor_message_id, existing);
+      }
+    }
+    return map;
+  });
+
+  // Sessions without anchors (show at bottom of conversation)
+  const unanchoredSessions = $derived(() => {
+    if (!showInlineSessions) return [];
+    return $sessions.sessions.filter(s => !s.anchor_message_id);
+  });
 
   let messagesContainer: HTMLDivElement;
   let showScrollButton = $state(false);
@@ -76,7 +102,33 @@
     {:else}
       {#each messages as message (message.id)}
         <MessageBubble {message} />
+
+        <!-- Inline sessions anchored to this message -->
+        {#if showInlineSessions}
+          {@const anchored = sessionsByAnchor().get(message.id) || []}
+          {#each anchored as session (session.id)}
+            <SessionBlock
+              {session}
+              isActive={$navigationContext.currentContext === session.id}
+              onSelect={() => navigationContext.switchToSession(session.id)}
+            />
+          {/each}
+        {/if}
       {/each}
+
+      <!-- Sessions without anchors (show at bottom) -->
+      {#if showInlineSessions && unanchoredSessions().length > 0}
+        <div class="mt-4 border-t border-term-border pt-4">
+          <div class="mb-2 text-xs text-term-fg-muted">Active Sessions</div>
+          {#each unanchoredSessions() as session (session.id)}
+            <SessionBlock
+              {session}
+              isActive={$navigationContext.currentContext === session.id}
+              onSelect={() => navigationContext.switchToSession(session.id)}
+            />
+          {/each}
+        </div>
+      {/if}
     {/if}
 
     {#if isLoading}

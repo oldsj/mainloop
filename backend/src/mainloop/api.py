@@ -298,6 +298,17 @@ async def chat(
         recent_messages=recent_messages,
     )
 
+    # If a session was spawned, don't save a main thread response
+    # The user interacts with the session directly
+    if result.suppress_response and result.spawned_session_ids:
+        # Return the first spawned session info instead of a message
+        # Frontend will auto-switch to this session
+        return ChatResponse(
+            conversation_id=conversation.id,
+            message=None,
+            spawned_session_id=result.spawned_session_ids[0],
+        )
+
     # Save assistant response and increment count
     assistant_message = await db.create_message(
         conversation_id=conversation.id,
@@ -939,6 +950,23 @@ async def list_sessions(
     return sessions
 
 
+# Color palette for session assignment
+SESSION_COLORS = [
+    "#06b6d4",  # cyan
+    "#22c55e",  # green
+    "#f97316",  # orange
+    "#a855f7",  # purple
+    "#ec4899",  # pink
+    "#eab308",  # yellow
+]
+
+
+async def _get_next_session_color(user_id: str) -> str:
+    """Get the next color for a session based on existing session count."""
+    existing_sessions = await db.list_sessions(user_id, limit=100)
+    return SESSION_COLORS[len(existing_sessions) % len(SESSION_COLORS)]
+
+
 @app.post("/sessions", response_model=Session)
 async def create_session(
     request: SessionCreate,
@@ -964,6 +992,9 @@ async def create_session(
     # Create conversation for this session
     conversation = await db.create_conversation(user_id, title=request.title)
 
+    # Assign color automatically
+    color = await _get_next_session_color(user_id)
+
     # Create session
     session = Session(
         id=str(uuid.uuid4()),
@@ -974,6 +1005,8 @@ async def create_session(
         prompt=request.prompt,
         conversation_id=conversation.id,
         status=SessionStatus.PENDING,
+        anchor_message_id=request.anchor_message_id,
+        color=color,
     )
     session = await db.create_session(session)
 

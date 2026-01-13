@@ -3,11 +3,9 @@
 
   let {
     session,
-    isExpanded = false,
     onclick
   }: {
     session: Session;
-    isExpanded?: boolean;
     onclick?: () => void;
   } = $props();
 
@@ -46,6 +44,11 @@
     ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes(session.status)
   );
 
+  // Check if session is actively running
+  const isActive = $derived(
+    ['active', 'planning', 'implementing'].includes(session.status)
+  );
+
   // Extract repo name from URL
   function getRepoName(repoUrl: string): string {
     return repoUrl.replace('https://github.com/', '');
@@ -68,14 +71,17 @@
 
 <button
   type="button"
-  class="w-full border border-term-border bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {isExpanded
-    ? 'border-term-accent'
-    : ''}"
+  class="w-full border border-term-border bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {isActive
+    ? 'border-l-2 border-l-term-cyan'
+    : ''} {needsAttention ? 'border-l-2 border-l-term-magenta bg-term-magenta/5' : ''}"
   {onclick}
 >
   <div class="flex items-start justify-between gap-2">
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
+        {#if isActive}
+          <span class="h-3 w-3 animate-spin rounded-full border border-term-cyan border-t-transparent"></span>
+        {/if}
         <span class="text-xs {statusColors[session.status] || 'text-term-fg-muted'}">
           [{statusLabels[session.status] || session.status.toUpperCase()}]
         </span>

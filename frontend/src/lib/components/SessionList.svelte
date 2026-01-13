@@ -1,31 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import type { Session } from '$lib/api';
   import { sessions, activeSessions } from '$lib/stores/sessions';
   import SessionListItem from './SessionListItem.svelte';
-  import SessionExpandedView from './SessionExpandedView.svelte';
-
-  let expandedSessionId = $state<string | null>(null);
 
   onMount(() => {
     sessions.fetchSessions();
   });
 
   function handleSessionClick(session: Session) {
-    if (expandedSessionId === session.id) {
-      expandedSessionId = null;
-    } else {
-      expandedSessionId = session.id;
-    }
+    goto(`/sessions/${session.id}`);
   }
-
-  function handleCloseExpanded() {
-    expandedSessionId = null;
-  }
-
-  let expandedSession = $derived(
-    $sessions.sessions.find((s) => s.id === expandedSessionId) || null
-  );
 </script>
 
 <div class="flex h-full flex-col bg-term-bg">
@@ -34,7 +20,10 @@
     <h2 class="text-sm font-medium text-term-fg">
       Sessions
       {#if $activeSessions.length > 0}
-        <span class="ml-1 text-term-accent">({$activeSessions.length} active)</span>
+        <span class="ml-2 inline-flex items-center gap-1 rounded bg-term-cyan/20 px-2 py-0.5 text-xs font-medium text-term-cyan">
+          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-term-cyan"></span>
+          {$activeSessions.length} active
+        </span>
       {/if}
     </h2>
     <button
@@ -50,36 +39,25 @@
   </div>
 
   <!-- Content -->
-  <div class="flex min-h-0 flex-1">
-    <!-- Session list -->
-    <div class="w-full overflow-y-auto {expandedSession ? 'hidden md:block md:w-1/3' : ''}">
-      {#if $sessions.loading && $sessions.sessions.length === 0}
-        <div class="flex items-center justify-center p-8 text-term-fg-muted">
-          <span>Loading sessions...</span>
-        </div>
-      {:else if $sessions.sessions.length === 0}
-        <div class="flex flex-col items-center justify-center p-8 text-term-fg-muted">
-          <p class="text-term-accent">$ sessions --list</p>
-          <p class="mt-2 text-sm">No sessions yet</p>
-          <p class="text-xs">Sessions appear when Claude spawns background work</p>
-        </div>
-      {:else}
-        <div class="space-y-2 p-3">
-          {#each $sessions.sessions as session (session.id)}
-            <SessionListItem
-              {session}
-              isExpanded={expandedSessionId === session.id}
-              onclick={() => handleSessionClick(session)}
-            />
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Expanded view -->
-    {#if expandedSession}
-      <div class="h-full w-full border-l border-term-border md:w-2/3">
-        <SessionExpandedView session={expandedSession} onClose={handleCloseExpanded} />
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    {#if $sessions.loading && $sessions.sessions.length === 0}
+      <div class="flex items-center justify-center p-8 text-term-fg-muted">
+        <span>Loading sessions...</span>
+      </div>
+    {:else if $sessions.sessions.length === 0}
+      <div class="flex flex-col items-center justify-center p-8 text-term-fg-muted">
+        <p class="text-term-accent">$ sessions --list</p>
+        <p class="mt-2 text-sm">No sessions yet</p>
+        <p class="text-xs">Sessions appear when Claude spawns background work</p>
+      </div>
+    {:else}
+      <div class="space-y-2 p-3">
+        {#each $sessions.sessions as session (session.id)}
+          <SessionListItem
+            {session}
+            onclick={() => handleSessionClick(session)}
+          />
+        {/each}
       </div>
     {/if}
   </div>

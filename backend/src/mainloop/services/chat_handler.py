@@ -85,6 +85,7 @@ def create_spawn_session_callable(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
+    spawned_session_ids: list[str],  # Mutable list to track spawned sessions
 ):
     """Create a raw spawn_session callable for Claude to use.
 
@@ -100,6 +101,21 @@ def create_spawn_session_callable(
         prompt = args.get("prompt", "")
         repo_url = args.get("repo_url")  # Optional - if provided, this is code work
         skip_plan = args.get("skip_plan", False)
+
+        # Get the most recent user message to use as anchor
+        # Session appears inline right after the user's request
+        anchor_message_id = None
+        try:
+            conv_messages = await db.get_messages(conversation_id)
+            if conv_messages:
+                # Find the last user message
+                for msg in reversed(conv_messages):
+                    if msg.role == "user":
+                        anchor_message_id = msg.id
+                        break
+                print(f"[SESSION] Using anchor_message_id: {anchor_message_id}")
+        except Exception as e:
+            print(f"[SESSION] Warning: Could not get anchor message: {e}")
 
         if not title:
             return {
@@ -148,7 +164,7 @@ def create_spawn_session_callable(
                 # Record this repo as recently used
                 await db.add_recent_repo(main_thread_id, repo_url)
 
-            # Create session
+            # Create session anchored to user's message
             session = Session(
                 user_id=user_id,
                 main_thread_id=main_thread_id,
@@ -157,6 +173,7 @@ def create_spawn_session_callable(
                 prompt=prompt,
                 conversation_id=conv.id,
                 status=SessionStatus.PENDING,
+                anchor_message_id=anchor_message_id,
                 # Code work fields (optional)
                 repo_url=repo_url,
                 project_id=project_id,
@@ -165,6 +182,9 @@ def create_spawn_session_callable(
             )
             session = await db.create_session(session)
             print(f"[SESSION] Session saved to DB: {session.id}")
+
+            # Track this session for anchor update after assistant message is saved
+            spawned_session_ids.append(session.id)
 
             # Start the session workflow
             from mainloop.workflows.session_worker import session_worker_workflow
@@ -218,6 +238,7 @@ def create_spawn_session_tool(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
+    spawned_session_ids: list[str],  # Mutable list to track spawned sessions
 ):
     """Create a spawn_session tool with context baked in.
 
@@ -226,7 +247,7 @@ def create_spawn_session_tool(
     """
     # Get the raw callable
     spawn_session_impl = create_spawn_session_callable(
-        user_id, main_thread_id, conversation_id
+        user_id, main_thread_id, conversation_id, spawned_session_ids
     )
 
     # Wrap it with the @tool decorator for Claude
@@ -306,6 +327,8 @@ class ChatResult:
     task_id: str | None = None
     needs_inbox_action: bool = False
     queue_item: QueueItem | None = None
+    spawned_session_ids: list[str] | None = None  # Sessions created during this turn
+    suppress_response: bool = False  # Don't save assistant message to main thread
 
 
 @dataclass
@@ -315,6 +338,7 @@ class ClaudeResponse:
     text: str
     compacted: bool = False
     compaction_count: int = 0
+    spawned_session_ids: list[str] | None = None  # Sessions created during this turn
 
 
 def _create_message_generator(prompt_text: str) -> AsyncIterator[dict]:
@@ -364,10 +388,11 @@ async def get_claude_response(
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
+        spawned_session_ids: list[str] = []  # Track sessions created during this turn
 
         if user_id and main_thread_id and conversation_id:
             spawn_session_tool = create_spawn_session_tool(
-                user_id, main_thread_id, conversation_id
+                user_id, main_thread_id, conversation_id, spawned_session_ids
             )
             mcp_server = create_sdk_mcp_server(
                 name="mainloop",
@@ -416,6 +441,9 @@ async def get_claude_response(
                         text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
                         compacted=compaction_count > 0,
                         compaction_count=compaction_count,
+                        spawned_session_ids=(
+                            spawned_session_ids if spawned_session_ids else None
+                        ),
                     )
             elif isinstance(msg, SystemMessage):
                 # Track compaction events (context was automatically summarized)
@@ -436,10 +464,14 @@ async def get_claude_response(
             ),
             compacted=compaction_count > 0,
             compaction_count=compaction_count,
+            spawned_session_ids=spawned_session_ids if spawned_session_ids else None,
         )
     except Exception as e:
         logger.error(f"Claude Agent SDK error: {e}")
-        return ClaudeResponse(text=f"Sorry, I encountered an error: {str(e)}")
+        return ClaudeResponse(
+            text=f"Sorry, I encountered an error: {str(e)}",
+            spawned_session_ids=spawned_session_ids if spawned_session_ids else None,
+        )
 
 
 async def process_message(
@@ -477,4 +509,12 @@ async def process_message(
         conversation_id=conversation_id,
     )
 
-    return ChatResult(response=claude_response.text)
+    # If sessions were spawned, suppress the main thread response
+    # The user interacts with the session directly
+    suppress = bool(claude_response.spawned_session_ids)
+
+    return ChatResult(
+        response=claude_response.text,
+        spawned_session_ids=claude_response.spawned_session_ids,
+        suppress_response=suppress,
+    )

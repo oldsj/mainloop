@@ -189,6 +189,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     pr_etag TEXT,
     pr_last_modified TIMESTAMPTZ,
     commit_sha TEXT,
+    -- Inline thread anchoring
+    anchor_message_id TEXT REFERENCES messages(id),
+    color VARCHAR(20),
     -- Routing and task metadata
     keywords TEXT[] DEFAULT '{}',
     skip_plan BOOLEAN DEFAULT FALSE,
@@ -203,6 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_main_thread ON sessions(main_thread_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 
 -- Session notifications (ephemeral)
 CREATE TABLE IF NOT EXISTS session_notifications (
@@ -416,12 +420,20 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='result') THEN
         ALTER TABLE sessions ADD COLUMN result JSONB;
     END IF;
+    -- Inline thread anchoring fields
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='anchor_message_id') THEN
+        ALTER TABLE sessions ADD COLUMN anchor_message_id TEXT REFERENCES messages(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='color') THEN
+        ALTER TABLE sessions ADD COLUMN color VARCHAR(20);
+    END IF;
 END $$;
 
 -- Create session indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_keywords ON sessions USING GIN(keywords);
+CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 """
 
 
@@ -1619,10 +1631,11 @@ class Database:
                  repo_url, project_id, branch_name, base_branch, model,
                  issue_url, issue_number, issue_etag, issue_last_modified,
                  pr_url, pr_number, pr_etag, pr_last_modified, commit_sha,
+                 anchor_message_id, color,
                  keywords, skip_plan, pending_questions, plan_text, result)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-                        $29, $30, $31, $32, $33)
+                        $29, $30, $31, $32, $33, $34, $35)
                 """,
                 session.id,
                 session.user_id,
@@ -1655,6 +1668,9 @@ class Database:
                 session.pr_etag,
                 session.pr_last_modified,
                 session.commit_sha,
+                # Inline thread anchoring
+                session.anchor_message_id,
+                session.color,
                 # Routing and planning fields
                 session.keywords,
                 session.skip_plan,
@@ -1728,6 +1744,9 @@ class Database:
         pr_etag: str | None = None,
         pr_last_modified: datetime | None = None,
         commit_sha: str | None = None,
+        # Inline thread anchoring
+        anchor_message_id: str | None = None,
+        color: str | None = None,
         # Planning fields
         pending_questions: list | None = None,
         plan_text: str | None = None,
@@ -1815,6 +1834,15 @@ class Database:
             updates.append(f"commit_sha = ${param_idx}")
             params.append(commit_sha)
             param_idx += 1
+        # Inline thread anchoring
+        if anchor_message_id is not None:
+            updates.append(f"anchor_message_id = ${param_idx}")
+            params.append(anchor_message_id)
+            param_idx += 1
+        if color is not None:
+            updates.append(f"color = ${param_idx}")
+            params.append(color)
+            param_idx += 1
         # Planning fields
         if pending_questions is not None:
             updates.append(f"pending_questions = ${param_idx}")
@@ -1893,6 +1921,9 @@ class Database:
             pr_etag=row.get("pr_etag"),
             pr_last_modified=row.get("pr_last_modified"),
             commit_sha=row.get("commit_sha"),
+            # Inline thread anchoring
+            anchor_message_id=row.get("anchor_message_id"),
+            color=row.get("color"),
             # Routing and planning fields
             keywords=row.get("keywords", []),
             skip_plan=row.get("skip_plan", False),

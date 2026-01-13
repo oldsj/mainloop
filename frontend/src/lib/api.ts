@@ -27,7 +27,8 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   conversation_id: string;
-  message: Message;
+  message: Message | null; // null when session spawned
+  spawned_session_id?: string; // Session ID if one was spawned
 }
 
 export type QueueItemType =
@@ -218,6 +219,9 @@ export interface Session {
   pr_url: string | null;
   pr_number: number | null;
   commit_sha: string | null;
+  // Inline thread anchoring
+  anchor_message_id: string | null;
+  color: string | null;
   // Planning fields
   keywords: string[];
   skip_plan: boolean;
@@ -232,6 +236,7 @@ export interface SessionCreate {
   prompt: string;
   repo_url?: string;
   skip_plan?: boolean;
+  anchor_message_id?: string;
 }
 
 export interface SessionNotification {

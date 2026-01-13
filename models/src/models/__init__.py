@@ -19,9 +19,6 @@ from models.workflow import (
     GitHubRepo,
     MainThread,
     Project,
-)
-from models.workflow import QuestionOption as _LegacyQuestionOption
-from models.workflow import (
     QueueItem,
     QueueItemPriority,
     QueueItemResponse,
