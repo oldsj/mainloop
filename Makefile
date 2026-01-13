@@ -26,11 +26,8 @@ dev: ## Start dev environment with hot reload (DevSpace + Kind)
 dev-stop: ## Stop DevSpace and purge resources
 	devspace purge --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
-dev-reset: ## Reset ALL data (database + task namespaces)
-	@./scripts/kind/reset-data.sh --all
-	@echo "Restarting backend to clear workflow state..."
-	@kubectl rollout restart deployment/mainloop-backend-devspace -n mainloop --context kind-$(KIND_CLUSTER_NAME)
-	@kubectl rollout status deployment/mainloop-backend-devspace -n mainloop --context kind-$(KIND_CLUSTER_NAME) --timeout=60s
+dev-reset: ## Reset ALL data (database + task namespaces + restart backend)
+	@./scripts/kind/reset-data.sh
 
 dev-logs: ## Tail backend logs
 	devspace logs -f --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
@@ -264,8 +261,7 @@ kind-secrets: ## Create K8s secrets from .env
 kind-deploy: ## Deploy mainloop to Kind
 	@./scripts/kind/deploy.sh
 
-kind-reset: ## Reset data (DB + task namespaces) - keeps cluster
-	@./scripts/kind/reset-data.sh
+kind-reset: dev-reset ## Alias for dev-reset
 
 kind-logs: ## Tail backend logs (Kind test cluster)
 	@kubectl --context=kind-$(KIND_CLUSTER_NAME) logs -n mainloop deployment/mainloop-backend -f
@@ -322,8 +318,7 @@ test-run: ## Run tests headless (after make test or make dev)
 	@./scripts/wait-for-ready.sh
 	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test $(TEST_ARGS)
 
-test-reset: ## Reset DB and task namespaces
-	@./scripts/kind/reset-data.sh
+test-reset: dev-reset ## Alias for dev-reset
 
 test-ci: ## Run tests in CI (uses legacy kind scripts, no DevSpace)
 	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
