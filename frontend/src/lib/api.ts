@@ -166,6 +166,84 @@ export interface ProjectDetail {
   tasks: WorkerTask[];
 }
 
+// Session types
+export type SessionStatus =
+  | 'pending'
+  | 'active'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'waiting_on_user'
+  | 'waiting_questions'
+  | 'waiting_plan_review'
+  | 'ready_to_implement'
+  | 'planning'
+  | 'implementing'
+  | 'under_review';
+
+export interface SessionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: QuestionOption[];
+  multi_select: boolean;
+  response: string | null;
+}
+
+export interface Session {
+  id: string;
+  user_id: string;
+  main_thread_id: string;
+  title: string;
+  description: string;
+  prompt: string;
+  conversation_id: string;
+  status: SessionStatus;
+  worker_pod_name: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  summary: string | null;
+  error: string | null;
+  // Code work fields (optional)
+  repo_url: string | null;
+  project_id: string | null;
+  branch_name: string | null;
+  base_branch: string;
+  model: string | null;
+  // GitHub issue fields
+  issue_url: string | null;
+  issue_number: number | null;
+  // GitHub PR fields
+  pr_url: string | null;
+  pr_number: number | null;
+  commit_sha: string | null;
+  // Planning fields
+  keywords: string[];
+  skip_plan: boolean;
+  pending_questions: SessionQuestion[] | null;
+  plan_text: string | null;
+  result: Record<string, unknown> | null;
+}
+
+export interface SessionCreate {
+  title: string;
+  description: string;
+  prompt: string;
+  repo_url?: string;
+  skip_plan?: boolean;
+}
+
+export interface SessionNotification {
+  id: string;
+  session_id: string;
+  user_id: string;
+  title: string;
+  preview: string;
+  read: boolean;
+  created_at: string;
+}
+
 export const api = {
   async listConversations(): Promise<{ conversations: Conversation[]; total: number }> {
     const response = await fetch(`${API_URL}/conversations`);
@@ -367,5 +445,76 @@ export const api = {
    */
   getEventsStreamUrl(): string {
     return `${API_URL}/events`;
+  },
+
+  // Session endpoints
+  async listSessions(options?: { status?: string }): Promise<Session[]> {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    const url = params.toString() ? `${API_URL}/sessions?${params}` : `${API_URL}/sessions`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to list sessions');
+    return response.json();
+  },
+
+  async createSession(request: SessionCreate): Promise<Session> {
+    const response = await fetch(`${API_URL}/sessions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request)
+    });
+    if (!response.ok) throw new Error('Failed to create session');
+    return response.json();
+  },
+
+  async getSession(sessionId: string): Promise<Session> {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}`);
+    if (!response.ok) throw new Error('Failed to get session');
+    return response.json();
+  },
+
+  async getSessionConversation(
+    sessionId: string
+  ): Promise<{ session: Session; messages: Message[] }> {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}/conversation`);
+    if (!response.ok) throw new Error('Failed to get session conversation');
+    return response.json();
+  },
+
+  async sendSessionMessage(sessionId: string, message: string): Promise<{ message_id: string }> {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ message })
+    });
+    if (!response.ok) throw new Error('Failed to send session message');
+    return response.json();
+  },
+
+  async cancelSession(sessionId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}/cancel`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to cancel session');
+  },
+
+  // Notification endpoints
+  async listNotifications(unreadOnly: boolean = true): Promise<SessionNotification[]> {
+    const params = new URLSearchParams();
+    params.set('unread_only', unreadOnly.toString());
+    const response = await fetch(`${API_URL}/notifications?${params}`);
+    if (!response.ok) throw new Error('Failed to list notifications');
+    return response.json();
+  },
+
+  async dismissNotification(notificationId: string): Promise<void> {
+    const response = await fetch(`${API_URL}/notifications/${notificationId}/dismiss`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to dismiss notification');
   }
 };

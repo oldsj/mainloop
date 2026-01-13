@@ -1,9 +1,6 @@
 @import '@mainloop/ui/theme.css';
 @import 'tailwindcss';
 
-/* JetBrains Mono from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 /* Base terminal styling */
 html {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;

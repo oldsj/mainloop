@@ -8,6 +8,7 @@ import { test, expect } from '../fixtures';
  * 2. Verify conversation history
  * 3. Send follow-up → verify context maintained
  * 4. Create task → verify it appears
+ * 5. Create session → verify it appears
  */
 
 test.describe('User Journey (E2E)', () => {
@@ -108,5 +109,31 @@ test.describe('User Journey (E2E)', () => {
     await expect(
       page.locator('[data-testid="projects-list"]').getByText('oldsj/mainloop')
     ).toBeVisible({ timeout: 30000 });
+  });
+
+  test('5. create session via conversation', async () => {
+    const page = sharedPage;
+    const input = page.getByPlaceholder('Enter command...').first();
+
+    // Wait for input to be ready
+    await expect(input).toBeEnabled({ timeout: 10000 });
+
+    await input.fill(
+      'Spawn a background session to research best practices for TypeScript error handling. Title it "Error Handling Research". I confirm, please spawn now.'
+    );
+    await page.getByRole('button', { name: 'EXEC' }).click();
+
+    // Verify message appeared
+    await expect(page.getByText('Error Handling Research').first()).toBeVisible({ timeout: 10000 });
+
+    // Wait for session to appear in sessions list (look for title or "ACTIVE" badge)
+    // The session will appear in the Sessions panel which should show the title
+    await expect(page.getByRole('heading', { name: 'Sessions' })).toBeVisible({ timeout: 30000 });
+
+    // Wait for the session to be created and appear
+    // It may show as either title text or in an active badge
+    await expect(
+      page.getByText('Error Handling Research').or(page.getByText('[ACTIVE]'))
+    ).toBeVisible({ timeout: 60000 });
   });
 });

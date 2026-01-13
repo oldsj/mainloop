@@ -16,6 +16,9 @@ from models import (
     QueueItem,
     QueueItemPriority,
     QueueItemType,
+    Session,
+    SessionNotification,
+    SessionStatus,
     TaskStatus,
     WorkerTask,
 )
@@ -152,6 +155,67 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used_at DESC);
+
+-- Sessions (unified: both simple conversations and code work)
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    main_thread_id TEXT NOT NULL REFERENCES main_threads(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    worker_pod_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    summary TEXT,
+    error TEXT,
+    -- Code work fields (optional - only used when repo_url is set)
+    repo_url TEXT,
+    project_id TEXT REFERENCES projects(id),
+    branch_name TEXT,
+    base_branch TEXT DEFAULT 'main',
+    model TEXT,
+    -- GitHub integration - Plan phase (issue)
+    issue_url TEXT,
+    issue_number INTEGER,
+    issue_etag TEXT,
+    issue_last_modified TIMESTAMPTZ,
+    -- GitHub integration - Implementation phase (PR)
+    pr_url TEXT,
+    pr_number INTEGER,
+    pr_etag TEXT,
+    pr_last_modified TIMESTAMPTZ,
+    commit_sha TEXT,
+    -- Routing and task metadata
+    keywords TEXT[] DEFAULT '{}',
+    skip_plan BOOLEAN DEFAULT FALSE,
+    -- Interactive planning state
+    pending_questions JSONB,
+    plan_text TEXT,
+    -- Additional result data
+    result JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_main_thread ON sessions(main_thread_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+
+-- Session notifications (ephemeral)
+CREATE TABLE IF NOT EXISTS session_notifications (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    preview TEXT NOT NULL,
+    read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_session_notifications_user ON session_notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_session_notifications_unread ON session_notifications(user_id, read) WHERE NOT read;
 """
 
 # Migration SQL for adding new columns to existing tables
@@ -287,6 +351,77 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_keywords ON worker_tasks USING GIN(keywords);
 CREATE INDEX IF NOT EXISTS idx_worker_tasks_project ON worker_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
+
+-- Add new columns to sessions for unified model
+DO $$
+BEGIN
+    -- Code work fields
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='repo_url') THEN
+        ALTER TABLE sessions ADD COLUMN repo_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='project_id') THEN
+        ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='branch_name') THEN
+        ALTER TABLE sessions ADD COLUMN branch_name TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='base_branch') THEN
+        ALTER TABLE sessions ADD COLUMN base_branch TEXT DEFAULT 'main';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='model') THEN
+        ALTER TABLE sessions ADD COLUMN model TEXT;
+    END IF;
+    -- GitHub issue fields
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='issue_url') THEN
+        ALTER TABLE sessions ADD COLUMN issue_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='issue_number') THEN
+        ALTER TABLE sessions ADD COLUMN issue_number INTEGER;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='issue_etag') THEN
+        ALTER TABLE sessions ADD COLUMN issue_etag TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='issue_last_modified') THEN
+        ALTER TABLE sessions ADD COLUMN issue_last_modified TIMESTAMPTZ;
+    END IF;
+    -- GitHub PR fields
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pr_url') THEN
+        ALTER TABLE sessions ADD COLUMN pr_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pr_number') THEN
+        ALTER TABLE sessions ADD COLUMN pr_number INTEGER;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pr_etag') THEN
+        ALTER TABLE sessions ADD COLUMN pr_etag TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pr_last_modified') THEN
+        ALTER TABLE sessions ADD COLUMN pr_last_modified TIMESTAMPTZ;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='commit_sha') THEN
+        ALTER TABLE sessions ADD COLUMN commit_sha TEXT;
+    END IF;
+    -- Routing and planning fields
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='keywords') THEN
+        ALTER TABLE sessions ADD COLUMN keywords TEXT[] DEFAULT '{}';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='skip_plan') THEN
+        ALTER TABLE sessions ADD COLUMN skip_plan BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pending_questions') THEN
+        ALTER TABLE sessions ADD COLUMN pending_questions JSONB;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='plan_text') THEN
+        ALTER TABLE sessions ADD COLUMN plan_text TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='result') THEN
+        ALTER TABLE sessions ADD COLUMN result JSONB;
+    END IF;
+END $$;
+
+-- Create session indexes
+CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_keywords ON sessions USING GIN(keywords);
 """
 
 
@@ -1464,6 +1599,389 @@ class Database:
             conversation_id=row["conversation_id"],
             role=row["role"],  # type: ignore
             content=row["content"],
+            created_at=row["created_at"],
+        )
+
+    # ============= Session Operations =============
+
+    async def create_session(self, session: Session) -> Session:
+        """Create a new session."""
+        if not self._pool:
+            return session
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO sessions
+                (id, user_id, main_thread_id, title, description, prompt,
+                 conversation_id, status, worker_pod_name, created_at,
+                 started_at, completed_at, summary, error,
+                 repo_url, project_id, branch_name, base_branch, model,
+                 issue_url, issue_number, issue_etag, issue_last_modified,
+                 pr_url, pr_number, pr_etag, pr_last_modified, commit_sha,
+                 keywords, skip_plan, pending_questions, plan_text, result)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                        $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
+                        $29, $30, $31, $32, $33)
+                """,
+                session.id,
+                session.user_id,
+                session.main_thread_id,
+                session.title,
+                session.description,
+                session.prompt,
+                session.conversation_id,
+                session.status.value,
+                session.worker_pod_name,
+                session.created_at,
+                session.started_at,
+                session.completed_at,
+                session.summary,
+                session.error,
+                # Code work fields
+                session.repo_url,
+                session.project_id,
+                session.branch_name,
+                session.base_branch,
+                session.model,
+                # GitHub issue fields
+                session.issue_url,
+                session.issue_number,
+                session.issue_etag,
+                session.issue_last_modified,
+                # GitHub PR fields
+                session.pr_url,
+                session.pr_number,
+                session.pr_etag,
+                session.pr_last_modified,
+                session.commit_sha,
+                # Routing and planning fields
+                session.keywords,
+                session.skip_plan,
+                (
+                    json.dumps([q.model_dump() for q in session.pending_questions])
+                    if session.pending_questions
+                    else None
+                ),
+                session.plan_text,
+                json.dumps(session.result) if session.result else None,
+            )
+        return session
+
+    async def get_session(self, session_id: str) -> Session | None:
+        """Get a session by ID."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM sessions WHERE id = $1", session_id
+            )
+        if not row:
+            return None
+        return self._row_to_session(row)
+
+    async def list_sessions(
+        self,
+        user_id: str,
+        status: SessionStatus | None = None,
+        limit: int = 50,
+    ) -> list[Session]:
+        """List sessions for a user."""
+        if not self._pool:
+            return []
+
+        query = "SELECT * FROM sessions WHERE user_id = $1"
+        params: list[Any] = [user_id]
+
+        if status:
+            query += f" AND status = ${len(params) + 1}"
+            params.append(status.value)
+
+        query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
+        params.append(limit)
+
+        async with self.connection() as conn:
+            rows = await conn.fetch(query, *params)
+        return [self._row_to_session(row) for row in rows]
+
+    async def update_session(
+        self,
+        session_id: str,
+        status: SessionStatus | None = None,
+        worker_pod_name: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        summary: str | None = None,
+        error: str | None = None,
+        # Code work fields
+        repo_url: str | None = None,
+        project_id: str | None = None,
+        branch_name: str | None = None,
+        # GitHub issue fields
+        issue_url: str | None = None,
+        issue_number: int | None = None,
+        issue_etag: str | None = None,
+        issue_last_modified: datetime | None = None,
+        # GitHub PR fields
+        pr_url: str | None = None,
+        pr_number: int | None = None,
+        pr_etag: str | None = None,
+        pr_last_modified: datetime | None = None,
+        commit_sha: str | None = None,
+        # Planning fields
+        pending_questions: list | None = None,
+        plan_text: str | None = None,
+        result: dict | None = None,
+    ):
+        """Update session fields."""
+        if not self._pool:
+            return
+        updates = []
+        params = []
+        param_idx = 1
+
+        if status is not None:
+            updates.append(f"status = ${param_idx}")
+            params.append(status.value)
+            param_idx += 1
+        if worker_pod_name is not None:
+            updates.append(f"worker_pod_name = ${param_idx}")
+            params.append(worker_pod_name)
+            param_idx += 1
+        if started_at is not None:
+            updates.append(f"started_at = ${param_idx}")
+            params.append(started_at)
+            param_idx += 1
+        if completed_at is not None:
+            updates.append(f"completed_at = ${param_idx}")
+            params.append(completed_at)
+            param_idx += 1
+        if summary is not None:
+            updates.append(f"summary = ${param_idx}")
+            params.append(summary)
+            param_idx += 1
+        if error is not None:
+            updates.append(f"error = ${param_idx}")
+            params.append(error)
+            param_idx += 1
+        # Code work fields
+        if repo_url is not None:
+            updates.append(f"repo_url = ${param_idx}")
+            params.append(repo_url)
+            param_idx += 1
+        if project_id is not None:
+            updates.append(f"project_id = ${param_idx}")
+            params.append(project_id)
+            param_idx += 1
+        if branch_name is not None:
+            updates.append(f"branch_name = ${param_idx}")
+            params.append(branch_name)
+            param_idx += 1
+        # GitHub issue fields
+        if issue_url is not None:
+            updates.append(f"issue_url = ${param_idx}")
+            params.append(issue_url)
+            param_idx += 1
+        if issue_number is not None:
+            updates.append(f"issue_number = ${param_idx}")
+            params.append(issue_number)
+            param_idx += 1
+        if issue_etag is not None:
+            updates.append(f"issue_etag = ${param_idx}")
+            params.append(issue_etag)
+            param_idx += 1
+        if issue_last_modified is not None:
+            updates.append(f"issue_last_modified = ${param_idx}")
+            params.append(issue_last_modified)
+            param_idx += 1
+        # GitHub PR fields
+        if pr_url is not None:
+            updates.append(f"pr_url = ${param_idx}")
+            params.append(pr_url)
+            param_idx += 1
+        if pr_number is not None:
+            updates.append(f"pr_number = ${param_idx}")
+            params.append(pr_number)
+            param_idx += 1
+        if pr_etag is not None:
+            updates.append(f"pr_etag = ${param_idx}")
+            params.append(pr_etag)
+            param_idx += 1
+        if pr_last_modified is not None:
+            updates.append(f"pr_last_modified = ${param_idx}")
+            params.append(pr_last_modified)
+            param_idx += 1
+        if commit_sha is not None:
+            updates.append(f"commit_sha = ${param_idx}")
+            params.append(commit_sha)
+            param_idx += 1
+        # Planning fields
+        if pending_questions is not None:
+            updates.append(f"pending_questions = ${param_idx}")
+            params.append(
+                json.dumps(
+                    [
+                        q.model_dump() if hasattr(q, "model_dump") else q
+                        for q in pending_questions
+                    ]
+                )
+                if pending_questions
+                else None
+            )
+            param_idx += 1
+        if plan_text is not None:
+            updates.append(f"plan_text = ${param_idx}")
+            params.append(plan_text)
+            param_idx += 1
+        if result is not None:
+            updates.append(f"result = ${param_idx}")
+            params.append(json.dumps(result))
+            param_idx += 1
+
+        params.append(session_id)
+
+        if updates:
+            async with self.connection() as conn:
+                await conn.execute(
+                    f"UPDATE sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
+                    *params,
+                )
+
+    def _row_to_session(self, row: asyncpg.Record) -> Session:
+        from models import SessionQuestion
+
+        # Parse pending_questions JSON
+        pending_questions = None
+        raw_questions = row.get("pending_questions")
+        if raw_questions:
+            parsed = _parse_json_field(raw_questions)
+            if parsed and isinstance(parsed, list):
+                pending_questions = [SessionQuestion(**q) for q in parsed]
+
+        # Parse result JSON
+        result = _parse_json_field(row.get("result"))
+
+        return Session(
+            id=row["id"],
+            user_id=row["user_id"],
+            main_thread_id=row["main_thread_id"],
+            title=row["title"],
+            description=row["description"],
+            prompt=row["prompt"],
+            conversation_id=row["conversation_id"],
+            status=SessionStatus(row["status"]),
+            worker_pod_name=row.get("worker_pod_name"),
+            created_at=row["created_at"],
+            started_at=row.get("started_at"),
+            completed_at=row.get("completed_at"),
+            summary=row.get("summary"),
+            error=row.get("error"),
+            # Code work fields
+            repo_url=row.get("repo_url"),
+            project_id=row.get("project_id"),
+            branch_name=row.get("branch_name"),
+            base_branch=row.get("base_branch", "main"),
+            model=row.get("model"),
+            # GitHub issue fields
+            issue_url=row.get("issue_url"),
+            issue_number=row.get("issue_number"),
+            issue_etag=row.get("issue_etag"),
+            issue_last_modified=row.get("issue_last_modified"),
+            # GitHub PR fields
+            pr_url=row.get("pr_url"),
+            pr_number=row.get("pr_number"),
+            pr_etag=row.get("pr_etag"),
+            pr_last_modified=row.get("pr_last_modified"),
+            commit_sha=row.get("commit_sha"),
+            # Routing and planning fields
+            keywords=row.get("keywords", []),
+            skip_plan=row.get("skip_plan", False),
+            pending_questions=pending_questions,
+            plan_text=row.get("plan_text"),
+            result=result,
+        )
+
+    # ============= Session Notification Operations =============
+
+    async def create_session_notification(
+        self, notification: SessionNotification
+    ) -> SessionNotification:
+        """Create a new session notification."""
+        if not self._pool:
+            return notification
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO session_notifications
+                (id, session_id, user_id, title, preview, read, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                notification.id,
+                notification.session_id,
+                notification.user_id,
+                notification.title,
+                notification.preview,
+                notification.read,
+                notification.created_at,
+            )
+        return notification
+
+    async def list_session_notifications(
+        self,
+        user_id: str,
+        unread_only: bool = True,
+        limit: int = 50,
+    ) -> list[SessionNotification]:
+        """List session notifications for a user."""
+        if not self._pool:
+            return []
+
+        if unread_only:
+            query = """
+                SELECT * FROM session_notifications
+                WHERE user_id = $1 AND read = FALSE
+                ORDER BY created_at DESC
+                LIMIT $2
+            """
+        else:
+            query = """
+                SELECT * FROM session_notifications
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """
+
+        async with self.connection() as conn:
+            rows = await conn.fetch(query, user_id, limit)
+        return [self._row_to_session_notification(row) for row in rows]
+
+    async def mark_session_notification_read(self, notification_id: str) -> None:
+        """Mark a session notification as read."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                "UPDATE session_notifications SET read = TRUE WHERE id = $1",
+                notification_id,
+            )
+
+    async def dismiss_session_notification(self, notification_id: str) -> None:
+        """Delete a session notification (dismiss)."""
+        if not self._pool:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                "DELETE FROM session_notifications WHERE id = $1",
+                notification_id,
+            )
+
+    def _row_to_session_notification(self, row: asyncpg.Record) -> SessionNotification:
+        return SessionNotification(
+            id=row["id"],
+            session_id=row["session_id"],
+            user_id=row["user_id"],
+            title=row["title"],
+            preview=row["preview"],
+            read=row["read"],
             created_at=row["created_at"],
         )
 

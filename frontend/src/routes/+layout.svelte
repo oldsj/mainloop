@@ -3,16 +3,19 @@
   import type { LayoutData } from './$types';
   import { onMount } from 'svelte';
   import { inbox } from '$lib/stores/inbox';
-  import { tasks } from '$lib/stores/tasks';
+  import { sessions } from '$lib/stores/sessions';
+  import { notifications } from '$lib/stores/notifications';
   import { themeStore } from '$lib/stores/theme';
   import { mobileTab } from '$lib/stores/mobileTab';
   import { isMobile } from '$lib/stores/viewport';
-  import { connectSSE, disconnectSSE } from '$lib/sse';
+  import { connectSSE, disconnectSSE, getSSEClient } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
   import TasksPanel from '$lib/components/TasksPanel.svelte';
+  import SessionList from '$lib/components/SessionList.svelte';
   import ProjectList from '$lib/components/ProjectList.svelte';
   import MobileTabBar from '$lib/components/MobileTabBar.svelte';
   import ThemeSelector from '$lib/components/ThemeSelector.svelte';
+  import NotificationToast from '$lib/components/NotificationToast.svelte';
   import { beforeNavigate } from '$app/navigation';
 
   let { children, data }: { children: any; data: LayoutData } = $props();
@@ -33,15 +36,45 @@
 
     // Start listening for SSE events
     inbox.startListening();
-    tasks.startListening();
+
+    // Listen for session events
+    const client = getSSEClient();
+    const unsubSessionUpdated = client.on('session:updated', (event) => {
+      const { session_id, status } = event.data as { session_id: string; status: string };
+      sessions.updateSession(session_id, { status: status as any });
+    });
+    const unsubSessionNeedsInput = client.on('session:needs_input', (event) => {
+      const { session_id, title, preview } = event.data as {
+        session_id: string;
+        title: string;
+        preview: string;
+      };
+      notifications.addNotification({
+        id: `notif-${Date.now()}`,
+        session_id,
+        user_id: '',
+        title,
+        preview,
+        read: false,
+        created_at: new Date().toISOString()
+      });
+    });
+
+    // Fetch initial data
+    sessions.fetchSessions();
+    notifications.fetchNotifications();
 
     return () => {
       inbox.stopListening();
-      tasks.stopListening();
+      unsubSessionUpdated();
+      unsubSessionNeedsInput();
       disconnectSSE();
     };
   });
 </script>
+
+<!-- Notification toasts -->
+<NotificationToast />
 
 {#if $isMobile}
   <!-- Mobile Layout -->
@@ -85,10 +118,15 @@
 
       <!-- Desktop: Always visible side panels -->
       <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
-        <div class="flex-1 overflow-hidden">
+        <div class="h-1/3 overflow-hidden border-b border-term-border">
+          <SessionList />
+        </div>
+        <div class="h-1/3 overflow-hidden border-b border-term-border">
           <TasksPanel desktop={true} />
         </div>
-        <ProjectList />
+        <div class="h-1/3 overflow-hidden">
+          <ProjectList />
+        </div>
       </div>
     </div>
   </div>

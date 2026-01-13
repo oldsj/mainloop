@@ -1,9 +1,6 @@
 <script lang="ts">
-  import { activeTasksCount } from '$lib/stores/tasks';
   import { unreadCount } from '$lib/stores/inbox';
   import { mobileTab } from '$lib/stores/mobileTab';
-
-  const totalCount = $derived($activeTasksCount + $unreadCount);
 
   // Derived class strings for reactive styling
   const chatTabClass = $derived(
@@ -25,7 +22,7 @@
       onclick={() => mobileTab.set('chat')}
       class="flex flex-1 flex-col items-center gap-1 py-3 transition-colors {chatTabClass}"
       aria-label="Chat"
-      aria-selected={$mobileTab === 'chat'}
+      aria-pressed={$mobileTab === 'chat'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -50,7 +47,7 @@
       onclick={() => mobileTab.set('tasks')}
       class="relative flex flex-1 flex-col items-center gap-1 py-3 transition-colors {inboxTabClass}"
       aria-label="Inbox"
-      aria-selected={$mobileTab === 'tasks'}
+      aria-pressed={$mobileTab === 'tasks'}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -66,12 +63,12 @@
           d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z"
         />
       </svg>
-      {#if totalCount > 0}
+      {#if $unreadCount > 0}
         <span
           data-testid="inbox-badge"
           class="absolute right-1/4 top-2 flex h-5 min-w-5 items-center justify-center border border-term-info bg-term-info px-1 text-xs text-term-bg"
         >
-          {totalCount}
+          {$unreadCount}
         </span>
       {/if}
       <span class="text-xs">[INBOX]</span>

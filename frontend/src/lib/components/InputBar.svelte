@@ -3,8 +3,10 @@
 
   let {
     disabled = false,
-    onsend
-  }: { disabled?: boolean; onsend?: (detail: { message: string }) => void } = $props();
+    onsend,
+    placeholder = 'Enter command...'
+  }: { disabled?: boolean; onsend?: (detail: { message: string }) => void; placeholder?: string } =
+    $props();
 
   function handleSubmit(event: SubmitEvent) {
     event.preventDefault();
@@ -33,7 +35,7 @@
     bind:value={$draftMessage}
     onkeydown={handleKeydown}
     {disabled}
-    placeholder="Enter command..."
+    {placeholder}
     rows="1"
     class="flex-1 resize-none border-none bg-transparent text-term-fg placeholder:text-term-fg-muted focus:outline-none disabled:opacity-50"
   ></textarea>
