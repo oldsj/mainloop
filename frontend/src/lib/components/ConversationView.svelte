@@ -3,7 +3,7 @@
   import type { Message, Session } from '$lib/api';
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
-  import { currentSessionMessages } from '$lib/stores/sessionMessages';
+  import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
   import { marked } from 'marked';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
@@ -54,6 +54,40 @@
     gfm: true
   });
 
+  // Unified timeline: merge main messages with session messages (when focused)
+  type TimelineItem =
+    | { type: 'message'; message: Message }
+    | { type: 'session-anchor'; message: Message; sessions: Session[] }
+    | { type: 'thread-reply'; message: Message; session: Session };
+
+  const timeline = $derived(() => {
+    const items: TimelineItem[] = [];
+
+    // Add main thread messages (with session anchors)
+    for (const message of messages) {
+      const anchored = sessionsByAnchor().get(message.id) || [];
+      if (anchored.length > 0) {
+        items.push({ type: 'session-anchor', message, sessions: anchored });
+      } else {
+        items.push({ type: 'message', message });
+      }
+    }
+
+    // Add ALL session messages as thread replies (not just focused session)
+    for (const { message, session } of $allSessionMessagesFlat) {
+      items.push({ type: 'thread-reply', message, session });
+    }
+
+    // Sort everything by timestamp
+    items.sort((a, b) => {
+      const timeA = new Date(a.message.created_at).getTime();
+      const timeB = new Date(b.message.created_at).getTime();
+      return timeA - timeB;
+    });
+
+    return items;
+  });
+
   let messagesContainer: HTMLDivElement;
   let showScrollButton = $state(false);
 
@@ -79,7 +113,7 @@
     // Track these values to trigger effect
     messages;
     isLoading;
-    $currentSessionMessages;
+    $allSessionMessagesFlat;
 
     // Scroll after DOM updates
     tick().then(() => {
@@ -109,19 +143,55 @@
         <p class="animate-cursor text-term-accent">_</p>
       </div>
     {:else}
-      {#each messages as message (message.id)}
-        <MessageBubble {message} />
-
-        <!-- Inline sessions anchored to this message -->
-        {#if showInlineSessions}
-          {@const anchored = sessionsByAnchor().get(message.id) || []}
-          {#each anchored as session (session.id)}
-            <SessionBlock
-              {session}
-              isActive={$navigationContext.currentContext === session.id}
-              onSelect={() => navigationContext.switchToSession(session.id)}
-            />
-          {/each}
+      {#each timeline() as item (item.type === 'thread-reply' ? `thread-${item.message.id}` : item.message.id)}
+        {#if item.type === 'message'}
+          <MessageBubble message={item.message} />
+        {:else if item.type === 'session-anchor'}
+          <MessageBubble message={item.message} />
+          <!-- Inline sessions anchored to this message -->
+          {#if showInlineSessions}
+            {#each item.sessions as session (session.id)}
+              <SessionBlock
+                {session}
+                isActive={$navigationContext.currentContext === session.id}
+                onSelect={() => navigationContext.switchToSession(session.id)}
+              />
+            {/each}
+          {/if}
+        {:else if item.type === 'thread-reply'}
+          <!-- Thread reply notification (Slack-style "replied in thread") -->
+          {@const sessionColor = item.session.color || 'var(--term-cyan)'}
+          {@const isUser = item.message.role === 'user'}
+          {@const preview = item.message.content.slice(0, 120)}
+          {@const isLong = item.message.content.length > 120}
+          <button
+            type="button"
+            class="my-1 ml-4 flex w-[calc(100%-1rem)] items-start gap-2 border-l-4 bg-term-bg-secondary/30 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50"
+            style="border-color: {sessionColor};"
+            onclick={() => navigationContext.zoomSession(item.session.id)}
+          >
+            <span
+              class="mt-1 h-2 w-2 shrink-0 rounded-full"
+              style="background-color: {sessionColor};"
+            ></span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 text-xs">
+                <span style="color: {sessionColor};">{item.session.title}</span>
+                <span class="text-term-fg-muted">·</span>
+                <span class="text-term-fg-muted">
+                  {isUser ? 'You' : 'Agent'} replied
+                </span>
+                <span class="text-term-fg-muted">·</span>
+                <time class="text-term-fg-muted">
+                  {new Date(item.message.created_at).toLocaleTimeString()}
+                </time>
+              </div>
+              <div class="mt-1 truncate text-sm text-term-fg-muted">
+                {preview}{#if isLong}...{/if}
+              </div>
+            </div>
+            <span class="shrink-0 text-xs text-term-fg-muted">→</span>
+          </button>
         {/if}
       {/each}
 
@@ -139,62 +209,18 @@
         </div>
       {/if}
 
-      <!-- Inline thread replies when focused on a session -->
-      {#if $currentSession && $currentSessionMessages.length > 0}
+      <!-- Session status indicator when focused -->
+      {#if $currentSession}
         {@const sessionColor = $currentSession.color || 'var(--term-cyan)'}
-        <div
-          class="mt-4 border-l-4 bg-term-bg-secondary/50"
-          style="border-color: {sessionColor};"
-        >
-          <!-- Thread header -->
-          <div class="flex items-center gap-2 border-b border-term-border px-3 py-2">
-            <span
-              class="h-2 w-2 rounded-full"
-              style="background-color: {sessionColor};"
-            ></span>
-            <span class="text-xs text-term-fg-muted">
-              Thread: <span style="color: {sessionColor};">{$currentSession.title}</span>
-            </span>
+        {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
+          <div
+            class="my-1 ml-4 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"
+            style="border-color: {sessionColor}; color: {sessionColor};"
+          >
+            <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
+            <span>{$currentSession.title} processing...</span>
           </div>
-
-          <!-- Thread messages -->
-          <div class="space-y-2 py-2">
-            {#each $currentSessionMessages as msg (msg.id)}
-              {@const isUser = msg.role === 'user'}
-              {@const htmlContent = marked.parse(msg.content)}
-              <div
-                class="message w-full border-l-2 px-3 py-2 {isUser
-                  ? 'border-term-accent-alt bg-transparent'
-                  : 'border-term-accent bg-term-bg'}"
-              >
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs {isUser ? 'text-term-accent-alt' : 'text-term-accent'}">
-                    {isUser ? '$ user@session' : '> agent@session'}
-                  </span>
-                  <div class="prose-terminal text-sm text-term-fg">
-                    {@html htmlContent}
-                  </div>
-                  <time class="text-xs text-term-fg-muted">
-                    {new Date(msg.created_at).toLocaleTimeString()}
-                  </time>
-                </div>
-              </div>
-            {/each}
-          </div>
-
-          <!-- Session status indicator -->
-          {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
-            <div class="flex items-center gap-2 border-t border-term-border px-3 py-2 text-xs text-term-cyan">
-              <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
-              <span>Processing...</span>
-            </div>
-          {:else if ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes($currentSession.status)}
-            <div class="flex items-center gap-1 border-t border-term-border px-3 py-2 text-xs text-term-magenta">
-              <span class="animate-pulse">*</span>
-              <span>Waiting for your input</span>
-            </div>
-          {/if}
-        </div>
+        {/if}
       {/if}
     {/if}
 

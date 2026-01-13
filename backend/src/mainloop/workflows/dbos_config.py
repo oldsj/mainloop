@@ -8,9 +8,7 @@ from mainloop.config import settings
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = (
-    "7"  # v7: Fix PR URL extraction after implement job (was only in skip_plan mode)
-)
+WORKFLOW_VERSION = "8"  # v8: Simplified session worker - direct agent SDK conversation
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",

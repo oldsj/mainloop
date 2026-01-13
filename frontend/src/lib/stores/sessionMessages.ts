@@ -1,27 +1,26 @@
 /**
- * Session messages store for the currently focused session.
+ * Session messages store for ALL active sessions.
  *
  * Provides:
- * - Messages for inline display at bottom of ConversationView
+ * - Messages for all sessions (for timeline notifications)
  * - Optimistic updates when sending messages
- * - Auto-refresh integration with SessionBlock
+ * - Auto-refresh for active sessions
  */
 
 import { writable, derived, get } from 'svelte/store';
-import { api, type Message } from '$lib/api';
-import { navigationContext, currentSession } from './navigationContext';
+import { api, type Message, type Session } from '$lib/api';
+import { sessions } from './sessions';
 
-interface SessionMessagesState {
-  sessionId: string | null;
-  messages: Message[];
-  loading: boolean;
+interface AllSessionMessagesState {
+  // Map of sessionId -> messages
+  bySession: Map<string, Message[]>;
+  loading: Set<string>;
 }
 
-function createSessionMessagesStore() {
-  const { subscribe, set, update } = writable<SessionMessagesState>({
-    sessionId: null,
-    messages: [],
-    loading: false
+function createAllSessionMessagesStore() {
+  const { subscribe, set, update } = writable<AllSessionMessagesState>({
+    bySession: new Map(),
+    loading: new Set()
   });
 
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -30,55 +29,74 @@ function createSessionMessagesStore() {
     subscribe,
 
     /**
-     * Load messages for a session
+     * Load messages for a specific session
      */
-    async loadMessages(sessionId: string) {
-      update((s) => ({ ...s, sessionId, loading: true }));
+    async loadSession(sessionId: string) {
+      update((s) => {
+        const newLoading = new Set(s.loading);
+        newLoading.add(sessionId);
+        return { ...s, loading: newLoading };
+      });
+
       try {
         const data = await api.getSessionConversation(sessionId);
-        update((s) => ({
-          ...s,
-          sessionId,
-          messages: data.messages,
-          loading: false
-        }));
+        update((s) => {
+          const newBySession = new Map(s.bySession);
+          newBySession.set(sessionId, data.messages);
+          const newLoading = new Set(s.loading);
+          newLoading.delete(sessionId);
+          return { bySession: newBySession, loading: newLoading };
+        });
       } catch (e) {
         console.error('Failed to load session messages:', e);
-        update((s) => ({ ...s, loading: false }));
+        update((s) => {
+          const newLoading = new Set(s.loading);
+          newLoading.delete(sessionId);
+          return { ...s, loading: newLoading };
+        });
       }
     },
 
     /**
-     * Refresh messages for the current session
+     * Refresh messages for all active sessions
      */
-    async refresh() {
+    async refreshAll() {
+      const sessionsState = get(sessions);
+      const activeSessionIds = sessionsState.sessions
+        .filter((s) => !['completed', 'failed', 'cancelled'].includes(s.status))
+        .map((s) => s.id);
+
+      // Load each session's messages
+      await Promise.all(activeSessionIds.map((id) => this.loadSession(id)));
+    },
+
+    /**
+     * Add a message optimistically to a session
+     */
+    addOptimistic(sessionId: string, message: Message) {
+      update((s) => {
+        const newBySession = new Map(s.bySession);
+        const existing = newBySession.get(sessionId) || [];
+        newBySession.set(sessionId, [...existing, message]);
+        return { ...s, bySession: newBySession };
+      });
+    },
+
+    /**
+     * Get messages for a specific session
+     */
+    getMessages(sessionId: string): Message[] {
       const state = get({ subscribe });
-      if (state.sessionId) {
-        try {
-          const data = await api.getSessionConversation(state.sessionId);
-          update((s) => ({ ...s, messages: data.messages }));
-        } catch (e) {
-          console.error('Failed to refresh session messages:', e);
-        }
-      }
+      return state.bySession.get(sessionId) || [];
     },
 
     /**
-     * Add a message optimistically (for immediate UI feedback)
+     * Start auto-refresh polling for all active sessions
      */
-    addOptimistic(message: Message) {
-      update((s) => ({
-        ...s,
-        messages: [...s.messages, message]
-      }));
-    },
-
-    /**
-     * Start auto-refresh polling
-     */
-    startPolling(intervalMs = 2000) {
+    startPolling(intervalMs = 3000) {
       this.stopPolling();
-      refreshInterval = setInterval(() => this.refresh(), intervalMs);
+      this.refreshAll(); // Initial load
+      refreshInterval = setInterval(() => this.refreshAll(), intervalMs);
     },
 
     /**
@@ -92,27 +110,32 @@ function createSessionMessagesStore() {
     },
 
     /**
-     * Clear messages and stop polling
+     * Clear all messages
      */
     clear() {
       this.stopPolling();
-      set({ sessionId: null, messages: [], loading: false });
+      set({ bySession: new Map(), loading: new Set() });
     }
   };
 }
 
-export const sessionMessages = createSessionMessagesStore();
+export const allSessionMessages = createAllSessionMessagesStore();
 
 /**
- * Derived store: messages for the current focused session
+ * Derived store: all session messages flattened with session info
  */
-export const currentSessionMessages = derived(
-  [sessionMessages, currentSession],
-  ([$sessionMessages, $currentSession]) => {
-    // Only return messages if we're focused on this session
-    if (!$currentSession || $sessionMessages.sessionId !== $currentSession.id) {
-      return [];
+export const allSessionMessagesFlat = derived(
+  [allSessionMessages, sessions],
+  ([$allMessages, $sessions]) => {
+    const result: Array<{ message: Message; session: Session }> = [];
+
+    for (const session of $sessions.sessions) {
+      const messages = $allMessages.bySession.get(session.id) || [];
+      for (const message of messages) {
+        result.push({ message, session });
+      }
     }
-    return $sessionMessages.messages;
+
+    return result;
   }
 );

@@ -4,23 +4,16 @@
   import { projects } from '$lib/stores/projects';
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
-  import { sessionMessages } from '$lib/stores/sessionMessages';
+  import { allSessionMessages } from '$lib/stores/sessionMessages';
   import { api } from '$lib/api';
   import ConversationView from './ConversationView.svelte';
 
   let { messages, isLoading } = $derived($conversationStore);
 
-  // Load session messages when focusing on a session
+  // Start polling for all session messages
   $effect(() => {
-    const session = $currentSession;
-    if (session) {
-      sessionMessages.loadMessages(session.id);
-      sessionMessages.startPolling(2000);
-    } else {
-      sessionMessages.clear();
-    }
-
-    return () => sessionMessages.stopPolling();
+    allSessionMessages.startPolling(3000);
+    return () => allSessionMessages.stopPolling();
   });
 
   onMount(async () => {
@@ -108,7 +101,7 @@
     if (!session) return;
 
     // Optimistic: Add user message immediately to session messages
-    sessionMessages.addOptimistic({
+    allSessionMessages.addOptimistic(session.id, {
       id: `temp-${Date.now()}`,
       conversation_id: session.conversation_id,
       role: 'user',
@@ -121,7 +114,7 @@
       // Refresh session status and messages
       sessions.fetchSessions();
       // Force immediate refresh to get real message ID and any quick response
-      sessionMessages.refresh();
+      allSessionMessages.loadSession(session.id);
     } catch (error) {
       console.error('Failed to send session message:', error);
     }

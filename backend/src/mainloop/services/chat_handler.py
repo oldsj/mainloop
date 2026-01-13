@@ -35,7 +35,7 @@ def build_chat_system_prompt(recent_repos: list[str] | None = None) -> str:
     base_prompt = """You are a helpful AI assistant that can spawn background sessions to work on tasks independently.
 
 ## spawn_session
-Use spawn_session when the user requests work that should run in the background. Sessions appear in the user's Sessions panel where they can follow progress and interact.
+Use spawn_session when the user requests work that should run in the background. The session receives the user's EXACT message - do not expand or interpret it.
 
 When to use spawn_session WITH repo_url (for code work):
 - Creating, modifying, or deleting code files
@@ -50,9 +50,9 @@ When to use spawn_session WITHOUT repo_url (for other background work):
 - Any work that can run in the background
 
 Usage:
-1. Confirm you understand what the user wants
-2. For code work: suggest a recent repo or ask for the GitHub repository URL
-3. Once confirmed, use spawn_session with appropriate parameters
+1. For code work: suggest a recent repo or ask for the GitHub repository URL
+2. Use spawn_session with just a short title (e.g., "Add quickstart to README")
+3. The user's original message is passed directly to the session - do NOT expand it
 
 Do NOT use spawn_session for:
 - Answering simple questions
@@ -97,14 +97,13 @@ def create_spawn_session_callable(
         """Spawn a background session to work on a task independently."""
         print(f"[SESSION] spawn_session_impl called with args: {args}")
         title = args.get("title", "")
-        description = args.get("description", "")
-        prompt = args.get("prompt", "")
         repo_url = args.get("repo_url")  # Optional - if provided, this is code work
         skip_plan = args.get("skip_plan", False)
 
-        # Get the most recent user message to use as anchor
-        # Session appears inline right after the user's request
+        # Get the most recent user message to use as anchor AND as the prompt
+        # The session receives the user's exact message - no expansion
         anchor_message_id = None
+        prompt = ""
         try:
             conv_messages = await db.get_messages(conversation_id)
             if conv_messages:
@@ -112,8 +111,10 @@ def create_spawn_session_callable(
                 for msg in reversed(conv_messages):
                     if msg.role == "user":
                         anchor_message_id = msg.id
+                        prompt = msg.content  # Use exact user message as prompt
                         break
                 print(f"[SESSION] Using anchor_message_id: {anchor_message_id}")
+                print(f"[SESSION] Using original user prompt: {prompt[:100]}...")
         except Exception as e:
             print(f"[SESSION] Warning: Could not get anchor message: {e}")
 
@@ -125,9 +126,17 @@ def create_spawn_session_callable(
 
         if not prompt:
             return {
-                "content": [{"type": "text", "text": "Error: prompt is required"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: Could not find user message to use as prompt",
+                    }
+                ],
                 "is_error": True,
             }
+
+        # Use title as description
+        description = title
 
         # Validate repo URL format if provided
         if repo_url and not repo_url.startswith("https://github.com/"):
@@ -253,15 +262,13 @@ def create_spawn_session_tool(
     # Wrap it with the @tool decorator for Claude
     @tool(
         "spawn_session",
-        "Spawn a background session to work on a task independently. "
-        "Sessions appear in the user's Sessions panel where they can follow progress. "
+        "Spawn a background session to work on the user's request. "
+        "The session receives the user's exact message - do not expand or interpret it. "
         "Use this for: (1) code work - provide repo_url for GitHub integration, "
         "(2) research/analysis - omit repo_url for general background work. "
-        "Sessions have their own conversation and notify the user when input is needed.",
+        "Sessions appear in the user's Sessions panel where they can follow progress.",
         {
-            "title": str,
-            "description": str,
-            "prompt": str,
+            "title": str,  # Short title for the session (e.g., "Add quickstart to README")
             "repo_url": str,  # Optional - if provided, enables code work with GitHub
             "skip_plan": bool,  # Optional - skip planning phase for code work
         },
