@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mainloop uses a coordinator/worker pattern where a fast main thread agent delegates complex tasks to more capable worker agents.
+Mainloop uses a main thread + sessions pattern where your continuous conversation spawns background sessions that appear inline as threaded replies.
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -22,19 +22,19 @@ Mainloop uses a coordinator/worker pattern where a fast main thread agent delega
 │     Frontend     │            │     Backend      │
 │    (SvelteKit)   │◄──────────►│    (FastAPI)     │
 │                  │            │                  │
-│  - Mobile-first  │            │  - DBOS workflows│
-│  - Chat UI       │            │  - Main thread   │
-│  - Queue view    │            │  - Task queue    │
+│  - Chat + inline │            │  - DBOS workflows│
+│    sessions      │            │  - Main thread   │
+│  - Notifications │            │  - Session queue │
 └──────────────────┘            └────────┬─────────┘
                                          │
                     ┌────────────────────┼────────────────────┐
                     │                    │                    │
                     ▼                    ▼                    ▼
            ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-           │ Claude Agent │     │ Claude Agent │     │ Claude Agent │
-           │   Worker 1   │     │   Worker 2   │     │   Worker N   │
+           │   Session 1  │     │   Session 2  │     │   Session N  │
+           │   (Claude)   │     │    (Opus)    │     │   (varies)   │
            │              │     │              │     │              │
-           │  (isolated)  │     │  (isolated)  │     │  (isolated)  │
+           │  research    │     │  code work   │     │  any task    │
            └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
@@ -42,39 +42,50 @@ Mainloop uses a coordinator/worker pattern where a fast main thread agent delega
 
 ### Frontend (SvelteKit)
 
-- Mobile-first responsive UI
-- Real-time chat interface
-- Human review queue for worker questions/approvals
-- Tailwind v4 styling
+- Mobile-first responsive UI with chat and sessions tabs
+- **Main thread**: Continuous conversation with inline session blocks
+- **Inline threading**: Session messages appear as Slack-style notifications in timeline
+- **Session views**: Expand inline or zoom to fullscreen conversation
+- **Notifications**: Toast alerts when sessions need attention
 
 ### Backend (FastAPI + DBOS)
 
-- **Main Thread Workflow**: Per-user coordinator that runs on Haiku (fast, cheap)
-- **Worker Workflows**: Task executors that run on Opus (capable, thorough)
+- **Main Thread Workflow**: Per-user conversation that spawns sessions
+- **Session Workflows**: Background work with their own conversations
 - **PostgreSQL**: Durable workflow state and conversation history
-- **Task Queue**: DBOS-managed queue for worker distribution
+- **SSE**: Real-time session updates and notifications
 
-### Claude Agent Container
+### Sessions
 
-- Runs Claude Code CLI with Max subscription
-- Each worker gets isolated workspace
-- Handles git operations, file editing, PR creation
+Sessions are the unified model for all background work:
+
+- **Simple sessions**: Claude conversations without code (research, analysis)
+- **Code sessions**: GitHub integration with plan → implement → PR workflow
+
+Each session has:
+
+- Its own conversation (separate from main thread)
+- A color for visual distinction in timeline
+- Status tracking (active, waiting, completed, etc.)
+- Anchor to the main thread message that spawned it
 
 ## Data Flow
 
 1. User sends message via frontend
-2. Backend receives request (authenticated via Cloudflare Access)
-3. Main thread (Haiku) analyzes intent
-4. If task needed: spawn worker (Opus) with task details
-5. Worker executes autonomously, may ask questions via queue
-6. Results flow back to main thread → user
+2. Backend adds to main thread conversation
+3. Main thread (Claude) decides if session needed
+4. If spawning: creates session anchored to user message
+5. Session appears inline in main thread timeline
+6. Session messages surface as thread notifications
+7. User can respond inline or zoom into session
+8. Completed sessions post summary back to main thread
 
 ## Model Configuration
 
-| Component   | Model          | Purpose                            |
-| ----------- | -------------- | ---------------------------------- |
-| Main thread | Haiku          | Fast coordination, intent analysis |
-| Workers     | Opus (default) | Complex tasks, code generation     |
-| Workers     | Sonnet/Haiku   | Can be overridden per-task         |
+| Component   | Model          | Purpose                          |
+| ----------- | -------------- | -------------------------------- |
+| Main thread | Sonnet         | Coordination, spawning decisions |
+| Sessions    | Opus (default) | Complex tasks, code generation   |
+| Sessions    | Sonnet/Haiku   | Can be specified per-session     |
 
-The main thread can dynamically choose which model a worker uses based on task complexity.
+Sessions can use different models based on task complexity.

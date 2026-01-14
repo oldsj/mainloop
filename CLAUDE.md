@@ -5,8 +5,8 @@
 **mainloop** is an attention management system - one place to focus, accessible from any device.
 
 - One continuous conversation that persists across devices
-- AI workers handle tasks in background
-- Unified inbox surfaces what needs attention
+- Sessions handle background work with inline threading in main conversation
+- Notifications surface when sessions need attention or complete
 
 **Structure:**
 

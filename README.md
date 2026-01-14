@@ -4,11 +4,11 @@ A single conversation to manage all of your AI sessions - that keeps working whi
 
 Your main conversation thread is the closest digital mapping to your own internal thread of consciousness. Everything else flows into a unified inbox that surfaces only what needs your attention.
 
-Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI workers and let them handle the work while you stay in flow.
+Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI sessions and let them handle the work while you stay in flow.
 
-  | Desktop | Mobile |
-  |---------|--------|
-  | <img width="600" alt="mainloop desktop" src="https://github.com/user-attachments/assets/49971afd-c155-4855-a292-5b0c59570066" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
+| Desktop                                                                                                                          | Mobile                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| <img width="600" alt="mainloop desktop" src="https://github.com/user-attachments/assets/49971afd-c155-4855-a292-5b0c59570066" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
 
 ## How It Works
 
@@ -17,24 +17,26 @@ You (phone/laptop)
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│                   Chat Interface                     │
-│           Claude with spawn_task tool               │
+│                   Main Thread                        │
+│           Claude with spawn_session tool            │
 │                                                      │
-│   "Should I spawn a worker for this? (confirms)"    │
+│   user@mainloop$ research X      ← inline sessions  │
+│   ├── [research X] thinking...   ← threaded reply   │
+│   └── [research X] here's what   ← notification     │
 └──────────────┬────────────────┬─────────────────────┘
                │                │
        ┌───────▼──────┐  ┌──────▼───────┐
-       │   Worker 1   │  │   Worker 2   │  ...
-       │   (Opus)     │  │   (Opus)     │
+       │   Session 1  │  │   Session 2  │  ...
+       │   (Claude)   │  │   (Opus)     │
        │              │  │              │
-       │  Feature dev │  │  Bug fix     │
+       │   Research   │  │  Feature dev │
        └──────────────┘  └──────────────┘
 ```
 
-- **Main thread**: One continuous conversation — Claude responds naturally, spawns workers when you confirm
-- **Workers**: Opus models handle complex tasks in isolated K8s namespaces
-- **Inbox**: Unified attention queue — what needs you surfaces; everything else folds away
-- **Persistence**: Conversations and tasks survive restarts via compaction + [DBOS](docs/DBOS.md)
+- **Main thread**: One continuous conversation — sessions spawn inline and surface results back
+- **Sessions**: Background AI work with their own conversations; appear as colored threads in your timeline
+- **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
+- **Persistence**: Conversations and sessions survive restarts via compaction + [DBOS](docs/DBOS.md)
 
 ## Quick Start
 
@@ -79,16 +81,22 @@ mainloop/
 
 ## UI
 
-- **Mobile**: Bottom tab bar (Chat / Inbox)
-- **Desktop**: Chat with always-visible Inbox sidebar
+- **Mobile**: Bottom tab bar (Chat / Sessions)
+- **Desktop**: Chat with always-visible Sessions sidebar
 
-**Inbox** — a unified view of everything that needs your attention:
+**Chat** — your main thread with inline sessions:
 
-1. Questions and approvals from workers
-2. Active tasks (with expandable live logs)
-3. Recent failures (always visible, one-click retry)
-4. Recently completed work
-5. History (collapsed)
+- Sessions spawn as colored thread blocks in your timeline
+- Session messages appear as Slack-style thread notifications
+- Click to expand inline or zoom to fullscreen view
+- Terminal-style prompt: `user@context$` with content on new line
+
+**Sessions** — all background work in one place:
+
+1. Active sessions (with live status)
+2. Sessions needing input (questions, plan reviews)
+3. Completed and failed sessions
+4. Each session has its own conversation you can zoom into
 
 ## Agent Workflow
 
