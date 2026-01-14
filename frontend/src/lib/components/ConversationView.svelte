@@ -169,6 +169,7 @@
           <!-- Thread reply notification (Slack-style "replied in thread") -->
           {@const sessionColor = item.session.color}
           {@const isUser = item.message.role === 'user'}
+          {@const modelName = item.session.model || 'claude'}
           {@const preview = item.message.content.slice(0, 120)}
           {@const isLong = item.message.content.length > 120}
           <button
@@ -183,10 +184,8 @@
             ></span>
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 text-xs">
-                <span style="color: {sessionColor};">{item.session.title}</span>
-                <span class="text-term-fg-muted">·</span>
-                <span class="text-term-fg-muted">
-                  {isUser ? 'You' : 'Agent'} replied
+                <span class={isUser ? 'text-term-accent-alt' : 'text-term-accent'}>
+                  $ {isUser ? 'user' : modelName}@{item.session.title}
                 </span>
                 <span class="text-term-fg-muted">·</span>
                 <time class="text-term-fg-muted">
@@ -236,8 +235,8 @@
         class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
       >
         <span class="text-xs text-term-accent md:text-sm">
-          >
-          <span class="hidden md:inline">claude@mainloop</span>
+          $
+          <span class="hidden md:inline">claude@main</span>
         </span>
         <div class="flex items-center gap-2">
           <span class="text-sm text-term-fg-muted">processing</span>

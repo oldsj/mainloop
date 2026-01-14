@@ -24,8 +24,8 @@
     <span
       class="shrink-0 text-xs md:text-sm {isUser ? 'text-term-accent-alt' : 'text-term-accent'}"
     >
-      {isUser ? '$ ' : '> '}
-      <span class="hidden md:inline">{isUser ? 'user@mainloop' : 'claude@mainloop'}</span>
+      $
+      <span class="hidden md:inline">{isUser ? 'user' : 'claude'}@main</span>
     </span>
     <div class="min-w-0 flex-1">
       <div class="prose-terminal text-sm text-term-fg md:text-base">

@@ -1513,6 +1513,25 @@ class Database:
             for row in rows
         ]
 
+    async def get_message(self, message_id: str) -> Message | None:
+        """Get a single message by ID."""
+        if not self._pool:
+            return None
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM messages WHERE id = $1",
+                message_id,
+            )
+        if not row:
+            return None
+        return Message(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            role=row["role"],  # type: ignore
+            content=row["content"],
+            created_at=row["created_at"],
+        )
+
     async def list_messages(
         self, conversation_id: str, limit: int = 20
     ) -> list[Message]:

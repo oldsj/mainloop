@@ -35,7 +35,7 @@ def build_chat_system_prompt(recent_repos: list[str] | None = None) -> str:
     base_prompt = """You are a helpful AI assistant that can spawn background sessions to work on tasks independently.
 
 ## spawn_session
-Use spawn_session when the user requests work that should run in the background. The session receives the user's EXACT message - do not expand or interpret it.
+Use spawn_session when the user requests work that should run in the background.
 
 When to use spawn_session WITH repo_url (for code work):
 - Creating, modifying, or deleting code files
@@ -51,15 +51,14 @@ When to use spawn_session WITHOUT repo_url (for other background work):
 
 Usage:
 1. For code work: suggest a recent repo or ask for the GitHub repository URL
-2. Use spawn_session with just a short title (e.g., "Add quickstart to README")
-3. The user's original message is passed directly to the session - do NOT expand it
+2. Always get explicit confirmation before spawning a session
+3. Call spawn_session with just a title (and repo_url for code work)
+   - The session automatically receives the user's original request from the conversation
 
 Do NOT use spawn_session for:
 - Answering simple questions
 - Explaining concepts or providing information
-- General conversation you can handle directly
-
-Always get explicit confirmation before spawning a session."""
+- General conversation you can handle directly"""
 
     if recent_repos:
         repos_list = "\n".join(f"  - {repo}" for repo in recent_repos)
@@ -99,24 +98,32 @@ def create_spawn_session_callable(
         title = args.get("title", "")
         repo_url = args.get("repo_url")  # Optional - if provided, this is code work
         skip_plan = args.get("skip_plan", False)
+        request_message_id = args.get("request_message_id")  # ID of the user's original request
 
-        # Get the most recent user message to use as anchor AND as the prompt
-        # The session receives the user's exact message - no expansion
+        # Fetch the original request message from DB
         anchor_message_id = None
         prompt = ""
         try:
-            conv_messages = await db.get_messages(conversation_id)
-            if conv_messages:
-                # Find the last user message
-                for msg in reversed(conv_messages):
-                    if msg.role == "user":
-                        anchor_message_id = msg.id
-                        prompt = msg.content  # Use exact user message as prompt
-                        break
-                print(f"[SESSION] Using anchor_message_id: {anchor_message_id}")
-                print(f"[SESSION] Using original user prompt: {prompt[:100]}...")
+            if request_message_id:
+                # Claude told us which message contains the request - fetch it
+                request_msg = await db.get_message(request_message_id)
+                if request_msg and request_msg.role == "user":
+                    anchor_message_id = request_msg.id
+                    prompt = request_msg.content
+                    print(f"[SESSION] Using specified message {request_message_id}: {prompt[:100]}...")
+
+            # Fallback: use last user message if no ID provided or not found
+            if not prompt:
+                conv_messages = await db.get_messages(conversation_id)
+                if conv_messages:
+                    for msg in reversed(conv_messages):
+                        if msg.role == "user":
+                            anchor_message_id = msg.id
+                            prompt = msg.content
+                            break
+                print(f"[SESSION] Fallback to last user message: {prompt[:100]}...")
         except Exception as e:
-            print(f"[SESSION] Warning: Could not get anchor message: {e}")
+            print(f"[SESSION] Warning: Could not get message: {e}")
 
         if not title:
             return {
@@ -129,7 +136,7 @@ def create_spawn_session_callable(
                 "content": [
                     {
                         "type": "text",
-                        "text": "Error: Could not find user message to use as prompt",
+                        "text": "Error: Could not find a user message in the conversation to use as the session prompt.",
                     }
                 ],
                 "is_error": True,
@@ -267,12 +274,13 @@ def create_spawn_session_tool(
     @tool(
         "spawn_session",
         "Spawn a background session to work on the user's request. "
-        "The session receives the user's exact message - do not expand or interpret it. "
         "Use this for: (1) code work - provide repo_url for GitHub integration, "
         "(2) research/analysis - omit repo_url for general background work. "
-        "Sessions appear in the user's Sessions panel where they can follow progress.",
+        "IMPORTANT: Pass the request_message_id from the conversation history [ID: ...] "
+        "that contains the user's actual request (not a confirmation like 'yes').",
         {
             "title": str,  # Short title for the session (e.g., "Add quickstart to README")
+            "request_message_id": str,  # ID from conversation [ID: ...] with the user's request
             "repo_url": str,  # Optional - if provided, enables code work with GitHub
             "skip_plan": bool,  # Optional - skip planning phase for code work
         },
@@ -284,14 +292,17 @@ def create_spawn_session_tool(
 
 
 def format_conversation_history(messages: list[Message]) -> str:
-    """Format conversation history for inclusion in prompt."""
+    """Format conversation history for inclusion in prompt.
+
+    Includes message IDs so Claude can reference them when spawning sessions.
+    """
     if not messages:
         return ""
 
     lines = []
     for msg in messages:
         role = "User" if msg.role == "user" else "Assistant"
-        lines.append(f"{role}: {msg.content}")
+        lines.append(f"[ID: {msg.id}] {role}: {msg.content}")
 
     return "\n\n".join(lines)
 

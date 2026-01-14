@@ -207,12 +207,13 @@
     {/if}
 
     {#if isLoading}
+      {@const modelName = session?.model || 'claude'}
       <div
         class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
       >
         <span class="text-xs text-term-accent md:text-sm">
-          >
-          <span class="hidden md:inline">agent@session</span>
+          $
+          <span class="hidden md:inline">{modelName}@{session?.title || 'session'}</span>
         </span>
         <div class="flex items-center gap-2">
           <span class="text-sm text-term-fg-muted">processing</span>
