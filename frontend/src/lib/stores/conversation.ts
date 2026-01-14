@@ -32,6 +32,11 @@ function createConversationStore() {
         ...state,
         messages: [...state.messages, message]
       })),
+    setMessages: (messages: Message[]) =>
+      update((state) => ({
+        ...state,
+        messages
+      })),
     setLoading: (isLoading: boolean) =>
       update((state) => ({
         ...state,

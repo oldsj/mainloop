@@ -22,6 +22,9 @@ class EventType(str, Enum):
     # Global events
     TASK_UPDATED = "task:updated"
     INBOX_UPDATED = "inbox:updated"
+    SESSION_UPDATED = "session:updated"
+    SESSION_NEEDS_INPUT = "session:needs_input"
+    SESSION_MESSAGE = "session:message"
     HEARTBEAT = "heartbeat"
 
     # Task log events
@@ -294,5 +297,50 @@ async def notify_inbox_updated(
         SSEEvent(
             event=EventType.INBOX_UPDATED,
             data=data,
+        ),
+    )
+
+
+async def notify_session_updated(user_id: str, session_id: str, status: str, **extra):
+    """Notify user that a session was updated."""
+    await event_bus.publish_to_user(
+        user_id,
+        SSEEvent(
+            event=EventType.SESSION_UPDATED,
+            data={"session_id": session_id, "status": status, **extra},
+        ),
+    )
+
+
+async def notify_session_needs_input(
+    user_id: str, session_id: str, title: str, preview: str
+):
+    """Notify user that a session needs their input."""
+    await event_bus.publish_to_user(
+        user_id,
+        SSEEvent(
+            event=EventType.SESSION_NEEDS_INPUT,
+            data={
+                "session_id": session_id,
+                "title": title,
+                "preview": preview,
+            },
+        ),
+    )
+
+
+async def notify_session_message(
+    user_id: str, session_id: str, message_id: str, role: str
+):
+    """Notify user of a new message in a session's conversation."""
+    await event_bus.publish_to_user(
+        user_id,
+        SSEEvent(
+            event=EventType.SESSION_MESSAGE,
+            data={
+                "session_id": session_id,
+                "message_id": message_id,
+                "role": role,
+            },
         ),
     )

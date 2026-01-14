@@ -229,3 +229,51 @@ export async function setupConversation(page: Page): Promise<void> {
   const assistantMessage = page.locator('.message.bg-term-bg-secondary').first();
   await expect(assistantMessage).toBeVisible({ timeout: 30000 });
 }
+
+/**
+ * Seed a session in specific state. Returns session ID, conversation ID.
+ * userId is required for per-user test isolation.
+ */
+export type SessionStatus = 'pending' | 'active' | 'waiting_on_user' | 'completed' | 'failed';
+
+export async function seedSession(
+  page: Page,
+  userId: string,
+  options: {
+    status?: SessionStatus;
+    title?: string;
+    description?: string;
+    prompt?: string;
+    summary?: string;
+    error?: string;
+    createNotification?: boolean;
+    notificationTitle?: string;
+    notificationPreview?: string;
+  } = {}
+): Promise<{ sessionId: string; conversationId: string; notificationId: string | null }> {
+  const response = await page.request.post(`${apiURL}/internal/test/seed-session`, {
+    headers: { 'X-User-ID': userId },
+    data: {
+      status: options.status || 'active',
+      title: options.title || 'Test Session',
+      description: options.description || 'Test session description',
+      prompt: options.prompt || 'Test prompt',
+      summary: options.summary,
+      error: options.error,
+      create_notification: options.createNotification || false,
+      notification_title: options.notificationTitle || 'Session needs input',
+      notification_preview: options.notificationPreview || 'Please provide additional details'
+    }
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Failed to seed session: ${response.status()}`);
+  }
+
+  const data = await response.json();
+  return {
+    sessionId: data.session_id,
+    conversationId: data.conversation_id,
+    notificationId: data.notification_id
+  };
+}

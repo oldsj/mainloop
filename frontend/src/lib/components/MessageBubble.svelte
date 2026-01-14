@@ -2,7 +2,7 @@
   import type { Message } from '$lib/api';
   import { marked } from 'marked';
 
-  let { message }: { message: Message } = $props();
+  let { message, context = 'main' }: { message: Message; context?: string } = $props();
   let isUser = $derived(message.role === 'user');
 
   // Configure marked for terminal aesthetic
@@ -15,17 +15,15 @@
 </script>
 
 <div
-  class="message w-full border-l-2 px-3 py-2 md:px-4 {isUser
-    ? 'border-term-accent-alt bg-transparent'
-    : 'border-term-accent bg-term-bg-secondary'}"
+  class="message w-full border-l-2 border-term-border px-3 py-2 md:px-4 {isUser
+    ? 'bg-transparent'
+    : 'bg-term-bg-secondary'}"
 >
-  <!-- Mobile: stacked, Desktop: inline -->
-  <div class="flex flex-col gap-1 md:flex-row md:items-start md:gap-3">
+  <div class="flex flex-col gap-1">
     <span
       class="shrink-0 text-xs md:text-sm {isUser ? 'text-term-accent-alt' : 'text-term-accent'}"
     >
-      {isUser ? '$ ' : '> '}
-      <span class="hidden md:inline">{isUser ? 'user@mainloop' : 'claude@mainloop'}</span>
+      {isUser ? 'user' : 'claude'}@{context}$
     </span>
     <div class="min-w-0 flex-1">
       <div class="prose-terminal text-sm text-term-fg md:text-base">

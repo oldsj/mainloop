@@ -10,6 +10,9 @@ export type SSEEventType =
   | 'connected'
   | 'task:updated'
   | 'inbox:updated'
+  | 'session:updated'
+  | 'session:needs_input'
+  | 'session:message'
   | 'heartbeat'
   | 'log'
   | 'status'
@@ -82,6 +85,9 @@ export class SSEClient {
       'connected',
       'task:updated',
       'inbox:updated',
+      'session:updated',
+      'session:needs_input',
+      'session:message',
       'heartbeat',
       'log',
       'status',

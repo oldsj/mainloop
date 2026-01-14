@@ -1,45 +1,19 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
   import { projects } from '$lib/stores/projects';
+  import { sessions } from '$lib/stores/sessions';
+  import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
+  import { allSessionMessages } from '$lib/stores/sessionMessages';
   import { api } from '$lib/api';
-  import MessageBubble from './MessageBubble.svelte';
-  import InputBar from './InputBar.svelte';
+  import ConversationView from './ConversationView.svelte';
 
   let { messages, isLoading } = $derived($conversationStore);
-  let messagesContainer: HTMLDivElement;
-  let showScrollButton = $state(false);
 
-  // Check if scrolled to bottom
-  function checkScrollPosition() {
-    if (!messagesContainer) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    showScrollButton = distanceFromBottom > 100;
-  }
-
-  function scrollToBottom() {
-    if (messagesContainer) {
-      messagesContainer.scrollTo({
-        top: messagesContainer.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-  }
-
-  // Auto-scroll to bottom when messages change or loading state changes
+  // Start polling for all session messages
   $effect(() => {
-    // Track these values to trigger effect
-    messages;
-    isLoading;
-
-    // Scroll after DOM updates
-    tick().then(() => {
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        showScrollButton = false;
-      }
-    });
+    allSessionMessages.startPolling(3000);
+    return () => allSessionMessages.stopPolling();
   });
 
   onMount(async () => {
@@ -59,6 +33,16 @@
 
   async function handleSendMessage(detail: { message: string }) {
     const userMessage = detail.message;
+
+    // Route to session or main thread based on context
+    if (!$isMainContext && $currentSession) {
+      await sendSessionMessage(userMessage);
+    } else {
+      await sendMainThreadMessage(userMessage);
+    }
+  }
+
+  async function sendMainThreadMessage(userMessage: string) {
     const currentConversationId = $conversationStore.currentConversation?.id;
 
     // Optimistic: Add user message immediately
@@ -89,8 +73,19 @@
         });
       }
 
-      // Add assistant response (now returned synchronously)
-      conversationStore.addMessage(response.message);
+      // Check if a session was spawned (no assistant message)
+      if (response.spawned_session_id) {
+        // Reload conversation to get real message IDs (needed for anchor matching)
+        const { messages: freshMessages } = await api.getConversation(response.conversation_id);
+        conversationStore.setMessages(freshMessages);
+        // Refresh sessions to get the new one
+        await sessions.fetchSessions();
+        // Auto-switch to the spawned session
+        navigationContext.switchToSession(response.spawned_session_id);
+      } else if (response.message) {
+        // Add assistant response (normal case)
+        conversationStore.addMessage(response.message);
+      }
 
       // Refresh projects in case a task was spawned
       projects.fetchProjects();
@@ -100,66 +95,38 @@
       conversationStore.setLoading(false);
     }
   }
+
+  async function sendSessionMessage(userMessage: string) {
+    const session = $currentSession;
+    if (!session) return;
+
+    // Optimistic: Add user message immediately to session messages
+    allSessionMessages.addOptimistic(session.id, {
+      id: `temp-${Date.now()}`,
+      conversation_id: session.conversation_id,
+      role: 'user',
+      content: userMessage,
+      created_at: new Date().toISOString()
+    });
+
+    try {
+      await api.sendSessionMessage(session.id, userMessage);
+      // Refresh session status and messages
+      sessions.fetchSessions();
+      // Force immediate refresh to get real message ID and any quick response
+      allSessionMessages.loadSession(session.id);
+    } catch (error) {
+      console.error('Failed to send session message:', error);
+    }
+  }
 </script>
 
-<div class="relative flex h-full flex-col bg-term-bg">
-  <!-- Messages -->
-  <div
-    bind:this={messagesContainer}
-    onscroll={checkScrollPosition}
-    class="flex-1 space-y-2 overflow-y-auto p-4"
-  >
-    {#if messages.length === 0}
-      <div class="flex h-full flex-col items-center justify-center text-term-fg-muted">
-        <p class="text-term-accent">$ mainloop --help</p>
-        <p class="mt-2">Start a conversation to begin</p>
-        <p class="animate-cursor text-term-accent">_</p>
-      </div>
-    {:else}
-      {#each messages as message (message.id)}
-        <MessageBubble {message} />
-      {/each}
-    {/if}
-
-    {#if isLoading}
-      <div
-        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
-      >
-        <span class="text-xs text-term-accent md:text-sm">
-          >
-          <span class="hidden md:inline">claude@mainloop</span>
-        </span>
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-term-fg-muted">processing</span>
-          <span class="animate-cursor text-term-accent">_</span>
-        </div>
-      </div>
-    {/if}
-  </div>
-
-  <!-- Scroll to bottom button -->
-  {#if showScrollButton}
-    <button
-      type="button"
-      onclick={scrollToBottom}
-      class="absolute bottom-24 right-4 flex h-10 w-10 items-center justify-center border border-term-border bg-term-bg-secondary text-term-fg-muted transition-colors hover:border-term-accent hover:text-term-accent"
-      aria-label="Scroll to bottom"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke-width="2"
-        stroke="currentColor"
-        class="h-5 w-5"
-      >
-        <path stroke-linecap="square" stroke-linejoin="miter" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-      </svg>
-    </button>
-  {/if}
-
-  <!-- Input -->
-  <div class="border-t border-term-border p-4">
-    <InputBar onsend={handleSendMessage} disabled={isLoading} />
-  </div>
-</div>
+<!-- Always show main thread - sessions appear inline -->
+<ConversationView
+  {messages}
+  {isLoading}
+  onSendMessage={handleSendMessage}
+  placeholder={$currentSession ? `Reply to ${$currentSession.title}...` : 'Enter command...'}
+  emptyStateTitle="$ mainloop --help"
+  emptyStateMessage="Start a conversation to begin"
+/>

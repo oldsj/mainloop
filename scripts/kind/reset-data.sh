@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Reset data between runs
-#
-# Usage:
-#   ./reset-data.sh        # Reset test data only (preserves dev user data)
-#   ./reset-data.sh --all  # Reset ALL data (dev + test)
-#
-# The API cleans up both database and K8s namespaces.
+# Reset database and k8s task namespaces
 set -euo pipefail
 
-API_URL="${API_URL:-http://localhost:8081}"
-RESET_ALL="${1-}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
+CONTEXT="kind-${CLUSTER_NAME}"
 
-if [[ ${RESET_ALL} == "--all" ]]; then
-  echo "=== Resetting ALL data (dev + test) ==="
-  QUERY="?all=true"
-else
-  echo "=== Resetting test data only (preserving dev data) ==="
-  QUERY=""
-fi
+echo "=== Using context: ${CONTEXT} ==="
 
-echo "Calling API to reset data..."
-if curl -sf "${API_URL}/health" >/dev/null 2>&1; then
-  response=$(curl -sf -X POST "${API_URL}/internal/test/reset${QUERY}" 2>&1) || {
-    echo "Warning: API reset failed - backend may not be in test mode"
-    echo "Response: ${response:-none}"
-    exit 1
-  }
-  echo "API response: ${response}"
-else
-  echo "Error: Backend not reachable at ${API_URL}"
-  exit 1
+echo "=== Cleaning up k8s task namespaces ==="
+# Delete all task-* namespaces (created by worker workflows)
+for ns in $(kubectl --context "${CONTEXT}" get ns -o name 2>/dev/null | grep "^namespace/task-" | cut -d/ -f2); do
+  echo "Deleting namespace: ${ns}"
+  kubectl --context "${CONTEXT}" delete ns "${ns}" --wait=false 2>/dev/null || true
+done
+
+echo "=== Resetting database ==="
+# Drop both public and dbos schemas to fully reset state
+kubectl --context "${CONTEXT}" exec -n mainloop postgres-0 -- psql -U mainloop -d mainloop -c "
+DROP SCHEMA IF EXISTS dbos CASCADE;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+"
+
+echo "=== Restarting backend to reinitialize DBOS ==="
+# Try DevSpace deployment first, fall back to kind deployment
+if kubectl --context "${CONTEXT}" get deployment/mainloop-backend-devspace -n mainloop &>/dev/null; then
+  kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend-devspace -n mainloop
+  kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend-devspace -n mainloop --timeout=60s
+elif kubectl --context "${CONTEXT}" get deployment/mainloop-backend -n mainloop &>/dev/null; then
+  kubectl --context "${CONTEXT}" rollout restart deployment/mainloop-backend -n mainloop
+  kubectl --context "${CONTEXT}" rollout status deployment/mainloop-backend -n mainloop --timeout=60s
 fi
 
 echo "=== Reset complete ==="

@@ -5,8 +5,8 @@
 **mainloop** is an attention management system - one place to focus, accessible from any device.
 
 - One continuous conversation that persists across devices
-- AI workers handle tasks in background
-- Unified inbox surfaces what needs attention
+- Sessions handle background work with inline threading in main conversation
+- Notifications surface when sessions need attention or complete
 
 **Structure:**
 
@@ -116,6 +116,7 @@ Tests are organized into projects by execution mode:
 - **DBOS workflows**: Bump `WORKFLOW_VERSION` in `dbos_config.py` when changing workflow logic
 - **HTML**: Be explicit, don't rely on browser defaults (`type="button"`, `rel="noopener"`, etc.)
 - **Responsive layouts**: Use `isMobile` store to conditionally render, not CSS hide (avoids duplicate DOM elements)
+- **K8s scripts**: Always use explicit `--context kind-${KIND_CLUSTER_NAME:-mainloop-test}` in kubectl commands to avoid targeting wrong cluster
 
 ## Deployment
 

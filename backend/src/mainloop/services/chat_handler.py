@@ -17,19 +17,14 @@ from claude_agent_sdk import (
 from dbos import SetWorkflowID
 from mainloop.config import settings
 from mainloop.db import db
-from mainloop.services.task_router import (
-    extract_keywords,
-    find_matching_tasks,
-)
+from mainloop.services.task_router import extract_keywords
 from mainloop.workflows.dbos_config import worker_queue
 
 from models import (
     Message,
     QueueItem,
-    QueueItemPriority,
-    QueueItemType,
-    TaskStatus,
-    WorkerTask,
+    Session,
+    SessionStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,26 +32,33 @@ logger = logging.getLogger(__name__)
 
 def build_chat_system_prompt(recent_repos: list[str] | None = None) -> str:
     """Build the system prompt for chat, including recent repos if available."""
-    base_prompt = """You are a helpful AI assistant that can also spawn autonomous coding agents.
+    base_prompt = """You are a helpful AI assistant that can spawn background sessions to work on tasks independently.
 
-When the user requests work that involves modifying code, creating files, making commits, or any development task:
-1. Confirm you understand what they want
-2. Ask them to confirm they want you to spawn a worker agent
-3. If they have recent repos, suggest one; otherwise ask for the GitHub repository URL
-4. Once confirmed, use the spawn_task tool to start the work
+## spawn_session
+Use spawn_session when the user requests work that should run in the background.
 
-When to use spawn_task:
+When to use spawn_session WITH repo_url (for code work):
 - Creating, modifying, or deleting code files
 - Making commits or pull requests
 - Running builds, tests, or deployments
 - Any work that requires access to a codebase
 
-Do NOT use spawn_task for:
-- Answering questions about how to do something
-- Explaining concepts or providing information
-- General conversation
+When to use spawn_session WITHOUT repo_url (for other background work):
+- Research tasks that take time
+- Analysis or investigation work
+- Planning or brainstorming that needs multiple steps
+- Any work that can run in the background
 
-Always get explicit confirmation before spawning a task."""
+Usage:
+1. For code work: suggest a recent repo or ask for the GitHub repository URL
+2. Always get explicit confirmation before spawning a session
+3. Call spawn_session with just a title (and repo_url for code work)
+   - The session automatically receives the user's original request from the conversation
+
+Do NOT use spawn_session for:
+- Answering simple questions
+- Explaining concepts or providing information
+- General conversation you can handle directly"""
 
     if recent_repos:
         repos_list = "\n".join(f"  - {repo}" for repo in recent_repos)
@@ -65,57 +67,90 @@ Always get explicit confirmation before spawning a task."""
 The user has recently worked with these repositories:
 {repos_list}
 
-If relevant to their request, suggest using one of these repos. For example:
-"I can spawn a worker agent for this. Should I use {recent_repos[0]}?"
+If the request involves code work, suggest using one of these repos. For example:
+"I can spawn a session to work on this. Should I use {recent_repos[0]}?"
 """
     else:
         base_prompt += """
 
-Ask for the GitHub repo URL like:
-"I can spawn a worker agent to do this. Would you like me to proceed? Please provide the GitHub repo URL."
+If the request involves code work, ask for the GitHub repo URL like:
+"I can spawn a session to work on this. Would you like me to proceed? Please provide the GitHub repo URL."
 """
 
     return base_prompt
 
 
-def create_spawn_task_callable(
+def create_spawn_session_callable(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
+    spawned_session_ids: list[str],  # Mutable list to track spawned sessions
 ):
-    """Create a raw spawn_task callable for Claude to use.
+    """Create a raw spawn_session callable for Claude to use.
 
-    This returns an async function that can be called directly with a dict of args.
+    Sessions are unified background work - they can be simple Claude conversations
+    or code work with GitHub integration.
     """
 
-    async def spawn_task_impl(args: dict[str, Any]) -> dict[str, Any]:
-        """Spawn a worker task to handle a coding request."""
-        print(f"[SPAWN] spawn_task_impl called with args: {args}")
-        task_description = args.get("task_description", "")
-        repo_url = args.get("repo_url", "")
-        skip_planning = args.get("skip_planning", False)
+    async def spawn_session_impl(args: dict[str, Any]) -> dict[str, Any]:
+        """Spawn a background session to work on a task independently."""
+        print(f"[SESSION] spawn_session_impl called with args: {args}")
+        title = args.get("title", "")
+        repo_url = args.get("repo_url")  # Optional - if provided, this is code work
+        skip_plan = args.get("skip_plan", False)
+        request_message_id = args.get(
+            "request_message_id"
+        )  # ID of the user's original request
 
-        if not task_description:
+        # Fetch the original request message from DB
+        anchor_message_id = None
+        prompt = ""
+        try:
+            if request_message_id:
+                # Claude told us which message contains the request - fetch it
+                request_msg = await db.get_message(request_message_id)
+                if request_msg and request_msg.role == "user":
+                    anchor_message_id = request_msg.id
+                    prompt = request_msg.content
+                    print(
+                        f"[SESSION] Using specified message {request_message_id}: {prompt[:100]}..."
+                    )
+
+            # Fallback: use last user message if no ID provided or not found
+            if not prompt:
+                conv_messages = await db.get_messages(conversation_id)
+                if conv_messages:
+                    for msg in reversed(conv_messages):
+                        if msg.role == "user":
+                            anchor_message_id = msg.id
+                            prompt = msg.content
+                            break
+                print(f"[SESSION] Fallback to last user message: {prompt[:100]}...")
+        except Exception as e:
+            print(f"[SESSION] Warning: Could not get message: {e}")
+
+        if not title:
             return {
-                "content": [
-                    {"type": "text", "text": "Error: task_description is required"}
-                ],
+                "content": [{"type": "text", "text": "Error: title is required"}],
                 "is_error": True,
             }
 
-        if not repo_url:
+        if not prompt:
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": "Error: repo_url is required. Ask the user for the GitHub repository URL.",
+                        "text": "Error: Could not find a user message in the conversation to use as the session prompt.",
                     }
                 ],
                 "is_error": True,
             }
 
-        # Validate repo URL format
-        if not repo_url.startswith("https://github.com/"):
+        # Use title as description
+        description = title
+
+        # Validate repo URL format if provided
+        if repo_url and not repo_url.startswith("https://github.com/"):
             return {
                 "content": [
                     {
@@ -127,115 +162,151 @@ def create_spawn_task_callable(
             }
 
         try:
-            print(f"[SPAWN] Creating task for repo: {repo_url}")
-            keywords = extract_keywords(task_description)
-            print(f"[SPAWN] Keywords: {keywords}")
+            is_code_work = repo_url is not None
+            print(f"[SESSION] Creating session: {title} (code_work={is_code_work})")
 
-            task = WorkerTask(
-                main_thread_id=main_thread_id,
+            # Create conversation for this session
+            conv = await db.create_conversation(user_id, title=title)
+            print(f"[SESSION] Created conversation: {conv.id}")
+
+            # Extract keywords for code work
+            keywords = extract_keywords(prompt) if is_code_work else []
+
+            # Create project from repo URL if provided (so it shows in sidebar)
+            project_id = None
+            if repo_url:
+                print(f"[SESSION] Creating project for repo: {repo_url}")
+                project = await db.get_or_create_project_from_url(user_id, repo_url)
+                project_id = project.id
+                print(
+                    f"[SESSION] Project created/found: {project.id} - {project.full_name}"
+                )
+                # Record this repo as recently used
+                await db.add_recent_repo(main_thread_id, repo_url)
+
+            # Create session anchored to user's message
+            from mainloop.api import _get_next_session_color
+
+            color = await _get_next_session_color(user_id)
+            session = Session(
                 user_id=user_id,
-                task_type="feature",
-                description=task_description,
-                prompt=task_description,
+                main_thread_id=main_thread_id,
+                title=title,
+                description=description or title,
+                prompt=prompt,
+                conversation_id=conv.id,
+                status=SessionStatus.PENDING,
+                anchor_message_id=anchor_message_id,
+                color=color,
+                # Code work fields (optional)
                 repo_url=repo_url,
-                status=TaskStatus.PENDING,
-                conversation_id=conversation_id,
+                project_id=project_id,
+                skip_plan=skip_plan,
                 keywords=keywords,
-                skip_plan=skip_planning,
             )
-            print("[SPAWN] WorkerTask created, calling db.create_worker_task")
-            task = await db.create_worker_task(task)
-            print(f"[SPAWN] Task saved to DB: {task.id}")
+            session = await db.create_session(session)
+            print(f"[SESSION] Session saved to DB: {session.id}")
 
-            # Create project from repo URL (so it shows in sidebar)
-            print(f"[SPAWN] Creating project for repo: {repo_url}")
-            project = await db.get_or_create_project_from_url(user_id, repo_url)
-            print(f"[SPAWN] Project created/found: {project.id} - {project.full_name}")
+            # Track this session for anchor update after assistant message is saved
+            spawned_session_ids.append(session.id)
 
-            # Enqueue the worker task
-            from mainloop.workflows.worker import worker_task_workflow
+            # Start the session workflow
+            from mainloop.workflows.session_worker import session_worker_workflow
 
-            print(f"[SPAWN] Enqueueing workflow for task {task.id}")
-            with SetWorkflowID(task.id):
-                handle = worker_queue.enqueue(worker_task_workflow, task.id)
-                print(f"[SPAWN] Workflow enqueued, handle: {handle}")
+            print(f"[SESSION] Enqueueing workflow for session {session.id}")
+            with SetWorkflowID(session.id):
+                handle = worker_queue.enqueue(session_worker_workflow, session.id)
+                print(f"[SESSION] Workflow enqueued, handle: {handle}")
 
             logger.info(
-                f"Spawned worker task via tool: {task.id} (skip_plan={skip_planning})"
+                f"Spawned session via tool: {session.id} (code_work={is_code_work})"
             )
 
-            # Record this repo as recently used
-            await db.add_recent_repo(main_thread_id, repo_url)
+            response_text = (
+                f"Session started successfully!\n"
+                f"Session ID: {session.id[:8]}\n"
+                f"Title: {title}\n"
+            )
+            if repo_url:
+                response_text += f"Repository: {repo_url}\n"
+            response_text += (
+                "\nThe session is now running in the background. "
+                "It will appear in the user's Sessions panel."
+            )
 
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Worker task spawned successfully!\n"
-                        f"Task ID: {task.id[:8]}\n"
-                        f"Repository: {repo_url}\n"
-                        f"Description: {task_description}\n"
-                        f"Skip planning: {skip_planning}\n\n"
-                        f"The agent will start working and update the user via their inbox.",
+                        "text": response_text,
                     }
                 ]
             }
         except Exception as e:
             import traceback
 
-            print(f"[SPAWN] ERROR: {e}")
-            print(f"[SPAWN] Traceback: {traceback.format_exc()}")
-            logger.error(f"Failed to spawn task: {e}")
+            print(f"[SESSION] ERROR: {e}")
+            print(f"[SESSION] Traceback: {traceback.format_exc()}")
+            logger.error(f"Failed to spawn session: {e}")
             return {
-                "content": [{"type": "text", "text": f"Error spawning task: {str(e)}"}],
+                "content": [
+                    {"type": "text", "text": f"Error spawning session: {str(e)}"}
+                ],
                 "is_error": True,
             }
 
-    return spawn_task_impl
+    return spawn_session_impl
 
 
-def create_spawn_task_tool(
+def create_spawn_session_tool(
     user_id: str,
     main_thread_id: str,
     conversation_id: str,
+    spawned_session_ids: list[str],  # Mutable list to track spawned sessions
 ):
-    """Create a spawn_task tool with context baked in.
+    """Create a spawn_session tool with context baked in.
 
     This factory creates a tool that has access to the current user/conversation context.
     Returns an SdkMcpTool for use with Claude Agent SDK.
     """
     # Get the raw callable
-    spawn_task_impl = create_spawn_task_callable(
-        user_id, main_thread_id, conversation_id
+    spawn_session_impl = create_spawn_session_callable(
+        user_id, main_thread_id, conversation_id, spawned_session_ids
     )
 
     # Wrap it with the @tool decorator for Claude
     @tool(
-        "spawn_task",
-        "Spawn an autonomous coding agent to work on a development task. "
-        "Use this when the user confirms they want you to create, modify, or delete code. "
-        "Requires a task description and GitHub repository URL.",
+        "spawn_session",
+        "Spawn a background session to work on the user's request. "
+        "Use this for: (1) code work - provide repo_url for GitHub integration, "
+        "(2) research/analysis - omit repo_url for general background work. "
+        "IMPORTANT: Pass the request_message_id from the conversation history [ID: ...] "
+        "that contains the user's actual request (not a confirmation like 'yes').",
         {
-            "task_description": str,
-            "repo_url": str,
-            "skip_planning": bool,
+            "title": str,  # Short title for the session (e.g., "Add quickstart to README")
+            "request_message_id": str,  # ID from conversation [ID: ...] with the user's request
+            "repo_url": str,  # Optional - if provided, enables code work with GitHub
+            "skip_plan": bool,  # Optional - skip planning phase for code work
         },
     )
-    async def spawn_task(args: dict[str, Any]) -> dict[str, Any]:
-        return await spawn_task_impl(args)
+    async def spawn_session(args: dict[str, Any]) -> dict[str, Any]:
+        return await spawn_session_impl(args)
 
-    return spawn_task
+    return spawn_session
 
 
 def format_conversation_history(messages: list[Message]) -> str:
-    """Format conversation history for inclusion in prompt."""
+    """Format conversation history for inclusion in prompt.
+
+    Includes message IDs so Claude can reference them when spawning sessions.
+    """
     if not messages:
         return ""
 
     lines = []
     for msg in messages:
         role = "User" if msg.role == "user" else "Assistant"
-        lines.append(f"{role}: {msg.content}")
+        lines.append(f"[ID: {msg.id}] {role}: {msg.content}")
 
     return "\n\n".join(lines)
 
@@ -282,6 +353,8 @@ class ChatResult:
     task_id: str | None = None
     needs_inbox_action: bool = False
     queue_item: QueueItem | None = None
+    spawned_session_ids: list[str] | None = None  # Sessions created during this turn
+    suppress_response: bool = False  # Don't save assistant message to main thread
 
 
 @dataclass
@@ -291,6 +364,7 @@ class ClaudeResponse:
     text: str
     compacted: bool = False
     compaction_count: int = 0
+    spawned_session_ids: list[str] | None = None  # Sessions created during this turn
 
 
 def _create_message_generator(prompt_text: str) -> AsyncIterator[dict]:
@@ -340,18 +414,19 @@ async def get_claude_response(
         mcp_servers = {}
         allowed_tools = []
         system_prompt = None
+        spawned_session_ids: list[str] = []  # Track sessions created during this turn
 
         if user_id and main_thread_id and conversation_id:
-            spawn_task_tool = create_spawn_task_tool(
-                user_id, main_thread_id, conversation_id
+            spawn_session_tool = create_spawn_session_tool(
+                user_id, main_thread_id, conversation_id, spawned_session_ids
             )
             mcp_server = create_sdk_mcp_server(
                 name="mainloop",
                 version="1.0.0",
-                tools=[spawn_task_tool],
+                tools=[spawn_session_tool],
             )
             mcp_servers["mainloop"] = mcp_server
-            allowed_tools.append("mcp__mainloop__spawn_task")
+            allowed_tools.append("mcp__mainloop__spawn_session")
 
             # Fetch recent repos for system prompt
             recent_repos = await db.get_recent_repos(main_thread_id)
@@ -392,6 +467,9 @@ async def get_claude_response(
                         text=f"Sorry, I encountered an error: {msg.result or 'Unknown error'}",
                         compacted=compaction_count > 0,
                         compaction_count=compaction_count,
+                        spawned_session_ids=(
+                            spawned_session_ids if spawned_session_ids else None
+                        ),
                     )
             elif isinstance(msg, SystemMessage):
                 # Track compaction events (context was automatically summarized)
@@ -412,10 +490,14 @@ async def get_claude_response(
             ),
             compacted=compaction_count > 0,
             compaction_count=compaction_count,
+            spawned_session_ids=spawned_session_ids if spawned_session_ids else None,
         )
     except Exception as e:
         logger.error(f"Claude Agent SDK error: {e}")
-        return ClaudeResponse(text=f"Sorry, I encountered an error: {str(e)}")
+        return ClaudeResponse(
+            text=f"Sorry, I encountered an error: {str(e)}",
+            spawned_session_ids=spawned_session_ids if spawned_session_ids else None,
+        )
 
 
 async def process_message(
@@ -428,9 +510,8 @@ async def process_message(
 ) -> ChatResult:
     """Process a user message and return an immediate response.
 
-    This handles:
-    - Routing to existing tasks
-    - Claude response with spawn_task tool (Claude decides when to spawn workers)
+    Claude has access to spawn_session tool to create background sessions
+    when the user wants to start tasks.
 
     Args:
         user_id: The user's unique identifier.
@@ -441,47 +522,8 @@ async def process_message(
         recent_messages: Recent unsummarized messages for context.
 
     """
-    # Check for routing to existing tasks first
-    matches = await find_matching_tasks(user_id, message)
-
-    if matches:
-        best_match = matches[0]
-
-        if best_match.confidence >= 0.7:
-            # High confidence match - add to inbox for confirmation
-            queue_item = await _create_routing_queue_item(
-                main_thread_id=main_thread_id,
-                user_id=user_id,
-                task=best_match.task,
-                message=message,
-                conversation_id=conversation_id,
-                matches=[best_match],
-            )
-            return ChatResult(
-                response=f"This looks related to an existing task: {best_match.task.description[:100]}. Check your inbox to confirm.",
-                needs_inbox_action=True,
-                queue_item=queue_item,
-            )
-
-        elif len(matches) > 1 and matches[0].confidence >= 0.4:
-            # Multiple matches - ask user to choose
-            queue_item = await _create_routing_queue_item(
-                main_thread_id=main_thread_id,
-                user_id=user_id,
-                task=matches[0].task,
-                message=message,
-                conversation_id=conversation_id,
-                matches=matches[:3],
-                multiple=True,
-            )
-            return ChatResult(
-                response="Multiple active tasks might match. Check your inbox to choose.",
-                needs_inbox_action=True,
-                queue_item=queue_item,
-            )
-
-    # Get Claude response with spawn_task tool available
-    # Claude will naturally decide when to ask for confirmation and spawn tasks
+    # Get Claude response with spawn_session tool available
+    # Claude will naturally decide when to ask for confirmation and spawn sessions
     model = settings.claude_model  # Uses haiku by default
     claude_response = await get_claude_response(
         message,
@@ -493,52 +535,12 @@ async def process_message(
         conversation_id=conversation_id,
     )
 
-    return ChatResult(response=claude_response.text)
+    # If sessions were spawned, suppress the main thread response
+    # The user interacts with the session directly
+    suppress = bool(claude_response.spawned_session_ids)
 
-
-async def _create_routing_queue_item(
-    main_thread_id: str,
-    user_id: str,
-    task: WorkerTask,
-    message: str,
-    conversation_id: str,
-    matches: list,
-    multiple: bool = False,
-) -> QueueItem:
-    """Create a queue item for routing confirmation."""
-    if multiple:
-        task_options = [f"{m.task.description[:50]}..." for m in matches]
-        task_options.append("Create new task")
-        content = f"Multiple active tasks might match: {message[:100]}"
-        title = "Which task?"
-        context = {
-            "matches": [
-                {"task_id": m.task.id, "confidence": m.confidence} for m in matches
-            ],
-            "original_message": message,
-            "conversation_id": conversation_id,
-        }
-    else:
-        task_options = ["Route to this task", "Create new task"]
-        content = f"This looks related to: {task.description[:100]}"
-        title = "Route to existing task?"
-        context = {
-            "suggested_task_id": task.id,
-            "confidence": matches[0].confidence if matches else 0,
-            "match_reasons": matches[0].match_reasons if matches else [],
-            "original_message": message,
-            "conversation_id": conversation_id,
-        }
-
-    queue_item = QueueItem(
-        main_thread_id=main_thread_id,
-        task_id=task.id,
-        user_id=user_id,
-        item_type=QueueItemType.ROUTING_SUGGESTION,
-        priority=QueueItemPriority.HIGH,
-        title=title,
-        content=content,
-        options=task_options,
-        context=context,
+    return ChatResult(
+        response=claude_response.text,
+        spawned_session_ids=claude_response.spawned_session_ids,
+        suppress_response=suppress,
     )
-    return await db.create_queue_item(queue_item)

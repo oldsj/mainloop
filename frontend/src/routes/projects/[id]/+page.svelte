@@ -4,10 +4,12 @@
   import { projects, currentProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
 
-  const projectId = $page.params.id;
+  const projectId = $page.params.id!;
 
   onMount(() => {
-    projects.fetchProjectDetail(projectId);
+    if (projectId) {
+      projects.fetchProjectDetail(projectId);
+    }
   });
 
   function formatDate(dateStr: string): string {
@@ -160,7 +162,7 @@
               <div class="border border-term-border bg-term-bg p-3">
                 <div class="flex items-start justify-between gap-2">
                   <div class="flex-1">
-                    <p class="text-sm text-term-fg">{task.title || 'Untitled task'}</p>
+                    <p class="text-sm text-term-fg">{task.description || 'Untitled task'}</p>
                     <p class="mt-1 text-xs text-term-fg-muted">
                       {formatDate(task.created_at)}
                     </p>

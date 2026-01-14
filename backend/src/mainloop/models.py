@@ -30,4 +30,5 @@ class ChatResponse(BaseModel):
     """Response model for chat interaction."""
 
     conversation_id: str
-    message: Message
+    message: Message | None = None  # None when session spawned
+    spawned_session_id: str | None = None  # Session ID if one was spawned
