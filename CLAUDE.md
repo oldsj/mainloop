@@ -110,6 +110,7 @@ Tests are organized into projects by execution mode:
 
 ## Key Patterns
 
+- **Svelte stores + HMR gotcha**: When editing store files, Vite HMR can leave stale module references - components keep old store imports while the store file gets new code. Hard refresh doesn't fix this. Solution: touch (add a comment to) the component that imports the store to force Vite to recompile it with fresh imports. If derived stores don't update after their dependencies change, this is almost always the cause.
 - **Pydantic models** in `models/` shared between frontend types and backend
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
 - **API calls**: Use `$lib/api.ts`, never hardcode URLs
