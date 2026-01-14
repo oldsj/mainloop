@@ -16,7 +16,8 @@
     placeholder = 'Enter command...',
     emptyStateTitle = '$ mainloop --help',
     emptyStateMessage = 'Start a conversation to begin',
-    showInlineSessions = true
+    showInlineSessions = true,
+    context = 'main'
   }: {
     messages: Message[];
     isLoading: boolean;
@@ -25,6 +26,7 @@
     emptyStateTitle?: string;
     emptyStateMessage?: string;
     showInlineSessions?: boolean;
+    context?: string;
   } = $props();
 
   // Map of anchor_message_id -> sessions for inline rendering
@@ -73,9 +75,11 @@
       }
     }
 
-    // Add ALL session messages as thread replies (not just focused session)
-    for (const { message, session } of $allSessionMessagesFlat) {
-      items.push({ type: 'thread-reply', message, session });
+    // Add ALL session messages as thread replies (only in main thread view)
+    if (showInlineSessions) {
+      for (const { message, session } of $allSessionMessagesFlat) {
+        items.push({ type: 'thread-reply', message, session });
+      }
     }
 
     // Sort everything by timestamp
@@ -152,19 +156,9 @@
     {:else}
       {#each timeline() as item (item.type === 'thread-reply' ? `thread-${item.message.id}` : item.message.id)}
         {#if item.type === 'message'}
-          <MessageBubble message={item.message} />
+          <MessageBubble message={item.message} {context} />
         {:else if item.type === 'session-anchor'}
-          <MessageBubble message={item.message} />
-          <!-- Inline sessions anchored to this message -->
-          {#if showInlineSessions}
-            {#each item.sessions as session (session.id)}
-              <SessionBlock
-                {session}
-                isActive={$navigationContext.currentContext === session.id}
-                onSelect={() => navigationContext.switchToSession(session.id)}
-              />
-            {/each}
-          {/if}
+          <MessageBubble message={item.message} {context} />
         {:else if item.type === 'thread-reply'}
           <!-- Thread reply notification (Slack-style "replied in thread") -->
           {@const sessionColor = item.session.color}
@@ -174,7 +168,7 @@
           {@const isLong = item.message.content.length > 120}
           <button
             type="button"
-            class="my-1 ml-4 flex w-[calc(100%-1rem)] items-start gap-2 border-l-4 bg-term-bg-secondary/30 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50"
+            class="my-1 ml-10 flex w-[calc(100%-2.5rem)] items-start gap-2 border-l-4 bg-term-bg-secondary/30 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50"
             style="border-color: {sessionColor};"
             onclick={() => navigationContext.zoomSession(item.session.id)}
           >
@@ -185,7 +179,7 @@
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 text-xs">
                 <span class={isUser ? 'text-term-accent-alt' : 'text-term-accent'}>
-                  $ {isUser ? 'user' : modelName}@{item.session.title}
+                  {isUser ? 'user' : modelName}@{item.session.title}$
                 </span>
                 <span class="text-term-fg-muted">·</span>
                 <time class="text-term-fg-muted">
@@ -220,7 +214,7 @@
         {@const sessionColor = $currentSession.color}
         {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
           <div
-            class="my-1 ml-4 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"
+            class="my-1 ml-10 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"
             style="border-color: {sessionColor}; color: {sessionColor};"
           >
             <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
@@ -232,11 +226,10 @@
 
     {#if isLoading}
       <div
-        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
+        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:px-4"
       >
         <span class="text-xs text-term-accent md:text-sm">
-          $
-          <span class="hidden md:inline">claude@main</span>
+          claude@{context}$
         </span>
         <div class="flex items-center gap-2">
           <span class="text-sm text-term-fg-muted">processing</span>

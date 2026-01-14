@@ -202,18 +202,17 @@
       </div>
     {:else}
       {#each messages as message (message.id)}
-        <MessageBubble {message} />
+        <MessageBubble {message} context={session?.title ?? 'session'} />
       {/each}
     {/if}
 
     {#if isLoading}
       {@const modelName = session?.model || 'claude'}
       <div
-        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4"
+        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:px-4"
       >
         <span class="text-xs text-term-accent md:text-sm">
-          $
-          <span class="hidden md:inline">{modelName}@{session?.title || 'session'}</span>
+          {modelName}@{session?.title || 'session'}$
         </span>
         <div class="flex items-center gap-2">
           <span class="text-sm text-term-fg-muted">processing</span>

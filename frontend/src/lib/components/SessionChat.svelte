@@ -69,5 +69,7 @@
     placeholder="Send a message to this session..."
     emptyStateTitle="$ session --start"
     emptyStateMessage="This session's conversation will appear here"
+    showInlineSessions={false}
+    context={session?.title ?? 'session'}
   />
 {/if}
