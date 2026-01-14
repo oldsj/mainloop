@@ -8,12 +8,13 @@ from mainloop.config import settings
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = "8"  # v8: Simplified session worker - direct agent SDK conversation
+WORKFLOW_VERSION = "9"  # v9: Use @DBOS.transaction for DB operations
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",
     "system_database_url": settings.database_url
     or os.environ.get("DBOS_SYSTEM_DATABASE_URL"),
+    "application_database_url": settings.database_url,
     "application_version": WORKFLOW_VERSION,
 }
 

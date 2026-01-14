@@ -21,8 +21,13 @@ from dbos import DBOS
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.sse import notify_session_updated
+from mainloop.workflows.transactions import (
+    add_message_to_conversation,
+    load_session,
+    update_session_status,
+)
 
-from models import Session, SessionStatus
+from models import SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -33,42 +38,6 @@ TOPIC_USER_MESSAGE = "user_message"
 USER_INPUT_TIMEOUT = 86400  # 24 hours
 
 SESSION_SYSTEM_PROMPT = """You are an AI assistant working in a background session. Respond directly to the user's request."""
-
-
-@DBOS.step()
-async def load_session(session_id: str) -> Session | None:
-    """Load session from database."""
-    return await db.get_session(session_id)
-
-
-@DBOS.step()
-async def update_session_status(
-    session_id: str,
-    status: SessionStatus,
-    started_at: datetime | None = None,
-    completed_at: datetime | None = None,
-    error: str | None = None,
-) -> None:
-    """Update session status in database."""
-    await db.update_session(
-        session_id,
-        status=status,
-        started_at=started_at,
-        completed_at=completed_at,
-        error=error,
-    )
-
-
-@DBOS.step()
-async def add_message_to_conversation(
-    conversation_id: str,
-    role: str,
-    content: str,
-) -> str:
-    """Add a message to the session's conversation."""
-    message = await db.create_message(conversation_id, role, content)
-    await db.increment_message_count(conversation_id)
-    return message.id
 
 
 @DBOS.step()
@@ -124,13 +93,13 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
     """
     logger.info(f"Starting session workflow: {session_id}")
 
-    session = await load_session(session_id)
+    session = load_session(session_id)
     if not session:
         return {"status": "failed", "error": "Session not found"}
 
     try:
         # Mark session as active
-        await update_session_status(
+        update_session_status(
             session_id,
             SessionStatus.ACTIVE,
             started_at=datetime.now(timezone.utc),
@@ -138,7 +107,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
         await notify_status(session.user_id, session_id, "active")
 
         # Add initial prompt as user message
-        await add_message_to_conversation(
+        add_message_to_conversation(
             session.conversation_id,
             "user",
             session.prompt,
@@ -149,7 +118,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
             session.conversation_id,
             repo_url=session.repo_url,
         )
-        await add_message_to_conversation(
+        add_message_to_conversation(
             session.conversation_id,
             "assistant",
             response,
@@ -158,7 +127,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
         # Now wait for user messages in a loop
         while True:
             # Wait for user input
-            await update_session_status(session_id, SessionStatus.WAITING_ON_USER)
+            update_session_status(session_id, SessionStatus.WAITING_ON_USER)
             await notify_status(session.user_id, session_id, "waiting_on_user")
 
             message_response = await DBOS.recv_async(
@@ -168,7 +137,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
 
             if message_response is None:
                 # Timeout - complete session
-                await update_session_status(
+                update_session_status(
                     session_id,
                     SessionStatus.COMPLETED,
                     completed_at=datetime.now(timezone.utc),
@@ -178,21 +147,21 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
 
             # Got user message
             user_message = message_response.get("message", "")
-            await add_message_to_conversation(
+            add_message_to_conversation(
                 session.conversation_id,
                 "user",
                 user_message,
             )
 
             # Mark as active and get response
-            await update_session_status(session_id, SessionStatus.ACTIVE)
+            update_session_status(session_id, SessionStatus.ACTIVE)
             await notify_status(session.user_id, session_id, "active")
 
             response = await get_claude_response(
                 session.conversation_id,
                 repo_url=session.repo_url,
             )
-            await add_message_to_conversation(
+            add_message_to_conversation(
                 session.conversation_id,
                 "assistant",
                 response,
@@ -202,7 +171,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Session workflow failed: {e}")
-        await update_session_status(
+        update_session_status(
             session_id,
             SessionStatus.FAILED,
             completed_at=datetime.now(timezone.utc),
