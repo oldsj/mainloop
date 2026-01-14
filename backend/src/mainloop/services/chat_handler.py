@@ -98,7 +98,9 @@ def create_spawn_session_callable(
         title = args.get("title", "")
         repo_url = args.get("repo_url")  # Optional - if provided, this is code work
         skip_plan = args.get("skip_plan", False)
-        request_message_id = args.get("request_message_id")  # ID of the user's original request
+        request_message_id = args.get(
+            "request_message_id"
+        )  # ID of the user's original request
 
         # Fetch the original request message from DB
         anchor_message_id = None
@@ -110,7 +112,9 @@ def create_spawn_session_callable(
                 if request_msg and request_msg.role == "user":
                     anchor_message_id = request_msg.id
                     prompt = request_msg.content
-                    print(f"[SESSION] Using specified message {request_message_id}: {prompt[:100]}...")
+                    print(
+                        f"[SESSION] Using specified message {request_message_id}: {prompt[:100]}..."
+                    )
 
             # Fallback: use last user message if no ID provided or not found
             if not prompt:
