@@ -1687,12 +1687,13 @@ async def reset_test_data(all: bool = False):
         # Delete app data for test users only (order matters for foreign keys)
         await conn.execute("DELETE FROM queue_items WHERE user_id LIKE 'test-%'")
         await conn.execute(
-            "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id LIKE 'test-%')"
-        )
-        await conn.execute(
             "DELETE FROM session_notifications WHERE user_id LIKE 'test-%'"
         )
+        # Sessions must be deleted before messages (sessions.anchor_message_id -> messages.id)
         await conn.execute("DELETE FROM sessions WHERE user_id LIKE 'test-%'")
+        await conn.execute(
+            "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id LIKE 'test-%')"
+        )
         await conn.execute("DELETE FROM worker_tasks WHERE user_id LIKE 'test-%'")
         await conn.execute("DELETE FROM projects WHERE user_id LIKE 'test-%'")
         await conn.execute("DELETE FROM conversations WHERE user_id LIKE 'test-%'")
