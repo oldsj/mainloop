@@ -63,7 +63,7 @@
   {#if $currentSession}
     <div class="mt-1 flex items-center justify-between px-3 text-xs text-term-fg-muted">
       <span>
-        Replying to <span style="color: {$currentSession.color || 'var(--term-cyan)'}">{$currentSession.title}</span>
+        Replying to <span style="color: {$currentSession.color}">{$currentSession.title}</span>
       </span>
       <button
         type="button"

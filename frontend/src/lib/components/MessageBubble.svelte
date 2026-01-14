@@ -15,9 +15,9 @@
 </script>
 
 <div
-  class="message w-full border-l-2 px-3 py-2 md:px-4 {isUser
-    ? 'border-term-accent-alt bg-transparent'
-    : 'border-term-accent bg-term-bg-secondary'}"
+  class="message w-full border-l-2 border-term-border px-3 py-2 md:px-4 {isUser
+    ? 'bg-transparent'
+    : 'bg-term-bg-secondary'}"
 >
   <!-- Mobile: stacked, Desktop: inline -->
   <div class="flex flex-col gap-1 md:flex-row md:items-start md:gap-3">

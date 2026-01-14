@@ -950,14 +950,14 @@ async def list_sessions(
     return sessions
 
 
-# Color palette for session assignment
+# Color palette for session assignment - uses CSS variables for theme compatibility
 SESSION_COLORS = [
-    "#06b6d4",  # cyan
-    "#22c55e",  # green
-    "#f97316",  # orange
-    "#a855f7",  # purple
-    "#ec4899",  # pink
-    "#eab308",  # yellow
+    "var(--term-cyan)",
+    "var(--term-green)",
+    "var(--term-orange)",
+    "var(--term-purple)",
+    "var(--term-magenta)",
+    "var(--term-yellow)",
 ]
 
 
@@ -1556,6 +1556,9 @@ async def seed_session_for_testing(
     # Create conversation for the session
     conversation = await db.create_conversation(user_id, title=request.title)
 
+    # Assign color automatically
+    color = await _get_next_session_color(user_id)
+
     # Create session
     session = Session(
         id=str(uuid4()),
@@ -1568,6 +1571,7 @@ async def seed_session_for_testing(
         status=request.status,
         summary=request.summary,
         error=request.error,
+        color=color,
         created_at=datetime.now(),
         started_at=datetime.now() if request.status != SessionStatus.PENDING else None,
         completed_at=(

@@ -161,7 +161,7 @@
       >
         <span
           class="h-2 w-2 shrink-0 rounded-full"
-          style="background-color: {session.color || 'var(--term-cyan)'};"
+          style="background-color: {session.color};"
         ></span>
         <span class="min-w-0 flex-1 truncate text-sm text-term-fg">
           {session.title}

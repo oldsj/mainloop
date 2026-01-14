@@ -13,7 +13,7 @@
   } = $props();
 
   // Determine the border/accent color
-  const sessionColor = $derived(session.color || 'var(--term-cyan)');
+  const sessionColor = $derived(session.color);
 
   // Status display
   const statusLabels: Record<string, string> = {

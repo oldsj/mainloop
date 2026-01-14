@@ -124,7 +124,7 @@
   <!-- Header -->
   <div
     class="flex items-center justify-between border-b border-term-border px-4 py-3"
-    style="border-left: 4px solid {session?.color || 'var(--term-cyan)'};"
+    style="border-left: 4px solid {session?.color};"
   >
     <div class="flex min-w-0 flex-1 items-center gap-3">
       <!-- Back button -->
@@ -145,7 +145,7 @@
           <div class="flex items-center gap-2">
             <span
               class="h-2 w-2 shrink-0 rounded-full"
-              style="background-color: {session.color || 'var(--term-cyan)'};"
+              style="background-color: {session.color};"
             ></span>
             <h1 class="truncate text-lg font-medium text-term-fg">
               {session.title}
@@ -233,7 +233,7 @@
   <!-- Input -->
   <div
     class="border-t border-term-border p-4"
-    style="border-left: 4px solid {session?.color || 'var(--term-cyan)'};"
+    style="border-left: 4px solid {session?.color};"
   >
     <InputBar
       onsend={handleSendMessage}

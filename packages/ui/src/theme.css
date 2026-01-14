@@ -20,6 +20,14 @@
   --term-error: #f2777a;
   --term-info: #66cccc;
   --term-selection: #515151;
+
+  /* Session colors - for visual distinction between concurrent sessions */
+  --term-cyan: #66cccc;
+  --term-green: #99cc99;
+  --term-yellow: #ffcc66;
+  --term-magenta: #cc99cc;
+  --term-orange: #f99157;
+  --term-purple: #cc99ff;
 }
 
 .theme-eighties {
@@ -34,6 +42,12 @@
   --term-error: #f2777a;
   --term-info: #66cccc;
   --term-selection: #515151;
+  --term-cyan: #66cccc;
+  --term-green: #99cc99;
+  --term-yellow: #ffcc66;
+  --term-magenta: #cc99cc;
+  --term-orange: #f99157;
+  --term-purple: #cc99ff;
 }
 
 .theme-dracula {
@@ -48,6 +62,12 @@
   --term-error: #ff5555;
   --term-info: #8be9fd;
   --term-selection: #44475a;
+  --term-cyan: #8be9fd;
+  --term-green: #50fa7b;
+  --term-yellow: #f1fa8c;
+  --term-magenta: #ff79c6;
+  --term-orange: #ffb86c;
+  --term-purple: #bd93f9;
 }
 
 .theme-nord {
@@ -62,6 +82,12 @@
   --term-error: #bf616a;
   --term-info: #81a1c1;
   --term-selection: #434c5e;
+  --term-cyan: #88c0d0;
+  --term-green: #a3be8c;
+  --term-yellow: #ebcb8b;
+  --term-magenta: #b48ead;
+  --term-orange: #d08770;
+  --term-purple: #b48ead;
 }
 
 .theme-gruvbox {
@@ -76,6 +102,12 @@
   --term-error: #fb4934;
   --term-info: #83a598;
   --term-selection: #504945;
+  --term-cyan: #83a598;
+  --term-green: #b8bb26;
+  --term-yellow: #fabd2f;
+  --term-magenta: #d3869b;
+  --term-orange: #fe8019;
+  --term-purple: #d3869b;
 }
 
 .theme-tokyo-night {
@@ -90,6 +122,12 @@
   --term-error: #f7768e;
   --term-info: #7dcfff;
   --term-selection: #33467c;
+  --term-cyan: #7dcfff;
+  --term-green: #9ece6a;
+  --term-yellow: #e0af68;
+  --term-magenta: #bb9af7;
+  --term-orange: #ff9e64;
+  --term-purple: #bb9af7;
 }
 
 /* ============= Tailwind Theme Integration ============= */

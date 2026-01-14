@@ -174,6 +174,9 @@ def create_spawn_session_callable(
                 await db.add_recent_repo(main_thread_id, repo_url)
 
             # Create session anchored to user's message
+            from mainloop.api import _get_next_session_color
+
+            color = await _get_next_session_color(user_id)
             session = Session(
                 user_id=user_id,
                 main_thread_id=main_thread_id,
@@ -183,6 +186,7 @@ def create_spawn_session_callable(
                 conversation_id=conv.id,
                 status=SessionStatus.PENDING,
                 anchor_message_id=anchor_message_id,
+                color=color,
                 # Code work fields (optional)
                 repo_url=repo_url,
                 project_id=project_id,

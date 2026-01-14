@@ -167,7 +167,7 @@
           {/if}
         {:else if item.type === 'thread-reply'}
           <!-- Thread reply notification (Slack-style "replied in thread") -->
-          {@const sessionColor = item.session.color || 'var(--term-cyan)'}
+          {@const sessionColor = item.session.color}
           {@const isUser = item.message.role === 'user'}
           {@const preview = item.message.content.slice(0, 120)}
           {@const isLong = item.message.content.length > 120}
@@ -218,7 +218,7 @@
 
       <!-- Session status indicator when focused -->
       {#if $currentSession}
-        {@const sessionColor = $currentSession.color || 'var(--term-cyan)'}
+        {@const sessionColor = $currentSession.color}
         {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
           <div
             class="my-1 ml-4 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"

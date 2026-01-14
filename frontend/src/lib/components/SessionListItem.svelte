@@ -71,9 +71,8 @@
 
 <button
   type="button"
-  class="w-full border border-term-border bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {isActive
-    ? 'border-l-2 border-l-term-cyan'
-    : ''} {needsAttention ? 'border-l-2 border-l-term-magenta bg-term-magenta/5' : ''}"
+  class="w-full border border-l-4 border-term-border bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {needsAttention ? 'bg-term-magenta/5' : ''}"
+  style="border-left-color: {session.color};"
   {onclick}
 >
   <div class="flex items-start justify-between gap-2">
