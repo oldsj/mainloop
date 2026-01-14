@@ -48,6 +48,6 @@ test('displays session count in header', async ({ appPage, userId }) => {
   await appPage.reload();
   await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-  // Header should show active count
-  await expect(appPage.getByText('(2 active)')).toBeVisible({ timeout: 10000 });
+  // Header should show active count (format: "2 active")
+  await expect(appPage.getByText('2 active')).toBeVisible({ timeout: 10000 });
 });

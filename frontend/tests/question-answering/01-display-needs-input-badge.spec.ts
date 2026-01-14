@@ -7,11 +7,9 @@ import { seedTaskWaitingQuestions } from '../fixtures/seed-data';
 /**
  * QUESTION ANSWERING FLOW - Display task with NEEDS INPUT badge
  *
- * Verifies that tasks in waiting_questions status:
- * - Display with NEEDS INPUT badge
- * - Badge has warning styling (yellow/warning color)
- * - Task is automatically expanded
- * - First question is visible and expanded
+ * NOTE: The inbox UI was simplified. Questions now show as queue items
+ * with title "Answer Questions" and raw content. Interactive option
+ * buttons were removed.
  */
 
 test.describe('Question Viewing and Display', () => {
@@ -20,30 +18,10 @@ test.describe('Question Viewing and Display', () => {
     await seedTaskWaitingQuestions(page, userId);
     await page.reload();
 
-    // 4. Verify task appears in inbox with 'NEEDS INPUT' badge
-    const needsInputBadge = page.locator('text=NEEDS INPUT').first();
-    await expect(needsInputBadge).toBeVisible({ timeout: 10000 });
+    // Question item appears in inbox with title
+    await expect(page.getByText('Answer Questions')).toBeVisible({ timeout: 10000 });
 
-    // 5. Verify badge has warning styling (border-term-warning text-term-warning)
-    const badgeElement = page
-      .locator('.border-term-warning.text-term-warning', {
-        hasText: 'NEEDS INPUT'
-      })
-      .first();
-    await expect(badgeElement).toBeVisible();
-
-    // 6. Verify task is auto-expanded - first question visible without clicking
-    const firstQuestion = page.locator('text=Which authentication method should we use?').first();
-    await expect(firstQuestion).toBeVisible({ timeout: 5000 });
-
-    // Verify first question is in expanded state (options are visible)
-    const jwtOption = page.locator('button:has-text("JWT tokens")').first();
-    await expect(jwtOption).toBeVisible();
-
-    const sessionOption = page.locator('button:has-text("Session cookies")').first();
-    await expect(sessionOption).toBeVisible();
-
-    const oauthOption = page.locator('button:has-text("OAuth 2.0")').first();
-    await expect(oauthOption).toBeVisible();
+    // Question content is visible (shown as text)
+    await expect(page.getByText('Which authentication method')).toBeVisible();
   });
 });

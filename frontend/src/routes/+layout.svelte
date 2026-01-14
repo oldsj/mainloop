@@ -103,6 +103,7 @@
     // Fetch initial data
     sessions.fetchSessions();
     notifications.fetchNotifications();
+    inbox.fetchItems();
 
     return () => {
       inbox.stopListening();
