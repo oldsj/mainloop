@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Force HMR refresh for store reactivity
   import { onMount } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
   import { projects } from '$lib/stores/projects';
@@ -140,3 +141,9 @@
   emptyStateTitle="$ mainloop --help"
   emptyStateMessage="Start a conversation to begin"
 />
+// HMR refresh
+
+
+
+
+

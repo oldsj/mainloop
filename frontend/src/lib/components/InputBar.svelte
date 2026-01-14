@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Force HMR refresh for store reactivity
   import { draftMessage } from '$lib/stores/draftMessage';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
 
@@ -75,3 +76,9 @@
     </div>
   {/if}
 </div>
+// HMR refresh
+
+
+
+
+

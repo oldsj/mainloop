@@ -54,7 +54,7 @@
 </script>
 
 <div
-  class="session-block my-3 ml-4 border-l-4 bg-term-bg-secondary"
+  class="session-block my-3 ml-4 border-l-4 {isActive ? 'bg-term-bg-secondary/80 ring-1 ring-term-accent' : 'bg-term-bg-secondary'}"
   style="border-color: {sessionColor};"
 >
   <!-- Header only - thread messages appear as notifications in timeline -->

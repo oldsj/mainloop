@@ -1,5 +1,6 @@
 /**
  * Sessions store for managing session state
+ * (HMR refresh)
  */
 
 import { writable, derived } from 'svelte/store';

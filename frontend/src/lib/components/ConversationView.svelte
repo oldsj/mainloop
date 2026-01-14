@@ -166,11 +166,13 @@
           {@const modelName = item.session.model || 'claude'}
           {@const preview = item.message.content.slice(0, 120)}
           {@const isLong = item.message.content.length > 120}
+          {@const isActiveSession = $navigationContext.currentContext === item.session.id}
           <button
             type="button"
-            class="my-1 ml-10 flex w-[calc(100%-2.5rem)] items-start gap-2 border-l-4 bg-term-bg-secondary/30 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50"
+            class="my-1 ml-10 flex w-[calc(100%-2.5rem)] items-start gap-2 border-l-4 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50 {isActiveSession ? 'bg-term-bg-secondary/50 ring-1 ring-term-accent' : 'bg-term-bg-secondary/30'}"
             style="border-color: {sessionColor};"
-            onclick={() => navigationContext.zoomSession(item.session.id)}
+            onclick={() => navigationContext.switchToSession(item.session.id)}
+            ondblclick={() => navigationContext.zoomSession(item.session.id)}
           >
             <span
               class="mt-1 h-2 w-2 shrink-0 rounded-full"
