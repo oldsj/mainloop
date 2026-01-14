@@ -115,7 +115,7 @@ async def notify_status(user_id: str, session_id: str, status: str):
 
 @DBOS.workflow()
 async def session_worker_workflow(session_id: str) -> dict[str, Any]:
-    """Simple session workflow - direct conversation with agent SDK.
+    """Run session workflow with direct conversation via agent SDK.
 
     1. Process initial prompt
     2. Wait for user message
