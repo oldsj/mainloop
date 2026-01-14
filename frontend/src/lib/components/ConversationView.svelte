@@ -108,20 +108,27 @@
     }
   }
 
-  // Auto-scroll to bottom when messages change or loading state changes
+  // Auto-scroll to bottom when messages change (only if already near bottom)
   $effect(() => {
     // Track these values to trigger effect
     messages;
     isLoading;
     $allSessionMessagesFlat;
 
-    // Scroll after DOM updates
-    tick().then(() => {
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        showScrollButton = false;
-      }
-    });
+    // Check if user was already near bottom before updates
+    const wasNearBottom = messagesContainer
+      ? messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 150
+      : true;
+
+    // Only auto-scroll if user was already at/near bottom
+    if (wasNearBottom) {
+      tick().then(() => {
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+          showScrollButton = false;
+        }
+      });
+    }
   });
 
   async function handleSend(detail: { message: string }) {
