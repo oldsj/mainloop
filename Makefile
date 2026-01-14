@@ -29,6 +29,10 @@ dev-stop: ## Stop DevSpace and purge resources
 dev-reset: ## Reset ALL data (database + task namespaces + restart backend)
 	@./scripts/kind/reset-data.sh
 
+dev-clear-cache: ## Clear Vite cache (fixes stale HMR issues)
+	kubectl --context kind-$(KIND_CLUSTER_NAME) -n mainloop exec deployment/mainloop-frontend-devspace -- rm -rf /app/node_modules/.vite 2>/dev/null || true
+	@echo "Vite cache cleared. Refresh browser."
+
 dev-logs: ## Tail backend logs
 	devspace logs -f --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 

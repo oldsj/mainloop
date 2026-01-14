@@ -16,6 +16,16 @@
     return () => allSessionMessages.stopPolling();
   });
 
+  // Refresh session messages when sessions list changes (fixes race condition on page load)
+  $effect(() => {
+    const activeSessions = $sessions.sessions.filter(
+      (s) => !['completed', 'failed', 'cancelled'].includes(s.status)
+    );
+    if (activeSessions.length > 0) {
+      allSessionMessages.refreshAll();
+    }
+  });
+
   onMount(async () => {
     // Load the most recent conversation on startup
     try {
