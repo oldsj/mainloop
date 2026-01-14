@@ -124,6 +124,9 @@ dev:
           - .svelte-kit/
           - node_modules/
         disableDownload: true
+      - path: ./frontend/vite.config.ts:/app/frontend/vite.config.ts
+        file: true
+        disableDownload: true
       - path: ./packages:/app/packages
         excludePaths:
           - __pycache__/
