@@ -343,9 +343,7 @@ async def apply_session_namespace_network_policies(
                     to=[
                         client.V1NetworkPolicyPeer(
                             namespace_selector=client.V1LabelSelector(
-                                match_labels={
-                                    "kubernetes.io/metadata.name": "mainloop"
-                                }
+                                match_labels={"kubernetes.io/metadata.name": "mainloop"}
                             )
                         )
                     ],
@@ -355,7 +353,12 @@ async def apply_session_namespace_network_policies(
     )
 
     # Apply policies
-    for policy in [deny_all_policy, allow_dns_policy, allow_internet_policy, allow_mainloop_policy]:
+    for policy in [
+        deny_all_policy,
+        allow_dns_policy,
+        allow_internet_policy,
+        allow_mainloop_policy,
+    ]:
         try:
             networking_v1.create_namespaced_network_policy(
                 namespace=namespace, body=policy
