@@ -38,6 +38,8 @@ kubectl --context="${KIND_CONTEXT}" create secret generic mainloop-secrets \
   --namespace mainloop \
   --from-literal=claude-secret-token="${CLAUDE_CODE_OAUTH_TOKEN-}" \
   --from-literal=github-token="${GITHUB_TOKEN-}" \
+  --from-literal=db-username=mainloop \
+  --from-literal=db-password=mainloop \
   --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
 
 # Create ghcr-secret (optional - for pulling from GHCR if needed)
