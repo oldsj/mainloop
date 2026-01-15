@@ -17,7 +17,6 @@ from claude_agent_sdk import (
 from dbos import SetWorkflowID
 from mainloop.config import settings
 from mainloop.db import db
-from mainloop.services.task_router import extract_keywords
 from mainloop.workflows.dbos_config import worker_queue
 
 from models import (
@@ -97,7 +96,6 @@ def create_spawn_session_callable(
         print(f"[SESSION] spawn_session_impl called with args: {args}")
         title = args.get("title", "")
         repo_url = args.get("repo_url")  # Optional - if provided, this is code work
-        skip_plan = args.get("skip_plan", False)
         request_message_id = args.get(
             "request_message_id"
         )  # ID of the user's original request
@@ -169,9 +167,6 @@ def create_spawn_session_callable(
             conv = await db.create_conversation(user_id, title=title)
             print(f"[SESSION] Created conversation: {conv.id}")
 
-            # Extract keywords for code work
-            keywords = extract_keywords(prompt) if is_code_work else []
-
             # Create project from repo URL if provided (so it shows in sidebar)
             project_id = None
             if repo_url:
@@ -201,8 +196,6 @@ def create_spawn_session_callable(
                 # Code work fields (optional)
                 repo_url=repo_url,
                 project_id=project_id,
-                skip_plan=skip_plan,
-                keywords=keywords,
             )
             session = await db.create_session(session)
             print(f"[SESSION] Session saved to DB: {session.id}")
@@ -286,7 +279,6 @@ def create_spawn_session_tool(
             "title": str,  # Short title for the session (e.g., "Add quickstart to README")
             "request_message_id": str,  # ID from conversation [ID: ...] with the user's request
             "repo_url": str,  # Optional - if provided, enables code work with GitHub
-            "skip_plan": bool,  # Optional - skip planning phase for code work
         },
     )
     async def spawn_session(args: dict[str, Any]) -> dict[str, Any]:

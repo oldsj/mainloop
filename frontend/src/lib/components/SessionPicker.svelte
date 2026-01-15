@@ -19,10 +19,7 @@
   // Status styling
   const statusColors: Record<string, string> = {
     waiting_on_user: 'text-term-magenta',
-    waiting_questions: 'text-term-magenta',
-    waiting_plan_review: 'text-term-magenta',
     active: 'text-term-cyan',
-    planning: 'text-term-cyan',
     implementing: 'text-term-cyan',
     pending: 'text-term-yellow',
     completed: 'text-term-green',
@@ -32,10 +29,7 @@
 
   const statusLabels: Record<string, string> = {
     waiting_on_user: 'NEEDS INPUT',
-    waiting_questions: 'NEEDS INPUT',
-    waiting_plan_review: 'REVIEW PLAN',
     active: 'ACTIVE',
-    planning: 'PLANNING',
     implementing: 'IMPLEMENTING',
     pending: 'PENDING',
     completed: 'DONE',
@@ -148,7 +142,7 @@
     {#each sortedSessions as session, i (session.id)}
       {@const itemIndex = i + 1}
       {@const isSelected = selectedIndex === itemIndex}
-      {@const needsAttention = ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes(session.status)}
+      {@const needsAttention = session.status === 'waiting_on_user'}
       <button
         type="button"
         class="flex w-full items-center gap-2 px-3 py-2 text-left {isSelected
@@ -173,7 +167,7 @@
               ? 'bg-term-green/20 text-term-green'
               : session.status === 'failed' || session.status === 'cancelled'
                 ? 'bg-term-red/20 text-term-red'
-                : ['active', 'planning', 'implementing'].includes(session.status)
+                : ['active', 'implementing'].includes(session.status)
                   ? 'bg-term-cyan/20 text-term-cyan'
                   : 'bg-term-fg-muted/20 text-term-fg-muted'}"
           style="border-radius: 9999px;"

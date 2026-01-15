@@ -214,7 +214,7 @@
       <!-- Session status indicator when focused -->
       {#if $currentSession}
         {@const sessionColor = $currentSession.color}
-        {#if ['pending', 'active', 'planning', 'implementing'].includes($currentSession.status)}
+        {#if ['pending', 'active', 'implementing'].includes($currentSession.status)}
           <div
             class="my-1 ml-10 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"
             style="border-color: {sessionColor}; color: {sessionColor};"

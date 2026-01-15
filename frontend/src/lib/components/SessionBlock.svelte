@@ -20,10 +20,6 @@
     pending: 'PENDING',
     active: 'ACTIVE',
     waiting_on_user: 'NEEDS INPUT',
-    waiting_questions: 'NEEDS INPUT',
-    waiting_plan_review: 'REVIEW PLAN',
-    ready_to_implement: 'READY',
-    planning: 'PLANNING',
     implementing: 'IMPLEMENTING',
     under_review: 'IN REVIEW',
     completed: 'DONE',
@@ -32,12 +28,10 @@
   };
 
   const isRunning = $derived(
-    ['pending', 'active', 'planning', 'implementing'].includes(session.status)
+    ['pending', 'active', 'implementing'].includes(session.status)
   );
 
-  const needsAttention = $derived(
-    ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes(session.status)
-  );
+  const needsAttention = $derived(session.status === 'waiting_on_user');
 
   function handleClick() {
     if (onSelect) {
