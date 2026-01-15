@@ -55,3 +55,6 @@ spec:
     parameters:
       max_client_conn: '100'
       default_pool_size: '10'
+      # Disable query_wait_timeout (default 120s) because DBOS notification
+      # listener holds connections waiting for LISTEN/NOTIFY indefinitely
+      query_wait_timeout: '0'
