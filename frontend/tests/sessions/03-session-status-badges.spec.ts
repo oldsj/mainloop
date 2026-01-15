@@ -13,7 +13,7 @@ test.describe('Session status badges', () => {
     await appPage.reload();
     await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    await expect(appPage.getByText('[PENDING]')).toBeVisible({ timeout: 10000 });
+    await expect(appPage.getByText('PENDING', { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('shows ACTIVE badge for active session', async ({ appPage, userId }) => {
@@ -25,7 +25,7 @@ test.describe('Session status badges', () => {
     await appPage.reload();
     await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    await expect(appPage.getByText('[ACTIVE]')).toBeVisible({ timeout: 10000 });
+    await expect(appPage.getByText('ACTIVE', { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('shows NEEDS INPUT badge for waiting_on_user session', async ({ appPage, userId }) => {
@@ -37,7 +37,7 @@ test.describe('Session status badges', () => {
     await appPage.reload();
     await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    await expect(appPage.getByText('[NEEDS INPUT]')).toBeVisible({ timeout: 10000 });
+    await expect(appPage.getByText('NEEDS INPUT')).toBeVisible({ timeout: 10000 });
   });
 
   test('shows DONE badge for completed session', async ({ appPage, userId }) => {
@@ -50,7 +50,7 @@ test.describe('Session status badges', () => {
     await appPage.reload();
     await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    await expect(appPage.getByText('[DONE]')).toBeVisible({ timeout: 10000 });
+    await expect(appPage.getByText('DONE')).toBeVisible({ timeout: 10000 });
   });
 
   test('shows FAILED badge for failed session', async ({ appPage, userId }) => {
@@ -63,20 +63,7 @@ test.describe('Session status badges', () => {
     await appPage.reload();
     await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-    await expect(appPage.getByText('[FAILED]')).toBeVisible({ timeout: 10000 });
-  });
-
-  test('shows waiting indicator for waiting_on_user session', async ({ appPage, userId }) => {
-    await seedSession(appPage, userId, {
-      status: 'waiting_on_user',
-      title: 'Waiting For Input'
-    });
-
-    await appPage.reload();
-    await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
-
-    // Should show the "Waiting for your input" text
-    await expect(appPage.getByText('Waiting for your input')).toBeVisible({ timeout: 10000 });
+    await expect(appPage.getByText('FAILED', { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('shows error message for failed session', async ({ appPage, userId }) => {

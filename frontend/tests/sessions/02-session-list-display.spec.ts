@@ -3,7 +3,7 @@ import { test, expect, seedSession } from '../fixtures';
 /**
  * Test: Session list displays seeded sessions
  */
-test('displays session with title and description', async ({ appPage, userId }) => {
+test('displays session with title', async ({ appPage, userId }) => {
   // Seed a session
   await seedSession(appPage, userId, {
     status: 'active',
@@ -15,9 +15,8 @@ test('displays session with title and description', async ({ appPage, userId }) 
   await appPage.reload();
   await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-  // Session should appear in the list
+  // Session should appear in the list (description not shown in list view)
   await expect(appPage.getByText('Update Documentation')).toBeVisible({ timeout: 10000 });
-  await expect(appPage.getByText('Adding API reference section')).toBeVisible();
 });
 
 test('displays session active badge', async ({ appPage, userId }) => {
@@ -30,8 +29,8 @@ test('displays session active badge', async ({ appPage, userId }) => {
   await appPage.reload();
   await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
 
-  // Check for ACTIVE status badge
-  await expect(appPage.getByText('[ACTIVE]')).toBeVisible({ timeout: 10000 });
+  // Check for ACTIVE status badge (shown as pill without brackets)
+  await expect(appPage.getByText('ACTIVE', { exact: true })).toBeVisible({ timeout: 10000 });
 });
 
 test('displays session count in header', async ({ appPage, userId }) => {
