@@ -1,5 +1,7 @@
 """Configuration management."""
 
+from urllib.parse import quote_plus
+
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,7 +20,8 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """Construct database URL from parts."""
-        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        encoded_password = quote_plus(self.db_password)
+        return f"postgresql://{self.db_user}:{encoded_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
     # Claude
     claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
