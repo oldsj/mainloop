@@ -380,8 +380,14 @@ def build_fix_prompt() -> str:
     return "\n".join(parts)
 
 
-async def execute_task() -> dict:
-    """Execute the task using Claude Agent SDK."""
+async def execute_task(working_dir: str | None = None) -> dict:
+    """Execute the task using Claude Agent SDK.
+
+    Args:
+        working_dir: Directory where Claude should work. If provided (repo was cloned),
+                     Claude works in the repo. Otherwise uses WORKSPACE.
+
+    """
     prompt = build_prompt()
     print(f"[job_runner] Mode: {MODE}")
     print(f"[job_runner] Model: {CLAUDE_MODEL}")
@@ -392,10 +398,14 @@ async def execute_task() -> dict:
     perm_mode = "plan" if MODE == "plan" else "bypassPermissions"
     print(f"[job_runner] Permission mode: {perm_mode}")
 
+    # Use the cloned repo directory if available, otherwise use WORKSPACE
+    cwd = working_dir or WORKSPACE
+    print(f"[job_runner] Claude working directory: {cwd}")
+
     options = ClaudeAgentOptions(
         model=CLAUDE_MODEL,
         permission_mode=perm_mode,
-        cwd=WORKSPACE,
+        cwd=cwd,
     )
 
     collected_text: list[str] = []
@@ -706,7 +716,7 @@ async def main():
         print(f"[job_runner] Working in repo: {repo_dir}")
 
     try:
-        result = await execute_task()
+        result = await execute_task(working_dir=repo_dir)
         await send_result(
             status="completed",
             result=result,
