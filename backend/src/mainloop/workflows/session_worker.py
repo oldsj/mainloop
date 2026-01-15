@@ -145,14 +145,7 @@ async def session_worker_workflow(session_id: str) -> dict[str, Any]:
                 await notify_status(session.user_id, session_id, "completed")
                 return {"status": "completed", "reason": "timeout"}
 
-            # Got user message
-            user_message = message_response.get("message", "")
-            add_message_to_conversation(
-                session.conversation_id,
-                "user",
-                user_message,
-            )
-
+            # Got notification that user sent a message (already saved by API)
             # Mark as active and get response
             update_session_status(session_id, SessionStatus.ACTIVE)
             await notify_status(session.user_id, session_id, "active")

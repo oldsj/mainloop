@@ -1071,16 +1071,23 @@ async def send_session_message(
     if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not your session")
 
-    # If session is waiting on user, send message to workflow
+    # Save message directly to database (don't rely on workflow)
+    message = await db.create_message(
+        conversation_id=session.conversation_id,
+        role="user",
+        content=request.message,
+    )
+
+    # If session is waiting on user, notify workflow to process response
     if session.status == SessionStatus.WAITING_ON_USER:
-        # Notify the workflow via DBOS messaging
+        # Notify the workflow that a new message is ready
         DBOS.send(
             session_id,  # workflow_id is the session_id
-            {"message": request.message},
+            {"message_id": message.id},  # Just notify, message already saved
             topic=TOPIC_USER_MESSAGE,
         )
 
-    return {"status": "ok", "message_id": "pending"}
+    return {"status": "ok", "message_id": message.id}
 
 
 class SessionLogsResponse(BaseModel):

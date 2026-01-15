@@ -8,7 +8,7 @@ from mainloop.config import settings
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = "9"  # v9: Use @DBOS.transaction for DB operations
+WORKFLOW_VERSION = "10"  # v10: API saves user messages directly (not workflow)
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",
