@@ -40,13 +40,13 @@ spec:
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: mainloop-db-app
-                  key: username
+                  name: mainloop-secrets
+                  key: db-username
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: mainloop-db-app
-                  key: password
+                  name: mainloop-secrets
+                  key: db-password
             - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s build-backend build-frontend build-agent-controller build-all push-backend push-frontend push-agent-controller push-all build-all-parallel push-all-parallel deploy deploy-loop deploy-loop-all deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s build-backend build-frontend build-agent-controller build-all push-backend push-frontend push-agent-controller push-all build-all-parallel push-all-parallel deploy deploy-loop deploy-loop-all deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests prod-reset kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -227,6 +227,26 @@ deploy-frontend-k8s: ## Build, push, and restart frontend only (k8s version)
 
 deploy-manifests: ## Apply k8s manifests only (no image builds)
 	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
+
+PROD_CONTEXT ?= admin@internal-01
+
+prod-reset: ## Reset prod database + task namespaces + restart backend
+	@echo "=== Using context: $(PROD_CONTEXT) ==="
+	@echo "=== Cleaning up k8s task namespaces ==="
+	@for ns in $$(kubectl --context $(PROD_CONTEXT) get ns -o name 2>/dev/null | grep "^namespace/task-" | cut -d/ -f2); do \
+		echo "Deleting namespace: $$ns"; \
+		kubectl --context $(PROD_CONTEXT) delete ns "$$ns" --wait=false 2>/dev/null || true; \
+	done
+	@echo "=== Deleting CNPG Database CR ==="
+	kubectl --context $(PROD_CONTEXT) delete database mainloop-db-database -n mainloop --wait=true
+	@echo "=== Recreating Database CR ==="
+	kubectl --context $(PROD_CONTEXT) apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
+	@echo "=== Waiting for database to be ready ==="
+	@until kubectl --context $(PROD_CONTEXT) get database mainloop-db-database -n mainloop -o jsonpath='{.status.applied}' 2>/dev/null | grep -q true; do sleep 1; done
+	@echo "=== Restarting backend to reinitialize DBOS ==="
+	kubectl --context $(PROD_CONTEXT) rollout restart deployment/mainloop-backend -n mainloop
+	kubectl --context $(PROD_CONTEXT) rollout status deployment/mainloop-backend -n mainloop --timeout=60s
+	@echo "=== Reset complete ==="
 
 # K8s commands (for local testing before moving to infrastructure repo)
 k8s-apply: ## Apply K8s manifests locally
