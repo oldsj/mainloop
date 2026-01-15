@@ -46,9 +46,10 @@ make test-reset   # Clear DB + namespaces between runs
 
 **Playwright agents for test maintenance:**
 
-- Don't manually tweak tests - use `playwright-test-healer` to auto-fix failures
-- For new features, use `playwright-test-planner` to explore and generate plans
+- Specs in `docs/specs/` are the source of truth for app behavior
+- Use `playwright-test-planner` to generate test plans from specs
 - Use `playwright-test-generator` to create tests from plans
+- Use `playwright-test-healer` to auto-fix failing tests
 
 ### Test Architecture (Flakiness Prevention)
 
@@ -130,10 +131,10 @@ make setup-claude-creds  # Extract Claude credentials from Keychain
 ## Documentation Philosophy
 
 ```text
-README.md → docs/ → specs/ → tests/
+docs/specs/*.md → playwright-test-planner → tests/*.spec.ts
 ```
 
-Specs define behavior. Tests are the source of truth. Keep docs in sync by running planner agent after feature changes.
+Specs are the source of truth. They describe user-visible behavior in human-readable form, detailed enough for `playwright-test-planner` to generate tests. If tests fail: spec is wrong, code is wrong, or feature is in active development.
 
 ## Important
 
