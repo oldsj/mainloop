@@ -1,0 +1,26 @@
+# Dogfooding Mainloop
+
+**Dogfooding** for mainloop means using mainloop itself to develop mainloop. It's the practice of eating your own dog food—using the product you're building in the same way your users will.
+
+## What It Means for Mainloop
+
+Mainloop is an attention management system that uses spawned AI sessions to handle background work while you stay focused in the main conversation. Dogfooding mainloop means:
+
+1. **Using spawn_session for development tasks** - Instead of manually handling feature development, bug investigation, or refactoring in a single conversation, spawn dedicated sessions to parallelize the work.
+
+2. **Keeping the main thread focused** - The main conversation thread stays clean and focused on decisions, planning, and integration. Details, iteration, and implementation live in spawned sessions.
+
+3. **Leveraging notifications and task queuing** - Sessions surface results back to the main thread as notifications, maintaining a unified inbox of what needs attention.
+
+4. **Testing the UX in real scenarios** - By using mainloop to build mainloop, the team experiences firsthand where friction points exist, what the notifications feel like, and how the session workflow scales.
+
+## Practical Examples
+
+- **Feature development**: Spawn a session to implement a new feature, investigate design patterns, run tests, and prepare a PR—all in parallel with other work.
+- **Bug investigation**: Create a session to dig into logs, trace code paths, and propose a fix while the main thread stays available.
+- **Documentation updates**: Spawn a session to update docs, examples, or architecture diagrams without blocking the main conversation.
+- **Code review cycles**: Use sessions to address feedback, run CI checks, and iterate—the main thread only gets pinged when ready for final review.
+
+## Why It Matters
+
+Dogfooding validates that mainloop actually solves the problem it was built for: **keeping humans focused while parallel AI work happens in the background**. If building mainloop itself becomes easier and more manageable with mainloop, then the product works.
