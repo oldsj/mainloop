@@ -18,6 +18,7 @@ The main thread is a continuous conversation with Claude that persists across de
 ## Spawning Sessions
 
 From the main thread, you can ask Claude to spawn sessions:
+
 - Sessions appear as colored thread blocks in the timeline
 - Session messages surface as thread notifications
 - Click to expand inline or zoom to fullscreen view

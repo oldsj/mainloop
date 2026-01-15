@@ -122,11 +122,13 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 ## Documentation
 
 **Specs** (source of truth for app behavior):
+
 - [Chat](docs/specs/chat.md) - Main thread conversation
 - [Sessions](docs/specs/sessions.md) - Background work and status
 - [Layout](docs/specs/layout.md) - Mobile and desktop views
 
 **Guides**:
+
 - [Architecture](docs/architecture.md) - System design and data flow
 - [Development](docs/development.md) - Local setup and commands
 - [Contributing](CONTRIBUTING.md) - How to contribute

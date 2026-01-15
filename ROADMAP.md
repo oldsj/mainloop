@@ -5,6 +5,7 @@ Future ideas and features under consideration.
 ## CI Loop Automation
 
 Agent automatically iterates on CI failures:
+
 - Poll GitHub Actions after each push
 - On failure: analyze logs, fix, commit
 - Continue until green checkmark
@@ -12,6 +13,7 @@ Agent automatically iterates on CI failures:
 ## GitHub Issue Planning
 
 Agent creates/updates issues before coding:
+
 - Problem analysis and proposed approach
 - Implementation plan as "thinking out loud" space
 - Links PR back to issue for context
