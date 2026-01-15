@@ -80,6 +80,9 @@ async def create_session_namespace(session_id: str) -> str:
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
                 "mainloop.dev/session-id": session_id,
+                # Pod Security Standards - restrict privileged escalation
+                "pod-security.kubernetes.io/enforce": "baseline",
+                "pod-security.kubernetes.io/warn": "restricted",
             },
         )
     )
@@ -352,12 +355,77 @@ async def apply_session_namespace_network_policies(
         ),
     )
 
+    # Allow egress to K8s API server (for kubectl/devspace access)
+    # API server is typically in the default namespace
+    allow_kube_api_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="allow-kube-api",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/session-id": session_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Egress"],
+            egress=[
+                client.V1NetworkPolicyEgressRule(
+                    to=[
+                        client.V1NetworkPolicyPeer(
+                            namespace_selector=client.V1LabelSelector(
+                                match_labels={"kubernetes.io/metadata.name": "default"}
+                            )
+                        )
+                    ],
+                    ports=[client.V1NetworkPolicyPort(protocol="TCP", port=443)],
+                )
+            ],
+        ),
+    )
+
+    # Allow all egress within the session's own namespace (for dev environment)
+    allow_intra_namespace_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="allow-intra-namespace",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/session-id": session_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Egress", "Ingress"],
+            egress=[
+                client.V1NetworkPolicyEgressRule(
+                    to=[
+                        client.V1NetworkPolicyPeer(
+                            pod_selector=client.V1LabelSelector()  # Same namespace
+                        )
+                    ],
+                )
+            ],
+            ingress=[
+                client.V1NetworkPolicyIngressRule(
+                    _from=[
+                        client.V1NetworkPolicyPeer(
+                            pod_selector=client.V1LabelSelector()  # Same namespace
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+
     # Apply policies
     for policy in [
         deny_all_policy,
         allow_dns_policy,
         allow_internet_policy,
         allow_mainloop_policy,
+        allow_kube_api_policy,
+        allow_intra_namespace_policy,
     ]:
         try:
             networking_v1.create_namespaced_network_policy(

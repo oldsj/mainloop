@@ -1,0 +1,97 @@
+# Network policies for session namespaces (mainloop-session-*)
+# Reference documentation - actual policies are applied via k8s_namespace.py
+# Sessions get: DNS, internet, mainloop callback, K8s API, and intra-namespace traffic
+---
+# Default deny-all for session namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  # namespace: mainloop-session-xxx - set dynamically when creating namespace
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow DNS queries (required for internet access)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  # namespace: mainloop-session-xxx - set dynamically
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Allow egress to internet ONLY (block all cluster internal)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internet-only
+  # namespace: mainloop-session-xxx - set dynamically
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow to public internet only (block RFC1918 private networks)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block all private/internal networks
+              - 10.0.0.0/8 # Private class A
+              - 172.16.0.0/12 # Private class B
+              - 192.168.0.0/16 # Private class C
+              - 169.254.0.0/16 # Link-local
+              - 127.0.0.0/8 # Loopback
+              - fc00::/7 # IPv6 private
+              - fe80::/10 # IPv6 link-local
+              - ::1/128 # IPv6 loopback
+---
+# Allow egress to K8s API server (for kubectl/devspace access)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-api
+  # namespace: mainloop-session-xxx - set dynamically
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# Allow all traffic within the session's own namespace (for dev environment)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  # namespace: mainloop-session-xxx - set dynamically
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    - to:
+        - podSelector: {} # Same namespace
+  ingress:
+    - from:
+        - podSelector: {} # Same namespace

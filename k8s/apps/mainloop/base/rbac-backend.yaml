@@ -89,6 +89,12 @@ rules:
       - pods/log
     verbs: [get, list, watch]
 
+  # Pod exec - required for DevSpace file sync
+  - apiGroups: ['']
+    resources:
+      - pods/exec
+    verbs: [create, get]
+
   # Secrets - full access for app credentials
   - apiGroups: ['']
     resources:

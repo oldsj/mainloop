@@ -23,6 +23,11 @@ help: ## Show this help message
 dev: ## Start dev environment with hot reload (DevSpace + Kind)
 	devspace dev --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
+dev-session: ## Start dev environment inside a session namespace (for dogfooding)
+	@echo "=== Starting session dev environment ==="
+	@echo "Namespace: $${DEVSPACE_NAMESPACE:-default}"
+	devspace dev -f devspace-session.yaml
+
 dev-stop: ## Stop DevSpace and purge resources
 	devspace purge --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 

@@ -1,0 +1,211 @@
+version: v2beta1
+name: mainloop-session
+
+# Session dev mode: uses pre-built images, no building required
+# Run from session: devspace dev -f devspace-session.yaml
+
+# Variables
+vars:
+  SESSION_NAMESPACE:
+    source: env
+    default: ${DEVSPACE_NAMESPACE}
+  # Images are pre-loaded into Kind, no registry needed
+  BACKEND_IMAGE:
+    default: mainloop-backend:dev
+  FRONTEND_IMAGE:
+    default: mainloop-frontend:dev
+
+# No images section - we use pre-built images loaded into Kind
+
+# Deployments - inline manifests (no kustomize dependency)
+deployments:
+  postgres:
+    kubectl:
+      inlineManifest: |
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: session-db
+        spec:
+          serviceName: session-db
+          replicas: 1
+          selector:
+            matchLabels:
+              app: session-db
+          template:
+            metadata:
+              labels:
+                app: session-db
+            spec:
+              containers:
+                - name: postgres
+                  image: postgres:16-alpine
+                  env:
+                    - name: POSTGRES_DB
+                      value: mainloop
+                    - name: POSTGRES_USER
+                      value: mainloop
+                    - name: POSTGRES_PASSWORD
+                      value: devpassword
+                  ports:
+                    - containerPort: 5432
+                  volumeMounts:
+                    - name: data
+                      mountPath: /var/lib/postgresql/data
+          volumeClaimTemplates:
+            - metadata:
+                name: data
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 1Gi
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: session-db
+        spec:
+          selector:
+            app: session-db
+          ports:
+            - port: 5432
+
+  backend:
+    kubectl:
+      inlineManifest: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: session-backend
+          labels:
+            app: session-backend
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: session-backend
+          template:
+            metadata:
+              labels:
+                app: session-backend
+            spec:
+              containers:
+                - name: backend
+                  image: ${BACKEND_IMAGE}
+                  imagePullPolicy: Never
+                  ports:
+                    - containerPort: 8000
+                  env:
+                    - name: DB_HOST
+                      value: session-db
+                    - name: DB_PORT
+                      value: "5432"
+                    - name: DB_NAME
+                      value: mainloop
+                    - name: DB_USER
+                      value: mainloop
+                    - name: DB_PASSWORD
+                      value: devpassword
+                    - name: FRONTEND_DOMAIN
+                      value: localhost:3000
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: session-backend
+        spec:
+          selector:
+            app: session-backend
+          ports:
+            - port: 8000
+
+  frontend:
+    kubectl:
+      inlineManifest: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: session-frontend
+          labels:
+            app: session-frontend
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: session-frontend
+          template:
+            metadata:
+              labels:
+                app: session-frontend
+            spec:
+              containers:
+                - name: frontend
+                  image: ${FRONTEND_IMAGE}
+                  imagePullPolicy: Never
+                  ports:
+                    - containerPort: 3000
+                  env:
+                    - name: VITE_API_URL
+                      value: http://session-backend:8000
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: session-frontend
+        spec:
+          selector:
+            app: session-frontend
+          ports:
+            - port: 3000
+
+# Development mode with file sync
+dev:
+  backend:
+    labelSelector:
+      app: session-backend
+    devImage: ${BACKEND_IMAGE}
+    sync:
+      - path: ./backend/src:/app/src
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .pytest_cache/
+        disableDownload: true
+      - path: ./models:/models
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+        disableDownload: true
+    command:
+      - uvicorn
+      - mainloop.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8000'
+      - --reload
+      - --reload-dir
+      - /app/src
+      - --reload-dir
+      - /models
+    logs: {}
+
+  frontend:
+    labelSelector:
+      app: session-frontend
+    devImage: ${FRONTEND_IMAGE}
+    sync:
+      - path: ./frontend/src:/app/frontend/src
+        excludePaths:
+          - .svelte-kit/
+          - node_modules/
+        disableDownload: true
+    command:
+      - pnpm
+      - dev
+      - --host
+      - 0.0.0.0
+      - --port
+      - '3000'
+    logs: {}

@@ -19,6 +19,18 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# Install kubectl
+RUN curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$(dpkg --print-architecture)/kubectl" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
+
+# Install DevSpace
+RUN curl -fsSL "https://github.com/devspace-sh/devspace/releases/latest/download/devspace-linux-$(dpkg --print-architecture)" -o /usr/local/bin/devspace \
+    && chmod +x /usr/local/bin/devspace
+
+# Install Kind (for creating isolated dev clusters)
+RUN curl -fsSL "https://kind.sigs.k8s.io/dl/latest/kind-linux-$(dpkg --print-architecture)" -o /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind
+
 # Install Claude Code CLI and create non-root user
 RUN npm install -g @anthropic-ai/claude-code@latest \
     && useradd -m -s /bin/bash claude \
