@@ -15,8 +15,3 @@ patches:
     target:
       kind: Cluster
       name: mainloop-db
-
-# Use patchesStrategicMerge for multi-document personal config
-# (deprecated but still supported for this use case)
-patchesStrategicMerge:
-  - personal-config-patch.yaml

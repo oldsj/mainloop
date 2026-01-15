@@ -24,7 +24,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: agent-controller
-          image: ghcr.io/yourusername/mainloop-agent-controller:latest # Set via kustomize overlay
+          image: ghcr.io/oldsj/mainloop-agent-controller:latest
           ports:
             - containerPort: 8001
           securityContext:
