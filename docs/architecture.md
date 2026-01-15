@@ -59,8 +59,8 @@ Mainloop uses a main thread + sessions pattern where your continuous conversatio
 
 Sessions are the unified model for all background work:
 
-- **Simple sessions**: Claude conversations without code (research, analysis)
-- **Code sessions**: GitHub integration with plan → implement → PR workflow
+- **Simple sessions**: Research, analysis, or any conversation-based task
+- **Dev sessions**: Code work with their own K8s namespace for isolation
 
 Each session has:
 

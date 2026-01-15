@@ -115,6 +115,7 @@ Tests are organized into projects by execution mode:
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
 - **API calls**: Use `$lib/api.ts`, never hardcode URLs
 - **DBOS workflows**: Bump `WORKFLOW_VERSION` in `dbos_config.py` when changing workflow logic
+- **External docs**: Use context7 MCP to fetch up-to-date documentation for any library (DBOS, Svelte, Playwright, etc.)
 - **HTML**: Be explicit, don't rely on browser defaults (`type="button"`, `rel="noopener"`, etc.)
 - **Responsive layouts**: Use `isMobile` store to conditionally render, not CSS hide (avoids duplicate DOM elements)
 - **K8s scripts**: Always use explicit `--context kind-${KIND_CLUSTER_NAME:-mainloop-test}` in kubectl commands to avoid targeting wrong cluster
