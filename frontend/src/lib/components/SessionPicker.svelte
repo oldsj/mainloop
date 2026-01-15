@@ -166,8 +166,19 @@
         <span class="min-w-0 flex-1 truncate text-sm text-term-fg">
           {session.title}
         </span>
-        <span class="shrink-0 text-xs {statusColors[session.status] || 'text-term-fg-muted'}">
-          [{statusLabels[session.status] || session.status.toUpperCase()}]
+        <span
+          class="shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+            ? 'bg-term-magenta/20 text-term-magenta'
+            : session.status === 'completed'
+              ? 'bg-term-green/20 text-term-green'
+              : session.status === 'failed' || session.status === 'cancelled'
+                ? 'bg-term-red/20 text-term-red'
+                : ['active', 'planning', 'implementing'].includes(session.status)
+                  ? 'bg-term-cyan/20 text-term-cyan'
+                  : 'bg-term-fg-muted/20 text-term-fg-muted'}"
+          style="border-radius: 9999px;"
+        >
+          {statusLabels[session.status] || session.status.toUpperCase()}
         </span>
         {#if needsAttention}
           <span class="animate-pulse text-term-magenta">*</span>

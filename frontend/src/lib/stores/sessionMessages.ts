@@ -123,6 +123,7 @@ export const allSessionMessages = createAllSessionMessagesStore();
 
 /**
  * Derived store: all session messages flattened with session info
+ * Skips the first user message of each session since it duplicates the anchor
  */
 export const allSessionMessagesFlat = derived(
   [allSessionMessages, sessions],
@@ -131,7 +132,12 @@ export const allSessionMessagesFlat = derived(
 
     for (const session of $sessions.sessions) {
       const messages = $allMessages.bySession.get(session.id) || [];
-      for (const message of messages) {
+      for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        // Skip first message if it's a user message (duplicates the anchor)
+        if (i === 0 && message.role === 'user' && session.anchor_message_id) {
+          continue;
+        }
         result.push({ message, session });
       }
     }

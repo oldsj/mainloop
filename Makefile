@@ -195,24 +195,12 @@ deploy: push-all-parallel ## Full deployment to k8s (parallel builds + pushes)
 	wait
 	@echo "Rollouts triggered"
 
-deploy-loop: ## Smart watch - detects which service changed and deploys only that
-	@echo "Starting smart deploy loop (Ctrl+C to stop)..."
-	@echo "Watching: backend/ models/ -> deploy-backend"
-	@echo "Watching: frontend/src/ -> deploy-frontend-k8s"
-	@echo "Watching: claude-agent/ -> deploy-agent"
-	@echo "Watching: k8s/ -> deploy-manifests"
-	@trap 'kill 0' INT; \
-	watchexec -w backend -w models -e py,toml \
-		-i 'test*' -i '*_test.py' -i 'tests/' -i '__pycache__/' -i 'scripts/' \
-		--on-busy-update restart -- $(MAKE) deploy-backend & \
-	watchexec -w frontend/src -e ts,svelte,css \
-		--on-busy-update restart -- $(MAKE) deploy-frontend-k8s & \
-	watchexec -w claude-agent -e py,Dockerfile,toml \
-		-i 'test*' \
-		--on-busy-update restart -- $(MAKE) deploy-agent & \
-	watchexec -w k8s -e yaml \
-		--on-busy-update restart -- $(MAKE) deploy-manifests & \
-	wait
+deploy-loop: ## Pull and deploy every 10 seconds
+	@echo "Starting deploy loop (Ctrl+C to stop)..."
+	@while true; do \
+		git pull && $(MAKE) deploy; \
+		sleep 10; \
+	done
 
 deploy-loop-all: ## Watch all and redeploy everything (old behavior)
 	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models -w claude-agent \
