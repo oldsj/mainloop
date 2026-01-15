@@ -98,6 +98,27 @@ mainloop/
 3. Completed and failed sessions
 4. Each session has its own conversation you can zoom into
 
+## Agent Workflow
+
+Agents are sessions spawned for development tasks. Each agent gets its own K8s namespace for isolated iteration.
+
+```text
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Spawn     │────►│    Work     │────►│     PR      │────►│    Close    │
+│   (main)    │     │  (k8s ns)   │     │  (GitHub)   │     │  (summary)  │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+       ▲                   │
+       └───────────────────┘
+         check in / spawn more
+```
+
+1. **Spawn** - Main thread creates agent for a task
+2. **Work** - Agent iterates in its own K8s namespace (build, test, debug)
+3. **PR** - Agent creates and merges GitHub PR when ready
+4. **Close** - Agent posts summary back to main thread
+
+You stay in main thread, checking in on agents and spawning new ones as needed.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) - System design and data flow
