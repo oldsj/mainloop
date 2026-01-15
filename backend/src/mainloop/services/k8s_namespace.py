@@ -325,8 +325,37 @@ async def apply_session_namespace_network_policies(
         ),
     )
 
+    # Allow egress to mainloop namespace (for callback to backend)
+    allow_mainloop_policy = client.V1NetworkPolicy(
+        metadata=client.V1ObjectMeta(
+            name="allow-mainloop-callback",
+            namespace=namespace,
+            labels={
+                "app.kubernetes.io/managed-by": "mainloop",
+                "mainloop.dev/session-id": session_id,
+            },
+        ),
+        spec=client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(),
+            policy_types=["Egress"],
+            egress=[
+                client.V1NetworkPolicyEgressRule(
+                    to=[
+                        client.V1NetworkPolicyPeer(
+                            namespace_selector=client.V1LabelSelector(
+                                match_labels={
+                                    "kubernetes.io/metadata.name": "mainloop"
+                                }
+                            )
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+
     # Apply policies
-    for policy in [deny_all_policy, allow_dns_policy, allow_internet_policy]:
+    for policy in [deny_all_policy, allow_dns_policy, allow_internet_policy, allow_mainloop_policy]:
         try:
             networking_v1.create_namespaced_network_policy(
                 namespace=namespace, body=policy
