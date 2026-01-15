@@ -3,7 +3,6 @@
  *
  * Tracks which context (main thread or session) is currently active,
  * the session picker state, and zoom mode.
- * (HMR refresh)
  */
 
 import { writable, derived, get } from 'svelte/store';

@@ -75,8 +75,17 @@
       </span>
 
       <!-- Status badge -->
-      <span class="shrink-0 text-xs {needsAttention ? 'text-term-magenta' : 'text-term-fg-muted'}">
-        [{statusLabels[session.status] || session.status.toUpperCase()}]
+      <span
+        class="shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+          ? 'bg-term-magenta/20 text-term-magenta'
+          : session.status === 'completed'
+            ? 'bg-term-green/20 text-term-green'
+            : session.status === 'failed' || session.status === 'cancelled'
+              ? 'bg-term-red/20 text-term-red'
+              : 'bg-term-fg-muted/20 text-term-fg-muted'}"
+        style="border-radius: 9999px;"
+      >
+        {statusLabels[session.status] || session.status.toUpperCase()}
       </span>
     </button>
 

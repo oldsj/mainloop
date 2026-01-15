@@ -146,6 +146,15 @@
   --color-term-info: var(--term-info);
   --color-term-selection: var(--term-selection);
 
+  /* Session colors */
+  --color-term-cyan: var(--term-cyan);
+  --color-term-green: var(--term-green);
+  --color-term-yellow: var(--term-yellow);
+  --color-term-magenta: var(--term-magenta);
+  --color-term-orange: var(--term-orange);
+  --color-term-purple: var(--term-purple);
+  --color-term-red: var(--term-error);
+
   /* Typography - Monospace */
   --font-family-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', ui-monospace, monospace;
 

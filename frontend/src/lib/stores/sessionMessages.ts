@@ -1,6 +1,5 @@
 /**
  * Session messages store for ALL active sessions.
- * (HMR refresh)
  *
  * Provides:
  * - Messages for all sessions (for timeline notifications)

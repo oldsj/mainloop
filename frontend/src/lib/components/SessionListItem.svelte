@@ -75,63 +75,63 @@
   style="border-left-color: {session.color};"
   {onclick}
 >
-  <div class="flex items-start justify-between gap-2">
-    <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-2">
-        {#if isActive}
-          <span class="h-3 w-3 animate-spin rounded-full border border-term-cyan border-t-transparent"></span>
-        {/if}
-        <span class="text-xs {statusColors[session.status] || 'text-term-fg-muted'}">
-          [{statusLabels[session.status] || session.status.toUpperCase()}]
-        </span>
-        <h3 class="truncate text-sm font-medium text-term-fg">
-          {session.title}
-        </h3>
-      </div>
-
-      <p class="mt-1 truncate text-xs text-term-fg-muted">
-        {session.description}
-      </p>
-
-      {#if session.repo_url}
-        <div class="mt-1 flex items-center gap-2 text-xs text-term-fg-muted">
-          <span class="text-term-accent">in {getRepoName(session.repo_url)}</span>
-          {#if session.issue_number}
-            <a
-              href={session.issue_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="hover:text-term-accent"
-              onclick={(e) => e.stopPropagation()}
-            >
-              Issue #{session.issue_number}
-            </a>
-          {/if}
-          {#if session.pr_number}
-            <a
-              href={session.pr_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="hover:text-term-accent"
-              onclick={(e) => e.stopPropagation()}
-            >
-              PR #{session.pr_number}
-            </a>
-          {/if}
-        </div>
+  <!-- Row 1: Title + time -->
+  <div class="flex items-center justify-between gap-2">
+    <div class="flex min-w-0 items-center gap-2">
+      {#if isActive}
+        <span class="h-3 w-3 animate-spin rounded-full border border-term-cyan border-t-transparent"></span>
       {/if}
+      <h3 class="truncate text-sm font-medium text-term-fg">
+        {session.title}
+      </h3>
     </div>
-    <span class="shrink-0 text-xs text-term-fg-muted">
-      {formatTime(session.created_at)}
-    </span>
+    <span class="shrink-0 text-xs text-term-fg-muted">{formatTime(session.created_at)}</span>
   </div>
 
-  {#if needsAttention}
-    <div class="mt-2 flex items-center gap-1 text-xs text-term-magenta">
-      <span class="animate-pulse">*</span>
-      <span>Waiting for your input</span>
+  <!-- Row 2: Label + links (left), repo (right) -->
+  <div class="mt-2 flex items-center justify-between gap-2">
+    <div class="flex items-center gap-2">
+      <span
+        class="whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+          ? 'bg-term-magenta/20 text-term-magenta'
+          : session.status === 'completed'
+            ? 'bg-term-green/20 text-term-green'
+            : session.status === 'failed' || session.status === 'cancelled'
+              ? 'bg-term-red/20 text-term-red'
+              : isActive
+                ? 'bg-term-cyan/20 text-term-cyan'
+                : 'bg-term-fg-muted/20 text-term-fg-muted'}"
+        style="border-radius: 9999px;"
+      >
+        {statusLabels[session.status] || session.status.toUpperCase()}
+      </span>
+      {#if session.issue_number}
+        <a
+          href={session.issue_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-xs text-term-fg-muted hover:text-term-accent"
+          onclick={(e) => e.stopPropagation()}
+        >
+          #{session.issue_number}
+        </a>
+      {/if}
+      {#if session.pr_number}
+        <a
+          href={session.pr_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-xs text-term-fg-muted hover:text-term-accent"
+          onclick={(e) => e.stopPropagation()}
+        >
+          PR #{session.pr_number}
+        </a>
+      {/if}
     </div>
-  {/if}
+    {#if session.repo_url}
+      <span class="text-xs text-term-accent">{getRepoName(session.repo_url)}</span>
+    {/if}
+  </div>
 
   {#if session.error}
     <div class="mt-2 truncate text-xs text-term-red">
