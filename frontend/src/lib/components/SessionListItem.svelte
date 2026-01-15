@@ -13,10 +13,6 @@
     pending: 'text-term-yellow',
     active: 'text-term-cyan',
     waiting_on_user: 'text-term-magenta',
-    waiting_questions: 'text-term-magenta',
-    waiting_plan_review: 'text-term-magenta',
-    ready_to_implement: 'text-term-yellow',
-    planning: 'text-term-cyan',
     implementing: 'text-term-cyan',
     under_review: 'text-term-yellow',
     completed: 'text-term-green',
@@ -28,10 +24,6 @@
     pending: 'PENDING',
     active: 'ACTIVE',
     waiting_on_user: 'NEEDS INPUT',
-    waiting_questions: 'NEEDS INPUT',
-    waiting_plan_review: 'REVIEW PLAN',
-    ready_to_implement: 'READY',
-    planning: 'PLANNING',
     implementing: 'IMPLEMENTING',
     under_review: 'IN REVIEW',
     completed: 'DONE',
@@ -40,14 +32,10 @@
   };
 
   // Check if session needs user attention
-  const needsAttention = $derived(
-    ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes(session.status)
-  );
+  const needsAttention = $derived(session.status === 'waiting_on_user');
 
   // Check if session is actively running
-  const isActive = $derived(
-    ['active', 'planning', 'implementing'].includes(session.status)
-  );
+  const isActive = $derived(['active', 'implementing'].includes(session.status));
 
   // Extract repo name from URL
   function getRepoName(repoUrl: string): string {

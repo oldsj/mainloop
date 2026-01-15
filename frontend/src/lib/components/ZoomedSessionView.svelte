@@ -89,10 +89,7 @@
   // Status styling
   const statusColors: Record<string, string> = {
     waiting_on_user: 'text-term-magenta',
-    waiting_questions: 'text-term-magenta',
-    waiting_plan_review: 'text-term-magenta',
     active: 'text-term-cyan',
-    planning: 'text-term-cyan',
     implementing: 'text-term-cyan',
     pending: 'text-term-yellow',
     completed: 'text-term-green',
@@ -102,10 +99,7 @@
 
   const statusLabels: Record<string, string> = {
     waiting_on_user: 'NEEDS INPUT',
-    waiting_questions: 'NEEDS INPUT',
-    waiting_plan_review: 'REVIEW PLAN',
     active: 'ACTIVE',
-    planning: 'PLANNING',
     implementing: 'IMPLEMENTING',
     pending: 'PENDING',
     completed: 'DONE',
@@ -113,9 +107,7 @@
     cancelled: 'CANCELLED'
   };
 
-  const needsAttention = $derived(
-    session && ['waiting_on_user', 'waiting_questions', 'waiting_plan_review'].includes(session.status)
-  );
+  const needsAttention = $derived(session?.status === 'waiting_on_user');
 </script>
 
 <svelte:window onkeydown={handleKeydown} />

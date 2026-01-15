@@ -72,10 +72,6 @@
     switch (taskStatus) {
       case 'pending':
         return 'Setting up workspace...';
-      case 'planning':
-        return 'Analyzing codebase and creating plan...';
-      case 'waiting_plan_review':
-        return 'Plan ready - awaiting review in inbox';
       case 'implementing':
         return 'Implementing changes...';
       case 'under_review':
@@ -138,7 +134,7 @@
   onMount(() => {
     fetchLogs();
 
-    const activeStatuses = ['planning', 'implementing', 'pending'];
+    const activeStatuses = ['implementing', 'pending'];
     if (activeStatuses.includes(taskStatus)) {
       pollInterval = setInterval(fetchLogs, 3000);
     }
@@ -220,15 +216,6 @@
                 </svg>
                 <span>Copying credentials...</span>
               </div>
-            {:else if taskStatus === 'planning'}
-              <div class="flex items-center gap-2 text-sm text-term-info">
-                <svg class="h-3 w-3 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
-                <span>Claude is exploring the codebase...</span>
-              </div>
             {:else if taskStatus === 'implementing'}
               <div class="flex items-center gap-2 text-sm text-term-accent-alt">
                 <svg class="h-3 w-3 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -236,15 +223,6 @@
                   <polyline points="8 6 2 12 8 18" />
                 </svg>
                 <span>Claude is writing code...</span>
-              </div>
-            {:else if taskStatus === 'waiting_plan_review'}
-              <div class="flex items-center gap-2 text-sm text-term-warning">
-                <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="8" x2="12" y2="12" />
-                  <line x1="12" y1="16" x2="12.01" y2="16" />
-                </svg>
-                <span>Waiting for your review in inbox</span>
               </div>
             {:else}
               <p class="text-sm text-term-fg-muted">Waiting for activity...</p>

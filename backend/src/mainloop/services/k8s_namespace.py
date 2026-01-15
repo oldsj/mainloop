@@ -7,8 +7,8 @@ from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
-# Namespace prefix for task namespaces
-TASK_NAMESPACE_PREFIX = "task-"
+# Namespace prefix for session namespaces
+SESSION_NAMESPACE_PREFIX = "mainloop-session-"
 
 # Secrets to copy from mainloop namespace to task namespaces
 DEFAULT_SECRETS_TO_COPY = [
@@ -61,25 +61,25 @@ def get_networking_client() -> client.NetworkingV1Api:
     return client.NetworkingV1Api()
 
 
-async def create_task_namespace(task_id: str) -> str:
-    """Create an isolated namespace for a task.
+async def create_session_namespace(session_id: str) -> str:
+    """Create an isolated namespace for a session.
 
     Args:
-        task_id: The task ID (will be used in namespace name)
+        session_id: The session ID (will be used in namespace name)
 
     Returns:
         The namespace name that was created
 
     """
     core_v1, _ = get_k8s_client()
-    namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
+    namespace_name = f"{SESSION_NAMESPACE_PREFIX}{session_id[:8]}"
 
     namespace = client.V1Namespace(
         metadata=client.V1ObjectMeta(
             name=namespace_name,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         )
     )
@@ -97,14 +97,14 @@ async def create_task_namespace(task_id: str) -> str:
 
 
 async def copy_secrets_to_namespace(
-    task_id: str,
+    session_id: str,
     namespace: str,
     secrets: list[str] | None = None,
 ) -> None:
-    """Copy secrets from mainloop namespace to task namespace.
+    """Copy secrets from mainloop namespace to session namespace.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Target namespace to copy secrets to
         secrets: List of secret names to copy (defaults to DEFAULT_SECRETS_TO_COPY)
 
@@ -127,7 +127,7 @@ async def copy_secrets_to_namespace(
                     namespace=namespace,
                     labels={
                         "app.kubernetes.io/managed-by": "mainloop",
-                        "mainloop.dev/task-id": task_id,
+                        "mainloop.dev/session-id": session_id,
                         "mainloop.dev/copied-from": SOURCE_NAMESPACE,
                     },
                 ),
@@ -153,13 +153,13 @@ async def copy_secrets_to_namespace(
                 raise
 
 
-async def setup_worker_rbac(task_id: str, namespace: str) -> None:
-    """Create ServiceAccount and RoleBinding for worker in task namespace.
+async def setup_session_rbac(session_id: str, namespace: str) -> None:
+    """Create ServiceAccount and RoleBinding for worker in session namespace.
 
     This gives the worker pod permissions to deploy resources within its namespace.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Target namespace
 
     """
@@ -173,7 +173,7 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         ),
     )
@@ -198,7 +198,7 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         ),
         subjects=[
@@ -225,19 +225,21 @@ async def setup_worker_rbac(task_id: str, namespace: str) -> None:
             raise
 
 
-async def apply_task_namespace_network_policies(task_id: str, namespace: str) -> None:
-    """Apply network policies to task namespace for security isolation.
+async def apply_session_namespace_network_policies(
+    session_id: str, namespace: str
+) -> None:
+    """Apply network policies to session namespace for security isolation.
 
     Applies strict network policies:
     - Default deny-all ingress and egress
     - Allow DNS (required for internet access)
     - Allow egress to internet ONLY (blocks all cluster internal communication)
 
-    This ensures worker agents can only communicate with external services,
+    This ensures session agents can only communicate with external services,
     not with other cluster resources or each other.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Target namespace
 
     """
@@ -250,7 +252,7 @@ async def apply_task_namespace_network_policies(task_id: str, namespace: str) ->
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         ),
         spec=client.V1NetworkPolicySpec(
@@ -266,7 +268,7 @@ async def apply_task_namespace_network_policies(task_id: str, namespace: str) ->
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         ),
         spec=client.V1NetworkPolicySpec(
@@ -296,7 +298,7 @@ async def apply_task_namespace_network_policies(task_id: str, namespace: str) ->
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
+                "mainloop.dev/session-id": session_id,
             },
         ),
         spec=client.V1NetworkPolicySpec(
@@ -339,15 +341,15 @@ async def apply_task_namespace_network_policies(task_id: str, namespace: str) ->
                 raise
 
 
-async def delete_task_namespace(task_id: str) -> None:
-    """Delete a task namespace and all its resources.
+async def delete_session_namespace(session_id: str) -> None:
+    """Delete a session namespace and all its resources.
 
     Args:
-        task_id: The task ID (used to construct namespace name)
+        session_id: The session ID (used to construct namespace name)
 
     """
     core_v1, _ = get_k8s_client()
-    namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
+    namespace_name = f"{SESSION_NAMESPACE_PREFIX}{session_id[:8]}"
 
     try:
         core_v1.delete_namespace(
@@ -364,18 +366,18 @@ async def delete_task_namespace(task_id: str) -> None:
             raise
 
 
-async def namespace_exists(task_id: str) -> bool:
-    """Check if a task namespace exists.
+async def session_namespace_exists(session_id: str) -> bool:
+    """Check if a session namespace exists.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
 
     Returns:
         True if namespace exists, False otherwise
 
     """
     core_v1, _ = get_k8s_client()
-    namespace_name = f"{TASK_NAMESPACE_PREFIX}{task_id[:8]}"
+    namespace_name = f"{SESSION_NAMESPACE_PREFIX}{session_id[:8]}"
 
     try:
         core_v1.read_namespace(name=namespace_name)
@@ -386,8 +388,8 @@ async def namespace_exists(task_id: str) -> bool:
         raise
 
 
-async def list_task_namespaces() -> list[str]:
-    """List all task namespaces managed by mainloop.
+async def list_session_namespaces() -> list[str]:
+    """List all session namespaces managed by mainloop.
 
     Returns:
         List of namespace names

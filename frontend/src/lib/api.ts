@@ -63,67 +63,6 @@ export interface QueueItem {
   expires_at: string | null;
 }
 
-export interface QuestionOption {
-  label: string;
-  description: string | null;
-}
-
-export interface TaskQuestion {
-  id: string;
-  header: string;
-  question: string;
-  options: QuestionOption[];
-  multi_select: boolean;
-  response: string | null;
-}
-
-export interface WorkerTask {
-  id: string;
-  main_thread_id: string;
-  user_id: string;
-  task_type: string;
-  description: string;
-  prompt: string;
-  model: string | null;
-  repo_url: string | null;
-  project_id: string | null;
-  branch_name: string | null;
-  base_branch: string;
-  status: string;
-  workflow_run_id: string | null;
-  worker_pod_name: string | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  result: Record<string, unknown> | null;
-  error: string | null;
-  // Plan phase (issue)
-  issue_url: string | null;
-  issue_number: number | null;
-  // Implementation phase (PR)
-  pr_url: string | null;
-  pr_number: number | null;
-  commit_sha: string | null;
-  conversation_id: string | null;
-  message_id: string | null;
-  keywords: string[];
-  skip_plan: boolean;
-  // Interactive planning state
-  pending_questions: TaskQuestion[] | null;
-  plan_text: string | null;
-}
-
-export interface TaskContext {
-  task: WorkerTask;
-  queue_items: QueueItem[];
-}
-
-export interface TaskLogsResponse {
-  logs: string;
-  source: 'k8s' | 'none';
-  task_status: string;
-}
-
 export interface Project {
   id: string;
   user_id: string;
@@ -164,7 +103,7 @@ export interface ProjectDetail {
   project: Project;
   open_prs: ProjectPRSummary[];
   recent_commits: CommitSummary[];
-  tasks: WorkerTask[];
+  sessions: Session[];
 }
 
 // Session types
@@ -175,21 +114,8 @@ export type SessionStatus =
   | 'failed'
   | 'cancelled'
   | 'waiting_on_user'
-  | 'waiting_questions'
-  | 'waiting_plan_review'
-  | 'ready_to_implement'
-  | 'planning'
   | 'implementing'
   | 'under_review';
-
-export interface SessionQuestion {
-  id: string;
-  header: string;
-  question: string;
-  options: QuestionOption[];
-  multi_select: boolean;
-  response: string | null;
-}
 
 export interface Session {
   id: string;
@@ -222,11 +148,6 @@ export interface Session {
   // Inline thread anchoring
   anchor_message_id: string | null;
   color: string | null;
-  // Planning fields
-  keywords: string[];
-  skip_plan: boolean;
-  pending_questions: SessionQuestion[] | null;
-  plan_text: string | null;
   result: Record<string, unknown> | null;
 }
 
@@ -235,7 +156,6 @@ export interface SessionCreate {
   description: string;
   prompt: string;
   repo_url?: string;
-  skip_plan?: boolean;
   anchor_message_id?: string;
 }
 
@@ -356,93 +276,6 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to refresh project');
-  },
-
-  // Task endpoints
-  async listTasks(options?: { status?: string; projectId?: string }): Promise<WorkerTask[]> {
-    const params = new URLSearchParams();
-    if (options?.status) params.set('status', options.status);
-    if (options?.projectId) params.set('project_id', options.projectId);
-    const url = params.toString() ? `${API_URL}/tasks?${params}` : `${API_URL}/tasks`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to list tasks');
-    return response.json();
-  },
-
-  async getTask(taskId: string): Promise<WorkerTask> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}`);
-    if (!response.ok) throw new Error('Failed to get task');
-    return response.json();
-  },
-
-  async getTaskContext(taskId: string): Promise<TaskContext> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/context`);
-    if (!response.ok) throw new Error('Failed to get task context');
-    return response.json();
-  },
-
-  async cancelTask(taskId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/cancel`, {
-      method: 'POST'
-    });
-    if (!response.ok) throw new Error('Failed to cancel task');
-  },
-
-  async retryTask(taskId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/retry`, {
-      method: 'POST'
-    });
-    if (!response.ok) throw new Error('Failed to retry task');
-  },
-
-  async getTaskLogs(taskId: string, tail: number = 100): Promise<TaskLogsResponse> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/logs?tail=${tail}`);
-    if (!response.ok) throw new Error('Failed to get task logs');
-    return response.json();
-  },
-
-  async answerTaskQuestions(
-    taskId: string,
-    answers: Record<string, string>,
-    action: 'answer' | 'cancel' = 'answer'
-  ): Promise<void> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/answer-questions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ answers, action })
-    });
-    if (!response.ok) throw new Error('Failed to answer questions');
-  },
-
-  async approveTaskPlan(
-    taskId: string,
-    action: 'approve' | 'cancel' | 'revise' = 'approve',
-    revisionText?: string
-  ): Promise<void> {
-    const params = new URLSearchParams({ action });
-    if (revisionText) params.set('revision_text', revisionText);
-
-    const response = await fetch(`${API_URL}/tasks/${taskId}/approve-plan?${params}`, {
-      method: 'POST'
-    });
-    if (!response.ok) throw new Error('Failed to approve plan');
-  },
-
-  async startImplementation(taskId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/tasks/${taskId}/start-implementation`, {
-      method: 'POST'
-    });
-    if (!response.ok) throw new Error('Failed to start implementation');
-  },
-
-  /**
-   * Get the SSE endpoint URL for streaming task logs.
-   * Use with EventSource or the SSE client.
-   */
-  getTaskLogsStreamUrl(taskId: string): string {
-    return `${API_URL}/tasks/${taskId}/logs/stream`;
   },
 
   /**

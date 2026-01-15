@@ -19,18 +19,14 @@ from mainloop.services.chat_handler import process_message
 from mainloop.services.github_pr import (
     CommitSummary,
     ProjectPRSummary,
-    add_issue_comment,
     get_repo_metadata,
     list_open_prs,
     list_recent_commits,
-    update_github_issue,
 )
 from mainloop.sse import (
     create_sse_response,
     event_stream,
     notify_inbox_updated,
-    notify_task_updated,
-    task_log_stream,
 )
 
 # Import DBOS config to initialize DBOS before defining workflows
@@ -40,7 +36,6 @@ from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 from mainloop.workflows.main_thread import (
     get_or_start_main_thread,
 )
-from mainloop.workflows.worker import worker_task_workflow  # noqa: F401
 from pydantic import BaseModel
 
 from models import (
@@ -48,13 +43,10 @@ from models import (
     Project,
     QueueItem,
     QueueItemResponse,
-    QueueItemType,
     Session,
     SessionCreate,
     SessionNotification,
     SessionStatus,
-    TaskStatus,
-    WorkerTask,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,34 +167,6 @@ async def sse_events(
             user_id = get_user_id_from_cf_header()
 
     return create_sse_response(event_stream(user_id, request))
-
-
-@app.get("/tasks/{task_id}/logs/stream")
-async def sse_task_logs(
-    task_id: str,
-    request: Request,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """SSE endpoint for streaming task logs.
-
-    Streams events for:
-    - log - new log lines from the K8s pod
-    - status - task status changes
-    - end - stream is ending (task completed/failed)
-
-    Polls K8s logs every 2 seconds and streams new content.
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    # Verify task exists and belongs to user
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    return create_sse_response(task_log_stream(task_id, user_id, request))
 
 
 # ============= Main Thread Endpoints =============
@@ -533,7 +497,7 @@ class ProjectDetail(BaseModel):
     project: Project
     open_prs: list[ProjectPRSummary]
     recent_commits: list[CommitSummary]
-    tasks: list[WorkerTask]
+    sessions: list[Session]
 
 
 @app.get("/projects/{project_id}/detail", response_model=ProjectDetail)
@@ -541,7 +505,7 @@ async def get_project_detail(
     project_id: str,
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
-    """Get project with GitHub data (PRs, commits, tasks)."""
+    """Get project with GitHub data (PRs, commits, sessions)."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
@@ -555,14 +519,14 @@ async def get_project_detail(
         project.html_url, branch=project.default_branch, limit=10
     )
 
-    # Fetch tasks for this project
-    tasks = await db.list_worker_tasks(user_id=user_id, project_id=project_id, limit=50)
+    # Fetch sessions for this project
+    sessions = await db.list_sessions(user_id=user_id, project_id=project_id, limit=50)
 
     return ProjectDetail(
         project=project,
         open_prs=open_prs,
         recent_commits=recent_commits,
-        tasks=tasks,
+        sessions=sessions,
     )
 
 
@@ -584,353 +548,6 @@ async def refresh_project_metadata(project_id: str):
         )
 
     return {"status": "ok", "message": "Project metadata refreshed"}
-
-
-# ============= Task Endpoints =============
-
-
-@app.get("/tasks", response_model=list[WorkerTask])
-async def list_tasks(
-    user_id: str = Header(alias="X-User-ID", default=None),
-    status: str | None = None,
-    project_id: str | None = None,
-):
-    """List worker tasks for the user, optionally filtered by project."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    tasks = await db.list_worker_tasks(
-        user_id=user_id, status=status, project_id=project_id
-    )
-    return tasks
-
-
-class TaskContext(BaseModel):
-    """Full task context for pull-based retrieval."""
-
-    task: WorkerTask
-    queue_items: list[QueueItem]
-
-
-@app.get("/tasks/{task_id}", response_model=WorkerTask)
-async def get_task(task_id: str):
-    """Get a specific worker task."""
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
-
-
-@app.get("/tasks/{task_id}/context", response_model=TaskContext)
-async def get_task_context(
-    task_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Get full task context including queue items.
-
-    This endpoint is for pull-based context retrieval when the main thread
-    needs to know what's happening with a specific task.
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    # Get all queue items for this task
-    queue_items = await db.list_queue_items(user_id=user_id, task_id=task_id)
-
-    return TaskContext(task=task, queue_items=queue_items)
-
-
-class TaskLogsResponse(BaseModel):
-    """Response for task logs endpoint."""
-
-    logs: str
-    source: str  # "k8s" or "none"
-    task_status: str
-
-
-@app.get("/tasks/{task_id}/logs", response_model=TaskLogsResponse)
-async def get_task_logs(
-    task_id: str,
-    tail: int = 100,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Get logs for a worker task from its K8s pod.
-
-    Args:
-        task_id: The task ID
-        tail: Number of lines to return from the end (default 100)
-        user_id: User ID from X-User-ID header
-
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    # Try to get live logs from K8s
-    import logging
-
-    from mainloop.services.k8s_jobs import get_job_logs
-
-    logger = logging.getLogger(__name__)
-    namespace = f"task-{task_id[:8]}"
-
-    logs = None
-    source = "k8s"
-
-    try:
-        logs = await get_job_logs(task_id, namespace)
-    except Exception as e:
-        logger.warning(f"Failed to get K8s logs for task {task_id}: {e}")
-
-    if not logs:
-        logs = ""
-        source = "none"
-    else:
-        # Tail the logs to requested number of lines
-        lines = logs.split("\n")
-        if len(lines) > tail:
-            lines = lines[-tail:]
-        logs = "\n".join(lines)
-
-    return TaskLogsResponse(
-        logs=logs,
-        source=source,
-        task_status=task.status.value,
-    )
-
-
-@app.post("/tasks/{task_id}/cancel")
-async def cancel_task(
-    task_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Cancel a running task and close associated GitHub issue/PR."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    # Cancel the DBOS workflow
-    DBOS.cancel_workflow(task_id)
-
-    await db.update_worker_task(task_id, status=TaskStatus.CANCELLED)
-
-    # Close GitHub issue if exists
-    if task.repo_url and task.issue_number:
-        await add_issue_comment(
-            task.repo_url, task.issue_number, "❌ Task cancelled by user."
-        )
-        await update_github_issue(task.repo_url, task.issue_number, state="closed")
-
-    # Close GitHub PR if exists (PRs are also issues in GitHub API)
-    if task.repo_url and task.pr_number and task.pr_number != task.issue_number:
-        await add_issue_comment(
-            task.repo_url, task.pr_number, "❌ Task cancelled by user."
-        )
-        await update_github_issue(task.repo_url, task.pr_number, state="closed")
-
-    # Notify SSE clients
-    await notify_task_updated(user_id, task_id, "cancelled")
-
-    return {"status": "cancelled"}
-
-
-class AnswerQuestionsRequest(BaseModel):
-    """Request to answer task questions."""
-
-    answers: dict[str, str]  # question_id -> answer text
-    action: str = "answer"  # "answer" or "cancel"
-
-
-@app.post("/tasks/{task_id}/answer-questions")
-async def answer_task_questions(
-    task_id: str,
-    body: AnswerQuestionsRequest,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Answer questions asked by an agent during planning.
-
-    The agent can ask questions via AskUserQuestion tool during plan mode.
-    These questions are stored on the task and surfaced in the UI.
-    This endpoint sends the user's answers back to the waiting worker workflow.
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    if task.status != TaskStatus.WAITING_QUESTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Task is not waiting for questions (status: {task.status})",
-        )
-
-    # Send answers to the worker workflow
-    from dbos import error as dbos_error
-    from mainloop.workflows.worker import TOPIC_QUESTION_RESPONSE
-
-    # Try to send to worker workflow, but continue if workflow doesn't exist (e.g., in tests)
-    try:
-        DBOS.send(
-            task_id,  # Worker workflow ID is the task ID
-            {
-                "action": body.action,
-                "answers": body.answers,
-            },
-            topic=TOPIC_QUESTION_RESPONSE,
-        )
-    except dbos_error.DBOSNonExistentWorkflowError:
-        # Workflow doesn't exist (e.g., test environment) - that's okay, continue with status update
-        pass
-
-    # Update task status immediately so frontend sees correct state on refetch
-    # The workflow will also update this, but we do it here to prevent race conditions
-    if body.action == "cancel":
-        await db.update_worker_task(
-            task_id, status=TaskStatus.CANCELLED, pending_questions=[]
-        )
-        # Close GitHub issue if exists
-        if task.repo_url and task.issue_number:
-            await add_issue_comment(
-                task.repo_url, task.issue_number, "❌ Task cancelled by user."
-            )
-            await update_github_issue(task.repo_url, task.issue_number, state="closed")
-        await notify_task_updated(user_id, task_id, "cancelled")
-    else:
-        await db.update_worker_task(
-            task_id, status=TaskStatus.PLANNING, pending_questions=[]
-        )
-        await notify_task_updated(user_id, task_id, "planning")
-
-    return {"status": "ok", "message": f"Sent {len(body.answers)} answer(s) to task"}
-
-
-@app.post("/tasks/{task_id}/approve-plan")
-async def approve_task_plan(
-    task_id: str,
-    action: str = "approve",
-    revision_text: str | None = None,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Approve or revise a plan shown in the task UI.
-
-    This replaces the queue-item-based plan approval for the embedded task UI flow.
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    if task.status != TaskStatus.WAITING_PLAN_REVIEW:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Task is not waiting for plan review (status: {task.status})",
-        )
-
-    # Send response to the worker workflow
-    from mainloop.workflows.worker import TOPIC_PLAN_RESPONSE
-
-    DBOS.send(
-        task_id,
-        {
-            "action": action,  # "approve", "cancel", or revision text
-            "text": revision_text or "",
-        },
-        topic=TOPIC_PLAN_RESPONSE,
-    )
-
-    # Update task status immediately so frontend sees correct state on refetch
-    if action == "cancel":
-        await db.update_worker_task(
-            task_id, status=TaskStatus.CANCELLED, plan_text=None
-        )
-        # Close GitHub issue if exists
-        if task.repo_url and task.issue_number:
-            await add_issue_comment(
-                task.repo_url, task.issue_number, "❌ Task cancelled by user."
-            )
-            await update_github_issue(task.repo_url, task.issue_number, state="closed")
-        await notify_task_updated(user_id, task_id, "cancelled")
-    elif action == "approve":
-        await db.update_worker_task(task_id, status=TaskStatus.READY_TO_IMPLEMENT)
-        await notify_task_updated(user_id, task_id, "ready_to_implement")
-    else:
-        # Revision - back to planning
-        await db.update_worker_task(task_id, status=TaskStatus.PLANNING)
-        await notify_task_updated(user_id, task_id, "planning")
-
-    return {"status": "ok", "action": action}
-
-
-@app.post("/tasks/{task_id}/start-implementation")
-async def start_task_implementation(
-    task_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Start implementation of an approved plan.
-
-    This triggers the worker to proceed from ready_to_implement to implementing.
-    """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your task")
-
-    if task.status != TaskStatus.READY_TO_IMPLEMENT:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Task is not ready for implementation (status: {task.status})",
-        )
-
-    # Send implementation trigger to the worker workflow
-    from mainloop.workflows.worker import TOPIC_START_IMPLEMENTATION
-
-    DBOS.send(
-        task_id,
-        {"action": "start"},
-        topic=TOPIC_START_IMPLEMENTATION,
-    )
-
-    # Update task status immediately so frontend sees correct state on refetch
-    await db.update_worker_task(task_id, status=TaskStatus.IMPLEMENTING)
-
-    # Notify SSE clients
-    await notify_task_updated(user_id, task_id, "implementing")
-
-    return {"status": "ok", "message": "Implementation started"}
 
 
 # ============= Session Endpoints =============
@@ -1185,79 +802,34 @@ async def dismiss_notification(
 # ============= Internal Endpoints (for K8s Jobs) =============
 
 
-class TaskResult(BaseModel):
-    """Result from a worker Job."""
+class SessionResult(BaseModel):
+    """Result from a session Job."""
 
-    task_id: str
+    session_id: str
     status: str  # "completed" or "failed"
     result: dict[str, Any] | None = None
     error: str | None = None
     completed_at: str | None = None
 
 
-@app.post("/internal/tasks/{task_id}/complete")
-async def task_complete(task_id: str, result: TaskResult):
-    """Handle K8s Job completion callbacks.
+@app.post("/internal/sessions/{session_id}/complete")
+async def session_complete(session_id: str, result: SessionResult):
+    """Handle K8s Job completion callbacks for sessions.
 
-    This is called by the job_runner when a worker Job finishes.
-    It updates the task status and notifies the main thread workflow.
+    This is called by the job_runner when a session Job finishes.
+    It notifies the session workflow to add the response and continue.
     """
-    # Verify task exists
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    # Verify session exists
+    session = await db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    # Update task with job result
-    # NOTE: "completed" here means the K8s job finished, NOT that the task is done.
-    # The task is only truly completed when the PR is merged (handled by workflow).
-    # We just store the URL/number here without changing status.
-    if result.status == "completed":
-        # Handle both issue URLs (plan phase) and PR URLs (implement phase)
-        issue_url = result.result.get("issue_url") if result.result else None
-        pr_url = result.result.get("pr_url") if result.result else None
-        issue_number = None
-        pr_number = None
+    # Send result to the session workflow via DBOS.send()
+    # The session workflow is waiting on TOPIC_JOB_RESULT
+    from mainloop.workflows.session_worker import TOPIC_JOB_RESULT
 
-        if issue_url:
-            # Extract issue number from URL (e.g., https://github.com/owner/repo/issues/123)
-            try:
-                issue_number = int(issue_url.split("/")[-1])
-            except (ValueError, IndexError):
-                pass
-
-        if pr_url:
-            # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
-            try:
-                pr_number = int(pr_url.split("/")[-1])
-            except (ValueError, IndexError):
-                pass
-
-        # Update task with URLs - don't mark COMPLETED, workflow manages status
-        if issue_url or pr_url:
-            await db.update_worker_task(
-                task_id,
-                result=result.result,
-                issue_url=issue_url,
-                issue_number=issue_number,
-                pr_url=pr_url,
-                pr_number=pr_number,
-            )
-    elif result.status == "failed":
-        await db.update_worker_task(
-            task_id,
-            status=TaskStatus.FAILED,
-            error=result.error,
-        )
-
-    # Send result to the worker workflow via DBOS.send()
-    # The worker workflow is waiting on TOPIC_JOB_RESULT
-    from mainloop.workflows.worker import TOPIC_JOB_RESULT
-
-    # Send to the worker workflow (which uses task_id as workflow ID via the queue)
-    # Actually, we need to send to the workflow that's waiting
-    # The worker_task_workflow is running with the task_id as part of its workflow context
-    # We use DBOS.send with the workflow_id to target it
-    workflow_id = task_id  # The worker workflow uses task_id for idempotency
+    # The session workflow uses session_id as workflow ID
+    workflow_id = session_id
 
     DBOS.send(
         workflow_id,
@@ -1269,255 +841,10 @@ async def task_complete(task_id: str, result: TaskResult):
         topic=TOPIC_JOB_RESULT,
     )
 
-    return {"status": "ok", "task_id": task_id}
-
-
-# ============= Debug Endpoints =============
-
-
-class DebugTaskInfo(BaseModel):
-    """Debug info for a worker task including workflow state."""
-
-    task: WorkerTask
-    workflow_status: str | None = None
-    workflow_error: str | None = None
-    workflow_created_at: datetime | None = None
-    workflow_updated_at: datetime | None = None
-    namespace_exists: bool = False
-    k8s_jobs: list[str] = []
-
-
-@app.get("/debug/tasks", response_model=list[DebugTaskInfo])
-async def debug_list_tasks(
-    limit: int = 10,
-):
-    """List all tasks with debug info (no auth required for debugging)."""
-    from datetime import timezone
-
-    from mainloop.services.k8s_namespace import get_k8s_client, namespace_exists
-
-    # Get all tasks (bypass user filter for debugging)
-    async with db.connection() as conn:
-        task_rows = await conn.fetch(
-            """
-            SELECT * FROM worker_tasks
-            ORDER BY created_at DESC
-            LIMIT $1
-            """,
-            limit,
-        )
-
-        # Get workflow status for each task
-        results = []
-        for task_row in task_rows:
-            task = db._row_to_worker_task(task_row)
-
-            # Get DBOS workflow status
-            workflow_row = await conn.fetchrow(
-                """
-                SELECT status, error, created_at, updated_at
-                FROM dbos.workflow_status
-                WHERE workflow_uuid = $1
-                """,
-                task.id,
-            )
-
-            workflow_status = None
-            workflow_error = None
-            workflow_created_at = None
-            workflow_updated_at = None
-
-            if workflow_row:
-                workflow_status = workflow_row["status"]
-                # Just show raw error string (it's base64-encoded pickle, but we show it raw)
-                if workflow_row["error"]:
-                    workflow_error = f"[encoded] {workflow_row['error'][:200]}..."
-                workflow_created_at = datetime.fromtimestamp(
-                    workflow_row["created_at"] / 1000, tz=timezone.utc
-                )
-                workflow_updated_at = datetime.fromtimestamp(
-                    workflow_row["updated_at"] / 1000, tz=timezone.utc
-                )
-
-            # Check if namespace exists
-            ns_exists = False
-            k8s_jobs = []
-            try:
-                ns_exists = await namespace_exists(task.id)
-                if ns_exists:
-                    _, batch_v1 = get_k8s_client()
-                    namespace_name = f"task-{task.id[:8]}"
-                    jobs = batch_v1.list_namespaced_job(namespace=namespace_name)
-                    k8s_jobs = [j.metadata.name for j in jobs.items]
-            except Exception:
-                pass  # nosec B110
-
-            results.append(
-                DebugTaskInfo(
-                    task=task,
-                    workflow_status=workflow_status,
-                    workflow_error=workflow_error,
-                    workflow_created_at=workflow_created_at,
-                    workflow_updated_at=workflow_updated_at,
-                    namespace_exists=ns_exists,
-                    k8s_jobs=k8s_jobs,
-                )
-            )
-
-        return results
-
-
-@app.post("/tasks/{task_id}/retry")
-async def retry_task(task_id: str):
-    """Retry a failed task by resetting its status and re-enqueueing."""
-    from dbos import SetWorkflowID
-    from mainloop.workflows.dbos_config import worker_queue
-
-    task = await db.get_worker_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # Reset task status to pending
-    await db.update_worker_task(task_id, status=TaskStatus.PENDING, error=None)
-
-    # Delete the failed workflow from DBOS
-    async with db.connection() as conn:
-        await conn.execute(
-            "DELETE FROM dbos.workflow_status WHERE workflow_uuid = $1",
-            task_id,
-        )
-
-    # Re-enqueue via DBOS worker queue
-    with SetWorkflowID(task_id):
-        worker_queue.enqueue(worker_task_workflow, task_id)
-
-    return {"status": "retried", "task_id": task_id}
-
-
-@app.delete("/debug/tasks/{task_id}/namespace")
-async def debug_delete_namespace(task_id: str):
-    """Force delete a task namespace."""
-    from mainloop.services.k8s_namespace import delete_task_namespace
-
-    await delete_task_namespace(task_id)
-    return {"status": "deleted", "namespace": f"task-{task_id[:8]}"}
+    return {"status": "ok", "session_id": session_id}
 
 
 # ============= Test Helpers (E2E only) =============
-
-
-class SeedTaskRequest(BaseModel):
-    """Request to seed a task for testing."""
-
-    status: TaskStatus
-    task_type: str = "feature"
-    description: str = "Test task"
-    repo_url: str | None = None
-    plan: str | None = None
-    questions: list[dict] | None = None  # For waiting_questions status
-
-
-@app.post("/internal/test/seed-task")
-async def seed_task_for_testing(
-    request: SeedTaskRequest,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Create a task in a specific state for E2E testing.
-
-    WARNING: Only available in test environments. Do not use in production.
-    """
-    if not settings.is_test_env:
-        raise HTTPException(
-            status_code=403, detail="Only available in test environment"
-        )
-
-    from uuid import uuid4
-
-    # Get or create a test main thread
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-    thread = await db.get_main_thread_by_user(user_id)
-    if not thread:
-        # Create test thread directly (no workflow needed for tests)
-        thread = MainThread(user_id=user_id, workflow_run_id="test-workflow")
-        thread = await db.create_main_thread(thread)
-    thread_id = thread.id
-
-    # Create task
-    # Convert questions dict to TaskQuestion models if provided
-    pending_questions = None
-    if request.questions:
-        from models.workflow import QuestionOption, TaskQuestion
-
-        pending_questions = [
-            TaskQuestion(
-                id=q["id"],
-                header=q.get(
-                    "header", q["question"][:30]
-                ),  # Default header from question
-                question=q["question"],
-                options=[
-                    QuestionOption(
-                        label=opt["label"], description=opt.get("description")
-                    )
-                    for opt in q.get("options", [])
-                ],
-                multi_select=q.get("multi_select", False),
-                response=None,
-            )
-            for q in request.questions
-        ]
-        print(f"[DEBUG] Created {len(pending_questions)} pending_questions")
-        print(f"[DEBUG] pending_questions: {pending_questions}")
-
-    task = WorkerTask(
-        id=str(uuid4()),
-        main_thread_id=thread_id,
-        user_id=user_id,
-        task_type=request.task_type,
-        description=request.description,
-        prompt=f"Implement: {request.description}",
-        repo_url=request.repo_url,
-        status=request.status,
-        plan_text=request.plan,  # Store plan on task for UI display
-        pending_questions=pending_questions,  # Store questions on task for UI
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
-    )
-
-    await db.create_worker_task(task)
-
-    # If task needs plan review, create a queue item
-    if request.status == TaskStatus.WAITING_PLAN_REVIEW and request.plan:
-        queue_item = QueueItem(
-            id=str(uuid4()),
-            main_thread_id=thread_id,
-            task_id=task.id,
-            user_id=user_id,
-            item_type=QueueItemType.PLAN_REVIEW,
-            title="Review Plan",
-            content=request.plan,
-            created_at=datetime.now(),
-        )
-        await db.create_queue_item(queue_item)
-
-    # If task has questions, create a queue item
-    if request.status == TaskStatus.WAITING_QUESTIONS and request.questions:
-        import json
-
-        queue_item = QueueItem(
-            id=str(uuid4()),
-            main_thread_id=thread_id,
-            task_id=task.id,
-            user_id=user_id,
-            item_type=QueueItemType.QUESTION,
-            title="Answer Questions",
-            content=json.dumps(request.questions),  # Serialize questions to string
-            created_at=datetime.now(),
-        )
-        await db.create_queue_item(queue_item)
-
-    return {"task_id": task.id, "status": task.status}
 
 
 class SeedSessionRequest(BaseModel):
@@ -1637,7 +964,7 @@ async def reset_test_data(all: bool = False):
                 """
                 TRUNCATE TABLE
                     queue_items, messages, session_notifications, sessions,
-                    worker_tasks, projects, conversations, main_threads
+                    projects, conversations, main_threads
                 CASCADE
                 """
             )
@@ -1677,11 +1004,11 @@ async def reset_test_data(all: bool = False):
 
     # Test-only reset
     async with db.connection() as conn:
-        # Get task IDs and workflow IDs for test users before deleting
-        test_tasks = await conn.fetch(
-            "SELECT id FROM worker_tasks WHERE user_id LIKE 'test-%'"
+        # Get session IDs and workflow IDs for test users before deleting
+        test_sessions = await conn.fetch(
+            "SELECT id FROM sessions WHERE user_id LIKE 'test-%'"
         )
-        test_task_ids = [row["id"] for row in test_tasks]
+        test_session_ids = [row["id"] for row in test_sessions]
 
         test_workflow_ids = await conn.fetch(
             """
@@ -1701,7 +1028,6 @@ async def reset_test_data(all: bool = False):
         await conn.execute(
             "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id LIKE 'test-%')"
         )
-        await conn.execute("DELETE FROM worker_tasks WHERE user_id LIKE 'test-%'")
         await conn.execute("DELETE FROM projects WHERE user_id LIKE 'test-%'")
         await conn.execute("DELETE FROM conversations WHERE user_id LIKE 'test-%'")
         await conn.execute("DELETE FROM main_threads WHERE user_id LIKE 'test-%'")
@@ -1730,8 +1056,8 @@ async def reset_test_data(all: bool = False):
                 workflow_ids,
             )
 
-    # Delete K8s namespaces for test tasks
-    if test_task_ids:
+    # Delete K8s namespaces for test sessions
+    if test_session_ids:
         try:
             from kubernetes.client.rest import ApiException
             from mainloop.services.k8s_namespace import get_k8s_client
@@ -1744,8 +1070,8 @@ async def reset_test_data(all: bool = False):
             )
 
             for ns in namespaces.items:
-                task_id = ns.metadata.labels.get("mainloop.dev/task-id", "")
-                if task_id in test_task_ids:
+                session_id = ns.metadata.labels.get("mainloop.dev/session-id", "")
+                if session_id in test_session_ids:
                     try:
                         core_v1.delete_namespace(name=ns.metadata.name)
                         deleted_namespaces.append(ns.metadata.name)
