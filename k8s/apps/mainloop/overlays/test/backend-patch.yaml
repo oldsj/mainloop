@@ -20,6 +20,8 @@ spec:
             # Use cheapest/fastest model for tests
             - name: CLAUDE_MODEL
               value: haiku
+            - name: CLAUDE_WORKER_MODEL
+              value: haiku
             # Mock GitHub API (no real GitHub calls in tests)
             - name: USE_MOCK_GITHUB
               value: 'true'
