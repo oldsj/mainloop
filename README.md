@@ -36,7 +36,7 @@ You (phone/laptop)
 - **Main thread**: One continuous conversation — sessions spawn inline and surface results back
 - **Sessions**: Background AI work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
-- **Persistence**: Conversations and sessions survive restarts via compaction + [DBOS](docs/DBOS.md)
+- **Persistence**: Conversations and sessions survive restarts via compaction + [DBOS](https://docs.dbos.dev/)
 
 ## Quick Start
 
@@ -100,48 +100,38 @@ mainloop/
 
 ## Agent Workflow
 
-Agents follow a structured workflow: **plan in issue → implement in draft PR → iterate until CI green → ready for human review**.
+Agents are sessions spawned for development tasks. Each agent gets its own K8s namespace for isolated iteration.
 
 ```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Planning  │────►│    Draft    │────►│  Iteration  │────►│   Review    │
-│  (GH Issue) │     │    (PR)     │     │  (CI Loop)  │     │   (Human)   │
+│   Spawn     │────►│    Work     │────►│     PR      │────►│    Close    │
+│   (main)    │     │  (k8s ns)   │     │  (GitHub)   │     │  (summary)  │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+       ▲                   │
+       └───────────────────┘
+         check in / spawn more
 ```
 
-### Phases
+1. **Spawn** - Main thread creates agent for a task
+2. **Work** - Agent iterates in its own K8s namespace (build, test, debug)
+3. **PR** - Agent creates and merges GitHub PR when ready
+4. **Close** - Agent posts summary back to main thread
 
-1. **Planning (GitHub Issue)** - Agent creates/updates an issue with problem analysis, proposed approach, and implementation plan. The issue is the "thinking out loud" space before code.
-
-2. **Draft PR** - Agent creates a draft PR linked to the issue. Implements in small, logical commits. Uses PR comments to narrate progress and decisions.
-
-3. **Iteration (CI Loop)** - Agent polls GitHub Actions after each push. On failure: analyzes logs, fixes, commits. Continues until green checkmark.
-
-4. **Ready for Review** - Agent marks PR ready and adds summary comment. Human reviewer steps in for final approval.
-
-### Verification
-
-Agents use these tools to verify work before marking ready:
-
-- **LSP server integration** - Real-time type/lint errors
-- **`trunk` CLI** - Unified super-linter
-- **Project test suites** - Via GitHub Actions
-
-### Project Template (Future)
-
-| Component      | Purpose                              |
-| -------------- | ------------------------------------ |
-| GitHub Actions | CI pipeline (lint, type-check, test) |
-| K8s/Helm       | Preview environments per PR          |
-| CNPG operator  | Dynamic test databases               |
-| trunk.yaml     | Unified linter config                |
+You stay in main thread, checking in on agents and spawning new ones as needed.
 
 ## Documentation
 
+**Specs** (source of truth for app behavior):
+
+- [Chat](docs/specs/chat.md) - Main thread conversation
+- [Sessions](docs/specs/sessions.md) - Background work and status
+- [Layout](docs/specs/layout.md) - Mobile and desktop views
+
+**Guides**:
+
 - [Architecture](docs/architecture.md) - System design and data flow
 - [Development](docs/development.md) - Local setup and commands
-- [DBOS Workflows](docs/DBOS.md) - Durable task orchestration
-- [Contributing](CONTRIBUTING.md) - How to contribute to mainloop
+- [Contributing](CONTRIBUTING.md) - How to contribute
 
 ## License
 

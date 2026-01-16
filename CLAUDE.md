@@ -46,9 +46,10 @@ make test-reset   # Clear DB + namespaces between runs
 
 **Playwright agents for test maintenance:**
 
-- Don't manually tweak tests - use `playwright-test-healer` to auto-fix failures
-- For new features, use `playwright-test-planner` to explore and generate plans
+- Specs in `docs/specs/` are the source of truth for app behavior
+- Use `playwright-test-planner` to generate test plans from specs
 - Use `playwright-test-generator` to create tests from plans
+- Use `playwright-test-healer` to auto-fix failing tests
 
 ### Test Architecture (Flakiness Prevention)
 
@@ -115,6 +116,7 @@ Tests are organized into projects by execution mode:
 - **Svelte 5 runes**: `$state`, `$derived`, `$effect`, `$props`
 - **API calls**: Use `$lib/api.ts`, never hardcode URLs
 - **DBOS workflows**: Bump `WORKFLOW_VERSION` in `dbos_config.py` when changing workflow logic
+- **External docs**: Use context7 MCP to fetch up-to-date documentation for any library (DBOS, Svelte, Playwright, etc.)
 - **HTML**: Be explicit, don't rely on browser defaults (`type="button"`, `rel="noopener"`, etc.)
 - **Responsive layouts**: Use `isMobile` store to conditionally render, not CSS hide (avoids duplicate DOM elements)
 - **K8s scripts**: Always use explicit `--context kind-${KIND_CLUSTER_NAME:-mainloop-test}` in kubectl commands to avoid targeting wrong cluster
@@ -129,10 +131,10 @@ make setup-claude-creds  # Extract Claude credentials from Keychain
 ## Documentation Philosophy
 
 ```text
-README.md → docs/ → specs/ → tests/
+docs/specs/*.md → playwright-test-planner → tests/*.spec.ts
 ```
 
-Specs define behavior. Tests are the source of truth. Keep docs in sync by running planner agent after feature changes.
+Specs are the source of truth. They describe user-visible behavior in human-readable form, detailed enough for `playwright-test-planner` to generate tests. If tests fail: spec is wrong, code is wrong, or feature is in active development.
 
 ## Important
 
