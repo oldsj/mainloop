@@ -48,11 +48,10 @@ When to use spawn_session WITHOUT repo_url (for other background work):
 - Planning or brainstorming that needs multiple steps
 - Any work that can run in the background
 
-Usage:
-1. For code work: suggest a recent repo or ask for the GitHub repository URL
-2. Always get explicit confirmation before spawning a session
-3. Call spawn_session with just a title (and repo_url for code work)
-   - The session automatically receives the user's original request from the conversation
+IMPORTANT - When spawning a session:
+1. IMMEDIATELY acknowledge and spawn - don't ask for confirmation
+2. Respond with a brief acknowledgment like "On it - spawning a session to [task summary]"
+3. Then call spawn_session with the title (and repo_url for code work)
 
 Do NOT use spawn_session for:
 - Answering simple questions
@@ -66,14 +65,12 @@ Do NOT use spawn_session for:
 The user has recently worked with these repositories:
 {repos_list}
 
-If the request involves code work, suggest using one of these repos. For example:
-"I can spawn a session to work on this. Should I use {recent_repos[0]}?"
+If the request involves code work and includes a repo URL, use it. Otherwise use the most relevant recent repo.
 """
     else:
         base_prompt += """
 
-If the request involves code work, ask for the GitHub repo URL like:
-"I can spawn a session to work on this. Would you like me to proceed? Please provide the GitHub repo URL."
+If the request involves code work but no repo is provided, ask for the GitHub repo URL.
 """
 
     return base_prompt

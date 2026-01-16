@@ -8,8 +8,14 @@ CONTEXT="kind-${CLUSTER_NAME}"
 echo "=== Using context: ${CONTEXT} ==="
 
 echo "=== Cleaning up k8s task namespaces ==="
-# Delete all task-* namespaces (created by worker workflows)
+# Delete all task-* namespaces (legacy worker workflows)
 for ns in $(kubectl --context "${CONTEXT}" get ns -o name 2>/dev/null | grep "^namespace/task-" | cut -d/ -f2); do
+  echo "Deleting namespace: ${ns}"
+  kubectl --context "${CONTEXT}" delete ns "${ns}" --wait=false 2>/dev/null || true
+done
+
+# Delete all mainloop-session-* namespaces (session workers)
+for ns in $(kubectl --context "${CONTEXT}" get ns -o name 2>/dev/null | grep "^namespace/mainloop-session-" | cut -d/ -f2); do
   echo "Deleting namespace: ${ns}"
   kubectl --context "${CONTEXT}" delete ns "${ns}" --wait=false 2>/dev/null || true
 done
