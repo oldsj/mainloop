@@ -175,6 +175,16 @@ dev:
           - '*.pyc'
           - .venv/
         disableDownload: true
+        onUpload:
+          exec:
+            - name: rebuild-agent-image
+              command: |-
+                echo "[agent] Rebuilding image for Jobs..."
+                docker build -t mainloop-agent-controller:dev claude-agent/ && \
+                kind load docker-image mainloop-agent-controller:dev --name mainloop-test && \
+                echo "[agent] Done - new Jobs will use updated code"
+              local: true
+              onChange: ['*.py']
     command:
       - /entrypoint.sh
     logs: {}
@@ -194,6 +204,7 @@ hooks:
   - name: create-secrets
     events:
       - before:deploy
+      - before:dev
     command: ./scripts/kind/create-secrets.sh
 
   - name: load-images

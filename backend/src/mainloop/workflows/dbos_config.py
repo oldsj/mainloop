@@ -8,7 +8,7 @@ from mainloop.config import settings
 # DBOS configuration
 # application_version prevents recovery of old workflows after code changes
 # Bump this when workflow step order/logic changes to avoid DBOSUnexpectedStepError
-WORKFLOW_VERSION = "10"  # v10: API saves user messages directly (not workflow)
+WORKFLOW_VERSION = "11"  # v11: Sessions use K8s job isolation, removed worker tasks
 
 dbos_config: DBOSConfig = {
     "name": "mainloop",
@@ -21,11 +21,11 @@ dbos_config: DBOSConfig = {
 # Initialize DBOS - must be done before defining workflows
 DBOS(config=dbos_config)
 
-# Queue for worker tasks with concurrency limit
-# This ensures we don't overwhelm resources with too many concurrent workers
+# Queue for session workflows with concurrency limit
+# This ensures we don't overwhelm resources with too many concurrent sessions
 worker_queue = Queue(
-    "worker_tasks",
-    concurrency=3,  # Max 3 workers running at once globally
+    "worker_tasks",  # Queue name kept for backwards compatibility
+    concurrency=3,  # Max 3 sessions running at once globally
 )
 
 # Queue for user main threads - one at a time per partition (user)

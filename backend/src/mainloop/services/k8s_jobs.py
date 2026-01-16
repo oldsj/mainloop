@@ -1,7 +1,6 @@
-"""Kubernetes Job management for worker tasks."""
+"""Kubernetes Job management for session tasks."""
 
 import logging
-from typing import Literal
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
@@ -14,34 +13,22 @@ logger = logging.getLogger(__name__)
 JOB_TTL_SECONDS = 3600  # Keep completed jobs for 1 hour
 
 
-async def create_worker_job(
-    task_id: str,
+async def create_session_job(
+    session_id: str,
     namespace: str,
     prompt: str,
-    mode: Literal["plan", "implement", "feedback", "fix"],
     callback_url: str,
     model: str | None = None,
-    repo_url: str | None = None,
-    pr_number: int | None = None,
-    issue_number: int | None = None,
-    branch_name: str | None = None,
-    feedback_context: str | None = None,
     iteration: int = 0,
 ) -> str:
-    """Create a worker Job in the task namespace.
+    """Create a session Job in the session namespace.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Target namespace for the Job
-        prompt: The task prompt/description
-        mode: "plan" for issue with plan, "implement" for code, "feedback" for comments, "fix" for CI
+        prompt: The full prompt with conversation context
         callback_url: URL to POST results to
-        model: Claude model to use (defaults to settings.claude_worker_model)
-        repo_url: Repository URL to clone
-        pr_number: PR number (for implement, feedback, fix modes)
-        issue_number: Issue number (for implement mode - references plan issue)
-        branch_name: Branch name to use (for implement, feedback, fix modes)
-        feedback_context: PR comments/feedback to address
+        model: Claude model to use (defaults to settings.claude_model)
         iteration: Iteration number for jobs (ensures unique names)
 
     Returns:
@@ -50,11 +37,11 @@ async def create_worker_job(
     """
     _, batch_v1 = get_k8s_client()
 
-    # Include iteration in job name to ensure uniqueness across feedback rounds
+    # Include iteration in job name to ensure uniqueness across rounds
     if iteration > 0:
-        job_name = f"worker-{task_id[:8]}-{mode[:3]}-{iteration}"
+        job_name = f"session-{session_id[:8]}-{iteration}"
     else:
-        job_name = f"worker-{task_id[:8]}-{mode[:3]}"
+        job_name = f"session-{session_id[:8]}"
 
     # Check if job already exists and is completed - delete it to allow retry
     try:
@@ -78,14 +65,14 @@ async def create_worker_job(
         if e.status != 404:
             raise
         # Job doesn't exist, continue with creation
-    model = model or settings.claude_worker_model
+
+    model = model or settings.claude_model
 
     # Environment variables for the job
     env_vars = [
-        client.V1EnvVar(name="TASK_ID", value=task_id),
+        client.V1EnvVar(name="SESSION_ID", value=session_id),
         client.V1EnvVar(name="TASK_PROMPT", value=prompt),
         client.V1EnvVar(name="CALLBACK_URL", value=callback_url),
-        client.V1EnvVar(name="MODE", value=mode),
         client.V1EnvVar(name="CLAUDE_MODEL", value=model),
         # Claude credentials from secret
         client.V1EnvVar(
@@ -97,7 +84,7 @@ async def create_worker_job(
                 )
             ),
         ),
-        # GitHub token from secret
+        # GitHub token from secret (optional, for gh CLI access)
         client.V1EnvVar(
             name="GH_TOKEN",
             value_from=client.V1EnvVarSource(
@@ -110,20 +97,6 @@ async def create_worker_job(
         ),
     ]
 
-    # Add optional env vars
-    if repo_url:
-        env_vars.append(client.V1EnvVar(name="REPO_URL", value=repo_url))
-    if pr_number:
-        env_vars.append(client.V1EnvVar(name="PR_NUMBER", value=str(pr_number)))
-    if issue_number:
-        env_vars.append(client.V1EnvVar(name="ISSUE_NUMBER", value=str(issue_number)))
-    if branch_name:
-        env_vars.append(client.V1EnvVar(name="BRANCH_NAME", value=branch_name))
-    if feedback_context:
-        env_vars.append(
-            client.V1EnvVar(name="FEEDBACK_CONTEXT", value=feedback_context)
-        )
-
     # Job spec
     job = client.V1Job(
         metadata=client.V1ObjectMeta(
@@ -131,8 +104,7 @@ async def create_worker_job(
             namespace=namespace,
             labels={
                 "app.kubernetes.io/managed-by": "mainloop",
-                "mainloop.dev/task-id": task_id,
-                "mainloop.dev/mode": mode,
+                "mainloop.dev/session-id": session_id,
             },
         ),
         spec=client.V1JobSpec(
@@ -142,7 +114,7 @@ async def create_worker_job(
                 metadata=client.V1ObjectMeta(
                     labels={
                         "app.kubernetes.io/managed-by": "mainloop",
-                        "mainloop.dev/task-id": task_id,
+                        "mainloop.dev/session-id": session_id,
                     },
                 ),
                 spec=client.V1PodSpec(
@@ -196,11 +168,11 @@ async def create_worker_job(
     return job_name
 
 
-async def get_job_status(task_id: str, namespace: str) -> dict | None:
-    """Get the status of a worker Job.
+async def get_job_status(session_id: str, namespace: str) -> dict | None:
+    """Get the status of a session Job.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Namespace where the Job is running
 
     Returns:
@@ -212,7 +184,7 @@ async def get_job_status(task_id: str, namespace: str) -> dict | None:
     try:
         jobs = batch_v1.list_namespaced_job(
             namespace=namespace,
-            label_selector=f"mainloop.dev/task-id={task_id}",
+            label_selector=f"mainloop.dev/session-id={session_id}",
         )
 
         if not jobs.items:
@@ -238,11 +210,11 @@ async def get_job_status(task_id: str, namespace: str) -> dict | None:
         raise
 
 
-async def delete_job(task_id: str, namespace: str) -> None:
-    """Delete a worker Job.
+async def delete_job(session_id: str, namespace: str) -> None:
+    """Delete a session Job.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Namespace where the Job is running
 
     """
@@ -251,7 +223,7 @@ async def delete_job(task_id: str, namespace: str) -> None:
     try:
         jobs = batch_v1.list_namespaced_job(
             namespace=namespace,
-            label_selector=f"mainloop.dev/task-id={task_id}",
+            label_selector=f"mainloop.dev/session-id={session_id}",
         )
 
         for job in jobs.items:
@@ -266,16 +238,16 @@ async def delete_job(task_id: str, namespace: str) -> None:
 
     except ApiException as e:
         if e.status == 404:
-            logger.info(f"No jobs found for task {task_id} in {namespace}")
+            logger.info(f"No jobs found for session {session_id} in {namespace}")
         else:
             raise
 
 
-async def get_job_logs(task_id: str, namespace: str) -> str | None:
-    """Get logs from a worker Job's pod.
+async def get_job_logs(session_id: str, namespace: str) -> str | None:
+    """Get logs from a session Job's pod.
 
     Args:
-        task_id: The task ID
+        session_id: The session ID
         namespace: Namespace where the Job is running
 
     Returns:
@@ -287,7 +259,7 @@ async def get_job_logs(task_id: str, namespace: str) -> str | None:
     try:
         pods = core_v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector=f"mainloop.dev/task-id={task_id}",
+            label_selector=f"mainloop.dev/session-id={session_id}",
         )
 
         if not pods.items:

@@ -13,47 +13,19 @@ def _uuid() -> str:
 
 
 class SessionStatus(str, Enum):
-    """Status of a session - covers both simple conversations and code work."""
+    """Status of a session."""
 
-    # Common states
     PENDING = "pending"
     ACTIVE = "active"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
-    # Interactive states (waiting on user)
-    WAITING_ON_USER = "waiting_on_user"  # Generic - session needs user input
-    WAITING_QUESTIONS = "waiting_questions"  # Agent asked questions, needs answers
-    WAITING_PLAN_REVIEW = "waiting_plan_review"  # Plan needs approval
-    READY_TO_IMPLEMENT = "ready_to_implement"  # Plan approved, waiting to start
+    WAITING_ON_USER = "waiting_on_user"
 
-    # Code work states (when repo_url is set)
-    PLANNING = "planning"  # Creating implementation plan
-    IMPLEMENTING = "implementing"  # Writing code per approved plan
-    UNDER_REVIEW = "under_review"  # PR created, awaiting review/merge
-
-
-class QuestionOption(BaseModel):
-    """An option for a session question."""
-
-    label: str = Field(..., description="Display text for the option")
-    description: str | None = Field(None, description="Explanation of this option")
-
-
-class SessionQuestion(BaseModel):
-    """A question asked by an agent that needs user input."""
-
-    id: str = Field(default_factory=_uuid, description="Unique question ID")
-    header: str = Field(..., description="Short label/category for the question")
-    question: str = Field(..., description="Full question text")
-    options: list[QuestionOption] = Field(
-        default_factory=list, description="Available options"
-    )
-    multi_select: bool = Field(
-        default=False, description="Allow selecting multiple options"
-    )
-    response: str | None = Field(None, description="User's answer")
+    # Code work states
+    IMPLEMENTING = "implementing"
+    UNDER_REVIEW = "under_review"
 
 
 class Session(BaseModel):
@@ -137,20 +109,6 @@ class Session(BaseModel):
         None, description="Assigned color for inline display (hex or name)"
     )
 
-    # Routing and task metadata
-    keywords: list[str] = Field(
-        default_factory=list, description="Keywords for task routing"
-    )
-    skip_plan: bool = Field(
-        default=False, description="Skip plan phase if user said 'just do it'"
-    )
-
-    # Interactive planning state
-    pending_questions: list[SessionQuestion] | None = Field(
-        None, description="Questions awaiting user answers"
-    )
-    plan_text: str | None = Field(None, description="Current plan text for review")
-
     # Additional result data
     result: dict[str, Any] | None = Field(None, description="Session result data")
 
@@ -162,12 +120,7 @@ class Session(BaseModel):
     @property
     def needs_attention(self) -> bool:
         """Returns True if this session is waiting on user input."""
-        return self.status in {
-            SessionStatus.WAITING_ON_USER,
-            SessionStatus.WAITING_QUESTIONS,
-            SessionStatus.WAITING_PLAN_REVIEW,
-            SessionStatus.READY_TO_IMPLEMENT,
-        }
+        return self.status == SessionStatus.WAITING_ON_USER
 
 
 class SessionCreate(BaseModel):
@@ -181,7 +134,6 @@ class SessionCreate(BaseModel):
     repo_url: str | None = Field(
         None, description="GitHub repository URL for code work"
     )
-    skip_plan: bool = Field(default=False, description="Skip planning phase")
 
     # Optional: for inline threading
     anchor_message_id: str | None = Field(

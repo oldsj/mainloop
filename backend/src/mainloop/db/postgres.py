@@ -19,8 +19,6 @@ from models import (
     Session,
     SessionNotification,
     SessionStatus,
-    TaskStatus,
-    WorkerTask,
 )
 
 
@@ -53,47 +51,11 @@ CREATE TABLE IF NOT EXISTS main_threads (
 );
 CREATE INDEX IF NOT EXISTS idx_main_threads_user_id ON main_threads(user_id);
 
--- Worker tasks
-CREATE TABLE IF NOT EXISTS worker_tasks (
-    id TEXT PRIMARY KEY,
-    main_thread_id TEXT NOT NULL REFERENCES main_threads(id),
-    user_id TEXT NOT NULL,
-    task_type TEXT NOT NULL,
-    description TEXT NOT NULL,
-    prompt TEXT NOT NULL,
-    model TEXT,
-    repo_url TEXT,
-    branch_name TEXT,
-    base_branch TEXT DEFAULT 'main',
-    status TEXT NOT NULL DEFAULT 'pending',
-    workflow_run_id TEXT,
-    worker_pod_name TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    result JSONB,
-    error TEXT,
-    pr_url TEXT,
-    pr_number INTEGER,
-    commit_sha TEXT,
-    -- Conversation linking for routing
-    conversation_id TEXT,
-    message_id TEXT,
-    keywords TEXT[] DEFAULT '{}',
-    skip_plan BOOLEAN DEFAULT FALSE,
-    -- Interactive planning state
-    pending_questions JSONB,
-    plan_text TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_worker_tasks_main_thread ON worker_tasks(main_thread_id);
-CREATE INDEX IF NOT EXISTS idx_worker_tasks_user_id ON worker_tasks(user_id);
-CREATE INDEX IF NOT EXISTS idx_worker_tasks_status ON worker_tasks(status);
-
 -- Queue items (human-in-the-loop / inbox)
 CREATE TABLE IF NOT EXISTS queue_items (
     id TEXT PRIMARY KEY,
     main_thread_id TEXT NOT NULL REFERENCES main_threads(id),
-    task_id TEXT REFERENCES worker_tasks(id),
+    task_id TEXT,
     user_id TEXT NOT NULL,
     item_type TEXT NOT NULL,
     priority TEXT NOT NULL DEFAULT 'normal',
@@ -192,13 +154,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Inline thread anchoring
     anchor_message_id TEXT REFERENCES messages(id),
     color VARCHAR(20),
-    -- Routing and task metadata
-    keywords TEXT[] DEFAULT '{}',
-    skip_plan BOOLEAN DEFAULT FALSE,
-    -- Interactive planning state
-    pending_questions JSONB,
-    plan_text TEXT,
-    -- Additional result data
     result JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
@@ -224,54 +179,9 @@ CREATE INDEX IF NOT EXISTS idx_session_notifications_unread ON session_notificat
 
 # Migration SQL for adding new columns to existing tables
 MIGRATION_SQL = """
--- Add new columns to worker_tasks if they don't exist
+-- Add queue_items and conversation migrations
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='model') THEN
-        ALTER TABLE worker_tasks ADD COLUMN model TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_number') THEN
-        ALTER TABLE worker_tasks ADD COLUMN pr_number INTEGER;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='conversation_id') THEN
-        ALTER TABLE worker_tasks ADD COLUMN conversation_id TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='message_id') THEN
-        ALTER TABLE worker_tasks ADD COLUMN message_id TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='keywords') THEN
-        ALTER TABLE worker_tasks ADD COLUMN keywords TEXT[] DEFAULT '{}';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='skip_plan') THEN
-        ALTER TABLE worker_tasks ADD COLUMN skip_plan BOOLEAN DEFAULT FALSE;
-    END IF;
-    -- Issue tracking columns (plan phase)
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_url') THEN
-        ALTER TABLE worker_tasks ADD COLUMN issue_url TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_number') THEN
-        ALTER TABLE worker_tasks ADD COLUMN issue_number INTEGER;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_etag') THEN
-        ALTER TABLE worker_tasks ADD COLUMN issue_etag TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='issue_last_modified') THEN
-        ALTER TABLE worker_tasks ADD COLUMN issue_last_modified TIMESTAMPTZ;
-    END IF;
-    -- ETag columns for PR polling
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_etag') THEN
-        ALTER TABLE worker_tasks ADD COLUMN pr_etag TEXT;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pr_last_modified') THEN
-        ALTER TABLE worker_tasks ADD COLUMN pr_last_modified TIMESTAMPTZ;
-    END IF;
-    -- Interactive planning columns
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='pending_questions') THEN
-        ALTER TABLE worker_tasks ADD COLUMN pending_questions JSONB;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='plan_text') THEN
-        ALTER TABLE worker_tasks ADD COLUMN plan_text TEXT;
-    END IF;
     -- Add read_at to queue_items
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='queue_items' AND column_name='read_at') THEN
         ALTER TABLE queue_items ADD COLUMN read_at TIMESTAMPTZ;
@@ -290,70 +200,9 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conversations' AND column_name='claude_session_id') THEN
         ALTER TABLE conversations DROP COLUMN claude_session_id;
     END IF;
-    -- Add project_id to worker_tasks
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='worker_tasks' AND column_name='project_id') THEN
-        ALTER TABLE worker_tasks ADD COLUMN project_id TEXT REFERENCES projects(id);
-    END IF;
-END $$;
-
--- Migrate existing repo URLs to projects and link tasks
-DO $$
-DECLARE
-    task_record RECORD;
-    v_project_id TEXT;
-    repo_owner TEXT;
-    repo_name TEXT;
-    v_full_name TEXT;
-BEGIN
-    -- Only run if projects table is empty (first migration)
-    IF NOT EXISTS (SELECT 1 FROM projects LIMIT 1) THEN
-        FOR task_record IN
-            SELECT DISTINCT user_id, repo_url
-            FROM worker_tasks
-            WHERE repo_url IS NOT NULL
-        LOOP
-            -- Parse owner/name from URL (handles both https://github.com/owner/repo and https://github.com/owner/repo.git)
-            repo_owner := split_part(
-                replace(replace(task_record.repo_url, 'https://github.com/', ''), '.git', ''),
-                '/', 1
-            );
-            repo_name := split_part(
-                replace(replace(task_record.repo_url, 'https://github.com/', ''), '.git', ''),
-                '/', 2
-            );
-            v_full_name := repo_owner || '/' || repo_name;
-
-            -- Check if project already exists for this user
-            SELECT id INTO v_project_id
-            FROM projects
-            WHERE projects.user_id = task_record.user_id AND projects.full_name = v_full_name;
-
-            IF v_project_id IS NULL THEN
-                v_project_id := gen_random_uuid()::TEXT;
-                INSERT INTO projects (id, user_id, owner, name, full_name, html_url, created_at, last_used_at)
-                VALUES (
-                    v_project_id,
-                    task_record.user_id,
-                    repo_owner,
-                    repo_name,
-                    v_full_name,
-                    task_record.repo_url,
-                    NOW(),
-                    NOW()
-                );
-            END IF;
-
-            -- Update tasks to reference the project
-            UPDATE worker_tasks
-            SET project_id = v_project_id
-            WHERE worker_tasks.repo_url = task_record.repo_url AND worker_tasks.user_id = task_record.user_id;
-        END LOOP;
-    END IF;
 END $$;
 
 -- Create indexes if they don't exist
-CREATE INDEX IF NOT EXISTS idx_worker_tasks_keywords ON worker_tasks USING GIN(keywords);
-CREATE INDEX IF NOT EXISTS idx_worker_tasks_project ON worker_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
 
 -- Add new columns to sessions for unified model
@@ -404,19 +253,6 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='commit_sha') THEN
         ALTER TABLE sessions ADD COLUMN commit_sha TEXT;
     END IF;
-    -- Routing and planning fields
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='keywords') THEN
-        ALTER TABLE sessions ADD COLUMN keywords TEXT[] DEFAULT '{}';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='skip_plan') THEN
-        ALTER TABLE sessions ADD COLUMN skip_plan BOOLEAN DEFAULT FALSE;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='pending_questions') THEN
-        ALTER TABLE sessions ADD COLUMN pending_questions JSONB;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='plan_text') THEN
-        ALTER TABLE sessions ADD COLUMN plan_text TEXT;
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sessions' AND column_name='result') THEN
         ALTER TABLE sessions ADD COLUMN result JSONB;
     END IF;
@@ -432,7 +268,6 @@ END $$;
 -- Create session indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_keywords ON sessions USING GIN(keywords);
 CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 """
 
@@ -676,266 +511,6 @@ class Database:
                 if isinstance(row["context"], dict)
                 else (json.loads(row["context"]) if row["context"] else {})
             ),
-        )
-
-    # ============= Worker Task Operations =============
-
-    async def create_worker_task(self, task: WorkerTask) -> WorkerTask:
-        """Create a new worker task."""
-        if not self._pool:
-            return task
-        async with self.connection() as conn:
-            # Serialize pending_questions to JSON for storage
-            import json
-
-            pending_questions_json = (
-                json.dumps([q.model_dump() for q in task.pending_questions])
-                if task.pending_questions
-                else None
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO worker_tasks
-                (id, main_thread_id, user_id, task_type, description, prompt, model,
-                 repo_url, branch_name, base_branch, status, created_at,
-                 conversation_id, message_id, keywords, skip_plan, plan_text, pending_questions)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-                """,
-                task.id,
-                task.main_thread_id,
-                task.user_id,
-                task.task_type,
-                task.description,
-                task.prompt,
-                task.model,
-                task.repo_url,
-                task.branch_name,
-                task.base_branch,
-                task.status.value,
-                task.created_at,
-                task.conversation_id,
-                task.message_id,
-                task.keywords,
-                task.skip_plan,
-                task.plan_text,
-                pending_questions_json,
-            )
-        return task
-
-    async def get_worker_task(self, task_id: str) -> WorkerTask | None:
-        """Get a worker task by ID."""
-        if not self._pool:
-            return None
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM worker_tasks WHERE id = $1", task_id
-            )
-        if not row:
-            return None
-        return self._row_to_worker_task(row)
-
-    async def list_worker_tasks(
-        self,
-        user_id: str,
-        status: str | None = None,
-        project_id: str | None = None,
-        limit: int = 50,
-    ) -> list[WorkerTask]:
-        """List worker tasks for a user."""
-        if not self._pool:
-            return []
-
-        query = "SELECT * FROM worker_tasks WHERE user_id = $1"
-        params: list[Any] = [user_id]
-
-        if status:
-            query += f" AND status = ${len(params) + 1}"
-            params.append(status)
-
-        if project_id:
-            query += f" AND project_id = ${len(params) + 1}"
-            params.append(project_id)
-
-        query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
-        params.append(limit)
-
-        async with self.connection() as conn:
-            rows = await conn.fetch(query, *params)
-        return [self._row_to_worker_task(row) for row in rows]
-
-    async def update_worker_task(
-        self,
-        task_id: str,
-        status: TaskStatus | None = None,
-        workflow_run_id: str | None = None,
-        worker_pod_name: str | None = None,
-        started_at: datetime | None = None,
-        completed_at: datetime | None = None,
-        result: dict | None = None,
-        error: str | None = None,
-        project_id: str | None = None,
-        # Issue fields (plan phase)
-        issue_url: str | None = None,
-        issue_number: int | None = None,
-        issue_etag: str | None = None,
-        issue_last_modified: datetime | None = None,
-        # PR fields (implementation phase)
-        pr_url: str | None = None,
-        pr_number: int | None = None,
-        pr_etag: str | None = None,
-        pr_last_modified: datetime | None = None,
-        commit_sha: str | None = None,
-        branch_name: str | None = None,
-        # Interactive planning fields
-        pending_questions: list[dict] | None = None,
-        plan_text: str | None = None,
-    ):
-        """Update worker task fields."""
-        if not self._pool:
-            return
-        updates = []
-        params = []
-        param_idx = 1
-
-        if status is not None:
-            updates.append(f"status = ${param_idx}")
-            params.append(status.value if isinstance(status, TaskStatus) else status)
-            param_idx += 1
-        if workflow_run_id is not None:
-            updates.append(f"workflow_run_id = ${param_idx}")
-            params.append(workflow_run_id)
-            param_idx += 1
-        if worker_pod_name is not None:
-            updates.append(f"worker_pod_name = ${param_idx}")
-            params.append(worker_pod_name)
-            param_idx += 1
-        if started_at is not None:
-            updates.append(f"started_at = ${param_idx}")
-            params.append(started_at)
-            param_idx += 1
-        if completed_at is not None:
-            updates.append(f"completed_at = ${param_idx}")
-            params.append(completed_at)
-            param_idx += 1
-        if result is not None:
-            updates.append(f"result = ${param_idx}")
-            params.append(json.dumps(result))
-            param_idx += 1
-        if error is not None:
-            updates.append(f"error = ${param_idx}")
-            params.append(error)
-            param_idx += 1
-        if project_id is not None:
-            updates.append(f"project_id = ${param_idx}")
-            params.append(project_id)
-            param_idx += 1
-        if pr_url is not None:
-            updates.append(f"pr_url = ${param_idx}")
-            params.append(pr_url)
-            param_idx += 1
-        if pr_number is not None:
-            updates.append(f"pr_number = ${param_idx}")
-            params.append(pr_number)
-            param_idx += 1
-        if commit_sha is not None:
-            updates.append(f"commit_sha = ${param_idx}")
-            params.append(commit_sha)
-            param_idx += 1
-        if branch_name is not None:
-            updates.append(f"branch_name = ${param_idx}")
-            params.append(branch_name)
-            param_idx += 1
-        if issue_url is not None:
-            updates.append(f"issue_url = ${param_idx}")
-            params.append(issue_url)
-            param_idx += 1
-        if issue_number is not None:
-            updates.append(f"issue_number = ${param_idx}")
-            params.append(issue_number)
-            param_idx += 1
-        if issue_etag is not None:
-            updates.append(f"issue_etag = ${param_idx}")
-            params.append(issue_etag)
-            param_idx += 1
-        if issue_last_modified is not None:
-            updates.append(f"issue_last_modified = ${param_idx}")
-            params.append(issue_last_modified)
-            param_idx += 1
-        if pr_etag is not None:
-            updates.append(f"pr_etag = ${param_idx}")
-            params.append(pr_etag)
-            param_idx += 1
-        if pr_last_modified is not None:
-            updates.append(f"pr_last_modified = ${param_idx}")
-            params.append(pr_last_modified)
-            param_idx += 1
-        # pending_questions: empty list [] means clear, list with items means set
-        # None means don't update (standard pattern)
-        if pending_questions is not None:
-            updates.append(f"pending_questions = ${param_idx}")
-            # Empty list clears (stores null), non-empty stores as JSON string
-            # asyncpg requires explicit JSON serialization for JSONB columns
-            params.append(json.dumps(pending_questions) if pending_questions else None)
-            param_idx += 1
-        if plan_text is not None:
-            updates.append(f"plan_text = ${param_idx}")
-            params.append(plan_text)
-            param_idx += 1
-
-        params.append(task_id)
-
-        if updates:
-            async with self.connection() as conn:
-                await conn.execute(
-                    f"UPDATE worker_tasks SET {', '.join(updates)} WHERE id = ${param_idx}",
-                    *params,
-                )
-
-    def _row_to_worker_task(self, row: asyncpg.Record) -> WorkerTask:
-        return WorkerTask(
-            id=row["id"],
-            main_thread_id=row["main_thread_id"],
-            user_id=row["user_id"],
-            task_type=row["task_type"],
-            description=row["description"],
-            prompt=row["prompt"],
-            model=row.get("model"),
-            repo_url=row["repo_url"],
-            project_id=row.get("project_id"),
-            branch_name=row["branch_name"],
-            base_branch=row["base_branch"],
-            status=TaskStatus(row["status"]),
-            workflow_run_id=row["workflow_run_id"],
-            worker_pod_name=row["worker_pod_name"],
-            created_at=row["created_at"],
-            started_at=row["started_at"],
-            completed_at=row["completed_at"],
-            result=(
-                row["result"]
-                if isinstance(row["result"], dict)
-                else (json.loads(row["result"]) if row["result"] else None)
-            ),
-            error=row["error"],
-            # Issue fields (plan phase)
-            issue_url=row.get("issue_url"),
-            issue_number=row.get("issue_number"),
-            issue_etag=row.get("issue_etag"),
-            issue_last_modified=row.get("issue_last_modified"),
-            # PR fields (implementation phase)
-            pr_url=row["pr_url"],
-            pr_number=row.get("pr_number"),
-            pr_etag=row.get("pr_etag"),
-            pr_last_modified=row.get("pr_last_modified"),
-            commit_sha=row["commit_sha"],
-            conversation_id=row.get("conversation_id"),
-            message_id=row.get("message_id"),
-            keywords=list(row["keywords"]) if row.get("keywords") else [],
-            skip_plan=row.get("skip_plan", False),
-            # Interactive planning state
-            # Handle both JSONB (returns list) and legacy string data
-            pending_questions=_parse_json_field(row.get("pending_questions")),
-            plan_text=row.get("plan_text"),
         )
 
     # ============= Project Operations =============
@@ -1650,11 +1225,10 @@ class Database:
                  repo_url, project_id, branch_name, base_branch, model,
                  issue_url, issue_number, issue_etag, issue_last_modified,
                  pr_url, pr_number, pr_etag, pr_last_modified, commit_sha,
-                 anchor_message_id, color,
-                 keywords, skip_plan, pending_questions, plan_text, result)
+                 anchor_message_id, color, result)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-                        $29, $30, $31, $32, $33, $34, $35)
+                        $29, $30, $31)
                 """,
                 session.id,
                 session.user_id,
@@ -1690,15 +1264,6 @@ class Database:
                 # Inline thread anchoring
                 session.anchor_message_id,
                 session.color,
-                # Routing and planning fields
-                session.keywords,
-                session.skip_plan,
-                (
-                    json.dumps([q.model_dump() for q in session.pending_questions])
-                    if session.pending_questions
-                    else None
-                ),
-                session.plan_text,
                 json.dumps(session.result) if session.result else None,
             )
         return session
@@ -1766,9 +1331,6 @@ class Database:
         # Inline thread anchoring
         anchor_message_id: str | None = None,
         color: str | None = None,
-        # Planning fields
-        pending_questions: list | None = None,
-        plan_text: str | None = None,
         result: dict | None = None,
     ):
         """Update session fields."""
@@ -1862,24 +1424,6 @@ class Database:
             updates.append(f"color = ${param_idx}")
             params.append(color)
             param_idx += 1
-        # Planning fields
-        if pending_questions is not None:
-            updates.append(f"pending_questions = ${param_idx}")
-            params.append(
-                json.dumps(
-                    [
-                        q.model_dump() if hasattr(q, "model_dump") else q
-                        for q in pending_questions
-                    ]
-                )
-                if pending_questions
-                else None
-            )
-            param_idx += 1
-        if plan_text is not None:
-            updates.append(f"plan_text = ${param_idx}")
-            params.append(plan_text)
-            param_idx += 1
         if result is not None:
             updates.append(f"result = ${param_idx}")
             params.append(json.dumps(result))
@@ -1895,17 +1439,6 @@ class Database:
                 )
 
     def _row_to_session(self, row: asyncpg.Record) -> Session:
-        from models import SessionQuestion
-
-        # Parse pending_questions JSON
-        pending_questions = None
-        raw_questions = row.get("pending_questions")
-        if raw_questions:
-            parsed = _parse_json_field(raw_questions)
-            if parsed and isinstance(parsed, list):
-                pending_questions = [SessionQuestion(**q) for q in parsed]
-
-        # Parse result JSON
         result = _parse_json_field(row.get("result"))
 
         return Session(
@@ -1943,11 +1476,6 @@ class Database:
             # Inline thread anchoring
             anchor_message_id=row.get("anchor_message_id"),
             color=row.get("color"),
-            # Routing and planning fields
-            keywords=row.get("keywords", []),
-            skip_plan=row.get("skip_plan", False),
-            pending_questions=pending_questions,
-            plan_text=row.get("plan_text"),
             result=result,
         )
 

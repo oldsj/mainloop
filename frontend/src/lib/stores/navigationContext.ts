@@ -142,14 +142,8 @@ export function getUrgencyScore(status: string): number {
   switch (status) {
     case 'waiting_on_user':
       return 100;
-    case 'waiting_questions':
-      return 90;
-    case 'waiting_plan_review':
-      return 85;
     case 'active':
       return 50;
-    case 'planning':
-      return 45;
     case 'implementing':
       return 45;
     case 'pending':
