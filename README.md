@@ -6,9 +6,9 @@ Your main conversation thread is the closest digital mapping to your own interna
 
 Inspired by [You Are The Main Thread](https://claudelog.com/mechanics/you-are-the-main-thread/) — you are the bottleneck, so spawn parallel AI sessions and let them handle the work while you stay in flow.
 
-| Desktop                                                                                                                          | Mobile                                                                                                                          |
-| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| <img width="600" alt="mainloop desktop" src="https://github.com/user-attachments/assets/49971afd-c155-4855-a292-5b0c59570066" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
+| Desktop                                                                  | Mobile                                                                                                                          |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| <img width="600" alt="mainloop desktop" src="docs/images/desktop.png" /> | <img width="150" alt="mainloop mobile" src="https://github.com/user-attachments/assets/3b263abe-9fee-45c5-9ba8-38edd5e5e4a8" /> |
 
 ## How It Works
 
