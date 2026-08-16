@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-agent-controller
+  namespace: mainloop
+spec:
+  replicas: 0
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mainloop-db
+  namespace: mainloop
+  annotations:
+    cnpg.io/hibernation: "on"
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: mainloop-db-pooler
+  namespace: mainloop
+spec:
+  instances: 0
