@@ -1,0 +1,42 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/process-exit.json#cursor-1",
+    "source_at": "2026-01-01T00:03:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-exit-init-001",
+      "session_id": "claude-native-session-exit"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/process-exit.json#cursor-2",
+    "source_at": "2026-01-01T00:03:01+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-exit-output-002",
+      "session_id": "claude-native-session-exit",
+      "message": {
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "The process ended without a native result event."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/process-exit.json#process-exit-after-cursor-2",
+    "event": {
+      "type": "process_exit",
+      "session_id": "claude-native-session-exit",
+      "exit_code": 0
+    }
+  }
+]

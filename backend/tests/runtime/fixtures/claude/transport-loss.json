@@ -1,0 +1,44 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/transport-loss.json#cursor-1",
+    "source_at": "2026-01-01T00:02:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-transport-init-001",
+      "session_id": "claude-native-session-transport"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/transport-loss.json#cursor-2",
+    "source_at": "2026-01-01T00:02:01+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-transport-output-002",
+      "session_id": "claude-native-session-transport",
+      "message": {
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "The transport is about to be interrupted."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source_cursor": 3,
+    "raw_evidence_ref": "fixture://claude/transport-loss.json#cursor-3",
+    "source_at": "2026-01-01T00:02:02+00:00",
+    "event": {
+      "type": "transport",
+      "subtype": "lost",
+      "session_id": "claude-native-session-transport",
+      "reason": "fixture socket closed"
+    }
+  }
+]

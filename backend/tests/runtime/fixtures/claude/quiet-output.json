@@ -1,0 +1,41 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/quiet-output.json#cursor-1",
+    "source_at": "2026-01-01T00:01:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-quiet-init-001",
+      "session_id": "claude-native-session-quiet"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/quiet-output.json#cursor-2",
+    "source_at": "2026-01-01T00:01:01+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-quiet-output-002",
+      "session_id": "claude-native-session-quiet",
+      "message": {
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "Output arrived, but no terminal result has been observed."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/quiet-output.json#quiet-after-cursor-2",
+    "event": {
+      "type": "quiet",
+      "session_id": "claude-native-session-quiet"
+    }
+  }
+]

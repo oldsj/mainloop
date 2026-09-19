@@ -1,0 +1,146 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-1",
+    "source_at": "2026-01-01T00:00:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-event-init-001",
+      "session_id": "claude-native-session-fixture",
+      "model": "claude-sonnet-fixture",
+      "version": "claude-code-fixture-0.1"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-2",
+    "source_at": "2026-01-01T00:00:01+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-event-output-002",
+      "session_id": "claude-native-session-fixture",
+      "message": {
+        "id": "claude-message-001",
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "I inspected the fixture workspace."
+          }
+        ],
+        "usage": {
+          "input_tokens": 11,
+          "output_tokens": 5
+        }
+      }
+    }
+  },
+  {
+    "source_cursor": 3,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-3",
+    "source_at": "2026-01-01T00:00:02+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-event-tool-003",
+      "session_id": "claude-native-session-fixture",
+      "message": {
+        "id": "claude-message-002",
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "claude-tool-001",
+            "name": "Read",
+            "input": {
+              "file_path": "/workspace/README.md"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source_cursor": 4,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-4",
+    "source_at": "2026-01-01T00:00:03+00:00",
+    "event": {
+      "type": "control_request",
+      "uuid": "claude-event-attention-004",
+      "session_id": "claude-native-session-fixture",
+      "request_id": "claude-permission-request-001",
+      "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Bash",
+        "input": {
+          "command": "git status --short"
+        },
+        "permission_suggestions": [],
+        "blocked_path": null
+      }
+    }
+  },
+  {
+    "source_cursor": 5,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-5",
+    "source_at": "2026-01-01T00:00:04+00:00",
+    "event": {
+      "type": "control_response",
+      "uuid": "claude-event-attention-resolved-005",
+      "session_id": "claude-native-session-fixture",
+      "response": {
+        "subtype": "success",
+        "request_id": "claude-permission-request-001",
+        "response": {
+          "behavior": "allow"
+        }
+      }
+    }
+  },
+  {
+    "source_cursor": 6,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-6",
+    "source_at": "2026-01-01T00:00:05+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "compact_boundary",
+      "uuid": "claude-event-compact-006",
+      "session_id": "claude-native-session-fixture"
+    }
+  },
+  {
+    "source_cursor": 7,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-7",
+    "source_at": "2026-01-01T00:00:06+00:00",
+    "event": {
+      "type": "result",
+      "subtype": "success",
+      "session_id": "claude-native-session-fixture",
+      "is_error": false,
+      "duration_ms": 1200,
+      "duration_api_ms": 900,
+      "num_turns": 1,
+      "result": "fixture session completed",
+      "usage": {
+        "input_tokens": 21,
+        "output_tokens": 8
+      }
+    }
+  },
+  {
+    "source_cursor": 8,
+    "raw_evidence_ref": "fixture://claude/stream.json#cursor-8",
+    "source_at": "2026-01-01T00:00:07+00:00",
+    "event": {
+      "type": "future_native_variant",
+      "subtype": "not-yet-modeled",
+      "uuid": "claude-event-unknown-008",
+      "session_id": "claude-native-session-fixture",
+      "opaque_value": {
+        "preserve": true
+      }
+    }
+  }
+]
