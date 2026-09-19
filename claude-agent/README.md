@@ -4,11 +4,7 @@ This container runs the Claude Code CLI for the mainloop backend.
 
 ## Current State
 
-The container currently just keeps running. In the future, this will:
-
-1. Accept HTTP requests from the backend
-2. Execute Claude Code CLI commands
-3. Stream responses back to the backend
+The service accepts requests from the backend, runs the current Claude integration in its workspace, and returns or streams results. Kubernetes jobs can also execute a bounded request and report the result through a callback.
 
 ## Usage
 
@@ -16,6 +12,6 @@ The backend communicates with this container via the internal Docker network.
 
 ## Configuration
 
-- Claude Code CLI uses the Max subscription
+- Claude Code uses the authentication configured for the runtime environment
 - Workspace is mounted at `/workspace`
 - Configuration from `~/.claude` is mounted read-only

@@ -45,7 +45,7 @@ You (phone/laptop)
 cp .env.example .env
 # Edit .env with your GitHub username (GHCR_USER) and domains
 
-# Setup Claude credentials (Linux - interactive login)
+# Optional: authenticate the current Claude integration
 make setup-claude-creds
 
 # Start all services
@@ -57,15 +57,7 @@ make dev
 
 ## Production Deployment
 
-```bash
-# Copy and edit the production config example
-cp k8s/apps/mainloop/overlays/prod/personal-config-patch.yaml.example \
-   k8s/apps/mainloop/overlays/prod/personal-config-patch.yaml
-# Edit with your domains and GitHub username
-
-# Deploy to k8s
-kubectl apply -k k8s/apps/mainloop/overlays/prod
-```
+The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and example overlays. Supply environment-specific images, domains, credentials, and storage through your deployment configuration, and apply production changes through your GitOps workflow.
 
 ## Project Structure
 
@@ -130,8 +122,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 **Guides**:
 
 - [Architecture](docs/architecture.md) - System design and data flow
-- [Development](docs/development.md) - Local setup and commands
-- [Contributing](CONTRIBUTING.md) - How to contribute
+- [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
 ## License
 

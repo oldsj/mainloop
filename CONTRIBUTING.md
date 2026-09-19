@@ -9,9 +9,10 @@ Thank you for your interest in contributing to mainloop! This document provides 
    ```bash
    cp .env.example .env
    # Edit .env with your configuration
-   make setup-claude-creds  # Setup Claude Code credentials
    make dev                 # Start local development environment
    ```
+
+   Authenticate the current Claude integration with `make setup-claude-creds` only when exercising live-agent paths.
 
 ## Development Workflow
 
@@ -89,9 +90,6 @@ cd frontend
 pnpm dev                 # Dev server
 pnpm check               # Type check
 
-# Deployment
-make deploy              # Full deploy to k8s
-make deploy-loop         # Watch for changes and auto-deploy
 ```
 
 ## Key Patterns
@@ -128,7 +126,7 @@ When modifying DBOS workflows:
 
 - Check existing issues and discussions
 - Read the documentation in `docs/`
-- See `CLAUDE.md` for detailed development guide
+- See `AGENTS.md` for repository-wide development guidance
 
 ## License
 
