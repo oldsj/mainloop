@@ -14,6 +14,8 @@ from enum import StrEnum
 
 from models.native_agent import (
     AttentionRequest,
+    CapabilityResult,
+    CapabilityState,
     NativeBinding,
     NativeEvent,
     ProviderExtension,
@@ -264,6 +266,21 @@ def _optional_text(value: object | None, label: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise CodexAdapterError(f"{label} must be a non-empty string when present")
     return value
+
+
+def _logical_message_id(*sources: Mapping[str, object]) -> str | None:
+    """Return the one logical message ID the record, event, and params agree on."""
+    values = {
+        _optional_text(source[key], "logical message ID")
+        for source in sources
+        for key in ("logical_message_id", "logicalMessageId")
+        if source.get(key) is not None
+    }
+    if len(values) > 1:
+        raise CodexAdapterError(
+            "logical message IDs disagree between record, event, and params"
+        )
+    return next(iter(values), None)
 
 
 def _required_field(record: Mapping[str, object], key: str) -> object:
@@ -828,12 +845,7 @@ def observe_codex_event(
         and attention_key not in attention_keys
     ):
         classification = _Classification("unknown", CodexEvidenceKind.UNKNOWN)
-    logical_message_id = _optional_text(
-        _first_value(
-            (record, event, params), ("logical_message_id", "logicalMessageId")
-        ),
-        "logical message ID",
-    )
+    logical_message_id = _logical_message_id(record, event, params)
     extension = _extension(native_binding, record, event, params, item, objects)
     normalized = NativeEvent(
         binding_id=native_binding.binding_id,
@@ -922,11 +934,159 @@ def normalize_codex_events(
     )
 
 
+def codex_fixture_capabilities() -> tuple[CapabilityResult, ...]:
+    """Return claims limited to the sanitized fixture boundary."""
+
+    return (
+        CapabilityResult(
+            capability="session_identity",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/session-001/event-001",
+            detail="thread/started preserves the native thread and event identity",
+        ),
+        CapabilityResult(
+            capability="thread_status",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/native-thread-status-001/event-001",
+            detail="structured thread status is not treated as turn completion",
+        ),
+        CapabilityResult(
+            capability="thread_isolation",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/foreign-thread-001/event-001",
+            detail=(
+                "events from a foreign native thread stay unknown, "
+                "with no activity, delivery, attention, or completion"
+            ),
+        ),
+        CapabilityResult(
+            capability="ordered_events",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/session-001/event-002",
+            detail=(
+                "source cursors, order, and raw evidence references are carried "
+                "into NativeEvent; the caller supplies them"
+            ),
+        ),
+        CapabilityResult(
+            capability="cursor_reconnect",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/session-001/event-002",
+            detail="replayed records stay idempotent through ContractStore",
+        ),
+        CapabilityResult(
+            capability="logical_message_identity",
+            state=CapabilityState.PROVED,
+            scope="fixture",
+            evidence_ref="fixture://codex/conflicting-logical-message-001/event-002",
+            detail=(
+                "conflicting logical message IDs across record, event, and "
+                "params are rejected before an event is emitted"
+            ),
+        ),
+        CapabilityResult(
+            capability="model_metadata",
+            state=CapabilityState.PARTIAL,
+            scope="fixture",
+            evidence_ref="fixture://codex/native-metadata-001/event-001",
+            detail="model, provider, and effort are preserved only when exposed",
+        ),
+        CapabilityResult(
+            capability="evidence_distinction",
+            state=CapabilityState.PARTIAL,
+            scope="fixture",
+            evidence_ref="fixture://codex/delivery-001/event-001",
+            detail=(
+                "receipt, delivery, output, completion, interruption, and quiet "
+                "evidence are separated only for the listed event shapes"
+            ),
+        ),
+        CapabilityResult(
+            capability="attention_request",
+            state=CapabilityState.PARTIAL,
+            scope="fixture",
+            evidence_ref="fixture://codex/native-attention-001/event-001",
+            detail=(
+                "generic payloads and the native approval, single-question "
+                "user-input, and serverRequest/resolved shapes are covered; "
+                "incomplete requests stay unknown"
+            ),
+        ),
+        CapabilityResult(
+            capability="usage",
+            state=CapabilityState.PARTIAL,
+            scope="fixture",
+            evidence_ref="fixture://codex/session-001/event-006",
+            detail=(
+                "input and output token counts are preserved when exposed; "
+                "attribution, limits, and billing are unknown"
+            ),
+        ),
+        CapabilityResult(
+            capability="continuation_observation",
+            state=CapabilityState.PARTIAL,
+            scope="fixture",
+            evidence_ref="fixture://codex/session-001/event-007",
+            detail="compaction and resume-shaped records are observed only",
+        ),
+        CapabilityResult(
+            capability="attention_response",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter cannot send an answer back to Codex",
+        ),
+        CapabilityResult(
+            capability="discovery",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter has no session discovery operation",
+        ),
+        CapabilityResult(
+            capability="session_creation",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter has no session creation operation",
+        ),
+        CapabilityResult(
+            capability="transport_ownership",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter has no transport and owns no native session",
+        ),
+        CapabilityResult(
+            capability="steering",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter has no send or steering operation",
+        ),
+        CapabilityResult(
+            capability="process_lifecycle",
+            state=CapabilityState.UNSUPPORTED,
+            scope="fixture",
+            detail="this adapter starts, stops, and monitors no Codex process",
+        ),
+        CapabilityResult(
+            capability="live_native_behavior",
+            state=CapabilityState.UNKNOWN,
+            detail="no subscription-backed Codex process was started",
+        ),
+    )
+
+
 class CodexFixtureAdapter:
     """Small, side-effect-free adapter facade used by fixture tests."""
 
     def __init__(self, binding: NativeBinding | Mapping[str, object]):
         self.binding = _codex_binding(binding)
+
+    @property
+    def capabilities(self) -> tuple[CapabilityResult, ...]:
+        return codex_fixture_capabilities()
 
     def observe(
         self,

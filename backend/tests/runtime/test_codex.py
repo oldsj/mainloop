@@ -11,12 +11,13 @@ from mainloop.runtime.codex import (
     CodexDeliverySignal,
     CodexEvidenceKind,
     CodexFixtureAdapter,
+    codex_fixture_capabilities,
     normalize_codex_event,
 )
 from mainloop.runtime.contracts import ContractStore
 from pydantic import ValidationError
 
-from models import NativeStatus
+from models import CapabilityResult, CapabilityState, NativeStatus
 
 FIXTURES = Path(__file__).parent / "fixtures" / "codex"
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -698,6 +699,92 @@ class CodexAdapterTests(unittest.TestCase):
         normalized = self.adapter.normalize_many(records)
 
         self.assertEqual([event.source_cursor for event in normalized], [4, 2, 1])
+
+    def test_agreeing_logical_message_id_is_preserved_and_nulls_are_ignored(self):
+        agreed, conflicting = load_jsonl("conflicting-logical-message.jsonl")[:2]
+        self.assertEqual(
+            self.adapter.normalize(agreed).logical_message_id, "logical-approval-001"
+        )
+
+        outer_null = deepcopy(conflicting)
+        outer_null["logical_message_id"] = None
+        self.assertEqual(
+            self.adapter.normalize(outer_null).logical_message_id,
+            "logical-other-002",
+        )
+
+        empty = deepcopy(conflicting)
+        empty["logical_message_id"] = ""
+        with self.assertRaises(CodexAdapterError):
+            self.adapter.normalize(empty)
+
+    def test_conflicting_logical_message_ids_are_rejected_without_ingestion(self):
+        agreed, *conflicts = load_jsonl("conflicting-logical-message.jsonl")
+        self.assertEqual(len(conflicts), 3)
+        store = ContractStore(binding())
+        store.record_message(message(), 1)
+        store.ingest(self.adapter.normalize(agreed), 1)
+        before = store.events
+        checkpoint = store.checkpoint(1)
+
+        # Envelope vs event, event vs params, and the snake/camel aliases in
+        # one envelope must each fail; no precedence picks a winner.
+        for record in conflicts:
+            with self.assertRaisesRegex(CodexAdapterError, "disagree"):
+                self.adapter.observe(record)
+            with self.assertRaisesRegex(CodexAdapterError, "disagree"):
+                normalize_codex_event(record, binding())
+        with self.assertRaisesRegex(CodexAdapterError, "disagree"):
+            self.adapter.normalize_many([agreed, *conflicts])
+
+        self.assertEqual(store.events, before)
+        self.assertEqual(store.checkpoint(1), checkpoint)
+        self.assertEqual(checkpoint.evidence_cursor, 1)
+
+    def test_capabilities_are_typed_and_scoped_to_fixtures(self):
+        capabilities = self.adapter.capabilities
+        by_name = {item.capability: item for item in capabilities}
+
+        self.assertEqual(capabilities, codex_fixture_capabilities())
+        self.assertEqual(len(by_name), len(capabilities))
+        self.assertTrue(
+            all(isinstance(item, CapabilityResult) for item in capabilities)
+        )
+        self.assertNotIn("live", {item.scope for item in capabilities})
+        for name in ("session_identity", "thread_isolation", "cursor_reconnect"):
+            self.assertEqual(by_name[name].state, CapabilityState.PROVED)
+            self.assertEqual(by_name[name].scope, "fixture")
+        for name in (
+            "model_metadata",
+            "evidence_distinction",
+            "attention_request",
+            "usage",
+            "continuation_observation",
+        ):
+            self.assertEqual(by_name[name].state, CapabilityState.PARTIAL)
+        for name in (
+            "attention_response",
+            "discovery",
+            "session_creation",
+            "transport_ownership",
+            "steering",
+            "process_lifecycle",
+        ):
+            self.assertEqual(by_name[name].state, CapabilityState.UNSUPPORTED)
+            self.assertIsNone(by_name[name].evidence_ref)
+        live = by_name["live_native_behavior"]
+        self.assertEqual(live.state, CapabilityState.UNKNOWN)
+        self.assertEqual(live.scope, "unverified")
+
+    def test_proved_and_partial_capabilities_cite_existing_fixture_evidence(self):
+        refs = {
+            record["raw_evidence_ref"]
+            for path in FIXTURES.glob("*.jsonl")
+            for record in load_jsonl(path.name)
+        }
+        for item in self.adapter.capabilities:
+            if item.state in (CapabilityState.PROVED, CapabilityState.PARTIAL):
+                self.assertIn(item.evidence_ref, refs, item.capability)
 
     def test_non_codex_binding_is_rejected(self):
         other = deepcopy(binding())

@@ -114,11 +114,26 @@ types, and invalid usage values are not silently repaired. An unknown but
 well-formed native event remains a normalized `unknown` event pointing at its
 raw evidence.
 
+A logical-message identifier may appear as `logical_message_id` or
+`logicalMessageId` on the envelope, the native event, or its `params`. Null
+values are ignored, but any two non-null values that differ, or an empty or
+non-string value, raise `CodexAdapterError` before an event is emitted. The
+adapter never picks a winner by precedence; only a single agreed identifier is
+carried into `NativeEvent.logical_message_id`.
+
 ## Capability evidence
 
 The following claims are fixture-scoped. They must not be upgraded to `live`
 until a separately authorized native proof exercises the actual installed
 Codex interface and transport.
+
+`codex_fixture_capabilities()` returns the same claims as typed shared
+`CapabilityResult` values, and `CodexFixtureAdapter.capabilities` exposes them.
+Each proved or partial claim carries `scope="fixture"` and an `evidence_ref`
+that names an existing sanitized fixture record; unsupported claims carry
+`scope="fixture"` and no evidence, and live behavior is a single `unknown`
+claim with unverified scope.
+The declarations are separate from provider metadata on `NativeEvent`.
 
 | Capability                                                                                   | Fixture status                                                                                                                                                                           | Live status                                                  |
 | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -131,7 +146,14 @@ Codex interface and transport.
 | Explicit attention request and resolution                                                    | partial: complete generic payloads and the native approval, single-question user-input, and `serverRequest/resolved` shapes above; replay and re-announcement do not duplicate attention | unproved; sending an answer back to Codex is not implemented |
 | Usage visibility                                                                             | partial: input/output counts when exposed                                                                                                                                                | unproved; attribution, limits, and billing remain unknown    |
 | Context continuation observation                                                             | partial: compaction/resume-shaped records only                                                                                                                                           | unproved                                                     |
-| Discovery, creation, transport ownership, steering, and process lifecycle                    | unknown/unsupported in this adapter                                                                                                                                                      | requires a gated live proof                                  |
+| Reject conflicting logical-message identifiers                                               | proved by `conflicting-logical-message.jsonl`; disagreement across envelope, event, and params is rejected and nothing is ingested                                                       | unproved                                                     |
+| Send an answer to an attention request                                                       | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Discovery                                                                                    | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Session creation                                                                             | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Transport ownership                                                                          | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Steering                                                                                     | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Process lifecycle                                                                            | unsupported in this adapter                                                                                                                                                              | requires a gated live proof                                  |
+| Live native behavior                                                                         | not applicable to fixtures                                                                                                                                                               | unknown; no Codex process was started                        |
 
 The fixture tests therefore establish deterministic normalization and recovery
 inputs, not that Codex emits these records in every mode or that a native
