@@ -1,0 +1,15 @@
+{
+  "fixture": "sanitized-codex-native-session",
+  "provenance": "synthetic fixture; not copied from a live Codex session",
+  "binding": {
+    "binding_id": "codex-binding-fixture",
+    "workspace_id": "workspace-codex-fixture",
+    "provider": "codex",
+    "runtime_type": "codex-app-server",
+    "native_session_id": "thread-codex-fixture-001",
+    "herdr_session_id": "herdr-session-fixture",
+    "herdr_agent_id": "codex-agent-fixture",
+    "creation_mode": "created",
+    "ownership_generation": 1
+  }
+}
