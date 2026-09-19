@@ -2,6 +2,22 @@
 
 from models.agent import AgentResponse, AgentTask
 from models.conversation import Conversation, Message
+from models.native_agent import (
+    AttentionItem,
+    AttentionRequest,
+    CapabilityResult,
+    CapabilityState,
+    Checkpoint,
+    DeliveryAttempt,
+    DeliveryState,
+    MessageEnvelope,
+    NativeBinding,
+    NativeEvent,
+    NativeStatus,
+    ProviderExtension,
+    ReconciliationEvidence,
+    WorkspaceBinding,
+)
 from models.session import (
     Session,
     SessionCreate,
@@ -43,4 +59,21 @@ __all__ = [
     "GitHubRepo",
     "GitHubPR",
     "Project",
+]
+
+__all__ += [
+    "AttentionItem",
+    "AttentionRequest",
+    "CapabilityResult",
+    "CapabilityState",
+    "Checkpoint",
+    "DeliveryAttempt",
+    "DeliveryState",
+    "MessageEnvelope",
+    "NativeBinding",
+    "NativeEvent",
+    "NativeStatus",
+    "ProviderExtension",
+    "ReconciliationEvidence",
+    "WorkspaceBinding",
 ]
