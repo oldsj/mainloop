@@ -26,12 +26,12 @@ The core experience is straightforward:
 
 ## Product experience
 
-| View | Purpose |
-| --- | --- |
-| Home | Current conversation, selected focus, meaningful updates, and requests for attention |
-| Projects | Project goals, tasks, decisions, notes, artifacts, checkpoints, and next actions |
-| Sessions | Agent sessions grouped by project and task, with conversation and terminal access |
-| Capacity | Provider availability, usage signals, queues, workspace resources, and trends |
+| View     | Purpose                                                                              |
+| -------- | ------------------------------------------------------------------------------------ |
+| Home     | Current conversation, selected focus, meaningful updates, and requests for attention |
+| Projects | Project goals, tasks, decisions, notes, artifacts, checkpoints, and next actions     |
+| Sessions | Agent sessions grouped by project and task, with conversation and terminal access    |
+| Capacity | Provider availability, usage signals, queues, workspace resources, and trends        |
 
 Mobile supports messaging, answering questions, approving decisions, reading results, steering work, and switching projects without terminal navigation. Desktop adds denser project, session, evidence, and workspace views.
 

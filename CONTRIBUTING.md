@@ -6,6 +6,7 @@ Thank you for your interest in contributing to mainloop! This document provides 
 
 1. **Fork the repository** and clone it locally
 2. **Set up your environment**:
+
    ```bash
    cp .env.example .env
    # Edit .env with your configuration
