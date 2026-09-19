@@ -584,19 +584,22 @@ def _extension(
     item: Mapping[str, object] | None,
     objects: tuple[Mapping[str, object], ...],
 ) -> ProviderExtension:
-    provider = _optional_text(
-        _first_value(
-            objects,
-            (
-                "provider",
-                "provider_name",
-                "providerName",
-                "model_provider",
-                "modelProvider",
+    provider = (
+        _optional_text(
+            _first_value(
+                objects,
+                (
+                    "provider",
+                    "provider_name",
+                    "providerName",
+                    "model_provider",
+                    "modelProvider",
+                ),
             ),
-        ),
-        "provider",
-    ) or binding.provider
+            "provider",
+        )
+        or binding.provider
+    )
     runtime_version = _optional_text(
         _first_value(objects, ("runtime_version", "runtimeVersion")),
         "runtime version",

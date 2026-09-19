@@ -20,7 +20,7 @@ JSON-shaped native Claude observations:
     "type": "assistant",
     "uuid": "claude-event-output-002",
     "session_id": "claude-native-session-fixture",
-    "message": {"content": [{"type": "text", "text": "..."}]}
+    "message": { "content": [{ "type": "text", "text": "..." }] }
   }
 }
 ```
@@ -39,20 +39,20 @@ types.
 
 ## Normalization
 
-| Native observation | Shared event | Evidence rule |
-| --- | --- | --- |
-| `system.init` | `activity` | Requires a session ID when building a binding; the binding preserves it. |
-| Assistant text | `output` | Text is activity/output, never completion by itself. |
-| Tool/thinking or other assistant activity | `activity` | Tool input is not interpreted as a product command. |
-| `stream_event` content/message updates | `output` or `activity` | A stream stop marker is not completion. |
-| `result` with `subtype=success` and `is_error=false` | `completed` | Both explicit success and the non-error flag are required. |
-| Explicit result error | `interrupted` | An error result is not a successful completion; `interruption.json#cursor-3` proves the fixture projection. |
-| `control_request` with `can_use_tool` | `attention` | A request ID is the correlation key for a pending boolean approval. |
-| Successful permission `control_response` with nested `response.behavior=allow/deny` | `attention_resolved` | Only explicit permission evidence and its request ID resolve attention. |
-| Other successful `control_response` records | `unknown` | Initialization, hooks, and permission-mode acknowledgements are not attention resolutions. |
-| `system.compact_boundary` | `continuation` | The observation does not implement or prove native resume behavior. |
-| Explicit `transport.lost` | `transport_lost` | The checkpoint becomes unknown; no retry or replay is implied. |
-| Unrecognized but structurally valid type | `unknown` | The native type, cursor, and raw evidence reference remain available. |
+| Native observation                                                                  | Shared event           | Evidence rule                                                                                               |
+| ----------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `system.init`                                                                       | `activity`             | Requires a session ID when building a binding; the binding preserves it.                                    |
+| Assistant text                                                                      | `output`               | Text is activity/output, never completion by itself.                                                        |
+| Tool/thinking or other assistant activity                                           | `activity`             | Tool input is not interpreted as a product command.                                                         |
+| `stream_event` content/message updates                                              | `output` or `activity` | A stream stop marker is not completion.                                                                     |
+| `result` with `subtype=success` and `is_error=false`                                | `completed`            | Both explicit success and the non-error flag are required.                                                  |
+| Explicit result error                                                               | `interrupted`          | An error result is not a successful completion; `interruption.json#cursor-3` proves the fixture projection. |
+| `control_request` with `can_use_tool`                                               | `attention`            | A request ID is the correlation key for a pending boolean approval.                                         |
+| Successful permission `control_response` with nested `response.behavior=allow/deny` | `attention_resolved`   | Only explicit permission evidence and its request ID resolve attention.                                     |
+| Other successful `control_response` records                                         | `unknown`              | Initialization, hooks, and permission-mode acknowledgements are not attention resolutions.                  |
+| `system.compact_boundary`                                                           | `continuation`         | The observation does not implement or prove native resume behavior.                                         |
+| Explicit `transport.lost`                                                           | `transport_lost`       | The checkpoint becomes unknown; no retry or replay is implied.                                              |
+| Unrecognized but structurally valid type                                            | `unknown`              | The native type, cursor, and raw evidence reference remain available.                                       |
 
 `process_exit` and `quiet` are runtime observations rather than native stream
 events. `ClaudeSessionNormalizer.observe_runtime()` retains their evidence and
@@ -73,19 +73,19 @@ event must match the bound session.
 The adapter exposes `claude_fixture_capabilities()` so callers can keep
 fixture-backed claims separate from live-provider claims.
 
-| Capability | State | Scope | Fixture evidence | Live status |
-| --- | --- | --- | --- | --- |
-| Session identity | proved | fixture | `stream.json#cursor-1` | Native discovery/attachment still needs live proof. |
-| Cursor ordering and reconnect deduplication | proved | fixture | `stream.json#cursor-2` | Runtime cursor durability and authenticated reconnect are unproved. |
-| Native completion parsing | proved | fixture | `stream.json#cursor-7` | A live Claude result/completion guarantee is unproved. |
-| Interruption projection | proved | fixture | `interruption.json#cursor-3` | Live error, cancellation, and process semantics are unproved. |
-| Permission attention request | partial | fixture | `stream.json#cursor-4` | Live exposure, user reply delivery, and resolution are unproved. |
-| Usage observation | partial | fixture | `stream.json#cursor-2` | Completeness, attribution, and billing semantics are unproved. |
-| Continuation observation | partial | fixture | `stream.json#cursor-6` | Native context continuation/resume behavior is unproved. |
-| Delivery receipt | unsupported | fixture | No receipt record in the fixture | Requires a separately proven native/runtime signal. |
-| Steering | unsupported | fixture | No send operation in this adapter | Requires an explicit runtime delivery contract. |
-| History export | unsupported | fixture | A stream is not a history export | Native history ownership remains with Claude. |
-| Live native behavior | unknown | unverified | No provider process was started | Must be established by a separate, authorized proof. |
+| Capability                                  | State       | Scope      | Fixture evidence                  | Live status                                                         |
+| ------------------------------------------- | ----------- | ---------- | --------------------------------- | ------------------------------------------------------------------- |
+| Session identity                            | proved      | fixture    | `stream.json#cursor-1`            | Native discovery/attachment still needs live proof.                 |
+| Cursor ordering and reconnect deduplication | proved      | fixture    | `stream.json#cursor-2`            | Runtime cursor durability and authenticated reconnect are unproved. |
+| Native completion parsing                   | proved      | fixture    | `stream.json#cursor-7`            | A live Claude result/completion guarantee is unproved.              |
+| Interruption projection                     | proved      | fixture    | `interruption.json#cursor-3`      | Live error, cancellation, and process semantics are unproved.       |
+| Permission attention request                | partial     | fixture    | `stream.json#cursor-4`            | Live exposure, user reply delivery, and resolution are unproved.    |
+| Usage observation                           | partial     | fixture    | `stream.json#cursor-2`            | Completeness, attribution, and billing semantics are unproved.      |
+| Continuation observation                    | partial     | fixture    | `stream.json#cursor-6`            | Native context continuation/resume behavior is unproved.            |
+| Delivery receipt                            | unsupported | fixture    | No receipt record in the fixture  | Requires a separately proven native/runtime signal.                 |
+| Steering                                    | unsupported | fixture    | No send operation in this adapter | Requires an explicit runtime delivery contract.                     |
+| History export                              | unsupported | fixture    | A stream is not a history export  | Native history ownership remains with Claude.                       |
+| Live native behavior                        | unknown     | unverified | No provider process was started   | Must be established by a separate, authorized proof.                |
 
 `proved` and `partial` in this table mean that the normalizer behavior is
 covered by sanitized fixtures. They do not mean that the corresponding live

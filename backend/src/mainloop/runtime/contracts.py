@@ -189,7 +189,7 @@ class ContractStore:
     def reconcile(
         self, raw: ReconciliationEvidence | dict, generation: int
     ) -> DeliveryAttempt:
-        """Current owner may resolve historical uncertainty using correlated evidence."""
+        """Resolve historical uncertainty using correlated evidence as current owner."""
         self._fence(generation)
         evidence = ReconciliationEvidence.model_validate(raw)
         old = self._attempts[evidence.attempt_id]

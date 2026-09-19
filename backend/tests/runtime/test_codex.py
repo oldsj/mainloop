@@ -12,12 +12,11 @@ from mainloop.runtime.codex import (
     CodexEvidenceKind,
     CodexFixtureAdapter,
     normalize_codex_event,
-    observe_codex_event,
 )
 from mainloop.runtime.contracts import ContractStore
-from models import NativeStatus
 from pydantic import ValidationError
 
+from models import NativeStatus
 
 FIXTURES = Path(__file__).parent / "fixtures" / "codex"
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -99,8 +98,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_installed_camelcase_item_types_and_token_usage_are_normalized(self):
         observations = tuple(
-            self.adapter.observe(record)
-            for record in load_jsonl("native-wire.jsonl")
+            self.adapter.observe(record) for record in load_jsonl("native-wire.jsonl")
         )
 
         self.assertEqual(
@@ -122,9 +120,7 @@ class CodexAdapterTests(unittest.TestCase):
             observations[0].event.extension.native_event_id,
             "native-agent-message-001",
         )
-        self.assertEqual(
-            observations[5].event.native_type, "thread/tokenUsage/updated"
-        )
+        self.assertEqual(observations[5].event.native_type, "thread/tokenUsage/updated")
         self.assertEqual(observations[5].event.extension.input_tokens, 321)
         self.assertEqual(observations[5].event.extension.output_tokens, 45)
         self.assertEqual(
@@ -514,9 +510,7 @@ class CodexAdapterTests(unittest.TestCase):
 
         # Given the accepted keys, an unmatched resolution keeps its evidence
         # and lets the cursor advance without inventing attention state.
-        unmatched = self.adapter.observe(
-            resolution, source_cursor=1, attention_keys=()
-        )
+        unmatched = self.adapter.observe(resolution, source_cursor=1, attention_keys=())
         self.assertEqual(unmatched.event.normalized_type, "unknown")
         self.assertEqual(unmatched.evidence_kind, CodexEvidenceKind.UNKNOWN)
         self.assertIsNone(unmatched.event.attention_key)

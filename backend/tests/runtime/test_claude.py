@@ -11,8 +11,9 @@ from mainloop.runtime.claude import (
     binding_from_init,
 )
 from mainloop.runtime.contracts import ContractStore
-from models import CapabilityState, NativeStatus
 from pydantic import ValidationError
+
+from models import CapabilityState, NativeStatus
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 FIXTURES = Path(__file__).parent / "fixtures" / "claude"
@@ -67,9 +68,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
                 "unknown",
             ],
         )
-        self.assertEqual(
-            [event.source_cursor for event in events], list(range(1, 9))
-        )
+        self.assertEqual([event.source_cursor for event in events], list(range(1, 9)))
         self.assertEqual(
             events[1].raw_evidence_ref,
             "fixture://claude/stream.json#cursor-2",
@@ -206,9 +205,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
             unknown.raw_evidence_ref,
             "fixture://claude/stream.json#cursor-8",
         )
-        self.assertEqual(
-            unknown.extension.native_event_id, "claude-event-unknown-008"
-        )
+        self.assertEqual(unknown.extension.native_event_id, "claude-event-unknown-008")
 
     def test_missing_usage_and_completion_evidence_do_not_create_defaults(self):
         records = fixture("stream.json")
@@ -225,9 +222,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
 
         missing_error_flag = copy.deepcopy(records[6])
         del missing_error_flag["event"]["is_error"]
-        not_proven_complete = normalizer.normalize(
-            missing_error_flag, ingested_at=NOW
-        )
+        not_proven_complete = normalizer.normalize(missing_error_flag, ingested_at=NOW)
         self.assertEqual(not_proven_complete.normalized_type, "unknown")
 
     def test_native_error_result_projects_to_interrupted(self):
@@ -243,9 +238,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
         store = ContractStore(normalizer.binding)
         for event in events:
             store.ingest(event, 1)
-        self.assertEqual(
-            store.checkpoint(1).native_status, NativeStatus.INTERRUPTED
-        )
+        self.assertEqual(store.checkpoint(1).native_status, NativeStatus.INTERRUPTED)
 
     def test_native_completion_process_exit_quiet_and_transport_loss_are_distinct(
         self,
@@ -264,9 +257,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
         quiet_store = ContractStore(quiet_normalizer.binding)
         for event in quiet_normalizer.normalize_many(quiet[:2], ingested_at=NOW):
             quiet_store.ingest(event, 1)
-        self.assertEqual(
-            quiet_store.checkpoint(1).native_status, NativeStatus.ACTIVE
-        )
+        self.assertEqual(quiet_store.checkpoint(1).native_status, NativeStatus.ACTIVE)
         quiet_observation = quiet_normalizer.observe_runtime(quiet[2])
         self.assertEqual(quiet_observation.kind, "quiet")
         self.assertEqual(len(quiet_store.events), 2)
@@ -300,17 +291,13 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
 
     def test_capability_matrix_labels_live_gaps_and_unsupported_operations(self):
         records = fixture("stream.json")
-        capabilities = {
-            item.capability: item for item in adapter(records).capabilities
-        }
+        capabilities = {item.capability: item for item in adapter(records).capabilities}
 
         self.assertEqual(capabilities["native_completion"].scope, "fixture")
         self.assertEqual(
             capabilities["native_completion"].state, CapabilityState.PROVED
         )
-        self.assertEqual(
-            capabilities["interruption"].state, CapabilityState.PROVED
-        )
+        self.assertEqual(capabilities["interruption"].state, CapabilityState.PROVED)
         self.assertEqual(
             capabilities["delivery_receipt"].state, CapabilityState.UNSUPPORTED
         )
@@ -318,9 +305,7 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
         self.assertEqual(
             capabilities["live_native_behavior"].state, CapabilityState.UNKNOWN
         )
-        self.assertEqual(
-            capabilities["live_native_behavior"].scope, "unverified"
-        )
+        self.assertEqual(capabilities["live_native_behavior"].scope, "unverified")
 
 
 if __name__ == "__main__":
