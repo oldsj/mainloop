@@ -30,6 +30,27 @@ class Settings(BaseSettings):
     claude_model: str = "sonnet"  # Main thread model
     claude_worker_model: str = "opus"  # Worker model (for background tasks)
 
+    # Native agents under Herdr (workspace pod reached over Kubernetes pod-exec)
+    workspace_namespace: str = "herdr-spike"
+    workspace_pod: str = "workspace-0"
+    main_pod: str = (
+        "main-0"  # pod that runs the native main thread (scratch cwd, no repo)
+    )
+
+    # Native main thread (context model). MAIN_THREAD_MODE=native replaces the SDK chat path.
+    main_thread_mode: str = "sdk"  # sdk | native
+    main_thread_model: str = "sonnet"
+    main_thread_effort: str = "medium"
+    # Rotation: cut to a fresh native session when the context grew by this many tokens above
+    # the lineage's first-turn baseline, or after this many completed turns (whichever first).
+    main_rotate_tokens: int = 20000
+    main_rotate_turns: int = 12
+    main_carry_over_messages: int = 6
+    native_child_kinds: str = "claude,codex"
+    agent_token_key: str = (
+        ""  # HMAC key for per-binding agent tokens (falls back to DB password)
+    )
+
     # GitHub
     github_token: str = ""
 

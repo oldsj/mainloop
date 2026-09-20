@@ -22,9 +22,12 @@ lint:
     # K8s security best practices - remaining issues are acceptable for internal Tailscale-only services
     # Fixed: container security contexts, health probes, RBAC over-permissions
     # Remaining: image tags/digests, readOnlyRootFilesystem, NetworkPolicy, etc.
+    # spikes/**: local-kind spike workspace pods (imagePullPolicy Never, no probes, no NetworkPolicy);
+    # never deployed outside the local kind cluster
     - linters: [checkov, trivy]
       paths:
         - k8s/**
+        - spikes/**
     # B104: Binding to 0.0.0.0 is intentional for containerized services
     # B608: False positives - SQL uses parameterized queries, column names are from internal code
     # B110: Intentional silent failure for optional API features
@@ -56,7 +59,7 @@ lint:
     - shfmt@3.6.0
     - taplo@0.10.0
     - terrascan@1.19.9
-    - trivy@0.68.2
+    - trivy@0.74.0
     - trufflehog@3.92.4
     - yamllint@1.37.1
 actions:

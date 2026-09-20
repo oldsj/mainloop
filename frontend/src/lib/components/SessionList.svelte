@@ -17,6 +17,7 @@
 <div class="flex h-full flex-col bg-term-bg">
   <!-- Header -->
   <div class="flex items-center justify-between border-b border-term-border p-3">
+    <a href="/agents" class="mr-2 border border-term-accent px-2 py-0.5 text-xs text-term-accent hover:bg-term-accent/10" data-testid="new-agent-link">+ agent</a>
     <h2 class="text-sm font-medium text-term-fg">
       Sessions
       {#if $activeSessions.length > 0}

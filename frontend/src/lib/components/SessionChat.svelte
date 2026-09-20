@@ -10,8 +10,11 @@
   let isLoading = $state(false);
   let error = $state<string | null>(null);
 
-  onMount(async () => {
-    await loadSession();
+  onMount(() => {
+    loadSession();
+    // Native agent replies arrive from the journal after the POST returns: keep reading.
+    const timer = setInterval(loadSession, 2500);
+    return () => clearInterval(timer);
   });
 
   async function loadSession() {
@@ -19,6 +22,7 @@
       const result = await api.getSessionConversation(sessionId);
       session = result.session;
       messages = result.messages;
+      isLoading = session.status === 'active';
     } catch (e) {
       console.error('Failed to load session:', e);
       error = 'Failed to load session';

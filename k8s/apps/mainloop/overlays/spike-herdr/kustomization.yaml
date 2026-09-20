@@ -1,0 +1,43 @@
+# Local-kind overlay for the native-agent slice: the `test` overlay (backend, frontend, Postgres)
+# without the Claude Agent SDK controller, which this slice does not use. The workspace pod
+# (Herdr + real claude/codex), its exec Role and the credential Secrets live in
+# spikes/k8s-herdr-agents (applied by build-real-agents.sh); Secret values are created by path
+# and never appear in manifests.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../test
+
+patches:
+  - target:
+      kind: Deployment
+      name: mainloop-agent-controller
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+
+  # Native main thread (plan r7): Claude under Herdr in pod main-0 replaces the SDK chat path.
+  # The SDK path stays available behind MAIN_THREAD_MODE=sdk. Model/effort/rotation use defaults
+  # (sonnet, medium, 20k tokens above baseline or 12 turns).
+  - target:
+      kind: Deployment
+      name: mainloop-backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: MAIN_THREAD_MODE, value: native }
+
+# The test overlay remaps ghcr.io/yourusername/*, but the base uses ghcr.io/oldsj/*; remap those
+# to the locally built, kind-loaded images (imagePullPolicy is Never).
+images:
+  - name: ghcr.io/oldsj/mainloop-backend
+    newName: mainloop-backend
+    newTag: test
+  - name: ghcr.io/oldsj/mainloop-frontend
+    newName: mainloop-frontend
+    newTag: test
+  - name: ghcr.io/oldsj/mainloop-agent-controller
+    newName: mainloop-agent-controller
+    newTag: test

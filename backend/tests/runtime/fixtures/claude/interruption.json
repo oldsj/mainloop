@@ -1,0 +1,48 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/interruption.json#cursor-1",
+    "source_at": "2026-01-01T00:04:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-interruption-init-001",
+      "session_id": "claude-native-session-interrupted"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/interruption.json#cursor-2",
+    "source_at": "2026-01-01T00:04:01+00:00",
+    "event": {
+      "type": "assistant",
+      "uuid": "claude-interruption-output-002",
+      "session_id": "claude-native-session-interrupted",
+      "message": {
+        "role": "assistant",
+        "model": "claude-sonnet-fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "The native run encountered an error."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source_cursor": 3,
+    "raw_evidence_ref": "fixture://claude/interruption.json#cursor-3",
+    "source_at": "2026-01-01T00:04:02+00:00",
+    "event": {
+      "type": "result",
+      "subtype": "error_during_execution",
+      "session_id": "claude-native-session-interrupted",
+      "is_error": true,
+      "duration_ms": 800,
+      "duration_api_ms": 600,
+      "num_turns": 1,
+      "result": "fixture native error"
+    }
+  }
+]

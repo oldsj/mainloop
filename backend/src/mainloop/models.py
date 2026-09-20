@@ -32,3 +32,6 @@ class ChatResponse(BaseModel):
     conversation_id: str
     message: Message | None = None  # None when session spawned
     spawned_session_id: str | None = None  # Session ID if one was spawned
+    # Native main thread: the reply arrives asynchronously from the journal mirror.
+    pending: bool = False
+    delivery_message_id: str | None = None

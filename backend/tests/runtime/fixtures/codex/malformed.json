@@ -1,0 +1,10 @@
+{
+  "source_cursor": "2",
+  "ownership_generation": 1,
+  "ingested_at": "2026-01-01T00:05:01+00:00",
+  "raw_evidence_ref": "fixture://codex/malformed-001/event-001",
+  "event": {
+    "type": "turn/completed",
+    "params": {}
+  }
+}

@@ -163,6 +163,104 @@ CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 
+-- Native agent bindings (one per session bound to a real agent under Herdr)
+CREATE TABLE IF NOT EXISTS native_bindings (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    kind TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    native_session_id TEXT,
+    approval_policy TEXT NOT NULL,
+    model TEXT,
+    herdr_pane_id TEXT,
+    herdr_terminal_id TEXT,
+    herdr_workspace_id TEXT,
+    pod_uid TEXT,
+    generation INTEGER NOT NULL DEFAULT 1,
+    journal_cursor INTEGER NOT NULL DEFAULT 0,
+    journal_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Delivery ledger: one row per user message; the journal is the receipt
+CREATE TABLE IF NOT EXISTS native_deliveries (
+    message_id TEXT PRIMARY KEY REFERENCES messages(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    state TEXT NOT NULL,
+    cursor_before INTEGER,
+    evidence_ref TEXT,
+    detail TEXT,
+    generation INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_native_deliveries_session ON native_deliveries(session_id);
+
+-- Context model (main thread window, session tree, topics). Additive to the r6 tables.
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS pod TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS topic_id TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS token_hash TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS standing_hash TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS lineage_seq INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS context_tokens INTEGER;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS baseline_tokens INTEGER;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS turns_in_lineage INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS reported_at TIMESTAMPTZ;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS continuations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'user';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(token_hash) WHERE token_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
+
+-- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
+CREATE TABLE IF NOT EXISTS topics (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status_line TEXT NOT NULL DEFAULT '',
+    checkpoint TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, name)
+);
+-- Notes, decisions, pending intent and child reports for a topic (source-linked).
+CREATE TABLE IF NOT EXISTS topic_records (
+    id TEXT PRIMARY KEY,
+    topic_id TEXT NOT NULL REFERENCES topics(id),
+    kind TEXT NOT NULL,          -- note | decision | pending | report
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',   -- pending: open | done
+    session_id TEXT,             -- the session that wrote it
+    evidence_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_topic_records_topic ON topic_records(topic_id, created_at);
+
+-- Lineage of native sessions behind one main-thread binding (rotation, never compaction).
+CREATE TABLE IF NOT EXISTS native_lineage (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    seq INTEGER NOT NULL,
+    native_session_id TEXT NOT NULL,
+    started_reason TEXT NOT NULL,
+    carry_over_hash TEXT,
+    ended_reason TEXT,
+    writeout TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at TIMESTAMPTZ,
+    PRIMARY KEY (session_id, seq)
+);
+
+-- Control-plane events observed in native journals (idempotent per evidence ref).
+CREATE TABLE IF NOT EXISTS native_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,          -- continuation
+    detail TEXT,
+    evidence_ref TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (session_id, kind, evidence_ref)
+);
+
 -- Session notifications (ephemeral)
 CREATE TABLE IF NOT EXISTS session_notifications (
     id TEXT PRIMARY KEY,
@@ -969,7 +1067,10 @@ class Database:
                 """
                 SELECT c.* FROM conversations c
                 WHERE c.user_id = $1
-                AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.conversation_id = c.id)
+                AND NOT EXISTS (
+                    SELECT 1 FROM sessions s WHERE s.conversation_id = c.id
+                    AND NOT EXISTS (SELECT 1 FROM native_bindings b WHERE b.session_id = s.id AND b.role = 'main')
+                )
                 ORDER BY c.updated_at DESC
                 LIMIT $2
                 """,
@@ -1290,7 +1391,11 @@ class Database:
         if not self._pool:
             return []
 
-        query = "SELECT * FROM sessions WHERE user_id = $1"
+        # The native main thread's session row is the conversation itself, not a listed session.
+        query = (
+            "SELECT * FROM sessions WHERE user_id = $1 AND NOT EXISTS "
+            "(SELECT 1 FROM native_bindings b WHERE b.session_id = sessions.id AND b.role = 'main')"
+        )
         params: list[Any] = [user_id]
 
         if status:

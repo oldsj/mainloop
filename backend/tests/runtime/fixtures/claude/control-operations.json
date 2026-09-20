@@ -1,0 +1,73 @@
+[
+  {
+    "source_cursor": 1,
+    "raw_evidence_ref": "fixture://claude/control-operations.json#cursor-1",
+    "source_at": "2026-01-01T00:05:00+00:00",
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "claude-control-init-001",
+      "session_id": "claude-native-session-controls"
+    }
+  },
+  {
+    "source_cursor": 2,
+    "raw_evidence_ref": "fixture://claude/control-operations.json#cursor-2",
+    "source_at": "2026-01-01T00:05:01+00:00",
+    "event": {
+      "type": "control_request",
+      "session_id": "claude-native-session-controls",
+      "request_id": "claude-initialize-001",
+      "request": {
+        "subtype": "initialize",
+        "hooks": null
+      }
+    }
+  },
+  {
+    "source_cursor": 3,
+    "raw_evidence_ref": "fixture://claude/control-operations.json#cursor-3",
+    "source_at": "2026-01-01T00:05:02+00:00",
+    "event": {
+      "type": "control_response",
+      "session_id": "claude-native-session-controls",
+      "response": {
+        "subtype": "success",
+        "request_id": "claude-initialize-001",
+        "response": {
+          "commands": []
+        }
+      }
+    }
+  },
+  {
+    "source_cursor": 4,
+    "raw_evidence_ref": "fixture://claude/control-operations.json#cursor-4",
+    "source_at": "2026-01-01T00:05:03+00:00",
+    "event": {
+      "type": "control_request",
+      "session_id": "claude-native-session-controls",
+      "request_id": "claude-permission-mode-001",
+      "request": {
+        "subtype": "set_permission_mode",
+        "mode": "default"
+      }
+    }
+  },
+  {
+    "source_cursor": 5,
+    "raw_evidence_ref": "fixture://claude/control-operations.json#cursor-5",
+    "source_at": "2026-01-01T00:05:04+00:00",
+    "event": {
+      "type": "control_response",
+      "session_id": "claude-native-session-controls",
+      "response": {
+        "subtype": "success",
+        "request_id": "claude-permission-mode-001",
+        "response": {
+          "mode": "default"
+        }
+      }
+    }
+  }
+]

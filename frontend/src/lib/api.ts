@@ -29,6 +29,8 @@ export interface ChatResponse {
   conversation_id: string;
   message: Message | null; // null when session spawned
   spawned_session_id?: string; // Session ID if one was spawned
+  pending?: boolean; // native main thread: the reply is mirrored from the journal; poll the conversation
+  delivery_message_id?: string | null;
 }
 
 export type QueueItemType =
@@ -125,6 +127,8 @@ export interface Session {
   description: string;
   prompt: string;
   conversation_id: string;
+  parent_session_id?: string | null; // native child: the delegating session
+  topic?: string | null;
   status: SessionStatus;
   worker_pod_name: string | null;
   created_at: string;
@@ -151,12 +155,81 @@ export interface Session {
   result: Record<string, unknown> | null;
 }
 
+export interface NativeDelivery {
+  message_id: string;
+  state: string;
+  evidence_ref: string | null;
+  detail: string | null;
+}
+
+export interface TopicLine {
+  name: string;
+  status_line: string;
+  pending: number;
+}
+
+export interface MainThreadInfo {
+  mode: 'sdk' | 'native';
+  session_id: string | null;
+  conversation_id: string | null;
+  native: NativeSessionInfo | null;
+  topics: TopicLine[];
+}
+
+export interface TopicRecord {
+  id: string;
+  kind: 'note' | 'decision' | 'pending' | 'report';
+  text: string;
+  status: string;
+  session_id: string | null;
+  created_at: string;
+}
+
+export interface TopicWithRecords {
+  id: string;
+  name: string;
+  status_line: string;
+  records: TopicRecord[];
+}
+
+export interface NativeSessionInfo {
+  session_id: string;
+  kind: 'claude' | 'codex';
+  role?: 'agent' | 'main' | 'child';
+  parent_session_id?: string | null;
+  topic?: string | null;
+  lineage_seq?: number;
+  context_tokens?: number | null;
+  baseline_tokens?: number | null;
+  turns_in_lineage?: number;
+  continuations?: number;
+  rotating?: boolean;
+  agent_name: string;
+  native_session_id: string | null;
+  model: string | null;
+  approval_policy: string;
+  herdr_pane_id: string | null;
+  herdr_terminal_id: string | null;
+  herdr_workspace_id: string | null;
+  workspace_pod: string | null;
+  workspace_pod_uid: string | null;
+  workspace_ready: boolean;
+  agent_live: boolean | null;
+  generation: number;
+  journal_cursor: number;
+  journal_ref: string | null;
+  turn_in_flight: boolean;
+  deliveries: NativeDelivery[];
+  note: string | null;
+}
+
 export interface SessionCreate {
   title: string;
   description: string;
   prompt: string;
   repo_url?: string;
   anchor_message_id?: string;
+  agent_kind?: 'claude' | 'codex';
 }
 
 export interface SessionNotification {
@@ -304,6 +377,31 @@ export const api = {
       body: JSON.stringify(request)
     });
     if (!response.ok) throw new Error('Failed to create session');
+    return response.json();
+  },
+
+  async getMainThread(): Promise<MainThreadInfo> {
+    const response = await fetch(`${API_URL}/main-thread`);
+    if (!response.ok) throw new Error('Failed to get main thread');
+    return response.json();
+  },
+
+  async rotateMainThread(): Promise<Record<string, unknown>> {
+    const response = await fetch(`${API_URL}/main-thread/rotate`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to rotate main thread');
+    return response.json();
+  },
+
+  async listTopics(): Promise<TopicWithRecords[]> {
+    const response = await fetch(`${API_URL}/topics`);
+    if (!response.ok) throw new Error('Failed to list topics');
+    return response.json();
+  },
+
+  async getSessionNative(sessionId: string): Promise<NativeSessionInfo | null> {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}/native`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error('Failed to get native session info');
     return response.json();
   },
 

@@ -156,6 +156,7 @@
         <span class="text-term-fg-muted">$</span> mainloop
       </h1>
       <div class="flex items-center gap-3">
+        <a href="/agents" class="text-sm text-term-accent hover:underline" data-testid="header-new-agent">new agent session</a>
         <ThemeSelector />
         <TasksBadge />
       </div>
