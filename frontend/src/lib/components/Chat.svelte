@@ -5,8 +5,13 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
   import { allSessionMessages } from '$lib/stores/sessionMessages';
-  import { api } from '$lib/api';
+  import { api, type MainThreadInfo } from '$lib/api';
   import ConversationView from './ConversationView.svelte';
+  import NativeIdentityStrip from './NativeIdentityStrip.svelte';
+
+  // Native main thread (MAIN_THREAD_MODE=native): a Claude session under Herdr whose window
+  // Mainloop rotates. The reply is mirrored from the native journal, so we poll for it.
+  let mainThread = $state<MainThreadInfo | null>(null);
 
   let { messages, isLoading } = $derived($conversationStore);
 
@@ -27,6 +32,16 @@
   });
 
   onMount(async () => {
+    try {
+      mainThread = await api.getMainThread();
+      if (mainThread.mode === 'native' && mainThread.conversation_id) {
+        const { conversation, messages } = await api.getConversation(mainThread.conversation_id);
+        conversationStore.setConversation(conversation, messages);
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to load main thread info:', error);
+    }
     // Load the most recent conversation on startup
     try {
       const { conversations } = await api.listConversations();
@@ -83,6 +98,14 @@
         });
       }
 
+      if (response.pending) {
+        // Native main thread: the send is ledgered; poll until the turn completes.
+        await pollNativeReply(response.conversation_id);
+        sessions.fetchSessions();
+        mainThread = await api.getMainThread();
+        return;
+      }
+
       // Check if a session was spawned (no assistant message)
       if (response.spawned_session_id) {
         // Reload conversation to get real message IDs (needed for anchor matching)
@@ -103,6 +126,18 @@
       console.error('Failed to send message:', error);
     } finally {
       conversationStore.setLoading(false);
+    }
+  }
+
+  async function pollNativeReply(conversationId: string) {
+    conversationStore.setLoading(true);
+    for (let i = 0; i < 180; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const { messages: fresh } = await api.getConversation(conversationId);
+      conversationStore.setMessages(fresh);
+      const info = await api.getMainThread();
+      mainThread = info;
+      if (info.native && !info.native.turn_in_flight) return;
     }
   }
 
@@ -131,6 +166,23 @@
   }
 </script>
 
+{#if mainThread?.mode === 'native' && mainThread.session_id}
+  <NativeIdentityStrip sessionId={mainThread.session_id} />
+  <div
+    class="border-term-border text-term-fg-muted border-b px-4 py-1 font-mono text-xs"
+    data-testid="topic-index"
+  >
+    topics:
+    {#each mainThread.topics as t (t.name)}
+      <span class="mr-3" data-testid="topic-line"
+        >{t.name}{t.status_line ? ` (${t.status_line})` : ''} [{t.pending} pending]</span
+      >
+    {:else}
+      <span>none yet</span>
+    {/each}
+  </div>
+{/if}
+
 <!-- Always show main thread - sessions appear inline -->
 <ConversationView
   {messages}
@@ -140,4 +192,3 @@
   emptyStateTitle="$ mainloop --help"
   emptyStateMessage="Start a conversation to begin"
 />
-

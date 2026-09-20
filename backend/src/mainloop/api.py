@@ -1,6 +1,7 @@
 """FastAPI application with DBOS durable workflows."""
 
 import logging
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ from mainloop.models import (
     ConversationListResponse,
     ConversationResponse,
 )
+from mainloop.runtime.agent_api import router as agent_api_router
 from mainloop.services.chat_handler import process_message
 from mainloop.services.github_pr import (
     CommitSummary,
@@ -40,6 +42,7 @@ from pydantic import BaseModel
 
 from models import (
     MainThread,
+    NativeSessionInfo,
     Project,
     QueueItem,
     QueueItemResponse,
@@ -73,8 +76,7 @@ def _apply_mock_github():
     if not settings.use_mock_github:
         return
 
-    import mainloop.services.github_pr as github_pr
-    from mainloop.services import github_mock
+    from mainloop.services import github_mock, github_pr
 
     # Replace functions with mocks
     funcs_to_mock = [
@@ -113,6 +115,15 @@ async def startup_event():
 
     # Launch DBOS
     DBOS.launch()
+
+    if settings.main_thread_mode == "native":
+        import asyncio
+
+        from mainloop.runtime import native_sessions
+
+        app.state.native_reconcile = asyncio.create_task(
+            native_sessions.reconcile_loop()
+        )
 
 
 @app.on_event("shutdown")
@@ -216,6 +227,9 @@ async def chat(
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
+    if settings.main_thread_mode == "native":
+        return await _chat_native(request, user_id)
+
     # Ensure main thread is running (for background coordination)
     main_thread_id = get_or_start_main_thread(user_id)
 
@@ -290,6 +304,96 @@ async def chat(
     )
 
 
+async def _chat_native(request: ChatRequest, user_id: str) -> ChatResponse:
+    """Native main thread: record + deliver to the Claude session under Herdr (ledgered). The
+    reply is mirrored from the native journal, so the client polls the conversation."""
+    from mainloop.runtime import delegation, native_sessions
+
+    binding = await delegation.ensure_main_session(user_id)
+    session = await db.get_session(binding["session_id"])
+    try:
+        message_id = await native_sessions.submit_message(
+            binding["session_id"], request.message
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ChatResponse(
+        conversation_id=session.conversation_id,
+        pending=True,
+        delivery_message_id=message_id,
+    )
+
+
+class MainThreadInfo(BaseModel):
+    mode: str
+    session_id: str | None = None
+    conversation_id: str | None = None
+    native: NativeSessionInfo | None = None
+    topics: list[dict] = []
+
+
+@app.get("/main-thread", response_model=MainThreadInfo)
+async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=None)):
+    """Main-thread mode, native identity strip, and the topic index."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    if settings.main_thread_mode != "native":
+        return MainThreadInfo(mode=settings.main_thread_mode)
+    from mainloop.runtime import delegation, native_sessions
+
+    binding = await delegation.ensure_main_session(user_id)
+    await native_sessions.sync(binding["session_id"])
+    session = await db.get_session(binding["session_id"])
+    topics = await delegation._topic_lines(user_id)
+    return MainThreadInfo(
+        mode="native",
+        session_id=binding["session_id"],
+        conversation_id=session.conversation_id,
+        native=await native_sessions.identity(binding["session_id"]),
+        topics=[asdict(t) for t in topics],
+    )
+
+
+@app.post("/main-thread/rotate")
+async def rotate_main_thread(user_id: str = Header(alias="X-User-ID", default=None)):
+    """Force a rotation now (same path as the automatic trigger); used to prove the cut."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    from mainloop.runtime import delegation, native_sessions
+
+    binding = await delegation.ensure_main_session(user_id)
+    return await native_sessions.rotate(binding["session_id"], "manual")
+
+
+@app.get("/topics")
+async def list_topics(user_id: str = Header(alias="X-User-ID", default=None)):
+    """Topic index with records (notes, decisions, pending intent, reports) for the UI."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    async with db.connection() as conn:
+        topics = await conn.fetch(
+            "SELECT * FROM topics WHERE user_id=$1 ORDER BY updated_at DESC", user_id
+        )
+        out = []
+        for t in topics:
+            recs = await conn.fetch(
+                "SELECT id, kind, text, status, session_id, created_at FROM topic_records WHERE topic_id=$1 ORDER BY created_at DESC LIMIT 50",
+                t["id"],
+            )
+            out.append(
+                {
+                    "id": t["id"],
+                    "name": t["name"],
+                    "status_line": t["status_line"],
+                    "records": [dict(r) for r in recs],
+                }
+            )
+    return out
+
+
+app.include_router(agent_api_router)
+
+
 # ============= Conversation Endpoints =============
 
 
@@ -314,6 +418,20 @@ async def get_conversation(conversation_id: str):
     conversation = await db.get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if settings.main_thread_mode == "native":
+        from mainloop.runtime import native_sessions
+
+        async with db.connection() as conn:
+            main_sid = await conn.fetchval(
+                """SELECT b.session_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+                   WHERE b.role='main' AND s.conversation_id=$1""",
+                conversation_id,
+            )
+        if main_sid:
+            await native_sessions.sync(
+                main_sid
+            )  # mirror new native-journal evidence first
 
     messages = await db.get_messages(conversation_id)
     return ConversationResponse(
@@ -564,6 +682,18 @@ async def list_sessions(
 
     session_status = SessionStatus(status) if status else None
     sessions = await db.list_sessions(user_id=user_id, status=session_status)
+    if sessions:
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT b.session_id, b.parent_session_id, t.name AS topic FROM native_bindings b
+                   LEFT JOIN topics t ON t.id=b.topic_id WHERE b.session_id = ANY($1)""",
+                [s.id for s in sessions],
+            )
+        info = {r["session_id"]: r for r in rows}
+        for s in sessions:
+            if s.id in info:
+                s.parent_session_id = info[s.id]["parent_session_id"]
+                s.topic = info[s.id]["topic"]
     return sessions
 
 
@@ -627,6 +757,15 @@ async def create_session(
     )
     session = await db.create_session(session)
 
+    if request.agent_kind:
+        # Real native agent under Herdr in the workspace pod (no DBOS worker / K8s Job).
+        from mainloop.runtime import native_sessions
+
+        await native_sessions.create_binding(session.id, request.agent_kind)
+        await db.update_session(session.id, status=SessionStatus.ACTIVE)
+        await native_sessions.submit_message(session.id, request.prompt)
+        return await db.get_session(session.id)
+
     # Start session worker workflow
     with SetWorkflowID(session.id):
         worker_queue.enqueue(session_worker_workflow, session.id)
@@ -659,8 +798,36 @@ async def get_session_conversation(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    from mainloop.runtime import native_sessions
+
+    if await native_sessions.get_binding(session_id):
+        await native_sessions.sync(
+            session_id
+        )  # mirror new native-journal evidence first
+        session = await db.get_session(session_id)
+
     messages = await db.get_messages(session.conversation_id)
     return SessionConversationResponse(session=session, messages=messages)
+
+
+@app.get("/sessions/{session_id}/native", response_model=NativeSessionInfo)
+async def get_session_native(
+    session_id: str, user_id: str = Header(alias="X-User-ID", default=None)
+):
+    """Identity strip for a session bound to a native agent under Herdr."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    owner = await db.get_session(session_id)
+    if owner is not None and owner.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your session")
+    from mainloop.runtime import native_sessions
+
+    info = await native_sessions.identity(session_id)
+    if info is None:
+        raise HTTPException(
+            status_code=404, detail="Session has no native agent binding"
+        )
+    return info
 
 
 class SessionMessageRequest(BaseModel):
@@ -687,6 +854,17 @@ async def send_session_message(
 
     if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not your session")
+
+    from mainloop.runtime import native_sessions
+
+    if await native_sessions.get_binding(session_id):
+        try:
+            message_id = await native_sessions.submit_message(
+                session_id, request.message
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "ok", "message_id": message_id}
 
     # Save message directly to database (don't rely on workflow)
     message = await db.create_message(

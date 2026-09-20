@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,11 @@ class Session(BaseModel):
 
     # Conversation - each session has its own chat
     conversation_id: str = Field(..., description="Session's conversation ID")
+    # Session tree (native children): set from the native binding when listing.
+    parent_session_id: str | None = Field(
+        None, description="Parent session (delegation)"
+    )
+    topic: str | None = Field(None, description="Topic this session works for")
 
     # Execution state
     status: SessionStatus = Field(
@@ -140,6 +145,11 @@ class SessionCreate(BaseModel):
         None, description="Main thread message ID to anchor this session to"
     )
 
+    # Optional: run a real native agent under Herdr in the workspace pod
+    agent_kind: Literal["claude", "codex"] | None = Field(
+        None, description="Native agent kind; omit for the existing session worker"
+    )
+
 
 class SessionNotification(BaseModel):
     """Ephemeral notification about a session needing attention."""
@@ -153,3 +163,49 @@ class SessionNotification(BaseModel):
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="Creation timestamp"
     )
+
+
+class NativeDeliveryInfo(BaseModel):
+    """Delivery ledger row for one user message sent to a native agent."""
+
+    message_id: str
+    state: str = Field(
+        ...,
+        description="queued|recorded|sending|delivered|completed|uncertain|failed",
+    )
+    evidence_ref: str | None = None
+    detail: str | None = None
+    source: str = "user"  # user | report | writeout | brief
+
+
+class NativeSessionInfo(BaseModel):
+    """Identity strip for a session bound to a native agent under Herdr."""
+
+    session_id: str
+    kind: Literal["claude", "codex"]
+    role: str = "agent"  # agent | main | child
+    parent_session_id: str | None = None
+    topic: str | None = None
+    agent_name: str
+    native_session_id: str | None = None
+    model: str | None = None
+    approval_policy: str
+    herdr_pane_id: str | None = None
+    herdr_terminal_id: str | None = None
+    herdr_workspace_id: str | None = None
+    workspace_pod: str | None = None
+    workspace_pod_uid: str | None = None
+    workspace_ready: bool = False
+    agent_live: bool | None = None
+    generation: int = 1
+    lineage_seq: int = 1
+    context_tokens: int | None = None
+    baseline_tokens: int | None = None
+    turns_in_lineage: int = 0
+    continuations: int = 0
+    rotating: bool = False
+    journal_cursor: int = 0
+    journal_ref: str | None = None
+    turn_in_flight: bool = False
+    deliveries: list[NativeDeliveryInfo] = Field(default_factory=list)
+    note: str | None = None

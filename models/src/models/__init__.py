@@ -19,6 +19,8 @@ from models.native_agent import (
     WorkspaceBinding,
 )
 from models.session import (
+    NativeDeliveryInfo,
+    NativeSessionInfo,
     Session,
     SessionCreate,
     SessionNotification,
@@ -46,6 +48,8 @@ __all__ = [
     # Session models
     "Session",
     "SessionCreate",
+    "NativeSessionInfo",
+    "NativeDeliveryInfo",
     "SessionNotification",
     "SessionStatus",
     # Workflow models

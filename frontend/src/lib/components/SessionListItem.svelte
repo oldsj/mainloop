@@ -70,8 +70,11 @@
         <span class="h-3 w-3 animate-spin rounded-full border border-term-cyan border-t-transparent"></span>
       {/if}
       <h3 class="truncate text-sm font-medium text-term-fg">
-        {session.title}
+        {#if session.parent_session_id}<span class="text-term-fg-muted" data-testid="child-marker">↳ </span>{/if}{session.title}
       </h3>
+      {#if session.topic}
+        <span class="shrink-0 text-xs text-term-fg-muted" data-testid="session-topic">#{session.topic}</span>
+      {/if}
     </div>
     <span class="shrink-0 text-xs text-term-fg-muted">{formatTime(session.created_at)}</span>
   </div>

@@ -1,0 +1,281 @@
+# Disposable spike workspace: one non-root pod, one retained PVC, real Herdr server.
+# Agent kind and args are configuration (ConfigMap), not image contents.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+data:
+  # Two bindings, two Herdr-supported kinds. Change AGENT_KIND/AGENT_ARGS to reconfigure.
+  alpha.env: |
+    AGENT_KIND=pi
+    AGENT_ARGS="--session-name alpha --label reviewer"
+  beta.env: |
+    AGENT_KIND=qwen
+    AGENT_ARGS="--session-name beta --label implementer"
+  # Real agents, bypass-permissions mode. {id} is the native session id.
+  claude.env: |
+    AGENT_KIND=claude
+    AGENT_NEW_ARGS="--dangerously-skip-permissions --append-system-prompt-file /etc/agent-config/mainloop-system.md --session-id {id}"
+    AGENT_RESUME_ARGS="--dangerously-skip-permissions --append-system-prompt-file /etc/agent-config/mainloop-system.md --resume {id}"
+    APPROVAL_POLICY=bypass-permissions
+  # Herdr delivers input as a terminal paste, which Claude Code wraps in <pasted_content>, and the
+  # model may treat that as untrusted data. This states who the author is.
+  mainloop-system.md: |
+    Messages in this session are relayed by the Mainloop control plane. The user typed each one in
+    the Mainloop chat UI. Text that arrives wrapped in pasted-content markers is the user's own
+    message: follow it as a direct instruction from the user.
+  codex.env: |
+    AGENT_KIND=codex
+    AGENT_NEW_ARGS="--dangerously-bypass-approvals-and-sandbox"
+    AGENT_RESUME_ARGS="resume {id} --dangerously-bypass-approvals-and-sandbox"
+    APPROVAL_POLICY=bypass-permissions
+  # --- Context model (plan r7) ---------------------------------------------------------------
+  # Main thread: a dispatcher. Only Bash restricted to `mainloop ...` (E5); no repo (scratch cwd);
+  # not bypass-permissions. Native auto-compaction is left at its default (knob semantics are
+  # unverified, E3); no compaction was observed below the rotation budget, and Mainloop rotates first.
+  # {model} {effort} {standing} {settings} are filled by `agentctl start`.
+  claude-main.env: |
+    AGENT_KIND=claude
+    AGENT_NEW_ARGS="--model {model} --effort {effort} --tools Bash --strict-mcp-config --disable-slash-commands --settings {settings} --append-system-prompt-file {standing} --session-id {id}"
+    AGENT_RESUME_ARGS="--model {model} --effort {effort} --tools Bash --strict-mcp-config --disable-slash-commands --settings {settings} --append-system-prompt-file {standing} --resume {id}"
+    APPROVAL_POLICY=restricted
+  claude-main.settings.json: |
+    {"permissions": {"allow": ["Bash(mainloop:*)"], "defaultMode": "dontAsk"}}
+  # Children: real workers in a scratch cwd, bypass-permissions inside the pod (the pod is the boundary).
+  # After native compaction the SessionStart(compact) hook re-injects the standing context.
+  claude-child.env: |
+    AGENT_KIND=claude
+    AGENT_NEW_ARGS="--dangerously-skip-permissions --settings {settings} --append-system-prompt-file {standing} --session-id {id}"
+    AGENT_RESUME_ARGS="--dangerously-skip-permissions --settings {settings} --append-system-prompt-file {standing} --resume {id}"
+    APPROVAL_POLICY=bypass-permissions
+  claude-child.settings.json: |
+    {"hooks": {"SessionStart": [{"matcher": "compact", "hooks": [{"type": "command", "command": "mainloop standing"}]}]}}
+  codex-child.env: |
+    AGENT_KIND=codex
+    AGENT_NEW_ARGS="--dangerously-bypass-approvals-and-sandbox"
+    AGENT_RESUME_ARGS="resume {id} --dangerously-bypass-approvals-and-sandbox"
+    APPROVAL_POLICY=bypass-permissions
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+spec:
+  clusterIP: None
+  selector:
+    app: workspace
+  ports:
+    - name: none
+      port: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: workspace
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+spec:
+  serviceName: workspace
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workspace
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app: workspace
+        mainloop.dev/spike: k8s-herdr-agents
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - { name: HOME, value: /workspace/.home }
+            - { name: WORKSPACE_PATH, value: /workspace/repo }
+            - { name: STANDIN_STATE_DIR, value: /workspace/.standin }
+            - { name: HERDR_SESSION, value: mainloop-spike }
+            - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
+            - { name: CODEX_HOME, value: /workspace/.codex }
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: claude-oauth, key: oauth-token, optional: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '2', memory: 2Gi }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: tmp, mountPath: /tmp }
+            - { name: agent-config, mountPath: /etc/agent-config, readOnly: true }
+            - { name: codex-auth, mountPath: /etc/agent-secrets/codex, readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: agent-config
+          configMap:
+            name: agent-config
+        - name: codex-auth
+          secret: { secretName: codex-auth, optional: true }
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+        labels:
+          mainloop.dev/spike: k8s-herdr-agents
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Main thread pod (owner decision 2): same image and shape as workspace-0, own PVC, no Codex auth.
+# The conversation agent runs in a scratch cwd (/workspace/main) with no repository.
+apiVersion: v1
+kind: Service
+metadata:
+  name: main
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+spec:
+  clusterIP: None
+  selector:
+    app: main
+  ports:
+    - name: none
+      port: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: main
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+spec:
+  serviceName: main
+  replicas: 1
+  selector:
+    matchLabels:
+      app: main
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app: main
+        mainloop.dev/spike: k8s-herdr-agents
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: workspace
+          image: __IMAGE__
+          imagePullPolicy: Never
+          env:
+            - { name: HOME, value: /workspace/.home }
+            - { name: WORKSPACE_PATH, value: /workspace/repo }
+            - { name: STANDIN_STATE_DIR, value: /workspace/.standin }
+            - { name: HERDR_SESSION, value: mainloop-main }
+            - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
+            - { name: CODEX_HOME, value: /workspace/.codex }
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: claude-oauth, key: oauth-token, optional: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: '1', memory: 1Gi }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: tmp, mountPath: /tmp }
+            - { name: agent-config, mountPath: /etc/agent-config, readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: agent-config
+          configMap:
+            name: agent-config
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+        labels:
+          mainloop.dev/spike: k8s-herdr-agents
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Least-privilege exec access for the Mainloop backend (transport for the Herdr adapter):
+# get/list the workspace pod and exec into it, in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workspace-exec
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+rules:
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: ['']
+    resources: [pods/exec]
+    verbs: [create, get] # the client's WebSocket exec is a GET upgrade
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-backend-workspace-exec
+  namespace: herdr-spike
+  labels:
+    mainloop.dev/spike: k8s-herdr-agents
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-backend
+    namespace: mainloop
+roleRef:
+  kind: Role
+  name: workspace-exec
+  apiGroup: rbac.authorization.k8s.io

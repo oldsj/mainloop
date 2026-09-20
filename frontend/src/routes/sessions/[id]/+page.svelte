@@ -4,6 +4,7 @@
   import { api, type Session, type Message } from '$lib/api';
   import { sessions } from '$lib/stores/sessions';
   import SessionChat from '$lib/components/SessionChat.svelte';
+  import NativeIdentityStrip from '$lib/components/NativeIdentityStrip.svelte';
 
   let sessionId = $derived($page.params.id);
   let session = $state<Session | null>(null);
@@ -92,6 +93,8 @@
         {/if}
       </div>
     </div>
+
+    <NativeIdentityStrip sessionId={session.id} />
 
     <!-- Tabs -->
     <div class="flex border-b border-term-border">
