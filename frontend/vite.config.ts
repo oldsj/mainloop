@@ -15,6 +15,20 @@ function storeHmrPlugin(): Plugin {
   };
 }
 
+// Dev only: with VITE_API_URL=/api the browser talks to this server, which forwards to the
+// backend. A remote dev box then needs one forwarded port (the UI) instead of two, and the
+// backend's localhost-only CORS rule never comes into play.
+const apiProxyTarget = process.env.MAINLOOP_API_PROXY || 'http://localhost:8000';
+
 export default defineConfig({
-  plugins: [sveltekit(), tailwindcss(), storeHmrPlugin()]
+  plugins: [sveltekit(), tailwindcss(), storeHmrPlugin()],
+  server: {
+    proxy: {
+      '/api': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '')
+      }
+    }
+  }
 });

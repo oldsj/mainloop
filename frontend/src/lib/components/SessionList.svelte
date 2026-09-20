@@ -45,6 +45,21 @@
       <div class="flex items-center justify-center p-8 text-term-fg-muted">
         <span>Loading sessions...</span>
       </div>
+    {:else if $sessions.error && $sessions.sessions.length === 0}
+      <div
+        class="flex flex-col items-center justify-center p-8 text-term-fg-muted"
+        data-testid="sessions-error"
+      >
+        <p class="text-term-red">Couldn't load sessions</p>
+        <p class="mt-2 text-xs">{$sessions.error}</p>
+        <button
+          type="button"
+          class="mt-3 text-xs text-term-accent hover:underline"
+          onclick={() => sessions.fetchSessions()}
+        >
+          retry
+        </button>
+      </div>
     {:else if $sessions.sessions.length === 0}
       <div class="flex flex-col items-center justify-center p-8 text-term-fg-muted">
         <p class="text-term-accent">$ sessions --list</p>

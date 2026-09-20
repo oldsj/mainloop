@@ -1,35 +1,41 @@
 <script lang="ts">
   import type { Message } from '$lib/api';
-  import { marked } from 'marked';
+  import { renderMarkdown } from '$lib/markdown';
+  import { parseChildReport } from '$lib/messages';
 
   let { message, context = 'main' }: { message: Message; context?: string } = $props();
   let isUser = $derived(message.role === 'user');
 
-  // Configure marked for terminal aesthetic
-  marked.setOptions({
-    breaks: true,
-    gfm: true
-  });
-
-  let htmlContent = $derived(marked.parse(message.content) as string);
+  // A child agent's report, delivered to the main thread as a message: not something the user said.
+  let report = $derived(isUser ? parseChildReport(message.content) : null);
+  let htmlContent = $derived(renderMarkdown(report ? report.body : message.content));
 </script>
 
 <div
-  class="message w-full border-l-2 border-term-border px-3 py-2 md:px-4 {isUser
-    ? 'bg-transparent'
-    : 'bg-term-bg-secondary'}"
+  class="message w-full border-l-2 px-3 py-2 md:px-4 {report
+    ? 'border-term-fg-muted bg-term-bg-secondary/40'
+    : 'border-term-border'} {!report && !isUser ? 'bg-term-bg-secondary' : 'bg-transparent'}"
+  data-testid={report ? 'child-report' : undefined}
 >
   <div class="flex flex-col gap-1">
     <span
-      class="shrink-0 text-xs md:text-sm {isUser ? 'text-term-accent-alt' : 'text-term-accent'}"
+      class="shrink-0 text-xs md:text-sm {report
+        ? 'text-term-fg-muted'
+        : isUser
+          ? 'text-term-accent-alt'
+          : 'text-term-accent'}"
     >
-      {isUser ? 'user' : 'claude'}@{context}$
+      {#if report}
+        child · {report.title}{report.fallback ? ' (ended without a report)' : ''}
+      {:else}
+        {isUser ? 'user' : 'claude'}@{context}$
+      {/if}
     </span>
     <div class="min-w-0 flex-1">
-      <div class="prose-terminal text-sm text-term-fg md:text-base">
+      <div class="prose-terminal text-term-fg text-sm md:text-base">
         {@html htmlContent}
       </div>
-      <time class="mt-1 block text-xs text-term-fg-muted">
+      <time class="text-term-fg-muted mt-1 block text-xs">
         {new Date(message.created_at).toLocaleTimeString()}
       </time>
     </div>

@@ -4,7 +4,6 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
   import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
-  import { marked } from 'marked';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
   import SessionBlock from './SessionBlock.svelte';
@@ -17,7 +16,10 @@
     emptyStateTitle = '$ mainloop --help',
     emptyStateMessage = 'Start a conversation to begin',
     showInlineSessions = true,
-    context = 'main'
+    context = 'main',
+    error = null,
+    inputDisabled = false,
+    onDismissError
   }: {
     messages: Message[];
     isLoading: boolean;
@@ -27,6 +29,11 @@
     emptyStateMessage?: string;
     showInlineSessions?: boolean;
     context?: string;
+    /** A send that was rejected; shown above the input, not lost in the console. */
+    error?: string | null;
+    /** Disable sending without implying a running turn (e.g. the window is rotating). */
+    inputDisabled?: boolean;
+    onDismissError?: () => void;
   } = $props();
 
   // Map of anchor_message_id -> sessions for inline rendering
@@ -47,13 +54,7 @@
   // Sessions without anchors (show at bottom of conversation)
   const unanchoredSessions = $derived(() => {
     if (!showInlineSessions) return [];
-    return $sessions.sessions.filter(s => !s.anchor_message_id);
-  });
-
-  // Configure marked for terminal aesthetic
-  marked.setOptions({
-    breaks: true,
-    gfm: true
+    return $sessions.sessions.filter((s) => !s.anchor_message_id);
   });
 
   // Unified timeline: merge main messages with session messages (when focused)
@@ -94,17 +95,25 @@
 
   let messagesContainer: HTMLDivElement;
   let showScrollButton = $state(false);
+  // Follow new messages while the reader is at the bottom (true on first load); scrolling up
+  // releases it. Measuring after the DOM grew would always look "far from the bottom".
+  let stickToBottom = true;
 
-  // Check if scrolled to bottom
+  function distanceFromBottom() {
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+    return scrollHeight - scrollTop - clientHeight;
+  }
+
   function checkScrollPosition() {
     if (!messagesContainer) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    showScrollButton = distanceFromBottom > 100;
+    const distance = distanceFromBottom();
+    stickToBottom = distance < 150;
+    showScrollButton = distance > 100;
   }
 
   function scrollToBottom() {
     if (messagesContainer) {
+      stickToBottom = true;
       messagesContainer.scrollTo({
         top: messagesContainer.scrollHeight,
         behavior: 'smooth'
@@ -112,20 +121,13 @@
     }
   }
 
-  // Auto-scroll to bottom when messages change (only if already near bottom)
   $effect(() => {
     // Track these values to trigger effect
     messages;
     isLoading;
     $allSessionMessagesFlat;
 
-    // Check if user was already near bottom before updates
-    const wasNearBottom = messagesContainer
-      ? messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 150
-      : true;
-
-    // Only auto-scroll if user was already at/near bottom
-    if (wasNearBottom) {
+    if (stickToBottom) {
       tick().then(() => {
         if (messagesContainer) {
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -140,15 +142,15 @@
   }
 </script>
 
-<div class="relative flex h-full flex-col bg-term-bg">
-  <!-- Messages -->
+<div class="bg-term-bg relative flex h-full min-h-0 flex-col">
+  <!-- Messages (the only scrolling region; the input below never scrolls away) -->
   <div
     bind:this={messagesContainer}
     onscroll={checkScrollPosition}
-    class="flex-1 space-y-2 overflow-y-auto p-4"
+    class="min-h-0 flex-1 space-y-2 overflow-y-auto p-4"
   >
     {#if messages.length === 0}
-      <div class="flex h-full flex-col items-center justify-center text-term-fg-muted">
+      <div class="text-term-fg-muted flex h-full flex-col items-center justify-center">
         <p class="text-term-accent">{emptyStateTitle}</p>
         <p class="mt-2">{emptyStateMessage}</p>
         <p class="animate-cursor text-term-accent">_</p>
@@ -169,7 +171,9 @@
           {@const isActiveSession = $navigationContext.currentContext === item.session.id}
           <button
             type="button"
-            class="my-1 ml-10 flex w-[calc(100%-2.5rem)] items-start gap-2 border-l-4 px-3 py-2 text-left transition-colors hover:bg-term-bg-secondary/50 {isActiveSession ? 'bg-term-bg-secondary/50 ring-1 ring-term-accent' : 'bg-term-bg-secondary/30'}"
+            class="hover:bg-term-bg-secondary/50 my-1 ml-10 flex w-[calc(100%-2.5rem)] items-start gap-2 border-l-4 px-3 py-2 text-left transition-colors {isActiveSession
+              ? 'bg-term-bg-secondary/50 ring-term-accent ring-1'
+              : 'bg-term-bg-secondary/30'}"
             style="border-color: {sessionColor};"
             onclick={() => navigationContext.switchToSession(item.session.id)}
             ondblclick={() => navigationContext.zoomSession(item.session.id)}
@@ -188,19 +192,19 @@
                   {new Date(item.message.created_at).toLocaleTimeString()}
                 </time>
               </div>
-              <div class="mt-1 truncate text-sm text-term-fg-muted">
+              <div class="text-term-fg-muted mt-1 truncate text-sm">
                 {preview}{#if isLong}...{/if}
               </div>
             </div>
-            <span class="shrink-0 text-xs text-term-fg-muted">→</span>
+            <span class="text-term-fg-muted shrink-0 text-xs">→</span>
           </button>
         {/if}
       {/each}
 
       <!-- Sessions without anchors (show at bottom) -->
       {#if showInlineSessions && unanchoredSessions().length > 0}
-        <div class="mt-4 border-t border-term-border pt-4">
-          <div class="mb-2 text-xs text-term-fg-muted">Active Sessions</div>
+        <div class="border-term-border mt-4 border-t pt-4">
+          <div class="text-term-fg-muted mb-2 text-xs">Active Sessions</div>
           {#each unanchoredSessions() as session (session.id)}
             <SessionBlock
               {session}
@@ -219,7 +223,9 @@
             class="my-1 ml-10 flex items-center gap-2 border-l-4 px-3 py-2 text-xs"
             style="border-color: {sessionColor}; color: {sessionColor};"
           >
-            <span class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"></span>
+            <span
+              class="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"
+            ></span>
             <span>{$currentSession.title} processing...</span>
           </div>
         {/if}
@@ -228,13 +234,13 @@
 
     {#if isLoading}
       <div
-        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:px-4"
+        class="border-term-accent bg-term-bg-secondary flex w-full flex-col gap-1 border-l-2 px-3 py-2 md:px-4"
       >
-        <span class="text-xs text-term-accent md:text-sm">
+        <span class="text-term-accent text-xs md:text-sm">
           claude@{context}$
         </span>
         <div class="flex items-center gap-2">
-          <span class="text-sm text-term-fg-muted">processing</span>
+          <span class="text-term-fg-muted text-sm">processing</span>
           <span class="animate-cursor text-term-accent">_</span>
         </div>
       </div>
@@ -246,7 +252,7 @@
     <button
       type="button"
       onclick={scrollToBottom}
-      class="absolute bottom-24 right-4 flex h-10 w-10 items-center justify-center border border-term-border bg-term-bg-secondary text-term-fg-muted transition-colors hover:border-term-accent hover:text-term-accent"
+      class="border-term-border bg-term-bg-secondary text-term-fg-muted hover:border-term-accent hover:text-term-accent absolute right-4 bottom-24 flex h-10 w-10 items-center justify-center border transition-colors"
       aria-label="Scroll to bottom"
     >
       <svg
@@ -262,61 +268,24 @@
     </button>
   {/if}
 
-  <!-- Input -->
-  <div class="border-t border-term-border p-4">
-    <InputBar onsend={handleSend} disabled={isLoading} {placeholder} />
+  <!-- Input: always visible at the bottom -->
+  <div
+    class="border-term-border bg-term-bg shrink-0 border-t p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:p-4"
+  >
+    {#if error}
+      <div
+        class="border-term-red/60 bg-term-red/10 text-term-red mb-2 flex items-start justify-between gap-2 border px-3 py-2 text-sm"
+        role="alert"
+        data-testid="send-error"
+      >
+        <span>{error}</span>
+        {#if onDismissError}
+          <button type="button" class="shrink-0 hover:underline" onclick={onDismissError}
+            >dismiss</button
+          >
+        {/if}
+      </div>
+    {/if}
+    <InputBar onsend={handleSend} disabled={isLoading || inputDisabled} {placeholder} />
   </div>
 </div>
-
-<style>
-  /* Terminal-styled markdown for thread messages */
-  .prose-terminal :global(p) {
-    margin: 0 0 0.5em 0;
-  }
-  .prose-terminal :global(p:last-child) {
-    margin-bottom: 0;
-  }
-  .prose-terminal :global(code) {
-    background: var(--term-bg);
-    border: 1px solid var(--term-border);
-    padding: 0.125em 0.375em;
-    font-size: 0.9em;
-    word-break: break-word;
-  }
-  .prose-terminal :global(pre) {
-    background: var(--term-bg);
-    border: 1px solid var(--term-border);
-    padding: 0.75em;
-    margin: 0.5em 0;
-    overflow-x: hidden;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .prose-terminal :global(pre code) {
-    background: none;
-    border: none;
-    padding: 0;
-  }
-  .prose-terminal :global(ul),
-  .prose-terminal :global(ol) {
-    margin: 0.5em 0;
-    padding-left: 1.5em;
-  }
-  .prose-terminal :global(li) {
-    margin: 0.25em 0;
-  }
-  .prose-terminal :global(ul) {
-    list-style-type: disc;
-  }
-  .prose-terminal :global(ol) {
-    list-style-type: decimal;
-  }
-  .prose-terminal :global(strong) {
-    color: var(--term-accent);
-    font-weight: 600;
-  }
-  .prose-terminal :global(a) {
-    color: var(--term-info);
-    text-decoration: underline;
-  }
-</style>

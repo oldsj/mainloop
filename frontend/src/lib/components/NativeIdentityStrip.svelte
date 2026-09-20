@@ -87,8 +87,8 @@
     {/if}
     {#if info.deliveries.length}
       <div class="mt-1" data-testid="id-deliveries">
-        deliveries:
-        {#each info.deliveries as d (d.message_id)}
+        deliveries: {info.deliveries.length}
+        {#each info.deliveries.slice(-3) as d (d.message_id)}
           <span class="mr-2" title={d.detail ?? d.evidence_ref ?? ''}>{d.state}</span>
         {/each}
       </div>

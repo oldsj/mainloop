@@ -342,7 +342,10 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
-    await native_sessions.sync(binding["session_id"])
+    # A rotation holds the session lock for the cut; do not queue behind it, so the UI can
+    # show "rotating" while it happens (the reconcile loop mirrors journal evidence anyway).
+    if not native_sessions.is_rotating(binding["session_id"]):
+        await native_sessions.sync(binding["session_id"])
     session = await db.get_session(binding["session_id"])
     topics = await delegation._topic_lines(user_id)
     return MainThreadInfo(
@@ -428,7 +431,7 @@ async def get_conversation(conversation_id: str):
                    WHERE b.role='main' AND s.conversation_id=$1""",
                 conversation_id,
             )
-        if main_sid:
+        if main_sid and not native_sessions.is_rotating(main_sid):
             await native_sessions.sync(
                 main_sid
             )  # mirror new native-journal evidence first

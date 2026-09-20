@@ -2,7 +2,31 @@
  * API client for backend communication
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '$lib/config';
+import { connection } from '$lib/stores/connection';
+
+/** A send the backend did not accept. `status` is 0 when it never got an HTTP response. */
+export class SendError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+  }
+}
+
+/** fetch that tells the connection store when the backend can't be reached at all. */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    // No HTTP response (refused, DNS, offline). Aborts are the caller's own doing.
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      connection.reportFailure();
+    }
+    throw error;
+  }
+}
 
 export interface Message {
   id: string;
@@ -244,7 +268,7 @@ export interface SessionNotification {
 
 export const api = {
   async listConversations(): Promise<{ conversations: Conversation[]; total: number }> {
-    const response = await fetch(`${API_URL}/conversations`);
+    const response = await apiFetch(`${API_URL}/conversations`);
     if (!response.ok) throw new Error('Failed to list conversations');
     return response.json();
   },
@@ -252,26 +276,41 @@ export const api = {
   async getConversation(
     conversationId: string
   ): Promise<{ conversation: Conversation; messages: Message[] }> {
-    const response = await fetch(`${API_URL}/conversations/${conversationId}`);
+    const response = await apiFetch(`${API_URL}/conversations/${conversationId}`);
     if (!response.ok) throw new Error('Failed to get conversation');
     return response.json();
   },
 
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
-    const response = await fetch(`${API_URL}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(request)
-    });
-    if (!response.ok) throw new Error('Failed to send message');
+    let response: Response;
+    try {
+      response = await apiFetch(`${API_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(request)
+      });
+    } catch {
+      throw new SendError("Can't reach the Mainloop backend.", 0);
+    }
+    if (!response.ok) {
+      // The native main thread answers 409 with a reason (rotating, or a turn still in flight).
+      let detail = 'Failed to send message';
+      try {
+        const body = await response.json();
+        if (typeof body?.detail === 'string') detail = body.detail;
+      } catch {
+        // keep the generic message
+      }
+      throw new SendError(detail, response.status);
+    }
     return response.json();
   },
 
   // Inbox/Queue endpoints
   async getUnreadCount(): Promise<number> {
-    const response = await fetch(`${API_URL}/queue/unread/count`);
+    const response = await apiFetch(`${API_URL}/queue/unread/count`);
     if (!response.ok) throw new Error('Failed to get unread count');
     const data = await response.json();
     return data.count;
@@ -288,33 +327,33 @@ export const api = {
     if (options?.taskId) params.set('task_id', options.taskId);
 
     const url = params.toString() ? `${API_URL}/queue?${params}` : `${API_URL}/queue`;
-    const response = await fetch(url);
+    const response = await apiFetch(url);
     if (!response.ok) throw new Error('Failed to list queue items');
     return response.json();
   },
 
   async getQueueItem(itemId: string): Promise<QueueItem> {
-    const response = await fetch(`${API_URL}/queue/${itemId}`);
+    const response = await apiFetch(`${API_URL}/queue/${itemId}`);
     if (!response.ok) throw new Error('Failed to get queue item');
     return response.json();
   },
 
   async markQueueItemRead(itemId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/queue/${itemId}/read`, {
+    const response = await apiFetch(`${API_URL}/queue/${itemId}/read`, {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to mark queue item read');
   },
 
   async markAllQueueItemsRead(): Promise<void> {
-    const response = await fetch(`${API_URL}/queue/read-all`, {
+    const response = await apiFetch(`${API_URL}/queue/read-all`, {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to mark all read');
   },
 
   async respondToQueueItem(itemId: string, responseText: string): Promise<void> {
-    const response = await fetch(`${API_URL}/queue/${itemId}/respond`, {
+    const response = await apiFetch(`${API_URL}/queue/${itemId}/respond`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -327,25 +366,25 @@ export const api = {
   // Project endpoints
   async listProjects(limit?: number): Promise<Project[]> {
     const params = limit ? `?limit=${limit}` : '';
-    const response = await fetch(`${API_URL}/projects${params}`);
+    const response = await apiFetch(`${API_URL}/projects${params}`);
     if (!response.ok) throw new Error('Failed to list projects');
     return response.json();
   },
 
   async getProject(projectId: string): Promise<Project> {
-    const response = await fetch(`${API_URL}/projects/${projectId}`);
+    const response = await apiFetch(`${API_URL}/projects/${projectId}`);
     if (!response.ok) throw new Error('Failed to get project');
     return response.json();
   },
 
   async getProjectDetail(projectId: string): Promise<ProjectDetail> {
-    const response = await fetch(`${API_URL}/projects/${projectId}/detail`);
+    const response = await apiFetch(`${API_URL}/projects/${projectId}/detail`);
     if (!response.ok) throw new Error('Failed to get project detail');
     return response.json();
   },
 
   async refreshProject(projectId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/projects/${projectId}/refresh`, {
+    const response = await apiFetch(`${API_URL}/projects/${projectId}/refresh`, {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to refresh project');
@@ -363,13 +402,13 @@ export const api = {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);
     const url = params.toString() ? `${API_URL}/sessions?${params}` : `${API_URL}/sessions`;
-    const response = await fetch(url);
+    const response = await apiFetch(url);
     if (!response.ok) throw new Error('Failed to list sessions');
     return response.json();
   },
 
   async createSession(request: SessionCreate): Promise<Session> {
-    const response = await fetch(`${API_URL}/sessions`, {
+    const response = await apiFetch(`${API_URL}/sessions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -381,32 +420,32 @@ export const api = {
   },
 
   async getMainThread(): Promise<MainThreadInfo> {
-    const response = await fetch(`${API_URL}/main-thread`);
+    const response = await apiFetch(`${API_URL}/main-thread`);
     if (!response.ok) throw new Error('Failed to get main thread');
     return response.json();
   },
 
   async rotateMainThread(): Promise<Record<string, unknown>> {
-    const response = await fetch(`${API_URL}/main-thread/rotate`, { method: 'POST' });
+    const response = await apiFetch(`${API_URL}/main-thread/rotate`, { method: 'POST' });
     if (!response.ok) throw new Error('Failed to rotate main thread');
     return response.json();
   },
 
   async listTopics(): Promise<TopicWithRecords[]> {
-    const response = await fetch(`${API_URL}/topics`);
+    const response = await apiFetch(`${API_URL}/topics`);
     if (!response.ok) throw new Error('Failed to list topics');
     return response.json();
   },
 
   async getSessionNative(sessionId: string): Promise<NativeSessionInfo | null> {
-    const response = await fetch(`${API_URL}/sessions/${sessionId}/native`);
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}/native`);
     if (response.status === 404) return null;
     if (!response.ok) throw new Error('Failed to get native session info');
     return response.json();
   },
 
   async getSession(sessionId: string): Promise<Session> {
-    const response = await fetch(`${API_URL}/sessions/${sessionId}`);
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}`);
     if (!response.ok) throw new Error('Failed to get session');
     return response.json();
   },
@@ -414,13 +453,13 @@ export const api = {
   async getSessionConversation(
     sessionId: string
   ): Promise<{ session: Session; messages: Message[] }> {
-    const response = await fetch(`${API_URL}/sessions/${sessionId}/conversation`);
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}/conversation`);
     if (!response.ok) throw new Error('Failed to get session conversation');
     return response.json();
   },
 
   async sendSessionMessage(sessionId: string, message: string): Promise<{ message_id: string }> {
-    const response = await fetch(`${API_URL}/sessions/${sessionId}/message`, {
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}/message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -432,7 +471,7 @@ export const api = {
   },
 
   async cancelSession(sessionId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/sessions/${sessionId}/cancel`, {
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}/cancel`, {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to cancel session');
@@ -442,13 +481,13 @@ export const api = {
   async listNotifications(unreadOnly: boolean = true): Promise<SessionNotification[]> {
     const params = new URLSearchParams();
     params.set('unread_only', unreadOnly.toString());
-    const response = await fetch(`${API_URL}/notifications?${params}`);
+    const response = await apiFetch(`${API_URL}/notifications?${params}`);
     if (!response.ok) throw new Error('Failed to list notifications');
     return response.json();
   },
 
   async dismissNotification(notificationId: string): Promise<void> {
-    const response = await fetch(`${API_URL}/notifications/${notificationId}/dismiss`, {
+    const response = await apiFetch(`${API_URL}/notifications/${notificationId}/dismiss`, {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to dismiss notification');
