@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# ShellCheck: these status checks and the single-quoted bash -c body are intentional.
+# shellcheck disable=SC2016,SC2310,SC2312
 # Run this worktree's frontend (Vite, hot reload) against the shared Kind backend.
 #
 #   scripts/dev-ui.sh up [--port N] [--clean]   start (idempotent) and print the URL
@@ -72,7 +74,7 @@ wait_for() { # <seconds> <description> <command...>
 }
 
 kubeconfig_path() {
-  if [[ -n ${MAINLOOP_KUBECONFIG:-} ]]; then
+  if [[ -n ${MAINLOOP_KUBECONFIG-} ]]; then
     echo "${MAINLOOP_KUBECONFIG}"
   else
     echo "${STATE}/kubeconfig-${CLUSTER_NAME}"
@@ -80,7 +82,7 @@ kubeconfig_path() {
 }
 
 refresh_kubeconfig() { # Kind's API port changes when the cluster restarts, so re-read it each start
-  [[ -n ${MAINLOOP_KUBECONFIG:-} ]] && return 0
+  [[ -n ${MAINLOOP_KUBECONFIG-} ]] && return 0
   local out
   if out="$(kind get kubeconfig --name "${CLUSTER_NAME}" 2>/dev/null)"; then
     :

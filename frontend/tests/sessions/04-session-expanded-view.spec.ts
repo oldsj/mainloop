@@ -20,7 +20,9 @@ test.describe('Session expanded view', () => {
     await sessionItem.click();
 
     // Session page should show the session's chat
-    await expect(appPage.getByRole('heading', { name: 'Expandable Session', level: 1 })).toBeVisible();
+    await expect(
+      appPage.getByRole('heading', { name: 'Expandable Session', level: 1 })
+    ).toBeVisible();
     await expect(appPage.getByPlaceholder('Message this session...')).toBeVisible();
   });
 

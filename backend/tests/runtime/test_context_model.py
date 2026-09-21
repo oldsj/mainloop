@@ -279,11 +279,11 @@ class FakeStore:
                 "title": b.get("title", "t"),
                 "topic": "billing",
                 "status": self.statuses.get(b["session_id"], "active"),
-                "state": "cancelled"
-                if self.statuses.get(b["session_id"]) == "cancelled"
-                else "reported"
-                if b["reported_at"]
-                else "working",
+                "state": (
+                    "cancelled"
+                    if self.statuses.get(b["session_id"]) == "cancelled"
+                    else "reported" if b["reported_at"] else "working"
+                ),
                 "turns": 0,
                 "last_activity": "00:00:00Z",
                 "last_reply": None,

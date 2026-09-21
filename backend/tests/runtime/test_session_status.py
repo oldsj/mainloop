@@ -2,9 +2,9 @@
 
 import unittest
 
-from models import SessionStatus as S
-
 from mainloop.runtime.native_sessions import ENDED_STATUSES, next_status
+
+from models import SessionStatus as S
 
 
 def status(current, *, turn_open=False, is_child=False, reported=False):

@@ -479,7 +479,8 @@ export const api = {
       },
       body: JSON.stringify({ message })
     });
-    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to send session message'));
+    if (!response.ok)
+      throw new Error(await errorDetail(response, 'Failed to send session message'));
     return response.json();
   },
 

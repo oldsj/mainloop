@@ -39,7 +39,6 @@ DONE again.
 
 Implemented; covered by unit tests with fakes (status rules, the agent verbs' policy), not yet exercised against a live cluster.
 
-
 - **Cancel** (session view, live sessions only) ends the session and stops its agent. If Mainloop cannot confirm the
   agent stopped it says so; the session is still cancelled and the stop is not retried blindly. A cancelled session
   no longer accepts messages.

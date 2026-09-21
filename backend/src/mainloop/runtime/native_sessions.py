@@ -80,10 +80,6 @@ def is_rotating(session_id: str) -> bool:
     return session_id in _rotating
 
 
-def is_rotating(session_id: str) -> bool:
-    return session_id in _rotating
-
-
 def workspace_for(binding: dict) -> HerdrWorkspace:
     """One Herdr workspace pod per binding: ``main-0`` for the main thread, else ``workspace-0``."""
     pod = binding.get("pod") or settings.workspace_pod
