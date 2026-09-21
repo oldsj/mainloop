@@ -158,6 +158,8 @@
         <div class="h-full overflow-hidden">
           {@render children()}
         </div>
+      {:else if activeTab === 'sessions'}
+        <SessionList />
       {:else if activeTab === 'tasks'}
         <TasksPanel desktop={false} mobile={true} />
       {/if}
@@ -192,13 +194,14 @@
       <!-- Desktop: Always visible side panels (hidden in zoom mode) -->
       {#if !$navigationContext.zoomedSession}
         <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
-          <div class="flex-1 overflow-hidden border-b border-term-border">
+          <!-- Sessions take the space; inbox and projects size to their content (capped). -->
+          <div class="min-h-0 flex-1 overflow-hidden border-b border-term-border">
             <SessionList />
           </div>
-          <div class="h-1/4 overflow-hidden border-b border-term-border">
+          <div class="flex max-h-[30%] min-h-0 shrink-0 flex-col overflow-hidden border-b border-term-border">
             <TasksPanel desktop={true} />
           </div>
-          <div class="h-1/4 overflow-hidden">
+          <div class="max-h-[25%] shrink-0 overflow-hidden">
             <ProjectList />
           </div>
         </div>

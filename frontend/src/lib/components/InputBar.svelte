@@ -17,15 +17,43 @@
   // Derive border color from current session context
   const borderColor = $derived(sessionColor ?? $currentSession?.color ?? null);
 
+  const MAX_HEIGHT_PX = 160;
+
+  let textarea = $state<HTMLTextAreaElement>();
+  // The box is disabled while a reply is pending, which drops focus; take it back afterwards.
+  let refocusWhenEnabled = false;
+
+  // Grow with the text (Shift+Enter adds lines) up to a cap, and shrink back after a send.
+  $effect(() => {
+    if (!textarea) return;
+    // Empty: one row, whatever the placeholder's length (it would otherwise size the box).
+    if (!$draftMessage) {
+      textarea.style.height = '';
+      return;
+    }
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_HEIGHT_PX)}px`;
+  });
+
+  $effect(() => {
+    if (disabled || !refocusWhenEnabled || !textarea) return;
+    refocusWhenEnabled = false;
+    // Only when focus was lost, not when the user has moved on to something else.
+    if (document.activeElement === document.body) textarea.focus();
+  });
+
   function handleSubmit(event: SubmitEvent) {
     event.preventDefault();
     if ($draftMessage.trim() && !disabled && onsend) {
       onsend({ message: $draftMessage.trim() });
       draftMessage.set('');
+      refocusWhenEnabled = true;
     }
   }
 
   function handleKeydown(event: KeyboardEvent) {
+    // Enter confirms an IME candidate (CJK, etc.); it must not send the half-composed message.
+    if (event.isComposing) return;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       handleSubmit(event as any);
@@ -37,18 +65,19 @@
   <form
     data-testid="input-bar"
     onsubmit={handleSubmit}
-    class="flex items-center gap-2 border border-term-border bg-term-bg-secondary px-3 py-2"
+    class="flex items-end gap-2 border border-term-border bg-term-bg-secondary px-3 py-2"
     style={borderColor ? `border-left: 4px solid ${borderColor};` : ''}
   >
-    <span class="shrink-0 text-term-accent">$</span>
+    <span class="shrink-0 py-1 text-term-accent">$</span>
     <textarea
+      bind:this={textarea}
       data-testid="command-input"
       bind:value={$draftMessage}
       onkeydown={handleKeydown}
       {disabled}
       {placeholder}
       rows="1"
-      class="flex-1 resize-none border-none bg-transparent text-term-fg placeholder:text-term-fg-muted focus:outline-none disabled:opacity-50"
+      class="max-h-40 flex-1 resize-none overflow-y-auto border-none bg-transparent py-1 text-term-fg placeholder:text-term-fg-muted focus:outline-none disabled:opacity-50"
     ></textarea>
     <button
       data-testid="exec-button"

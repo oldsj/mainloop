@@ -61,7 +61,7 @@
   {#if open}
     <div id="main-thread-details" class="border-term-border border-t">
       {#if info.session_id}
-        <NativeIdentityStrip sessionId={info.session_id} />
+        <NativeIdentityStrip sessionId={info.session_id} collapsible={false} />
       {/if}
       <div class="px-4 py-1 font-mono" data-testid="topic-index">
         topics:

@@ -888,42 +888,6 @@ async def send_session_message(
     return {"status": "ok", "message_id": message.id}
 
 
-class SessionLogsResponse(BaseModel):
-    """Response for session logs."""
-
-    logs: str
-    source: str
-    session_status: str
-
-
-@app.get("/sessions/{session_id}/logs", response_model=SessionLogsResponse)
-async def get_session_logs(
-    session_id: str,
-    tail: int = 100,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Get execution logs for a session."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    session = await db.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
-
-    # TODO: Get logs from K8s pod
-    logs = ""
-    source = "none"
-
-    return SessionLogsResponse(
-        logs=logs,
-        source=source,
-        session_status=session.status.value,
-    )
-
-
 @app.post("/sessions/{session_id}/cancel")
 async def cancel_session(
     session_id: str,

@@ -2,6 +2,7 @@
   import type { Message } from '$lib/api';
   import { renderMarkdown } from '$lib/markdown';
   import { parseChildReport } from '$lib/messages';
+  import { messageTime } from '$lib/time';
 
   let { message, context = 'main' }: { message: Message; context?: string } = $props();
   let isUser = $derived(message.role === 'user');
@@ -36,7 +37,7 @@
         {@html htmlContent}
       </div>
       <time class="text-term-fg-muted mt-1 block text-xs">
-        {new Date(message.created_at).toLocaleTimeString()}
+        {messageTime(message.created_at)}
       </time>
     </div>
   </div>
@@ -44,6 +45,10 @@
 
 <style>
   /* Terminal-styled markdown */
+  .prose-terminal {
+    /* A long unbroken token (a path, a URL) wraps instead of running off the screen. */
+    overflow-wrap: anywhere;
+  }
   .prose-terminal :global(p) {
     margin: 0 0 0.5em 0;
   }
@@ -132,7 +137,10 @@
   .prose-terminal :global(table) {
     border-collapse: collapse;
     margin: 0.5em 0;
-    width: 100%;
+    /* Wide tables scroll inside the bubble rather than stretching the page. */
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
   }
   .prose-terminal :global(th),
   .prose-terminal :global(td) {

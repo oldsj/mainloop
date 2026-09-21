@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import type { Session } from '$lib/api';
   import { sessions, activeSessions } from '$lib/stores/sessions';
   import SessionListItem from './SessionListItem.svelte';
@@ -71,6 +72,7 @@
         {#each $sessions.sessions as session (session.id)}
           <SessionListItem
             {session}
+            selected={$page.params.id === session.id}
             onclick={() => handleSessionClick(session)}
           />
         {/each}

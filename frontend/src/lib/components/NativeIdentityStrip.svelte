@@ -2,8 +2,25 @@
   import { onMount } from 'svelte';
   import { api, type NativeSessionInfo } from '$lib/api';
 
-  let { sessionId }: { sessionId: string } = $props();
+  let {
+    sessionId,
+    collapsible = true
+  }: {
+    sessionId: string;
+    /** Show one summary line with a details toggle; false shows every field (the caller toggles). */
+    collapsible?: boolean;
+  } = $props();
   let info = $state<NativeSessionInfo | null>(null);
+  let open = $state(false);
+
+  const expanded = $derived(!collapsible || open);
+  const live = $derived(
+    info?.agent_live === null || info?.agent_live === undefined
+      ? 'unknown'
+      : info.agent_live
+        ? 'live'
+        : 'idle'
+  );
 
   async function refresh() {
     try {
@@ -25,7 +42,33 @@
     class="border-term-border bg-term-bg-secondary text-term-fg-muted border-b px-4 py-2 font-mono text-xs"
     data-testid="identity-strip"
   >
-    <div class="flex flex-wrap gap-x-4 gap-y-1">
+    {#if collapsible}
+      <div class="flex items-center gap-2">
+        <span
+          class="h-2 w-2 shrink-0 rounded-full {live === 'live' ? 'bg-term-green' : 'bg-term-fg-muted'}"
+          aria-hidden="true"
+        ></span>
+        <span class="text-term-fg">{info.kind}</span>
+        <span>·</span>
+        <span class="truncate">{(info.model ?? 'model pending').replace(/^claude-/, '')}</span>
+        <span>·</span>
+        <span>{live}</span>
+        {#if info.topic}
+          <span class="hidden sm:inline">·</span>
+          <span class="hidden truncate sm:inline">#{info.topic}</span>
+        {/if}
+        <button
+          type="button"
+          class="hover:text-term-accent ml-auto shrink-0"
+          aria-expanded={open}
+          onclick={() => (open = !open)}
+          data-testid="identity-toggle"
+        >
+          details {open ? '▴' : '▾'}
+        </button>
+      </div>
+    {/if}
+    <div class="flex flex-wrap gap-x-4 gap-y-1 {collapsible ? 'mt-2' : ''} {expanded ? '' : 'hidden'}">
       <span>agent <b class="text-term-accent" data-testid="id-kind">{info.kind}</b></span>
       <span
         >model <b class="text-term-fg" data-testid="id-model">{info.model ?? 'unknown yet'}</b
@@ -86,7 +129,7 @@
       <div class="text-term-yellow mt-1" data-testid="id-note">{info.note}</div>
     {/if}
     {#if info.deliveries.length}
-      <div class="mt-1" data-testid="id-deliveries">
+      <div class="mt-1 {expanded ? '' : 'hidden'}" data-testid="id-deliveries">
         deliveries: {info.deliveries.length}
         {#each info.deliveries.slice(-3) as d (d.message_id)}
           <span class="mr-2" title={d.detail ?? d.evidence_ref ?? ''}>{d.state}</span>

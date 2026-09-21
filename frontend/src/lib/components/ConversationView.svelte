@@ -4,6 +4,7 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
   import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
+  import { messageTime } from '$lib/time';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
   import SessionBlock from './SessionBlock.svelte';
@@ -189,7 +190,7 @@
                 </span>
                 <span class="text-term-fg-muted">·</span>
                 <time class="text-term-fg-muted">
-                  {new Date(item.message.created_at).toLocaleTimeString()}
+                  {messageTime(item.message.created_at)}
                 </time>
               </div>
               <div class="text-term-fg-muted mt-1 truncate text-sm">

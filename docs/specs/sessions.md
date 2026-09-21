@@ -35,12 +35,16 @@ Clicking a session navigates to `/sessions/{id}`:
 
 - Shows title as h1 heading
 - Shows description if present
-- Has Chat and Logs tabs (Chat tab active by default)
+- Shows the session's chat directly (there is no Logs tab)
+- Shows a one-line identity summary (agent, model, live or idle, topic) that expands to the full identity strip
+- Follows the URL: opening another session from the list switches to it
+- The session open in the main pane is highlighted in the list
 - Active sessions show Cancel button
 - Completed sessions show Summary section
 - Failed sessions show Error section
 - Back button returns to home
 - Non-existent session ID shows "Session not found" with link to home
+- When the backend is unreachable the page says so and retries when it returns, instead of "Session not found"
 
 ## Notifications
 

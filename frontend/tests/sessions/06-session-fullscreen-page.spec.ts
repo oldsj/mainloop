@@ -128,7 +128,7 @@ test.describe('Session fullscreen page', () => {
     await expect(appPage.getByRole('link', { name: 'Back to home' })).toBeVisible();
   });
 
-  test('has chat and logs tabs', async ({ appPage, userId }) => {
+  test('shows the session chat', async ({ appPage, userId }) => {
     const { sessionId } = await seedSession(appPage, userId, {
       status: 'active',
       title: 'Tabs Session'
@@ -139,8 +139,6 @@ test.describe('Session fullscreen page', () => {
       timeout: 10000
     });
 
-    // Tabs may appear in both sidebar and main - just verify they exist
-    await expect(appPage.getByRole('button', { name: 'Chat' }).first()).toBeVisible();
-    await expect(appPage.getByRole('button', { name: 'Logs' }).first()).toBeVisible();
+    await expect(appPage.getByPlaceholder('Message this session...')).toBeVisible();
   });
 });
