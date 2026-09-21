@@ -428,7 +428,7 @@ export const api = {
       },
       body: JSON.stringify(request)
     });
-    if (!response.ok) throw new Error('Failed to create session');
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to create session'));
     return response.json();
   },
 

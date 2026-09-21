@@ -23,6 +23,8 @@
     onclick={() => (isOpen = !isOpen)}
     class="flex h-8 w-8 items-center justify-center border border-term-border bg-term-bg-secondary text-term-fg-muted hover:border-term-accent hover:text-term-accent"
     aria-label="Change theme"
+    aria-haspopup="true"
+    aria-expanded={isOpen}
     title="Change theme"
   >
     <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
