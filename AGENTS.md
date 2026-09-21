@@ -58,7 +58,10 @@ make dev          # DevSpace + Kind with hot reload
 make dev-stop     # stop the development environment
 make dev-reset    # reset local development data
 make dev-clear-cache
+scripts/dev-ui.sh up     # this worktree's frontend (Vite, hot reload) against the shared Kind backend
 ```
+
+`scripts/dev-ui.sh` is safe with several worktrees running at once: each gets its own Vite port and they share one backend port-forward. The Kind backend itself is shared, so a backend image loaded from one worktree serves all of them.
 
 The local Kubernetes workflow requires DevSpace and Kind. Python packages are managed by `uv`; JavaScript packages are managed by `pnpm`.
 
@@ -74,12 +77,9 @@ Common commands:
 make fmt                 # format and check files changed from main
 make lint                # lint files changed from main
 pnpm check               # workspace frontend/type checks
-cd frontend && pnpm exec playwright test --project=fast --project=mobile
 ```
 
-The Playwright `fast` and `mobile` projects use seeded data. The `e2e` project uses a real agent integration and must remain serial where conversation state is shared. Verify message submission before waiting for an agent response, use explicit button clicks, and wait for inputs to become enabled between messages.
-
-Some historical tests and Make targets invoke live agents, external services, containers, or Kubernetes. Do not run the `e2e` project, live-agent tests, subscription-consuming commands, deployments, destructive resets, or production commands unless the task explicitly requires them and their target is known. Default automated tests for new native-agent adapters must use sanitized fixtures or fakes; keep live proofs opt-in and bounded.
+Some historical tests and Make targets invoke live agents, external services, containers, or Kubernetes. Do not run the browser `e2e` tests, live-agent tests, subscription-consuming commands, deployments, destructive resets, or production commands unless the task explicitly requires them and their target is known. Default automated tests for new native-agent adapters must use sanitized fixtures or fakes; keep live proofs opt-in and bounded.
 
 For Kubernetes commands, always specify the intended context. Tests must not rely on a developer's current context or mutate production resources.
 
