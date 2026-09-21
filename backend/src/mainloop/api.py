@@ -888,6 +888,12 @@ async def send_session_message(
     return {"status": "ok", "message_id": message.id}
 
 
+# Done: nothing more will run, so the session can be cleared from the list.
+FINISHED_STATUSES = frozenset(
+    {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}
+)
+
+
 @app.post("/sessions/{session_id}/cancel")
 async def cancel_session(
     session_id: str,
@@ -904,13 +910,60 @@ async def cancel_session(
     if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not your session")
 
-    await db.update_session(
-        session_id, status=SessionStatus.FAILED, error="Cancelled by user"
-    )
+    if session.status in FINISHED_STATUSES:
+        return {"status": session.status.value, "agent": "not_running"}
 
-    # TODO: Cancel session worker workflow
+    from mainloop.runtime import native_sessions
 
-    return {"status": "cancelled"}
+    if await native_sessions.get_binding(session_id):
+        try:
+            agent = await native_sessions.cancel(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        # TODO: Cancel the legacy session worker workflow
+        await db.update_session(session_id, status=SessionStatus.CANCELLED)
+        agent = "not_running"
+
+    return {"status": "cancelled", "agent": agent}
+
+
+@app.post("/sessions/archive-finished")
+async def archive_finished_sessions(
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Clear every finished session (done, failed, cancelled) from the list.
+
+    Rows are kept for audit; sessions still running or waiting are left alone.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    archived = await db.archive_sessions(user_id)
+    return {"archived": archived}
+
+
+@app.post("/sessions/{session_id}/archive")
+async def archive_session(
+    session_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Clear one finished session from the list. A live one must be cancelled first."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    session = await db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your session")
+    if session.status not in FINISHED_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="This session is still running or waiting; cancel it first.",
+        )
+
+    await db.archive_sessions(user_id, session_ids=[session_id])
+    return {"status": "archived"}
 
 
 # ============= Notification Endpoints =============

@@ -15,6 +15,17 @@ export class SendError extends Error {
   }
 }
 
+/** The backend's explanation for a refused request, or a fallback when it gave none. */
+async function errorDetail(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === 'string') return body.detail;
+  } catch {
+    // not JSON (e.g. a proxy's error page)
+  }
+  return fallback;
+}
+
 /** fetch that tells the connection store when the backend can't be reached at all. */
 async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   try {
@@ -158,6 +169,8 @@ export interface Session {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /** Set when the session was cleared from the list; the row is kept for audit. */
+  archived_at?: string | null;
   summary: string | null;
   error: string | null;
   // Code work fields (optional)
@@ -466,15 +479,32 @@ export const api = {
       },
       body: JSON.stringify({ message })
     });
-    if (!response.ok) throw new Error('Failed to send session message');
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to send session message'));
     return response.json();
   },
 
-  async cancelSession(sessionId: string): Promise<void> {
+  /** `agent` says whether the agent's process was confirmed stopped ("unknown": it may still run). */
+  async cancelSession(sessionId: string): Promise<{ status: string; agent?: string }> {
     const response = await apiFetch(`${API_URL}/sessions/${sessionId}/cancel`, {
       method: 'POST'
     });
-    if (!response.ok) throw new Error('Failed to cancel session');
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to cancel session'));
+    return response.json();
+  },
+
+  /** Clear one finished session from the list (kept for audit). A live one is refused (409). */
+  async archiveSession(sessionId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/sessions/${sessionId}/archive`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to clear session'));
+  },
+
+  /** Clear every finished session (done, failed, cancelled); returns the ids cleared. */
+  async archiveFinishedSessions(): Promise<string[]> {
+    const response = await apiFetch(`${API_URL}/sessions/archive-finished`, { method: 'POST' });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to clear sessions'));
+    return (await response.json()).archived;
   },
 
   // Notification endpoints

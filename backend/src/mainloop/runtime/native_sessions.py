@@ -47,6 +47,28 @@ _locks: dict[str, asyncio.Lock] = {}
 _workspaces: dict[str, HerdrWorkspace] = {}
 _rotating: set[str] = set()
 OPEN_STATES = ("recorded", "sending", "delivered")
+# Ended by the user or by failure. Agent activity never moves a session out of these.
+ENDED_STATUSES = frozenset({SessionStatus.CANCELLED, SessionStatus.FAILED})
+
+
+def next_status(
+    current: SessionStatus, *, turn_open: bool, is_child: bool, reported: bool
+) -> SessionStatus:
+    """Session status from agent activity: what the mirror sets after each sync.
+
+    A cancelled or failed session stays that way however the agent behaves afterwards. Otherwise
+    an open turn is ``active``; an idle child that has reported is ``completed`` (its task is
+    done, nothing is waiting on the user); anything else idle is ``waiting_on_user``.
+    """
+    if current in ENDED_STATUSES:
+        return current
+    if turn_open:
+        return SessionStatus.ACTIVE
+    if is_child and reported:
+        return SessionStatus.COMPLETED
+    return SessionStatus.WAITING_ON_USER
+
+
 WRITEOUT_TEXT = (
     "[mainloop:pre-cut] Your context window is about to be reset by Mainloop. Write out anything "
     "durable now with `mainloop note`, `mainloop decide` and `mainloop pending` (one command each), "
@@ -204,6 +226,8 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
     task brief to a fresh child). A ``queued`` delivery is sent by ``sync`` once the agent is idle.
     """
     session = await db.get_session(session_id)
+    if source == "user" and session.status in ENDED_STATUSES:
+        raise ValueError(f"This session is {session.status.value}; start a new one.")
     if source == "user" and session_id in _rotating:
         raise ValueError(
             "The main thread is rotating its context window; try again in a moment."
@@ -525,15 +549,59 @@ async def _sync_locked(session_id: str) -> dict | None:
             fields["model"] = model
         await _update_binding(session_id, **fields)
         open_n = await _open_count(session_id)
-        new_status = SessionStatus.ACTIVE if open_n else SessionStatus.WAITING_ON_USER
+        is_child = binding["role"] == "child"
+        fresh = await get_binding(session_id) if is_child else None
+        new_status = next_status(
+            session.status,
+            turn_open=bool(open_n),
+            is_child=is_child,
+            reported=bool(fresh and fresh["reported_at"]),
+        )
         if session.status != new_status:
             await db.update_session(session_id, status=new_status)
         follow: dict = {"idle": open_n == 0}
-        if binding["role"] == "child" and new_reply:
-            fresh = await get_binding(session_id)
-            if fresh and fresh["reported_at"] is None:
-                follow["fallback_report"] = new_reply
+        if (
+            is_child
+            and new_reply
+            and new_status not in ENDED_STATUSES
+            and fresh
+            and fresh["reported_at"] is None
+        ):
+            follow["fallback_report"] = new_reply
         return follow
+
+
+async def cancel(session_id: str) -> str:
+    """End a native session: stop its agent and close its open deliveries.
+
+    The status is set first and is sticky, so no later sync brings the session back, and open
+    deliveries are failed so the reconcile loop stops visiting it. Returns ``stopped``,
+    ``not_running`` (Herdr had no such agent) or ``unknown`` (the stop could not be
+    confirmed; the agent may still be running, and it is not retried blindly).
+    """
+    binding = await get_binding(session_id)
+    if binding is not None and binding["role"] == "main":
+        raise ValueError("The main thread cannot be cancelled.")
+    async with _lock(session_id):
+        await db.update_session(session_id, status=SessionStatus.CANCELLED)
+        async with db.connection() as conn:
+            await conn.execute(
+                """UPDATE native_deliveries SET state='failed', detail='cancelled by user',
+                          updated_at=NOW()
+                   WHERE session_id=$1 AND state IN ('recorded','sending','delivered','queued')""",
+                session_id,
+            )
+        if binding is None:
+            return "not_running"
+        ws = workspace_for(binding)
+        try:
+            if await ws.agent_status(binding["agent_name"]) is None:
+                return "not_running"
+            await ws.stop(binding["agent_name"])
+            return "stopped"
+        except (TransportError, WorkspaceUnavailable, RuntimeError) as exc:
+            logger.warning("cancel of %s: agent stop unconfirmed: %s", session_id, exc)
+            return "unknown"
 
 
 async def _wait_delivery(message_id: str, session_id: str, timeout: float) -> str:

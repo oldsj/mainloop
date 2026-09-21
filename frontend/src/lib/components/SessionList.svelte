@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import type { Session } from '$lib/api';
-  import { sessions, activeSessions } from '$lib/stores/sessions';
+  import { sessions, activeSessions, finishedSessions } from '$lib/stores/sessions';
   import SessionListItem from './SessionListItem.svelte';
 
   onMount(() => {
@@ -12,6 +12,25 @@
 
   function handleSessionClick(session: Session) {
     goto(`/sessions/${session.id}`);
+  }
+
+  let clearError = $state<string | null>(null);
+
+  async function clearFinished() {
+    const count = $finishedSessions.length;
+    if (!confirm(`Clear ${count} finished session${count === 1 ? '' : 's'} from the list? They are kept for audit.`)) {
+      return;
+    }
+    clearError = null;
+    try {
+      await sessions.archiveFinished();
+      // The open session may have just been cleared; leave a page that no longer lists it.
+      if ($page.params.id && !$sessions.sessions.some((s) => s.id === $page.params.id)) {
+        goto('/');
+      }
+    } catch (e) {
+      clearError = e instanceof Error ? e.message : 'Failed to clear sessions';
+    }
   }
 </script>
 
@@ -28,6 +47,18 @@
         </span>
       {/if}
     </h2>
+    <div class="flex items-center gap-2">
+      {#if $finishedSessions.length > 0}
+        <button
+          type="button"
+          onclick={clearFinished}
+          class="text-xs text-term-fg-muted hover:text-term-accent"
+          data-testid="clear-finished"
+          title="Clear finished sessions from the list"
+        >
+          clear {$finishedSessions.length}
+        </button>
+      {/if}
     <button
       type="button"
       onclick={() => sessions.fetchSessions()}
@@ -38,7 +69,14 @@
         <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
       </svg>
     </button>
+    </div>
   </div>
+
+  {#if clearError}
+    <p class="border-b border-term-border px-3 py-2 text-xs text-term-red" role="alert">
+      {clearError}
+    </p>
+  {/if}
 
   <!-- Content -->
   <div class="min-h-0 flex-1 overflow-y-auto">

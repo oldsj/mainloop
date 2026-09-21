@@ -51,7 +51,8 @@ pod (`main-0`), instead of running a Claude Agent SDK query per message. The SDK
 - **Dispatcher only.** The agent's only tool is Bash restricted to `mainloop ...`; it has no repository. It records
   facts with `mainloop note|decide|pending`, files work with `mainloop delegate --topic ... --kind claude|codex`,
   and answers "what is the child doing" from `mainloop status|read`, which read Postgres and never message the
-  child.
+  child. On request it ends a running child with `mainloop cancel <id>` and tidies the user's list with
+  `mainloop clear` (finished children only; records are kept).
 - **Topics.** A topic is a durable record (name, status line, notes, decisions, pending intent, child reports), not
   a session. The topic index (names, status, pending counts) is shown under the identity strip.
 - **Child reports.** A delegated child appears in the session list marked `↳` with its topic. Its

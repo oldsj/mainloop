@@ -16,6 +16,8 @@
   let sendError = $state<string | null>(null);
 
   const offline = $derived($connection.status === 'offline');
+  // A cancelled or failed session takes no more messages (the backend refuses them).
+  const ended = $derived(session?.status === 'cancelled' || session?.status === 'failed');
 
   onMount(() => {
     loadSession();
@@ -67,7 +69,8 @@
       // Not delivered: take the optimistic bubble back, keep the text, and say so.
       messages = messages.filter((m) => m.id !== tempId);
       draftMessage.set(userMessage);
-      sendError = 'Could not send the message. Your message is back in the box.';
+      const reason = e instanceof Error && e.message ? e.message : 'Could not send the message.';
+      sendError = `${reason} Your message is back in the box.`;
     } finally {
       isLoading = false;
     }
@@ -78,13 +81,17 @@
   {messages}
   {isLoading}
   onSendMessage={handleSendMessage}
-  placeholder={offline ? 'Backend unreachable…' : 'Message this session...'}
+  placeholder={offline
+    ? 'Backend unreachable…'
+    : ended
+      ? `This session is ${session?.status}.`
+      : 'Message this session...'}
   emptyStateTitle="$ session --start"
   emptyStateMessage="This session's conversation will appear here"
   showInlineSessions={false}
   context={session?.title ?? 'session'}
   error={sendError ?? loadError}
-  inputDisabled={offline}
+  inputDisabled={offline || ended}
   onDismissError={() => {
     sendError = null;
     loadError = null;

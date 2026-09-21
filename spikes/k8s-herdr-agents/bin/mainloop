@@ -61,7 +61,7 @@ post() { # <path> <json>
 }
 usage() {
 	sed -n '2,3p' "$0"
-	echo "verbs: whoami topics topic note decide pending delegate status read report standing"
+	echo "verbs: whoami topics topic note decide pending delegate status read cancel clear report standing"
 }
 
 verb="${1:-help}"
@@ -138,6 +138,12 @@ read)
 	[[ ${1-} == --since ]] && since="${2:-0}"
 	Q=(--data-urlencode "session=${id}" --data-urlencode "since=${since}")
 	call GET /agent-api/read
+	;;
+cancel)
+	post /agent-api/cancel "$(jq -n --arg s "${1:?session id required}" '{session:$s}')"
+	;;
+clear)
+	post /agent-api/clear "$(jq -n --arg s "${1-}" 'if $s=="" then {} else {session:$s} end')"
 	;;
 report)
 	[[ ${1-} == --summary ]] || {

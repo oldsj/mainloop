@@ -8,6 +8,7 @@ delivery path). Status and read never add a turn to any native session (D9).
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -248,12 +249,14 @@ class PgStore:
                              AND m.role='assistant' ORDER BY m.created_at DESC LIMIT 1) AS last_reply
                    FROM native_bindings b JOIN sessions s ON s.id=b.session_id
                    LEFT JOIN topics t ON t.id=b.topic_id
-                   WHERE b.parent_session_id=$1 ORDER BY b.created_at""",
+                   WHERE b.parent_session_id=$1 AND s.archived_at IS NULL ORDER BY b.created_at""",
                 parent_session_id,
             )
         out = []
         for r in rows:
-            if r["reported_at"] is not None:
+            if r["status"] == "cancelled":
+                state = "cancelled"
+            elif r["reported_at"] is not None:
                 state = "reported"
             elif r["last_delivery"] in ("recorded", "sending", "delivered", "queued"):
                 state = "working"
@@ -270,6 +273,7 @@ class PgStore:
                     "kind": r["kind"],
                     "title": r["title"],
                     "topic": r["topic"] or INBOX,
+                    "status": r["status"],
                     "state": state,
                     "turns": r["turns_in_lineage"],
                     "last_activity": r["updated_at"].strftime("%H:%M:%SZ"),
@@ -277,6 +281,16 @@ class PgStore:
                 }
             )
         return out
+
+    async def cancel_session(self, session_id: str) -> str:
+        return await native_sessions.cancel(session_id)
+
+    async def archive_children(
+        self, user_id: str, parent_session_id: str, session_ids: list[str] | None
+    ) -> list[str]:
+        return await db.archive_sessions(
+            user_id, session_ids=session_ids, parent_session_id=parent_session_id
+        )
 
     async def messages(self, session_id: str, offset: int, limit: int) -> list[dict]:
         session = await db.get_session(session_id)
@@ -344,6 +358,15 @@ class PgStore:
                 await conn.execute(
                     "UPDATE topics SET updated_at=NOW() WHERE id=$1", topic["id"]
                 )
+        # Reporting is how a child's task ends: it is done, not waiting on the user. A session the
+        # user already cancelled stays cancelled.
+        if session.status not in native_sessions.ENDED_STATUSES:
+            await db.update_session(
+                child["session_id"],
+                status=SessionStatus.COMPLETED,
+                summary=summary,
+                completed_at=datetime.now(UTC),
+            )
         label = (
             " (fallback: the child ended a turn without reporting; this is its last reply)"
             if fallback

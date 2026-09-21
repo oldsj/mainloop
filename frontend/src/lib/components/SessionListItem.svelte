@@ -83,7 +83,7 @@
           ? 'bg-term-magenta/20 text-term-magenta'
           : session.status === 'completed'
             ? 'bg-term-green/20 text-term-green'
-            : session.status === 'failed' || session.status === 'cancelled'
+            : session.status === 'failed'
               ? 'bg-term-red/20 text-term-red'
               : isActive
                 ? 'bg-term-cyan/20 text-term-cyan'

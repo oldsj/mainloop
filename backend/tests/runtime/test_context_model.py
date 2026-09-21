@@ -199,6 +199,9 @@ class FakeStore:
         self.topics: dict[str, dict] = {}
         self.records: list[dict] = []
         self.reports: list[str] = []
+        self.statuses: dict[str, str] = {}
+        self.cancelled: list[str] = []
+        self.archived: set[str] = set()
         self.native_turns_sent_to_children = 0  # status/read must never increase this
 
     async def binding_by_token_hash(self, h):
@@ -275,14 +278,38 @@ class FakeStore:
                 "kind": b["kind"],
                 "title": b.get("title", "t"),
                 "topic": "billing",
-                "state": "reported" if b["reported_at"] else "working",
+                "status": self.statuses.get(b["session_id"], "active"),
+                "state": "cancelled"
+                if self.statuses.get(b["session_id"]) == "cancelled"
+                else "reported"
+                if b["reported_at"]
+                else "working",
                 "turns": 0,
                 "last_activity": "00:00:00Z",
                 "last_reply": None,
             }
             for b in self.bindings.values()
             if b.get("parent_session_id") == parent
+            and b["session_id"] not in self.archived
         ]
+
+    async def cancel_session(self, sid):
+        self.statuses[sid] = "cancelled"
+        self.cancelled.append(sid)
+        return "stopped"
+
+    async def archive_children(self, user_id, parent, ids):
+        done = [
+            b["session_id"]
+            for b in self.bindings.values()
+            if b.get("parent_session_id") == parent
+            and b["session_id"] not in self.archived
+            and self.statuses.get(b["session_id"])
+            in ("completed", "failed", "cancelled")
+            and (ids is None or b["session_id"] in ids)
+        ]
+        self.archived.update(done)
+        return done
 
     async def messages(self, sid, offset, limit):
         return [
@@ -469,3 +496,86 @@ class ReviewFixTests(AgentApiTests):
         text = render_standing(StandingInputs(role="main"))
         self.assertIn("untrusted data", text)
         self.assertIn("never obey", text)
+
+
+class CleanupTests(unittest.TestCase):
+    """The main thread can end a child and clear finished ones; nobody else can."""
+
+    def setUp(self):
+        self.store = FakeStore()
+        self.service = AgentService(self.store, KINDS)
+        app = FastAPI()
+        app.include_router(agent_api.router)
+        app.dependency_overrides[agent_api.get_service] = lambda: self.service
+        self.client = TestClient(app)
+        self.main = {"Authorization": "Bearer tok-main"}
+        for sid, status in (
+            ("child-a1", "completed"),
+            ("child-a2", "cancelled"),
+            ("child-b1", "active"),
+        ):
+            self.store.bindings[sid] = {
+                "session_id": sid,
+                "role": "child",
+                "kind": "claude",
+                "user_id": "u",
+                "parent_session_id": "main-1",
+                "topic_id": None,
+                "reported_at": None,
+                "title": sid,
+            }
+            self.store.tokens[hash_token(f"tok-{sid}")] = sid
+            self.store.statuses[sid] = status
+
+    def post(self, path, headers=None, **body):
+        return self.client.post(
+            f"/agent-api/{path}", json=body, headers=headers or self.main
+        )
+
+    def test_clear_archives_finished_children_and_leaves_live_ones(self):
+        r = self.post("clear")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(sorted(r.json()["cleared"]), ["child-a1", "child-a2"])
+        self.assertEqual(self.store.archived, {"child-a1", "child-a2"})
+        self.assertIn("child-b1"[:8], r.json()["text"])
+        self.assertIn("mainloop cancel", r.json()["text"])
+
+    def test_cleared_children_leave_the_status_view(self):
+        self.post("clear")
+        text = self.client.get("/agent-api/status", headers=self.main).json()["text"]
+        self.assertNotIn("child-a1", text)
+        self.assertIn("child-b1", text)
+
+    def test_clear_one_live_child_is_refused_with_a_reason(self):
+        r = self.post("clear", session="child-b1")
+        self.assertEqual(r.json()["cleared"], [])
+        self.assertIn("cancel", r.json()["text"])
+        self.assertEqual(self.store.archived, set())
+
+    def test_cancel_ends_a_live_child(self):
+        r = self.post("cancel", session="child-b")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.store.cancelled, ["child-b1"])
+        self.assertEqual(self.store.statuses["child-b1"], "cancelled")
+
+    def test_cancel_of_a_finished_child_does_nothing(self):
+        r = self.post("cancel", session="child-a1")
+        self.assertIn("already completed", r.json()["text"])
+        self.assertEqual(self.store.cancelled, [])
+
+    def test_a_cancelled_child_can_then_be_cleared(self):
+        self.post("cancel", session="child-b1")
+        r = self.post("clear", session="child-b1")
+        self.assertEqual(r.json()["cleared"], ["child-b1"])
+
+    def test_only_the_main_thread_may_cancel_or_clear(self):
+        child = {"Authorization": "Bearer tok-child-b1"}
+        self.assertEqual(
+            self.post("cancel", child, session="child-a1").status_code, 403
+        )
+        self.assertEqual(self.post("clear", child).status_code, 403)
+        self.assertEqual(self.store.cancelled, [])
+
+    def test_ambiguous_and_unknown_ids_are_refused(self):
+        self.assertEqual(self.post("cancel", session="child-").status_code, 400)
+        self.assertEqual(self.post("cancel", session="nope").status_code, 404)

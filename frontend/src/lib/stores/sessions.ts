@@ -49,18 +49,39 @@ function createSessionsStore() {
       }
     },
 
-    async cancelSession(sessionId: string) {
+    /** Never throws: `ok` false carries the reason, `unconfirmed` says the agent may still run. */
+    async cancelSession(
+      sessionId: string
+    ): Promise<{ ok: true; unconfirmed: boolean } | { ok: false; message: string }> {
       try {
-        await api.cancelSession(sessionId);
+        const result = await api.cancelSession(sessionId);
         update((state) => ({
           ...state,
           sessions: state.sessions.map((s) =>
-            s.id === sessionId ? { ...s, status: 'failed' as SessionStatus, error: 'Cancelled' } : s
+            s.id === sessionId ? { ...s, status: 'cancelled' as SessionStatus } : s
           )
         }));
+        return { ok: true, unconfirmed: result.agent === 'unknown' };
       } catch (e) {
         console.error('Failed to cancel session:', e);
+        return { ok: false, message: e instanceof Error ? e.message : 'Failed to cancel session' };
       }
+    },
+
+    /** Clear one finished session from the list. Throws with the backend's reason if refused. */
+    async archiveSession(sessionId: string) {
+      await api.archiveSession(sessionId);
+      update((state) => ({ ...state, sessions: state.sessions.filter((s) => s.id !== sessionId) }));
+    },
+
+    /** Clear every finished session from the list; returns how many were cleared. */
+    async archiveFinished(): Promise<number> {
+      const cleared = new Set(await api.archiveFinishedSessions());
+      update((state) => ({
+        ...state,
+        sessions: state.sessions.filter((s) => !cleared.has(s.id))
+      }));
+      return cleared.size;
     },
 
     updateSession(sessionId: string, updates: Partial<Session>) {
@@ -82,6 +103,13 @@ export const sessions = createSessionsStore();
 export const activeSessions = derived(sessions, ($sessions) =>
   $sessions.sessions.filter(
     (s) => s.status === 'pending' || s.status === 'active' || s.status === 'waiting_on_user'
+  )
+);
+
+/** Sessions that are over (done, failed, cancelled): these can be cleared from the list. */
+export const finishedSessions = derived(sessions, ($sessions) =>
+  $sessions.sessions.filter(
+    (s) => s.status === 'completed' || s.status === 'failed' || s.status === 'cancelled'
   )
 );
 

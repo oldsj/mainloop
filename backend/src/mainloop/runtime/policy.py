@@ -72,6 +72,13 @@ def check_spawn(
         )
 
 
+def may_manage_children(actor: Actor) -> None:
+    if actor.role != "main":
+        raise PolicyError(
+            "role", "only the main thread can cancel or clear its child agents"
+        )
+
+
 def may_report(actor: Actor) -> None:
     if actor.role != "child":
         raise PolicyError("role", "only a child agent can report to its parent")

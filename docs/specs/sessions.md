@@ -26,8 +26,28 @@ When sessions exist:
 | waiting_on_user | NEEDS INPUT | Blocked on user response |
 | completed       | DONE        | Finished successfully    |
 | failed          | FAILED      | Error occurred           |
+| cancelled       | CANCELLED   | Stopped by the user      |
 
 Failed sessions show error message below the badge.
+
+Cancelled and failed are final: an agent's later activity never changes them. For a native agent session,
+"active" is an open turn and "NEEDS INPUT" is an idle agent waiting for the next message. A delegated child that
+has reported is DONE (it shows its report as the summary); messaging it again makes it active until the reply, then
+DONE again.
+
+## Cancelling and clearing
+
+Implemented; covered by unit tests with fakes (status rules, the agent verbs' policy), not yet exercised against a live cluster.
+
+
+- **Cancel** (session view, live sessions only) ends the session and stops its agent. If Mainloop cannot confirm the
+  agent stopped it says so; the session is still cancelled and the stop is not retried blindly. A cancelled session
+  no longer accepts messages.
+- **Clear** removes finished sessions (done, failed, cancelled) from the list: "Clear" on a finished session's view,
+  or "clear N" in the list header for all of them. Cleared sessions are kept for audit, never deleted. A live
+  session cannot be cleared; cancel it first. The main thread's own conversation is never listed or cleared.
+- The main thread can do both for its children: `mainloop cancel <id>` and `mainloop clear [<id>]`. Only the main
+  thread may; a child agent is refused.
 
 ## Session Detail View
 
@@ -36,6 +56,7 @@ Clicking a session navigates to `/sessions/{id}`:
 - Shows title as h1 heading
 - Shows description if present
 - Shows the session's chat directly (there is no Logs tab)
+- Live sessions show Cancel; finished ones show Clear (see "Cancelling and clearing")
 - Shows a one-line identity summary (agent, model, live or idle, topic) that expands to the full identity strip
 - Follows the URL: opening another session from the list switches to it
 - The session open in the main pane is highlighted in the list

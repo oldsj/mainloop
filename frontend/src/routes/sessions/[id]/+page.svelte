@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
+  import { goto } from '$app/navigation';
   import { api, type Session } from '$lib/api';
   import { sessions } from '$lib/stores/sessions';
   import { connection } from '$lib/stores/connection';
@@ -25,6 +26,7 @@
     loaded = null;
     error = null;
     unreachable = false;
+    actionNotice = null;
     void loadSession(id);
   });
 
@@ -60,11 +62,38 @@
     }
   }
 
+  // The result of the last cancel/archive, shown under the header: the backend can refuse, and a
+  // cancel can succeed without being able to confirm that the agent's process stopped.
+  let actionNotice = $state<{ kind: 'error' | 'warning'; text: string } | null>(null);
+
+  const finished = $derived(
+    session?.status === 'completed' || session?.status === 'failed' || session?.status === 'cancelled'
+  );
+
   async function handleCancel() {
     if (!session) return;
-    if (confirm('Cancel this session?')) {
-      await sessions.cancelSession(session.id);
-      await loadSession();
+    if (!confirm('Cancel this session? Its agent is stopped.')) return;
+    actionNotice = null;
+    const result = await sessions.cancelSession(session.id);
+    if (!result.ok) {
+      actionNotice = { kind: 'error', text: result.message };
+    } else if (result.unconfirmed) {
+      actionNotice = {
+        kind: 'warning',
+        text: "Cancelled, but Mainloop couldn't confirm the agent stopped; it may still be running."
+      };
+    }
+    await loadSession();
+  }
+
+  async function handleArchive() {
+    if (!session) return;
+    actionNotice = null;
+    try {
+      await sessions.archiveSession(session.id);
+      await goto('/');
+    } catch (e) {
+      actionNotice = { kind: 'error', text: e instanceof Error ? e.message : 'Failed to clear' };
     }
   }
 </script>
@@ -124,9 +153,31 @@
           >
             Cancel
           </button>
+        {:else if finished}
+          <button
+            type="button"
+            onclick={handleArchive}
+            class="border border-term-border px-3 py-1 text-sm text-term-fg-muted hover:border-term-accent hover:text-term-accent"
+            data-testid="archive-session"
+            title="Clear this session from the list (kept for audit)"
+          >
+            Clear
+          </button>
         {/if}
       </div>
     </div>
+
+    {#if actionNotice}
+      <div
+        class="border-b px-4 py-2 text-sm {actionNotice.kind === 'error'
+          ? 'border-term-red/60 bg-term-red/10 text-term-red'
+          : 'border-term-yellow/60 bg-term-yellow/10 text-term-yellow'}"
+        role="alert"
+        data-testid="session-action-notice"
+      >
+        {actionNotice.text}
+      </div>
+    {/if}
 
     <NativeIdentityStrip sessionId={session.id} />
 

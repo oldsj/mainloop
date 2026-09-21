@@ -42,6 +42,10 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# A session in one of these is done: nothing more will run and it can be cleared from the list.
+FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
 class Store(Protocol):
     async def binding_by_token_hash(self, token_hash: str) -> dict | None: ...
     async def get_binding(self, session_id: str) -> dict | None: ...
@@ -57,6 +61,10 @@ class Store(Protocol):
     async def messages(
         self, session_id: str, offset: int, limit: int
     ) -> list[dict]: ...
+    async def cancel_session(self, session_id: str) -> str: ...
+    async def archive_children(
+        self, user_id: str, parent_session_id: str, session_ids: list[str] | None
+    ) -> list[str]: ...
     async def spawn_child(
         self, parent: dict, topic: dict, kind: str, title: str, brief: str
     ) -> str: ...
@@ -190,6 +198,64 @@ class AgentService:
             "message_id": mid,
         }
 
+    # -- cleanup: end a child, clear finished ones from the list -------------------------------
+    async def _child(self, ctx: Ctx, session_id: str) -> dict:
+        rows = await self.store.children_state(ctx.binding["session_id"])
+        match = [r for r in rows if r["session_id"].startswith(session_id)]
+        if not match:
+            raise HTTPException(status_code=404, detail="no such child in your tree")
+        if len(match) > 1:
+            raise HTTPException(
+                status_code=400, detail="ambiguous session id; give more characters"
+            )
+        return match[0]
+
+    @staticmethod
+    def _require_manager(ctx: Ctx) -> None:
+        try:
+            policy.may_manage_children(ctx.actor)
+        except PolicyError as exc:
+            raise HTTPException(
+                status_code=403, detail=f"[{exc.code}] {exc.message}"
+            ) from exc
+
+    async def cancel(self, ctx: Ctx, session_id: str) -> dict:
+        self._require_manager(ctx)
+        child = await self._child(ctx, session_id)
+        short = child["session_id"][:8]
+        if child["status"] in FINISHED_STATUSES:
+            return {"text": f"{short} is already {child['status']}; nothing to cancel"}
+        outcome = await self.store.cancel_session(child["session_id"])
+        text = f"cancelled {short}"
+        if outcome == "unknown":
+            text += "; stopping its agent could not be confirmed, so it may still be running"
+        return {"text": text, "agent": outcome}
+
+    async def clear(self, ctx: Ctx, session_id: str | None) -> dict:
+        """Clear finished children from the user's list (kept for audit, never deleted)."""
+        self._require_manager(ctx)
+        parent = ctx.binding["session_id"]
+        only = (
+            [(await self._child(ctx, session_id))["session_id"]] if session_id else None
+        )
+        archived = await self.store.archive_children(
+            ctx.binding["user_id"], parent, only
+        )
+        left = [
+            r
+            for r in await self.store.children_state(parent)
+            if (only is None or r["session_id"] in only)
+            and r["status"] not in FINISHED_STATUSES
+        ]
+        text = f"cleared {len(archived)} finished child session(s)"
+        if left:
+            names = ", ".join(r["session_id"][:8] for r in left)
+            text += (
+                f"; not cleared because they are still running or waiting: {names} "
+                "(cancel one with `mainloop cancel <id>` first)"
+            )
+        return {"text": text, "cleared": archived}
+
     # -- state, answered from Postgres only (no native turn) ----------------------------------
     async def status(self, ctx: Ctx, session_id: str | None) -> dict:
         rows = await self.store.children_state(ctx.binding["session_id"])
@@ -285,6 +351,14 @@ class DelegateIn(BaseModel):
     brief: str
 
 
+class CancelIn(BaseModel):
+    session: str = Field(..., min_length=1)
+
+
+class ClearIn(BaseModel):
+    session: str | None = None
+
+
 class ReportIn(BaseModel):
     summary: str = Field(..., min_length=1)
 
@@ -324,6 +398,16 @@ async def delegate(
     s: SvcDep,
 ):
     return await s.delegate(ctx, body.topic, body.kind, body.title, body.brief)
+
+
+@router.post("/cancel")
+async def cancel(body: CancelIn, ctx: CtxDep, s: SvcDep):
+    return await s.cancel(ctx, body.session)
+
+
+@router.post("/clear")
+async def clear(body: ClearIn, ctx: CtxDep, s: SvcDep):
+    return await s.clear(ctx, body.session)
 
 
 @router.post("/report")
