@@ -208,6 +208,17 @@ ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS baseline_tokens INTEGER;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS turns_in_lineage INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS reported_at TIMESTAMPTZ;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS continuations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+-- Cancelling used to record status failed + this error text (and agent sync could then revive
+-- it). Cancelled is its own status now; correct the old rows. Idempotent.
+UPDATE sessions SET status = 'cancelled', error = NULL
+ WHERE error = 'Cancelled by user' AND status <> 'cancelled';
+-- A child that has reported is done, not waiting on the user. New reports set this directly;
+-- this corrects children that reported before that, which no sync would revisit. Idempotent.
+UPDATE sessions SET status = 'completed'
+ WHERE status = 'waiting_on_user'
+   AND EXISTS (SELECT 1 FROM native_bindings b
+               WHERE b.session_id = sessions.id AND b.role = 'child' AND b.reported_at IS NOT NULL);
 ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'user';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(token_hash) WHERE token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
@@ -1386,8 +1397,9 @@ class Database:
         user_id: str,
         status: SessionStatus | None = None,
         limit: int = 50,
+        include_archived: bool = False,
     ) -> list[Session]:
-        """List sessions for a user."""
+        """List sessions for a user (cleared sessions are hidden unless asked for)."""
         if not self._pool:
             return []
 
@@ -1397,6 +1409,9 @@ class Database:
             "(SELECT 1 FROM native_bindings b WHERE b.session_id = sessions.id AND b.role = 'main')"
         )
         params: list[Any] = [user_id]
+
+        if not include_archived:
+            query += " AND archived_at IS NULL"
 
         if status:
             query += f" AND status = ${len(params) + 1}"
@@ -1408,6 +1423,39 @@ class Database:
         async with self.connection() as conn:
             rows = await conn.fetch(query, *params)
         return [self._row_to_session(row) for row in rows]
+
+    async def archive_sessions(
+        self,
+        user_id: str,
+        session_ids: list[str] | None = None,
+        parent_session_id: str | None = None,
+    ) -> list[str]:
+        """Clear finished sessions from the list; returns the ids that were archived.
+
+        Only finished sessions (completed, failed, cancelled) qualify, and never the main
+        thread. Rows are kept for audit. ``session_ids`` narrows to those sessions and
+        ``parent_session_id`` to the direct children of that session; both omitted means every
+        finished session of the user.
+        """
+        if not self._pool:
+            return []
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                """UPDATE sessions SET archived_at = NOW()
+                   WHERE user_id = $1 AND archived_at IS NULL
+                     AND status IN ('completed', 'failed', 'cancelled')
+                     AND NOT EXISTS (SELECT 1 FROM native_bindings m
+                                     WHERE m.session_id = sessions.id AND m.role = 'main')
+                     AND ($2::text[] IS NULL OR id = ANY($2))
+                     AND ($3::text IS NULL OR EXISTS (
+                            SELECT 1 FROM native_bindings c
+                            WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
+                   RETURNING id""",
+                user_id,
+                session_ids,
+                parent_session_id,
+            )
+        return [r["id"] for r in rows]
 
     async def update_session(
         self,
@@ -1559,6 +1607,7 @@ class Database:
             created_at=row["created_at"],
             started_at=row.get("started_at"),
             completed_at=row.get("completed_at"),
+            archived_at=row.get("archived_at"),
             summary=row.get("summary"),
             error=row.get("error"),
             # Code work fields

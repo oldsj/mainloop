@@ -342,7 +342,10 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
-    await native_sessions.sync(binding["session_id"])
+    # A rotation holds the session lock for the cut; do not queue behind it, so the UI can
+    # show "rotating" while it happens (the reconcile loop mirrors journal evidence anyway).
+    if not native_sessions.is_rotating(binding["session_id"]):
+        await native_sessions.sync(binding["session_id"])
     session = await db.get_session(binding["session_id"])
     topics = await delegation._topic_lines(user_id)
     return MainThreadInfo(
@@ -428,7 +431,7 @@ async def get_conversation(conversation_id: str):
                    WHERE b.role='main' AND s.conversation_id=$1""",
                 conversation_id,
             )
-        if main_sid:
+        if main_sid and not native_sessions.is_rotating(main_sid):
             await native_sessions.sync(
                 main_sid
             )  # mirror new native-journal evidence first
@@ -885,40 +888,10 @@ async def send_session_message(
     return {"status": "ok", "message_id": message.id}
 
 
-class SessionLogsResponse(BaseModel):
-    """Response for session logs."""
-
-    logs: str
-    source: str
-    session_status: str
-
-
-@app.get("/sessions/{session_id}/logs", response_model=SessionLogsResponse)
-async def get_session_logs(
-    session_id: str,
-    tail: int = 100,
-    user_id: str = Header(alias="X-User-ID", default=None),
-):
-    """Get execution logs for a session."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    session = await db.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
-
-    # TODO: Get logs from K8s pod
-    logs = ""
-    source = "none"
-
-    return SessionLogsResponse(
-        logs=logs,
-        source=source,
-        session_status=session.status.value,
-    )
+# Done: nothing more will run, so the session can be cleared from the list.
+FINISHED_STATUSES = frozenset(
+    {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}
+)
 
 
 @app.post("/sessions/{session_id}/cancel")
@@ -937,13 +910,60 @@ async def cancel_session(
     if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not your session")
 
-    await db.update_session(
-        session_id, status=SessionStatus.FAILED, error="Cancelled by user"
-    )
+    if session.status in FINISHED_STATUSES:
+        return {"status": session.status.value, "agent": "not_running"}
 
-    # TODO: Cancel session worker workflow
+    from mainloop.runtime import native_sessions
 
-    return {"status": "cancelled"}
+    if await native_sessions.get_binding(session_id):
+        try:
+            agent = await native_sessions.cancel(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        # TODO: Cancel the legacy session worker workflow
+        await db.update_session(session_id, status=SessionStatus.CANCELLED)
+        agent = "not_running"
+
+    return {"status": "cancelled", "agent": agent}
+
+
+@app.post("/sessions/archive-finished")
+async def archive_finished_sessions(
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Clear every finished session (done, failed, cancelled) from the list.
+
+    Rows are kept for audit; sessions still running or waiting are left alone.
+    """
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+    archived = await db.archive_sessions(user_id)
+    return {"archived": archived}
+
+
+@app.post("/sessions/{session_id}/archive")
+async def archive_session(
+    session_id: str,
+    user_id: str = Header(alias="X-User-ID", default=None),
+):
+    """Clear one finished session from the list. A live one must be cancelled first."""
+    if not user_id:
+        user_id = get_user_id_from_cf_header()
+
+    session = await db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your session")
+    if session.status not in FINISHED_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="This session is still running or waiting; cancel it first.",
+        )
+
+    await db.archive_sessions(user_id, session_ids=[session_id])
+    return {"status": "archived"}
 
 
 # ============= Notification Endpoints =============

@@ -4,7 +4,7 @@
  * Uses EventSource for automatic reconnection and native browser support.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '$lib/config';
 
 export type SSEEventType =
   | 'connected'
@@ -193,11 +193,4 @@ export function disconnectSSE(): void {
     globalClient.disconnect();
     globalClient = null;
   }
-}
-
-/**
- * Create an SSE client for streaming task logs.
- */
-export function createTaskLogClient(taskId: string, options: SSEClientOptions = {}): SSEClient {
-  return new SSEClient(`${API_URL}/tasks/${taskId}/logs/stream`, options);
 }

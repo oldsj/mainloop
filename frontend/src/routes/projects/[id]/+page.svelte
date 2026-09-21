@@ -1,16 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { projects, currentProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
+  import { statusLabel } from '$lib/sessionStatus';
 
-  const projectId = $page.params.id!;
+  // The route is reused when only [id] changes, so load per id rather than once on mount.
+  const projectId = $derived($page.params.id);
 
-  onMount(() => {
-    if (projectId) {
-      projects.fetchProjectDetail(projectId);
-    }
+  $effect(() => {
+    if (projectId) projects.fetchProjectDetail(projectId);
   });
+
+  // The store keeps the last project until the next one arrives; don't show it under another id.
+  const detail = $derived(
+    $currentProject?.project.id === projectId ? $currentProject : null
+  );
 
   function formatDate(dateStr: string): string {
     const date = new Date(dateStr);
@@ -29,11 +33,17 @@
   function getStatusColor(status: string): string {
     switch (status) {
       case 'completed':
-        return 'text-green-400';
+        return 'text-term-green';
       case 'failed':
-        return 'text-red-400';
-      case 'in_progress':
-        return 'text-yellow-400';
+        return 'text-term-red';
+      case 'waiting_on_user':
+        return 'text-term-magenta';
+      case 'active':
+      case 'implementing':
+        return 'text-term-cyan';
+      case 'pending':
+      case 'under_review':
+        return 'text-term-yellow';
       default:
         return 'text-term-fg-muted';
     }
@@ -45,8 +55,8 @@
 </svelte:head>
 
 <div class="flex h-full flex-col overflow-hidden bg-term-bg">
-  {#if $currentProject}
-    {@const { project, open_prs, recent_commits, tasks } = $currentProject}
+  {#if detail}
+    {@const { project, open_prs, recent_commits, sessions: projectSessions } = detail}
 
     <!-- Header -->
     <header class="border-b border-term-border px-6 py-4">
@@ -153,29 +163,32 @@
         {/if}
       </section>
 
-      <!-- Associated Tasks -->
+      <!-- Sessions working on this project -->
       <section>
-        <h2 class="mb-3 text-sm font-semibold text-term-fg">Tasks</h2>
-        {#if tasks.length > 0}
+        <h2 class="mb-3 text-sm font-semibold text-term-fg">Sessions</h2>
+        {#if projectSessions.length > 0}
           <div class="space-y-2">
-            {#each tasks as task (task.id)}
-              <div class="border border-term-border bg-term-bg p-3">
+            {#each projectSessions as session (session.id)}
+              <a
+                href="/sessions/{session.id}"
+                class="block border border-term-border bg-term-bg p-3 hover:border-term-accent"
+              >
                 <div class="flex items-start justify-between gap-2">
-                  <div class="flex-1">
-                    <p class="text-sm text-term-fg">{task.description || 'Untitled task'}</p>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm text-term-fg">{session.title || 'Untitled session'}</p>
                     <p class="mt-1 text-xs text-term-fg-muted">
-                      {formatDate(task.created_at)}
+                      {formatDate(session.created_at)}
                     </p>
                   </div>
-                  <span class="text-xs {getStatusColor(task.status)}">
-                    {task.status}
+                  <span class="shrink-0 text-xs {getStatusColor(session.status)}">
+                    {statusLabel(session.status)}
                   </span>
                 </div>
-              </div>
+              </a>
             {/each}
           </div>
         {:else}
-          <p class="text-sm text-term-fg-muted">No tasks yet</p>
+          <p class="text-sm text-term-fg-muted">No sessions yet</p>
         {/if}
       </section>
     </div>

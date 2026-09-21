@@ -1,11 +1,15 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
+  import { statusLabel } from '$lib/sessionStatus';
 
   let {
     session,
+    selected = false,
     onclick
   }: {
     session: Session;
+    /** The session currently open in the main pane. */
+    selected?: boolean;
     onclick?: () => void;
   } = $props();
 
@@ -18,17 +22,6 @@
     completed: 'text-term-green',
     failed: 'text-term-red',
     cancelled: 'text-term-fg-muted'
-  };
-
-  const statusLabels: Record<string, string> = {
-    pending: 'PENDING',
-    active: 'ACTIVE',
-    waiting_on_user: 'NEEDS INPUT',
-    implementing: 'IMPLEMENTING',
-    under_review: 'IN REVIEW',
-    completed: 'DONE',
-    failed: 'FAILED',
-    cancelled: 'CANCELLED'
   };
 
   // Check if session needs user attention
@@ -59,8 +52,11 @@
 
 <button
   type="button"
-  class="w-full border border-l-4 border-term-border bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {needsAttention ? 'bg-term-magenta/5' : ''}"
+  class="w-full border border-l-4 bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {selected
+    ? 'border-term-accent'
+    : 'border-term-border'} {needsAttention ? 'bg-term-magenta/5' : ''}"
   style="border-left-color: {session.color};"
+  aria-current={selected ? 'page' : undefined}
   {onclick}
 >
   <!-- Row 1: Title + time -->
@@ -87,14 +83,14 @@
           ? 'bg-term-magenta/20 text-term-magenta'
           : session.status === 'completed'
             ? 'bg-term-green/20 text-term-green'
-            : session.status === 'failed' || session.status === 'cancelled'
+            : session.status === 'failed'
               ? 'bg-term-red/20 text-term-red'
               : isActive
                 ? 'bg-term-cyan/20 text-term-cyan'
                 : 'bg-term-fg-muted/20 text-term-fg-muted'}"
         style="border-radius: 9999px;"
       >
-        {statusLabels[session.status] || session.status.toUpperCase()}
+        {statusLabel(session.status)}
       </span>
       {#if session.issue_number}
         <a

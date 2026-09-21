@@ -5,15 +5,62 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
   import { allSessionMessages } from '$lib/stores/sessionMessages';
-  import { api, type MainThreadInfo } from '$lib/api';
+  import { api, SendError, type MainThreadInfo } from '$lib/api';
+  import { draftMessage } from '$lib/stores/draftMessage';
+  import { connection } from '$lib/stores/connection';
+  import { visibleMessages } from '$lib/messages';
   import ConversationView from './ConversationView.svelte';
-  import NativeIdentityStrip from './NativeIdentityStrip.svelte';
+  import MainThreadHeader from './MainThreadHeader.svelte';
 
   // Native main thread (MAIN_THREAD_MODE=native): a Claude session under Herdr whose window
   // Mainloop rotates. The reply is mirrored from the native journal, so we poll for it.
   let mainThread = $state<MainThreadInfo | null>(null);
+  let sendError = $state<string | null>(null);
 
-  let { messages, isLoading } = $derived($conversationStore);
+  let { messages: allMessages, isLoading } = $derived($conversationStore);
+  const native = $derived(mainThread?.mode === 'native');
+  // Protocol traffic (the pre-cut turn) is not a conversation the user had.
+  const messages = $derived(native ? visibleMessages(allMessages) : allMessages);
+  // The main thread takes one message at a time; say so instead of letting a send fail.
+  const busy = $derived(
+    native && !!(mainThread?.native?.turn_in_flight || mainThread?.native?.rotating)
+  );
+  const offline = $derived($connection.status === 'offline');
+  const placeholder = $derived(
+    offline
+      ? 'Backend unreachable…'
+      : $currentSession
+        ? `Reply to ${$currentSession.title}...`
+        : mainThread?.native?.rotating
+          ? 'Resetting the context window…'
+          : busy
+            ? 'Working…'
+            : 'Enter command...'
+  );
+
+  // Keep the main thread live without a send: child reports and rotations arrive on their own.
+  $effect(() => {
+    if (!native) return;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || $conversationStore.isLoading) return;
+      try {
+        const info = await api.getMainThread();
+        mainThread = info;
+        if (info.conversation_id) {
+          const { messages: fresh } = await api.getConversation(info.conversation_id);
+          if (!stopped) conversationStore.setMessages(fresh);
+        }
+      } catch (error) {
+        console.error('Main thread refresh failed:', error);
+      }
+    };
+    const timer = setInterval(tick, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  });
 
   // Start polling for all session messages
   $effect(() => {
@@ -31,19 +78,28 @@
     }
   });
 
-  onMount(async () => {
+  // Whether the initial load finished. Until it has, an empty thread means "not loaded", not
+  // "nothing here", so the load is retried when the backend becomes reachable.
+  let loaded = $state(false);
+  let loadInFlight = false;
+
+  async function loadInitial() {
+    if (loaded || loadInFlight) return;
+    loadInFlight = true;
     try {
-      mainThread = await api.getMainThread();
-      if (mainThread.mode === 'native' && mainThread.conversation_id) {
-        const { conversation, messages } = await api.getConversation(mainThread.conversation_id);
-        conversationStore.setConversation(conversation, messages);
+      try {
+        mainThread = await api.getMainThread();
+        if (mainThread.mode === 'native' && mainThread.conversation_id) {
+          const { conversation, messages } = await api.getConversation(mainThread.conversation_id);
+          conversationStore.setConversation(conversation, messages);
+          loaded = true;
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to load main thread info:', error);
         return;
       }
-    } catch (error) {
-      console.error('Failed to load main thread info:', error);
-    }
-    // Load the most recent conversation on startup
-    try {
+      // Load the most recent conversation on startup
       const { conversations } = await api.listConversations();
       if (conversations.length > 0) {
         // Load the most recent conversation (already sorted by updated_at desc)
@@ -51,9 +107,19 @@
         const { conversation, messages } = await api.getConversation(latest.id);
         conversationStore.setConversation(conversation, messages);
       }
+      loaded = true;
     } catch (error) {
       console.error('Failed to load conversation:', error);
+    } finally {
+      loadInFlight = false;
     }
+  }
+
+  onMount(loadInitial);
+
+  // Retry a failed initial load as soon as the backend is reachable again.
+  $effect(() => {
+    if ($connection.status === 'online') void loadInitial();
   });
 
   async function handleSendMessage(detail: { message: string }) {
@@ -71,8 +137,10 @@
     const currentConversationId = $conversationStore.currentConversation?.id;
 
     // Optimistic: Add user message immediately
+    const tempId = `temp-${Date.now()}`;
+    sendError = null;
     conversationStore.addMessage({
-      id: `temp-${Date.now()}`,
+      id: tempId,
       conversation_id: currentConversationId || 'pending',
       role: 'user',
       content: userMessage,
@@ -81,11 +149,15 @@
 
     conversationStore.setLoading(true);
 
+    // Once the backend has accepted the message it is delivered; a later failure (e.g. while
+    // waiting for the reply) must not roll it back, or the user would send it twice.
+    let accepted = false;
     try {
       const response = await api.sendMessage({
         message: userMessage,
         conversation_id: currentConversationId
       });
+      accepted = true;
 
       // Update conversation ID if this was the first message
       if (!currentConversationId) {
@@ -124,6 +196,16 @@
       projects.fetchProjects();
     } catch (error) {
       console.error('Failed to send message:', error);
+      // Delivered, but the follow-up failed: keep the message; the live refresh (and the
+      // connection banner) take it from here.
+      if (accepted) return;
+      // Not delivered: take the optimistic bubble back, keep the text, and say why.
+      conversationStore.setMessages($conversationStore.messages.filter((m) => m.id !== tempId));
+      draftMessage.set(userMessage);
+      sendError =
+        error instanceof SendError && (error.status === 409 || error.status === 0)
+          ? `${error.message} Your message is back in the box.`
+          : 'Could not send the message. Your message is back in the box.';
     } finally {
       conversationStore.setLoading(false);
     }
@@ -166,29 +248,24 @@
   }
 </script>
 
-{#if mainThread?.mode === 'native' && mainThread.session_id}
-  <NativeIdentityStrip sessionId={mainThread.session_id} />
-  <div
-    class="border-term-border text-term-fg-muted border-b px-4 py-1 font-mono text-xs"
-    data-testid="topic-index"
-  >
-    topics:
-    {#each mainThread.topics as t (t.name)}
-      <span class="mr-3" data-testid="topic-line"
-        >{t.name}{t.status_line ? ` (${t.status_line})` : ''} [{t.pending} pending]</span
-      >
-    {:else}
-      <span>none yet</span>
-    {/each}
-  </div>
-{/if}
+<div class="flex h-full min-h-0 flex-col">
+  {#if native && mainThread}
+    <MainThreadHeader info={mainThread} />
+  {/if}
 
-<!-- Always show main thread - sessions appear inline -->
-<ConversationView
-  {messages}
-  {isLoading}
-  onSendMessage={handleSendMessage}
-  placeholder={$currentSession ? `Reply to ${$currentSession.title}...` : 'Enter command...'}
-  emptyStateTitle="$ mainloop --help"
-  emptyStateMessage="Start a conversation to begin"
-/>
+  <!-- Always show main thread. Native mode: child sessions live in the side list, not inline. -->
+  <div class="min-h-0 flex-1">
+    <ConversationView
+      {messages}
+      {isLoading}
+      onSendMessage={handleSendMessage}
+      {placeholder}
+      showInlineSessions={!native}
+      error={sendError}
+      inputDisabled={busy || offline}
+      onDismissError={() => (sendError = null)}
+      emptyStateTitle={loaded ? '$ mainloop --help' : '$ connecting'}
+      emptyStateMessage={loaded ? 'Start a conversation to begin' : 'Waiting for the backend…'}
+    />
+  </div>
+</div>

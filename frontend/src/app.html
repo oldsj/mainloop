@@ -11,6 +11,15 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply the saved theme before first paint (the app applies it again once mounted).
+      try {
+        var theme = localStorage.getItem('mainloop-theme');
+        if (['eighties', 'dracula', 'nord', 'gruvbox', 'tokyo-night'].indexOf(theme) !== -1) {
+          document.documentElement.className = 'theme-' + theme;
+        }
+      } catch (e) {}
+    </script>
     %sveltekit.head%
   </head>
   <body class="bg-neutral-50 text-neutral-900" data-sveltekit-preload-data="hover">

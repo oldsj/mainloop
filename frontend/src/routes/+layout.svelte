@@ -8,6 +8,8 @@
   import { themeStore } from '$lib/stores/theme';
   import { mobileTab } from '$lib/stores/mobileTab';
   import { isMobile } from '$lib/stores/viewport';
+  import { connection } from '$lib/stores/connection';
+  import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
   import { navigationContext, isZoomed } from '$lib/stores/navigationContext';
   import { connectSSE, disconnectSSE, getSSEClient } from '$lib/sse';
   import TasksBadge from '$lib/components/TasksBadge.svelte';
@@ -68,8 +70,21 @@
     }
   }
 
+  // The backend came back after an outage: reload what the failed requests left empty or stale.
+  // (SSE reconnects by itself; polling views catch up on their own timers.)
+  let seenRecoveries = 0;
+  $effect(() => {
+    const recoveries = $connection.recoveries;
+    if (recoveries === seenRecoveries) return;
+    seenRecoveries = recoveries;
+    sessions.fetchSessions();
+    notifications.fetchNotifications();
+    inbox.fetchItems();
+  });
+
   onMount(() => {
     themeStore.initialize();
+    const stopConnectionMonitor = connection.start();
 
     // Connect SSE for real-time updates
     connectSSE();
@@ -106,6 +121,7 @@
     inbox.fetchItems();
 
     return () => {
+      stopConnectionMonitor();
       inbox.stopListening();
       unsubSessionUpdated();
       unsubSessionNeedsInput();
@@ -126,13 +142,14 @@
 
 {#if $isMobile}
   <!-- Mobile Layout -->
-  <div class="flex h-screen flex-col">
+  <div class="flex h-dvh flex-col">
     <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
       <h1 class="text-xl text-term-accent">
         <span class="text-term-fg-muted">$</span> mainloop
       </h1>
       <ThemeSelector />
     </header>
+    <ConnectionBanner />
 
     <div class="flex-1 overflow-hidden pb-16">
       {#if $navigationContext.zoomedSession}
@@ -141,6 +158,8 @@
         <div class="h-full overflow-hidden">
           {@render children()}
         </div>
+      {:else if activeTab === 'sessions'}
+        <SessionList />
       {:else if activeTab === 'tasks'}
         <TasksPanel desktop={false} mobile={true} />
       {/if}
@@ -150,7 +169,7 @@
   </div>
 {:else}
   <!-- Desktop Layout -->
-  <div class="flex h-screen flex-col">
+  <div class="flex h-dvh flex-col">
     <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
       <h1 class="text-xl text-term-accent">
         <span class="text-term-fg-muted">$</span> mainloop
@@ -161,6 +180,7 @@
         <TasksBadge />
       </div>
     </header>
+    <ConnectionBanner />
 
     <div class="flex flex-1 overflow-hidden">
       <main class="flex-1 overflow-hidden">
@@ -174,13 +194,14 @@
       <!-- Desktop: Always visible side panels (hidden in zoom mode) -->
       {#if !$navigationContext.zoomedSession}
         <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
-          <div class="flex-1 overflow-hidden border-b border-term-border">
+          <!-- Sessions take the space; inbox and projects size to their content (capped). -->
+          <div class="min-h-0 flex-1 overflow-hidden border-b border-term-border">
             <SessionList />
           </div>
-          <div class="h-1/4 overflow-hidden border-b border-term-border">
+          <div class="flex max-h-[30%] min-h-0 shrink-0 flex-col overflow-hidden border-b border-term-border">
             <TasksPanel desktop={true} />
           </div>
-          <div class="h-1/4 overflow-hidden">
+          <div class="max-h-[25%] shrink-0 overflow-hidden">
             <ProjectList />
           </div>
         </div>

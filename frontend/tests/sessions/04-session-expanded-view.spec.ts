@@ -19,12 +19,14 @@ test.describe('Session expanded view', () => {
     await expect(sessionItem).toBeVisible({ timeout: 10000 });
     await sessionItem.click();
 
-    // Session page should show tabs
-    await expect(appPage.getByRole('button', { name: 'Chat' })).toBeVisible();
-    await expect(appPage.getByRole('button', { name: 'Logs' })).toBeVisible();
+    // Session page should show the session's chat
+    await expect(
+      appPage.getByRole('heading', { name: 'Expandable Session', level: 1 })
+    ).toBeVisible();
+    await expect(appPage.getByPlaceholder('Message this session...')).toBeVisible();
   });
 
-  test('expanded view shows chat tab by default', async ({ appPage, userId }) => {
+  test('expanded view shows the chat', async ({ appPage, userId }) => {
     await seedSession(appPage, userId, {
       status: 'active',
       title: 'Chat Tab Session'
@@ -36,38 +38,8 @@ test.describe('Session expanded view', () => {
     // Click on the session - navigates to session page
     await appPage.getByText('Chat Tab Session').click();
 
-    // Chat tab should be active
-    const chatTab = appPage.getByRole('button', { name: 'Chat' }).first();
-    await expect(chatTab).toBeVisible();
-
     // Should show session chat empty state
     await expect(appPage.getByText('$ session --start')).toBeVisible();
-  });
-
-  // Skip: Tab switching has timing issues
-  test.skip('can switch to logs tab', async ({ appPage, userId }) => {
-    await seedSession(appPage, userId, {
-      status: 'active',
-      title: 'Logs Tab Session'
-    });
-
-    await appPage.reload();
-    await expect(appPage.getByRole('heading', { name: '$ mainloop' }).first()).toBeVisible();
-
-    // Click on the session
-    await appPage.getByText('Logs Tab Session').click();
-
-    // Wait for page to load
-    await expect(appPage.getByRole('button', { name: 'Chat' }).first()).toBeVisible();
-
-    // Switch to logs tab
-    const logsButton = appPage.getByRole('button', { name: 'Logs' }).first();
-    await logsButton.click();
-
-    // Should show logs placeholder
-    await expect(appPage.getByText('No logs available yet')).toBeVisible({
-      timeout: 5000
-    });
   });
 
   test('session page shows title and description', async ({ appPage, userId }) => {

@@ -69,6 +69,10 @@ class Session(BaseModel):
     )
     started_at: datetime | None = Field(None, description="Start timestamp")
     completed_at: datetime | None = Field(None, description="Completion timestamp")
+    archived_at: datetime | None = Field(
+        None,
+        description="When the session was cleared from the list; kept for audit, never deleted",
+    )
 
     # Results
     summary: str | None = Field(

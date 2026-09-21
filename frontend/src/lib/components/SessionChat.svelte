@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type Message, type Session } from '$lib/api';
+  import { connection } from '$lib/stores/connection';
+  import { draftMessage } from '$lib/stores/draftMessage';
   import ConversationView from './ConversationView.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
@@ -8,7 +10,14 @@
   let session = $state<Session | null>(null);
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
-  let error = $state<string | null>(null);
+  // The last poll failed. Cleared by the next successful one; the messages already shown stay.
+  let loadError = $state<string | null>(null);
+  // The last send was not delivered. Stays until dismissed or the next send.
+  let sendError = $state<string | null>(null);
+
+  const offline = $derived($connection.status === 'offline');
+  // A cancelled or failed session takes no more messages (the backend refuses them).
+  const ended = $derived(session?.status === 'cancelled' || session?.status === 'failed');
 
   onMount(() => {
     loadSession();
@@ -23,9 +32,10 @@
       session = result.session;
       messages = result.messages;
       isLoading = session.status === 'active';
+      loadError = null;
     } catch (e) {
       console.error('Failed to load session:', e);
-      error = 'Failed to load session';
+      loadError = "Couldn't refresh this session. Retrying…";
     }
   }
 
@@ -33,12 +43,14 @@
     if (!session) return;
 
     const userMessage = detail.message;
+    const tempId = `temp-${Date.now()}`;
+    sendError = null;
 
     // Optimistic: Add user message immediately
     messages = [
       ...messages,
       {
-        id: `temp-${Date.now()}`,
+        id: tempId,
         conversation_id: session.conversation_id,
         role: 'user',
         content: userMessage,
@@ -54,26 +66,34 @@
       await loadSession();
     } catch (e) {
       console.error('Failed to send message:', e);
-      error = 'Failed to send message';
+      // Not delivered: take the optimistic bubble back, keep the text, and say so.
+      messages = messages.filter((m) => m.id !== tempId);
+      draftMessage.set(userMessage);
+      const reason = e instanceof Error && e.message ? e.message : 'Could not send the message.';
+      sendError = `${reason} Your message is back in the box.`;
     } finally {
       isLoading = false;
     }
   }
 </script>
 
-{#if error}
-  <div class="flex h-full items-center justify-center text-term-red">
-    <p>{error}</p>
-  </div>
-{:else}
-  <ConversationView
-    {messages}
-    {isLoading}
-    onSendMessage={handleSendMessage}
-    placeholder="Send a message to this session..."
-    emptyStateTitle="$ session --start"
-    emptyStateMessage="This session's conversation will appear here"
-    showInlineSessions={false}
-    context={session?.title ?? 'session'}
-  />
-{/if}
+<ConversationView
+  {messages}
+  {isLoading}
+  onSendMessage={handleSendMessage}
+  placeholder={offline
+    ? 'Backend unreachable…'
+    : ended
+      ? `This session is ${session?.status}.`
+      : 'Message this session...'}
+  emptyStateTitle="$ session --start"
+  emptyStateMessage="This session's conversation will appear here"
+  showInlineSessions={false}
+  context={session?.title ?? 'session'}
+  error={sendError ?? loadError}
+  inputDisabled={offline || ended}
+  onDismissError={() => {
+    sendError = null;
+    loadError = null;
+  }}
+/>
