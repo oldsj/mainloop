@@ -1,0 +1,52 @@
+# WorkerPool + ActorTemplate for the preview/HMR gate measurement (gate 3 in .tasknotes/plan.md):
+# a real Vite dev server plus a generic exec shim standing in for a credentialed native agent's
+# Bash tool (see spikes/substrate-workspace-adapter/image/). No durable volume: this template
+# relies on SNAPSHOT_CONTENT_SCOPE_FULL to preserve /work (including node_modules and any edits)
+# across suspend/resume, which is what the gate is actually measuring.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: preview-gate
+  namespace: ${ATESPACE}
+  labels:
+    workload: preview-gate
+spec:
+  replicas: 1
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    resources:
+      limits:
+        cpu: '1'
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 1Gi
+---
+metadata:
+  atespace: ${ATESPACE}
+  name: preview-gate
+workerSelector:
+  matchLabels:
+    workload: preview-gate
+containers:
+- name: preview
+  image: __IMAGE__
+  env:
+  - { name: HOME, value: /home/agent }
+  - { name: HERDR_SESSION, value: mainloop-preview }
+  resources:
+    limits:
+    - { name: cpu, quantity: "1" }
+    - { name: memory, quantity: 1Gi }
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/preview-gate/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

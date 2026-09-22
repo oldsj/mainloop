@@ -1,0 +1,11 @@
+{
+  "name": "mainloop-preview-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "7.3.1"
+  }
+}

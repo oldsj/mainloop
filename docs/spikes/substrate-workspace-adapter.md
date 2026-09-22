@@ -16,13 +16,34 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 
 ## Real versus stand-in
 
-| Layer                                                                                                    | Status                                                                                                                       |
-| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane) | Real                                                                                                                         |
-| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete           | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
-| Herdr + `agentctl` inside the actor image                                                                | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
-| Claude/Codex agent processes, credentials                                                                | Not run in this spike (see "Not attempted")                                                                                  |
-| `workspace_bindings` durable mapping (Postgres)                                                          | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
+| Layer                                                                                                                                                           | Status                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane)                                                        | Real                                                                                                                         |
+| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete                                                                  | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
+| `preview-gate` WorkerPool + ActorTemplate: real Herdr server, real Vite dev server, real NGINX header-proxy, real browser (`agent-browser`), real WebSocket HMR | Real                                                                                                                         |
+| Herdr + `agentctl` inside the actor images                                                                                                                      | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
+| The preview-gate's file edits (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                             | Stand-in -- see "Why not a real agent" below                                                                                 |
+| Claude/Codex agent processes, credentials                                                                                                                       | Not run in this spike (see "Not attempted")                                                                                  |
+| `workspace_bindings` durable mapping (Postgres)                                                                                                                 | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
+
+## Why not a real agent for the preview-gate edit (credential-injection gap)
+
+Substrate's pinned commit has no generic secret-injection mechanism equivalent to a Kubernetes
+Secret volume/env mount. `ActorTemplate` container env values are literal only (no
+`envFrom`/`valueFrom`, and the template is immutable, so baking a token in would also mean
+storing it permanently in a control-plane object -- unacceptable under this task's "credentials
+by path, never by value" rule). The only credential-shaped primitives are `SystemInfo` volumes
+(`actorMetadata`: the actor's own name/atespace/uid; `trustBundle`: a named, allowlisted CA
+bundle -- today only `egress-mitm.ate.dev`) and `pkg/proto/credproviderpb` (`CredentialProvider`,
+a plugin the _egress gateway_ calls to inject a credential into an actor's _outbound_ request,
+keyed by the actor's SPIFFE identity -- not a way to hand the actor's own process a local file or
+env var it can read directly, which is what the Claude Code / Codex CLIs need). A real
+native-agent proof (gate 5) therefore needs either an unsafe workaround or new plumbing (e.g. an
+authenticated credential-relay using the `MintActorJWT`/`MintActorCertificate` RPCs already in
+`ateapipb.Control`), out of scope for this spike. The preview-gate measurement below instead uses
+a generic exec shim (`spikes/substrate-workspace-adapter/image/exec-shim.js`) that pastes text
+into a real Herdr shell pane via `herdr pane run` -- a real shell executing a real command, just
+not a credentialed agent's own tool call.
 
 ## Run it
 
@@ -38,7 +59,11 @@ KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
 KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
   KUBECONFIG=/tmp/substrate-preview-kubeconfig \
   /tmp/substrate-preview-src/hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=agentgateway
-# build kubectl-ate, build+push the actor image, apply spikes/substrate-workspace-adapter/k8s/actor-template.yaml.tmpl
+# build kubectl-ate, build+push an actor image, apply either:
+#   k8s/actor-template.yaml.tmpl        -- the mainloop-workspace template (Herdr + agentctl)
+#   k8s/preview-gate-template.yaml.tmpl -- the preview-gate template (+ image/, a real Vite dev
+#                                          server and exec shim, for the preview/HMR gate)
+#   k8s/preview-proxy.yaml.tmpl         -- the NGINX ate-target-actor header-proxy in front of it
 # (WorkerPool via `ko resolve | kubectl apply`, ActorTemplate via `kubectl ate create actor-template -f -`)
 ```
 
@@ -66,12 +91,51 @@ KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
 - Building this adapter against the real CLI found one bug fixed in the same commit:
   `create_actor` was missing `-o json` and crashed parsing `kubectl ate`'s default table output.
 
+### Preview/HMR gate (gate 3): proved live, three real bugs isolated and fixed
+
+Through the actual intended route (real browser -> NGINX header-proxy -> `atenet-router`
+(agentgateway) -> a real Vite dev server in a real actor), with a real WebSocket HMR socket open
+the whole time: a real shell write (via the exec-shim's `herdr pane run`, not a purpose-built
+`/__edit` endpoint) to `main.js` produced a genuine in-place HMR update -- confirmed by a
+`window.__hmrMarker` value set before the edit surviving after it (a full reload would have reset
+it) and by the console logging `[vite] hot updated: /main.js`. This held across an explicit
+suspend/resume cycle too: content and the marker's own page state survived, and Vite's client
+logged `server connection lost. Polling for restart...` during the suspend and reconnected
+cleanly on resume, with a further post-resume edit still hot-updating correctly.
+
+Getting there required isolating and fixing three independent, real bugs -- exactly what the
+prior Kind preview proof asked for ("isolate ... rather than re-measuring as one blob"):
+
+1. **NGINX's `proxy_pass` defaults to HTTP/1.0 upstream**, which silently breaks `Connection:
+Upgrade`. Symptom: `503 upstream call failed: SendRequest: connection closed before message
+completed` from `atenet-router`, which looked like a router bug until isolated by testing the
+   same header-routed request directly against the router (works) versus through NGINX (fails).
+   The Jupyter demo's own `nginx.conf` (the pattern this proxy was copied from) has the same gap.
+   Fix: add `proxy_http_version 1.1;`.
+2. **A hardcoded `hmr.clientPort` pointed the browser's WebSocket at the actor's internal port
+   (80), not the port the browser actually reached the proxy on.** Symptom: `[vite] failed to
+connect to websocket (Error: WebSocket closed without opened.)` in the real browser, while a
+   raw `curl` WebSocket upgrade against the same actor succeeded (isolating it to the _browser's_
+   target URL, not the routing path). Fix: do not set `hmr.clientPort`; let Vite infer it from
+   `window.location`, which is correct for same-origin proxying.
+3. **A plain shell-redirect truncate-in-place write (`cmd > file`) was never observed by Vite's
+   file watcher on this gVisor-sandboxed filesystem, with or without `usePolling`; an atomic
+   rename-replace write (`sed -i`, or any editor/tool that writes-then-renames, which is how most
+   real editors and Node's own atomic-write helpers behave) was picked up every time.** This was
+   isolated by holding the watcher config fixed and varying only the write method. The initial
+   hypothesis (inotify does not work under gVisor) was wrong and is corrected here rather than
+   left standing: the default inotify-based watch picked up `sed -i` edits fine, with or without
+   polling enabled. `usePolling` is kept in the fixture's `vite.config.js` as defense in depth,
+   but it was not the actual fix.
+
+None of these three are Substrate bugs in the sense of "broken by Substrate" -- (1) is a gap in
+the demo NGINX pattern this repo's own docs show, (2) is a Vite config default that does not
+suit a proxied deployment, and (3) is a filesystem-semantics fact worth knowing about (most real
+editors already write this way, so it may not affect a real native-agent's edits, which is
+exactly why gate 5's live proof matters and was not reached in this run).
+
 ## Limits / not attempted in this run
 
-- **Preview/HMR gate**: no Vite actor, no authenticated fixed-header proxy, no `agent-browser`
-  trial. The prior `substrate-kind-preview-proof` note already showed this works and does not
-  always work reliably (10-30s stalls with an HMR socket open); this run did not repeat or
-  extend that measurement against Mainloop's own actor template.
 - **Dev-service gate**: no Postgres actor, no egress policy, no reconnect-after-wake trial against
   our template.
 - **Native-session gate, live**: no real Claude/Codex session was started inside a Substrate
@@ -85,7 +149,10 @@ KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
 
 ## Cleanup
 
-All test actors deleted, then the `substrate-preview` cluster and its `kind-registry` deleted
-(`hack/delete-kind-cluster.sh`). Final `kind get clusters` / `docker ps` showed only
-`mainloop-test` / `mainloop-test-control-plane`. Root disk free was unchanged (~26G) before and
-after. No Mainloop repository files outside this branch's own commits were changed.
+Each cluster lane in this spike (the initial adapter/CRASHED trial, and the later preview-gate
+trial) deleted its own test actors, then the `substrate-preview` cluster and its `kind-registry`
+(`hack/delete-kind-cluster.sh`), and pruned the locally built, unpushed-elsewhere Docker images.
+Final `kind get clusters` / `docker ps` showed only `mainloop-test` /
+`mainloop-test-control-plane` after every lane. Root disk stayed in the 19-27G-free range
+throughout (above the plan's 8G in-flight-trial abort threshold at all times); available RAM
+stayed above 8G. No Mainloop repository files outside this branch's own commits were changed.
