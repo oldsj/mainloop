@@ -310,29 +310,36 @@ test-k8s-components: ## Test K8s namespace/secret creation (quick)
 test-k8s-job: ## Test K8s job creation (creates a real job)
 	cd backend && uv run python scripts/test_k8s_components.py --job
 
-test-worker-e2e: ## Run full worker E2E test (requires running backend + k8s)
+test-worker-e2e: ## Run full worker E2E test (disabled; ENABLE_E2E=1 to opt in)
+	@./scripts/e2e-guard.sh
 	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
 # =============================================================================
 # Testing (DevSpace + Playwright)
+#
+# The Playwright and live-agent e2e suites are disabled by default and no
+# longer run in CI. Set ENABLE_E2E=1 to run them explicitly.
 # =============================================================================
 TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
 
-test: ## Deploy to Kind + open Playwright UI
+test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
+	@./scripts/e2e-guard.sh
 	@./scripts/test-guard.sh
 	devspace deploy --profile test --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 	@echo "Waiting for backend..."
 	@until curl -sf $(TEST_API_URL)/health > /dev/null 2>&1; do sleep 2; done
 	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test --ui
 
-test-run: ## Run tests headless (after make test or make dev)
+test-run: ## Run tests headless (disabled; ENABLE_E2E=1 to opt in)
+	@./scripts/e2e-guard.sh
 	@./scripts/wait-for-ready.sh
 	@cd frontend && PLAYWRIGHT_BASE_URL=$(TEST_FRONTEND_URL) API_URL=$(TEST_API_URL) pnpm exec playwright test $(TEST_ARGS)
 
 test-reset: dev-reset ## Alias for dev-reset
 
-test-ci: ## Run tests in CI (uses legacy kind scripts, no DevSpace)
+test-ci: ## Run tests with legacy kind scripts (disabled; ENABLE_E2E=1 to opt in)
+	@./scripts/e2e-guard.sh
 	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
 		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set"; \
 		exit 1; \

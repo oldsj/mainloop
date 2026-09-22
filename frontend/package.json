@@ -10,9 +10,9 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint": "prettier --check . && eslint .",
-    "test": "playwright test",
-    "test:ui": "playwright test --ui",
-    "test:debug": "playwright test --debug",
+    "test": "../scripts/e2e-guard.sh && playwright test",
+    "test:ui": "../scripts/e2e-guard.sh && playwright test --ui",
+    "test:debug": "../scripts/e2e-guard.sh && playwright test --debug",
     "test:report": "playwright show-report"
   },
   "devDependencies": {
