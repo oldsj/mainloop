@@ -7,7 +7,7 @@ Human-readable test plans for mainloop. The Playwright Generator agent transform
 1. Write test scenarios in markdown format (see examples below)
 2. Run the Generator agent: "Generate tests from specs/inbox-management.md"
 3. Tests are created in `tests/` directory
-4. Run tests: `pnpm test`
+4. Run tests: `ENABLE_E2E=1 pnpm test` (Playwright is disabled by default and does not run in CI)
 
 ## Spec Format
 
