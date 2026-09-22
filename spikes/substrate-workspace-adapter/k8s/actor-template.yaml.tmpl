@@ -1,0 +1,76 @@
+# WorkerPool (a real K8s CRD, `kubectl apply`) plus the Mainloop workspace ActorTemplate
+# (protojson-shaped ateapipb.ActorTemplate, applied with `kubectl ate create actor-template -f -`
+# after the __IMAGE__ placeholder is substituted with a digest-pinned reference -- Substrate
+# requires containers.image to be pinned by digest). Mirrors the shape of the pinned checkout's
+# demos/counter/{counter,counter-template}.yaml.tmpl.
+#
+# The atespace ("mainloop-workspaces" by default; see backend/src/mainloop/config.py
+# substrate_atespace) is both this WorkerPool's k8s namespace and a control-plane atespace
+# resource created separately with `kubectl ate create atespace`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: ${TEMPLATE_NAME}
+  namespace: ${ATESPACE}
+  labels:
+    workload: ${TEMPLATE_NAME}
+spec:
+  replicas: 2
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    resources:
+      limits:
+        cpu: '2'
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 2Gi
+---
+# ActorTemplate: one Herdr + agentctl container per actor, same image and entrypoint as
+# spikes/k8s-herdr-agents (see that spike's Dockerfile/bin/entrypoint.sh), running under
+# Substrate instead of a StatefulSet. snapshotsConfig captures full process memory on
+# suspend/commit so a resumed actor's native agent session (Claude/Codex under Herdr) continues
+# rather than cold-booting -- this is the behavior gate 5 (native-session continuity) measures.
+metadata:
+  atespace: ${ATESPACE}
+  name: ${TEMPLATE_NAME}
+workerSelector:
+  matchLabels:
+    workload: ${TEMPLATE_NAME}
+containers:
+- name: workspace
+  image: __IMAGE__
+  command:
+  - /usr/local/bin/entrypoint.sh
+  env:
+  - { name: HOME, value: /workspace/.home }
+  - { name: WORKSPACE_PATH, value: /workspace/repo }
+  - { name: STANDIN_STATE_DIR, value: /workspace/.standin }
+  - { name: HERDR_SESSION, value: mainloop-substrate }
+  - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
+  - { name: CODEX_HOME, value: /workspace/.codex }
+  volumeMounts:
+  - { name: workspace, mountPath: /workspace }
+  # ateapipb.SecurityContext only models Linux capability adjustments (no
+  # allowPrivilegeEscalation/readOnlyRootFilesystem -- the gVisor sandbox is the isolation
+  # boundary here, not those pod-level knobs), so there is nothing to set beyond the container's
+  # own non-root USER (see the image's Dockerfile).
+  resources:
+    limits:
+    - { name: cpu, quantity: "2" }
+    - { name: memory, quantity: 2Gi }
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/mainloop-workspaces/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+volumes:
+- name: workspace
+  durableDir: {}

@@ -98,7 +98,9 @@ class SubstrateControlTests(unittest.TestCase):
             run(ctl.get_actor("mainloop-workspaces", "ml-abc"))
 
     def test_create_actor_uses_template_flag(self):
-        ctl = FakeControl([ExecResult(0, actor_json("ACTOR_STATE_RESUMING"), "")])
+        # A freshly created actor starts SUSPENDED (never auto-started); measured against a
+        # live kind-substrate-preview cluster while building this adapter.
+        ctl = FakeControl([ExecResult(0, actor_json("ACTOR_STATE_SUSPENDED"), "")])
         run(
             ctl.create_actor(
                 "mainloop-workspaces", "ml-abc", template="mainloop-workspace"
@@ -114,6 +116,8 @@ class SubstrateControlTests(unittest.TestCase):
                 "mainloop-workspaces",
                 "--template",
                 "mainloop-workspace",
+                "-o",
+                "json",
             ],
         )
 

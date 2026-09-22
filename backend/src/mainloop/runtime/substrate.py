@@ -165,7 +165,17 @@ class SubstrateControl:
     async def create_actor(
         self, atespace: str, name: str, *, template: str, tag: str | None = None
     ) -> ActorRecord:
-        args = ["create", "actor", name, "--atespace", atespace, "--template", template]
+        args = [
+            "create",
+            "actor",
+            name,
+            "--atespace",
+            atespace,
+            "--template",
+            template,
+            "-o",
+            "json",
+        ]
         if tag:
             args += ["--tag", tag]
         res = await self._exec(args, timeout=90)
