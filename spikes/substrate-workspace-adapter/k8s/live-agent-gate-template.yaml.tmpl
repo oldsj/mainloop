@@ -1,0 +1,45 @@
+# WorkerPool + ActorTemplate for the bounded live native-agent proof (gate 5 in
+# .tasknotes/plan.md): real Claude Code / Codex CLIs under Herdr, driven by the exec shim. See
+# spikes/substrate-workspace-adapter/live-agent-image/.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: live-agent-gate
+  namespace: ${ATESPACE}
+  labels:
+    workload: live-agent-gate
+spec:
+  replicas: 1
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    resources:
+      limits: { cpu: '2', memory: 2Gi }
+      requests: { cpu: 250m, memory: 2Gi }
+---
+metadata:
+  atespace: ${ATESPACE}
+  name: live-agent-gate
+workerSelector:
+  matchLabels:
+    workload: live-agent-gate
+containers:
+- name: live-agent
+  image: __IMAGE__
+  env:
+  - { name: CRED_SERVER, value: "cred-server.cred-server.svc.cluster.local" }
+  resources:
+    limits:
+    - { name: cpu, quantity: "2" }
+    - { name: memory, quantity: 2Gi }
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/live-agent-gate/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

@@ -24,7 +24,8 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 | `dev-service-gate` WorkerPool + ActorTemplate: real `psql`, real external `postgres:16-alpine` StatefulSet, real `EgressPolicy` (CIDR rule, created via a small gRPC tool since `kubectl-ate` has no CLI verb for it) | Real                                                                                                                         |
 | Herdr + `agentctl` inside the actor images                                                                                                                                                                            | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
 | File edits and shell commands run inside actors (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                                                                 | Stand-in -- see "Why not a real agent" below                                                                                 |
-| Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run in this spike (see "Not attempted")                                                                                  |
+| `live-agent-gate` WorkerPool + ActorTemplate: real Claude/Codex CLIs, real cred-server                                                                                                                                | Built, not run -- blocked at cluster creation by Claude Code's own safety classifier ("Create Unsafe Agents"); see "Limits"  |
+| Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run in this spike (see "Limits")                                                                                         |
 | `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
 
 ## Why not a real agent for the preview-gate edit (credential-injection gap)
@@ -168,10 +169,17 @@ per `docs/network-egress.md`'s "CIDR/all policy: dial now" passthrough path) ins
 
 ## Limits / not attempted in this run
 
-- **Native-session gate, live**: no real Claude/Codex session was started inside a Substrate
-  actor; the credential wiring authorized by `.tasknotes/plan.md` was not used. Only the
-  fixture-level contract logic (`test_workspace_adapter.py`) and the generic
-  restore-vs-reboot log evidence above are available.
+- **Native-session gate, live**: infrastructure built and ready
+  (`spikes/substrate-workspace-adapter/live-agent-image/`, `k8s/cred-server.yaml.tmpl`,
+  `k8s/live-agent-gate-template.yaml.tmpl`) -- real Claude/Codex CLIs, credentials fetched at
+  actor-runtime through the same egress-CIDR mechanism gate 4 proved enforces (never baked into
+  a template), reusing `.tasknotes/plan.md`'s by-path Secret pattern. The trial was not run: the
+  cluster-creation step was declined by Claude Code's own auto-mode safety classifier ("Create
+  Unsafe Agents"), and the run stopped there rather than seeking a workaround, per the plan's own
+  "missing permission" stopping criterion -- this involves the operator's real subscription
+  credentials, so proceeding past a safety control without explicit human authorization was not
+  appropriate. Only the fixture-level contract logic (`test_workspace_adapter.py`) and the
+  generic restore-vs-reboot log evidence above are available for this gate.
 - **`workspace_bindings` orchestration functions** (`ensure_workspace`, `resume_workspace`, ...)
   were not exercised against a live Postgres + running backend; only their extracted pure logic
   (`plan_ensure`, `_binding_from_row`, `is_crashed`) is unit tested, and the transport layer

@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2312,SC2310,SC2311,SC2249  # pedantic optional checks; spike scripts
+# Pod-side operations, same verbs for every agent kind. Kind, args and resume syntax come from
+# /etc/agent-config/<binding>.env (ConfigMap), not from this script.
+#   agentctl start <binding> [--name N] [--new-id ID | --resume ID]   start under Herdr
+#       context-model options: --cwd-rel D (scratch cwd under the workspace root), --model M,
+#       --effort E, --standing-b64 B (standing context file), --token T (per-binding CLI token)
+#   agentctl send <name> <text>          deliver one prompt (Herdr input only; never reads a reply)
+#   agentctl native-id <name>            discover the native session id (from the native journal)
+#   agentctl journal <name> <id> <from>  print native journal lines after line <from>
+#   agentctl status <name>               Herdr liveness/state hint (JSON)
+#   agentctl stop <name>
+#   agentctl prompt <binding> <text>     stand-in only: deliver and grep the reply from the pane
+#   agentctl identity <name>
+# Replies for real agents are read from the native journals via `journal`, never from the pane.
+set -eu
+cmd="${1:?usage: agentctl start|send|native-id|journal|status|stop|prompt|identity ...}"
+shift
+H=(herdr --session "${HERDR_SESSION}")
+STATE="${WORKSPACE_PATH}/.mainloop"
+conf_dir="${AGENT_CONFIG_DIR:-/etc/agent-config}"
+
+load_conf() { # <binding>
+	[[ -f "${conf_dir}/$1.env" ]] || {
+		echo "no binding config: ${conf_dir}/$1.env" >&2
+		exit 2
+	}
+	# shellcheck disable=SC1090
+	. "${conf_dir}/$1.env"
+}
+
+cwd="${WORKSPACE_PATH}"
+
+trust_cwd() { # <kind> <dir>: pre-accept the trust dialog for a scratch cwd (no human at the TUI)
+	case "$1" in
+	claude)
+		local tmp
+		tmp="$(mktemp)"
+		jq --arg p "$2" '.projects[$p] = ((.projects[$p] // {}) + {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true})' "${HOME}/.claude.json" >"${tmp}" &&
+			cat "${tmp}" >"${HOME}/.claude.json"
+		rm -f "${tmp}"
+		;;
+	codex)
+		grep -qF "[projects.\"$2\"]" "${CODEX_HOME}/config.toml" || printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$2" >>"${CODEX_HOME}/config.toml"
+		;;
+	esac
+}
+
+pane_for_name() { # <name>: one Herdr workspace (labelled with the name) per agent
+	local ws
+	ws="$("${H[@]}" workspace list | jq -r --arg b "$1" '.result.workspaces[] | select(.label==$b) | .workspace_id' | head -n1)"
+	if [[ -z ${ws} ]]; then
+		ws="$("${H[@]}" workspace create --label "$1" --cwd "${cwd}" | jq -r .result.workspace.workspace_id)"
+	fi
+	"${H[@]}" pane list --workspace "${ws}" | jq -r '.result.panes[0].pane_id'
+}
+
+journal_file() { # <kind> <id>
+	case "$1" in
+	claude) find "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/projects" -name "$2.jsonl" 2>/dev/null | head -n1 ;;
+	codex) find "${CODEX_HOME}/sessions" -name "rollout-*-$2.jsonl" 2>/dev/null | head -n1 ;;
+	*)
+		echo "no journal for kind $1" >&2
+		return 1
+		;;
+	esac
+}
+
+case "${cmd}" in
+start)
+	binding="${1:?binding required}"
+	shift
+	name="${binding}"
+	mode=new
+	nid=""
+	cwd_rel=""
+	model=""
+	effort=""
+	standing_b64=""
+	token=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--name)
+			name="$2"
+			shift 2
+			;;
+		--new-id)
+			mode=new
+			nid="$2"
+			shift 2
+			;;
+		--resume)
+			mode=resume
+			nid="$2"
+			shift 2
+			;;
+		--cwd-rel)
+			cwd_rel="$2"
+			shift 2
+			;;
+		--model)
+			model="$2"
+			shift 2
+			;;
+		--effort)
+			effort="$2"
+			shift 2
+			;;
+		--standing-b64)
+			standing_b64="$2"
+			shift 2
+			;;
+		--token)
+			token="$2"
+			shift 2
+			;;
+		*)
+			echo "unknown option $1" >&2
+			exit 2
+			;;
+		esac
+	done
+	load_conf "${binding}"
+	ident="${STATE}/${name}.identity.json"
+	if "${H[@]}" agent get "${name}" >/dev/null 2>&1; then
+		echo "agent ${name} already live"
+		exit 0
+	fi
+	if [[ ${mode} == resume ]]; then args="${AGENT_RESUME_ARGS:-${AGENT_ARGS}}"; else args="${AGENT_NEW_ARGS:-${AGENT_ARGS}}"; fi
+	if [[ -n ${cwd_rel} ]]; then
+		cwd="$(dirname "${WORKSPACE_PATH}")/${cwd_rel}"
+		mkdir -p "${cwd}/.mainloop"
+		chmod 700 "${cwd}/.mainloop"
+		# Secrets and generated context go to files on the PVC (0600), never into the pane command.
+		[[ -z ${token} ]] || (
+			umask 077
+			printf '%s' "${token}" >"${cwd}/.mainloop/token"
+		)
+		[[ -z ${standing_b64} ]] || printf '%s' "${standing_b64}" | base64 -d >"${cwd}/.mainloop/standing.md"
+		[[ ! -f "${conf_dir}/${binding}.settings.json" ]] || cp "${conf_dir}/${binding}.settings.json" "${cwd}/.mainloop/settings.json"
+		trust_cwd "${AGENT_KIND}" "${cwd}"
+	fi
+	args="${args//\{id\}/${nid}}"
+	args="${args//\{model\}/${model}}"
+	args="${args//\{effort\}/${effort}}"
+	args="${args//\{standing\}/${cwd}/.mainloop/standing.md}"
+	args="${args//\{settings\}/${cwd}/.mainloop/settings.json}"
+	mkdir -p "${STATE}"
+	touch "${STATE}/${name}.started"
+	pane="$(pane_for_name "${name}")"
+	# $args is intentionally word-split: it is the native executable's argument list.
+	# shellcheck disable=SC2086
+	"${H[@]}" agent start "${name}" --kind "${AGENT_KIND}" --pane "${pane}" --timeout 60000 -- ${args} >/dev/null
+	"${H[@]}" agent get "${name}" | jq -c --arg b "${binding}" --arg k "${AGENT_KIND}" --arg args "${args}" --arg mode "${mode}" --arg nid "${nid}" \
+		'.result.agent | {binding:$b, kind:$k, args:$args, mode:$mode, native_session_id:(if $nid=="" then null else $nid end), herdr_agent:.agent, herdr_name:.name, pane_id, terminal_id, workspace_id, status:.agent_status}' >"${ident}"
+	cat "${ident}"
+	;;
+send)
+	name="${1:?name required}"
+	text="${2:?text required}"
+	# One delivery, no --wait retries: Herdr status is a hint, the journal is the receipt.
+	"${H[@]}" agent prompt "${name}" "${text}" >/dev/null
+	echo sent
+	;;
+native-id)
+	name="${1:?name required}"
+	ident="${STATE}/${name}.identity.json"
+	kind="$(jq -r .kind "${ident}")"
+	known="$(jq -r '.native_session_id // empty' "${ident}")"
+	if [[ -n ${known} ]]; then
+		echo "${known}"
+		exit 0
+	fi
+	case "${kind}" in
+	codex)
+		f="$(find "${CODEX_HOME}/sessions" -name 'rollout-*.jsonl' -newer "${STATE}/${name}.started" 2>/dev/null | sort | head -n1)"
+		[[ -n ${f} ]] || exit 1
+		id="$(basename "${f}" .jsonl | sed -E 's/^rollout-[0-9T:-]+-//')"
+		;;
+	*) exit 1 ;;
+	esac
+	tmp="$(mktemp)"
+	jq --arg id "${id}" '.native_session_id=$id' "${ident}" >"${tmp}" && cat "${tmp}" >"${ident}" && rm -f "${tmp}"
+	echo "${id}"
+	;;
+journal)
+	kind="$(jq -r .kind "${STATE}/${1:?name required}.identity.json")"
+	id="${2:?native id required}"
+	from="${3:-0}"
+	f="$(journal_file "${kind}" "${id}")"
+	[[ -n ${f} ]] || {
+		echo "#nofile"
+		exit 0
+	}
+	n="$(wc -l <"${f}")" # complete (newline-terminated) lines only
+	printf '#file\t%s\t%s\n' "${f}" "${n}"
+	if [[ ${n} -gt ${from} ]]; then sed -n "$((from + 1)),${n}p" "${f}" | awk -v s="${from}" '{print (NR + s) "\t" $0}'; fi
+	;;
+status)
+	# A failed `agent get` must fail the verb (a pipeline would report jq's exit status).
+	out="$("${H[@]}" agent get "${1:?name required}")" || exit 1
+	printf '%s' "${out}" | jq -c '.result.agent | {name, agent, pane_id, terminal_id, status: .agent_status}'
+	;;
+prompt) # stand-in agents only
+	binding="${1:?binding required}"
+	text="${2:?prompt text required}"
+	"${H[@]}" agent prompt "${binding}" "${text}" --wait --timeout 60000 >/dev/null
+	"${H[@]}" agent read "${binding}" | grep 'STANDIN-REPLY' | grep -F "echo=${text}" | tail -n1
+	;;
+stop)
+	name="${1:?name required}"
+	kind="$(jq -r '.kind // empty' "${STATE}/${name}.identity.json" 2>/dev/null || true)"
+	if [[ ${kind} == claude ]]; then
+		# A pasted "/exit" is text, and the restricted main thread has slash commands disabled:
+		# two quick Ctrl-C key presses exit Claude Code (measured).
+		"${H[@]}" agent send-keys "${name}" ctrl+c ctrl+c >/dev/null
+	else
+		"${H[@]}" agent prompt "${name}" "/exit" >/dev/null
+	fi
+	for _ in $(seq 1 20); do
+		"${H[@]}" agent get "${name}" >/dev/null 2>&1 || {
+			echo "agent ${name} stopped"
+			exit 0
+		}
+		sleep 0.5
+	done
+	echo "agent ${name} still live after stop" >&2
+	exit 1
+	;;
+identity) cat "${STATE}/${1:?name required}.identity.json" ;;
+*)
+	echo "unknown command ${cmd}" >&2
+	exit 2
+	;;
+esac
