@@ -3,22 +3,16 @@
 # Live-agent-gate actor entrypoint (gate 5 in .tasknotes/plan.md, bounded live proof): a real
 # Herdr server plus real Claude Code / Codex CLIs. Substrate has no Kubernetes-Secret-equivalent
 # volume/env mechanism for an actor (see docs/spikes/substrate-workspace-adapter.md,
-# "Credential-injection gap"), so credentials are fetched over the network from a small in-cluster
-# server, reachable only because this actor's narrow EgressPolicy allows exactly that server's
-# ClusterIP -- the same CIDR-scoped access-control mechanism gate 4 (dev-service) proved actually
-# enforces (a non-allowed destination gets a clean 403), reused here as the auth boundary rather
-# than inventing a new one. Never echoed, never written to a template, never logged.
+# "Credential-injection gap").
+#
+# Credential-free by construction: this entrypoint never fetches a credential and never
+# requires network access to reach a running state. The template controller uses the
+# ActorTemplate's `/healthz` readiness check before accepting the golden actor. A boot path
+# that depends on a credential fetch succeeding can fail golden creation when its relay is
+# denied or unreachable, which is what happened. Credential delivery is deferred to a
+# reviewed boundary and is never performed during golden-actor warmup or from this entrypoint.
 set -eu
 mkdir -p "${HOME}" "${HOME}/.claude" "${CODEX_HOME}"
-
-if [[ -n ${CRED_SERVER-} ]]; then
-  curl -fsS "http://${CRED_SERVER}/claude-token" -o "${HOME}/.claude-oauth-token"
-  chmod 600 "${HOME}/.claude-oauth-token"
-  CLAUDE_CODE_OAUTH_TOKEN="$(tr -d ' \r\n' <"${HOME}/.claude-oauth-token")"
-  export CLAUDE_CODE_OAUTH_TOKEN
-  curl -fsS "http://${CRED_SERVER}/codex-auth.json" -o "${CODEX_HOME}/auth.json"
-  chmod 600 "${CODEX_HOME}/auth.json"
-fi
 
 # Claude Code: onboarding done, workspace trusted, bypass-permissions warning accepted.
 if [[ ! -s "${HOME}/.claude.json" ]]; then
@@ -39,19 +33,35 @@ grep -q '^\[notice\]' "${CODEX_HOME}/config.toml" || printf '\n[notice]\nhide_ra
 
 mkdir -p "${WORKSPACE_PATH}"
 [[ -d "${WORKSPACE_PATH}/.git" ]] || git -C "${WORKSPACE_PATH}" init -q
+# Credential-free identity/counter marker for the fake-payload proof (recovery plan step 2):
+# a plain file the exec shim can read/increment to verify golden restore and suspend/resume
+# without any real agent session or credential.
+[[ -f "${WORKSPACE_PATH}/gate5-counter" ]] || echo 0 >"${WORKSPACE_PATH}/gate5-counter"
 
-echo "herdr $(herdr --version) server starting (HOME=${HOME} session=${HERDR_SESSION})"
+echo "herdr $(herdr --version) starting (HOME=${HOME} session=${HERDR_SESSION})"
 herdr --session "${HERDR_SESSION}" server &
 HERDR_PID=$!
 
+# The persistent control service's readiness check: an explicit, confirmed status call,
+# not a fixed sleep or a pre-confirmation log line. The ActorTemplate's `/healthz` probe
+# checks the Herdr server and this shell pane before the controller captures its snapshot.
+ready=0
 for _ in $(seq 1 60); do
-  herdr --session "${HERDR_SESSION}" status server >/dev/null 2>&1 && break
+  if herdr --session "${HERDR_SESSION}" status server >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
   sleep 0.5
 done
-
+if [[ ${ready} -ne 1 ]]; then
+  echo "CONTROL_SERVICE_READINESS_TIMEOUT: herdr server did not report ready within 30s" >&2
+  kill "${HERDR_PID}" 2>/dev/null || true
+  exit 1
+fi
 shell_ws=$(herdr --session "${HERDR_SESSION}" workspace create --label shell --cwd "${WORKSPACE_PATH}")
 shell_pane=$(echo "${shell_ws}" | jq -r '.result.root_pane.pane_id')
 
 EXEC_SHIM_PANE_ID="${shell_pane}" HERDR_SESSION="${HERDR_SESSION}" node "${EXEC_SHIM}" &
+echo "CONTROL_SERVICE_READY session=${HERDR_SESSION} pane=${shell_pane}"
 
 wait "${HERDR_PID}"

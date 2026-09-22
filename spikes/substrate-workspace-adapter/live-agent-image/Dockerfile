@@ -1,9 +1,10 @@
 # Live-agent-gate spike image (gate 5, bounded live proof): real Herdr + real Claude Code /
 # Codex CLIs + agentctl, driven by the same generic exec shim as the other gate images.
 # herdr/claude/codex/codex-code-mode-host are copied from the host into the build context by the
-# build script (never committed). No credentials are baked into this image; they are fetched at
-# actor runtime from an in-cluster server reachable only via a narrow EgressPolicy (see
-# entrypoint.sh and docs/spikes/substrate-workspace-adapter.md).
+# build script (never committed). No credentials are baked into this image, and entrypoint.sh
+# never fetches one: the golden actor built from this image boots to a ready control service
+# with no credential and no external network access. Credential delivery remains deferred until
+# a reviewed boundary exists (see docs/spikes/substrate-workspace-adapter.md).
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends jq ca-certificates git curl procps ripgrep \
     && rm -rf /var/lib/apt/lists/* \

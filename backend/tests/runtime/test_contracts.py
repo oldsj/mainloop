@@ -221,6 +221,31 @@ class ContractTests(unittest.TestCase):
         self.store.create_attempt(attempt("retry", generation=2), 2)
         self.assertEqual(len(self.store.attempts), 2)
 
+    def test_backend_restart_reconciles_persisted_recorded_attempt_before_retry(self):
+        # A restart leaves the durable attempt row intact. Ownership takeover is
+        # the in-memory contract's fake-backed model of loading that row under a
+        # new generation; no transport or database is involved.
+        recorded = self.store.create_attempt(attempt(), 1)
+        self.assertEqual(recorded.state, DeliveryState.RECORDED)
+        self.store.take_ownership(1)
+
+        historical = self.store.attempts[0]
+        self.assertEqual(historical.state, DeliveryState.RECORDED)
+        self.assertEqual(historical.ownership_generation, 1)
+        with self.assertRaises(ContractError):
+            self.store.create_attempt(attempt("retry", generation=2), 2)
+        with self.assertRaises(ContractError):
+            self.store.reconcile(self.evidence("delivered"), 2)
+
+        retired = self.store.reconcile(self.evidence("not_delivered"), 2)
+        self.assertEqual(retired.state, DeliveryState.FAILED)
+        self.assertEqual(retired.result, "not_delivered")
+        self.store.create_attempt(attempt("retry", generation=2), 2)
+        self.assertEqual(
+            [item.state for item in self.store.attempts],
+            [DeliveryState.FAILED, DeliveryState.RECORDED],
+        )
+
     def test_takeover_reconnect_deduplicates_source_event(self):
         original = self.store.ingest(attention(), 1)
         self.store.take_ownership(1)

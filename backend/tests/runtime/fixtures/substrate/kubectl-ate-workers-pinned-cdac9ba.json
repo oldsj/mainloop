@@ -1,0 +1,25 @@
+{
+  "workers": [
+    {
+      "labels": {
+        "workload": "live-agent-gate"
+      },
+      "metadata": {
+        "name": "worker-1"
+      },
+      "sandboxClass": "gvisor",
+      "status": {
+        "allocated": {
+          "actors": 3
+        },
+        "capacity": {
+          "actors": 4
+        },
+        "state": "WORKER_STATE_ACTIVE"
+      },
+      "workerNamespace": "live-agent-gate",
+      "workerPod": "worker-1-pod",
+      "workerPool": "live-agent-gate-workers"
+    }
+  ]
+}

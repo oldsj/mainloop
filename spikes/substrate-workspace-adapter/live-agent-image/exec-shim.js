@@ -32,7 +32,29 @@ function herdr(args, res) {
   });
 }
 
+function healthz(res) {
+  execFile('herdr', ['--session', SESSION, 'status', 'server'], (statusErr, stdout) => {
+    if (statusErr || !/^status:\s+running\s*$/m.test(stdout)) {
+      res.writeHead(503, { 'content-type': 'text/plain' }).end('not ready');
+      return;
+    }
+    execFile('herdr', ['--session', SESSION, 'pane', 'read', PANE_ID], (paneErr) => {
+      if (paneErr) {
+        res.writeHead(503, { 'content-type': 'text/plain' }).end('not ready');
+        return;
+      }
+      // The request is served by this shim, Herdr reports a running server, and pane read
+      // confirms the shell pane still exists. Do not expose status output or pane contents.
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+    });
+  });
+}
+
 const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/healthz') {
+    healthz(res);
+    return;
+  }
   if (req.method === 'GET' && req.url === '/read') {
     herdr(['pane', 'read', PANE_ID], res);
     return;

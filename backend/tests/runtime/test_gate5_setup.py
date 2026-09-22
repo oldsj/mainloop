@@ -1,0 +1,389 @@
+"""Credential-free regressions for the gate-5 setup script's build and rerun identity."""
+
+import json
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from mainloop.runtime.substrate import (
+    ActorFailedToStart,
+    ActorRecord,
+    ActorState,
+    IdentityConflict,
+)
+
+from scripts import gate5_setup
+
+FIXTURE_KUBECONFIG = "/fixture/kubeconfig"
+FIXTURE_KO = "/fixture/substrate/bin/ko"
+
+
+def completed(argv, returncode=0, stdout="", stderr=""):
+    return SimpleNamespace(
+        args=argv, returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+class Gate5SourceAndBuildTests(unittest.TestCase):
+    def make_source(self, root: Path) -> Path:
+        (root / ".git").mkdir(parents=True)
+        (root / "go.mod").write_text("module fixture\n")
+        (root / ".ko.yaml").write_text("defaultBaseImage: scratch\n")
+        return root
+
+    def test_source_requires_pinned_checkout_and_required_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = self.make_source(Path(temp_dir) / "substrate")
+            calls = []
+
+            def runner(argv, **kwargs):
+                calls.append(argv)
+                return completed(
+                    argv, stdout=gate5_setup.PINNED_SUBSTRATE_COMMIT + "\n"
+                )
+
+            self.assertEqual(
+                gate5_setup.verify_substrate_source(str(source), runner=runner),
+                str(source),
+            )
+            self.assertEqual(calls[0][:4], ["git", "-C", str(source), "rev-parse"])
+
+    def test_source_rejects_wrong_commit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = self.make_source(Path(temp_dir) / "substrate")
+
+            def runner(argv, **kwargs):
+                return completed(argv, stdout="a" * 40)
+
+            with self.assertRaisesRegex(RuntimeError, "must be pinned"):
+                gate5_setup.verify_substrate_source(str(source), runner=runner)
+
+    def test_source_rejects_missing_go_module_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "substrate"
+            source.mkdir()
+            (source / ".git").mkdir()
+            with self.assertRaisesRegex(RuntimeError, "missing go.mod"):
+                gate5_setup.verify_substrate_source(str(source))
+
+    def test_ko_resolve_uses_pinned_source_cwd_and_explicit_kube_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = self.make_source(Path(temp_dir) / "substrate")
+            calls = []
+
+            def runner(argv, **kwargs):
+                calls.append((argv, kwargs))
+                if argv[0] == "git":
+                    return completed(
+                        argv, stdout=gate5_setup.PINNED_SUBSTRATE_COMMIT + "\n"
+                    )
+                if argv[1:3] == ["resolve", "-f"]:
+                    return completed(argv, stdout="resolved-yaml")
+                return completed(argv)
+
+            with patch.dict("os.environ", {"KO_DOCKER_REPO": "localhost:5001"}):
+                gate5_setup.apply_worker_pool(
+                    "apiVersion: v1\n",
+                    kubeconfig=FIXTURE_KUBECONFIG,
+                    context="kind-substrate-preview",
+                    ko=FIXTURE_KO,
+                    substrate_src=str(source),
+                    runner=runner,
+                )
+
+            ko_argv, ko_kwargs = calls[1]
+            self.assertEqual(ko_argv[:3], [FIXTURE_KO, "resolve", "-f"])
+            self.assertEqual(ko_kwargs["cwd"], str(source))
+            apply_argv, apply_kwargs = calls[2]
+            self.assertEqual(
+                apply_argv[:5],
+                [
+                    "kubectl",
+                    "--context",
+                    "kind-substrate-preview",
+                    "--kubeconfig",
+                    FIXTURE_KUBECONFIG,
+                ],
+            )
+            self.assertEqual(apply_kwargs["input"], "resolved-yaml")
+
+    def test_cluster_identity_uses_explicit_context_and_namespace_uid(self):
+        calls = []
+        results = [
+            json.dumps(
+                {
+                    "contexts": [{"name": "kind-substrate-preview"}],
+                    "clusters": [{"cluster": {"server": "https://127.0.0.1:45147"}}],
+                }
+            ),
+            json.dumps({"metadata": {"uid": "kube-system-uid"}}),
+        ]
+
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            return completed(argv, stdout=results.pop(0))
+
+        identity = gate5_setup.get_cluster_identity(
+            context="kind-substrate-preview",
+            kubeconfig=FIXTURE_KUBECONFIG,
+            runner=runner,
+        )
+        self.assertEqual(
+            identity,
+            {
+                "api_server_url": "https://127.0.0.1:45147",
+                "kube_system_namespace_uid": "kube-system-uid",
+            },
+        )
+        self.assertTrue(
+            all("--context" in call and "--kubeconfig" in call for call in calls)
+        )
+
+    def test_actor_health_uses_actor_route_and_shim_port(self):
+        class FakeConnection:
+            def __init__(self, _host, _port, timeout):
+                self.timeout = timeout
+                self.tunnel = None
+                self.requested = None
+
+            def set_tunnel(self, target, *, headers):
+                self.tunnel = (target, headers)
+
+            def request(self, method, path):
+                self.requested = (method, path)
+
+            def getresponse(self):
+                return SimpleNamespace(status=200, read=lambda: b"ok")
+
+            def close(self):
+                pass
+
+        connections = []
+
+        def make_connection(*args, **kwargs):
+            connection = FakeConnection(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        with patch.object(gate5_setup.http.client, "HTTPConnection", make_connection):
+            self.assertTrue(
+                gate5_setup.actor_health_check(
+                    port=18091,
+                    atespace="live-agent-gate",
+                    actor_name="claude-gate5",
+                )
+            )
+        self.assertEqual(
+            connections[0].tunnel,
+            (
+                "actor-upstream:8090",
+                {"ate-target-actor": "live-agent-gate/claude-gate5"},
+            ),
+        )
+        self.assertEqual(connections[0].requested, ("GET", "/healthz"))
+
+
+class Gate5StateTests(unittest.TestCase):
+    def args(self, state_file: str, **overrides):
+        values = {
+            "context": "kind-substrate-preview",
+            "kubeconfig": FIXTURE_KUBECONFIG,
+            "atespace": "live-agent-gate",
+            "template_version": "v1",
+            "image": "localhost:5001/live-agent-gate@sha256:" + "a" * 64,
+            "actor_name": "claude-gate5",
+            "state_file": state_file,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def cluster(self, *, uid="cluster-uid"):
+        return {
+            "api_server_url": "https://127.0.0.1:45147",
+            "kube_system_namespace_uid": uid,
+        }
+
+    def test_persists_run_intent_before_actor_or_template_uids_exist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            args = self.args(path)
+            state = gate5_setup.prepare_run_state(args, self.cluster())
+            stored = json.loads(Path(path).read_text())
+            self.assertEqual(stored["run_id"], state["run_id"])
+            self.assertEqual(stored["template_name"], "live-agent-gate-v1")
+            self.assertEqual(stored["actor_name"], "claude-gate5")
+            self.assertIsNone(stored["template_uid"])
+            self.assertIsNone(stored["actor_uid"])
+            self.assertEqual(stored["cluster_identity"], self.cluster())
+
+    def test_rerun_refuses_changed_cluster_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            args = self.args(path)
+            gate5_setup.prepare_run_state(args, self.cluster())
+            with self.assertRaisesRegex(RuntimeError, "requested identity differs"):
+                gate5_setup.prepare_run_state(args, self.cluster(uid="other-cluster"))
+
+    def test_rerun_refuses_changed_template_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            gate5_setup.prepare_run_state(self.args(path), self.cluster())
+            with self.assertRaisesRegex(RuntimeError, "template_name"):
+                gate5_setup.prepare_run_state(
+                    self.args(path, template_version="v2"), self.cluster()
+                )
+
+
+class SetupControl:
+    def __init__(self, actor: ActorRecord | None):
+        self.actor = actor
+        self.created = []
+        self.resumed = 0
+
+    async def get_actor(self, _atespace, _name):
+        return self.actor
+
+    async def create_actor(self, atespace, name, *, template):
+        self.created.append((atespace, name, template))
+        self.actor = ActorRecord(
+            atespace=atespace,
+            name=name,
+            uid="actor-new",
+            state=ActorState.SUSPENDED,
+            external_snapshot_uri=None,
+            current_actor_template_uid="template-new",
+            raw={},
+        )
+        return self.actor
+
+    async def resume_actor(self, _atespace, _name):
+        self.resumed += 1
+        self.actor = replace(self.actor, state=ActorState.RUNNING)
+        return self.actor
+
+
+class Gate5ActorIdentityTests(unittest.TestCase):
+    def state(self, path, *, actor_uid="actor-1"):
+        state = {
+            "run_id": "run-1",
+            "actor_uid": actor_uid,
+            "actor_name": "claude-gate5",
+            "template_name": "live-agent-gate-v2",
+            "template_uid": "template-new",
+        }
+        gate5_setup.save_state(path, state)
+        return state
+
+    def actor(
+        self, *, uid="actor-1", template_uid="template-new", state=ActorState.RUNNING
+    ):
+        return ActorRecord(
+            atespace="live-agent-gate",
+            name="claude-gate5",
+            uid=uid,
+            state=state,
+            external_snapshot_uri=None,
+            current_actor_template_uid=template_uid,
+            raw={},
+        )
+
+    def args(self, path):
+        return SimpleNamespace(
+            state_file=path,
+            atespace="live-agent-gate",
+            actor_name="claude-gate5",
+            actor_timeout=5,
+        )
+
+    def test_exact_old_template_collision_with_new_template_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = {
+                "run_id": "run-2",
+                "actor_uid": None,
+                "template_uid": "template-new",
+            }
+            control = SetupControl(self.actor(template_uid="template-old"))
+            with self.assertRaisesRegex(IdentityConflict, "no actor uid"):
+                asyncio_run(
+                    gate5_setup.ensure_actor(
+                        control,
+                        self.args(path),
+                        "live-agent-gate-v2",
+                        "template-new",
+                        state,
+                    )
+                )
+
+    def test_owned_actor_with_template_mismatch_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = self.state(path)
+            control = SetupControl(self.actor(template_uid="template-old"))
+            with self.assertRaisesRegex(IdentityConflict, "references template uid"):
+                asyncio_run(
+                    gate5_setup.ensure_actor(
+                        control,
+                        self.args(path),
+                        "live-agent-gate-v2",
+                        "template-new",
+                        state,
+                    )
+                )
+
+    def test_crashed_and_deleting_actors_are_refused_before_resume(self):
+        for actor_state in (ActorState.CRASHED, ActorState.DELETING):
+            with self.subTest(
+                actor_state=actor_state
+            ), tempfile.TemporaryDirectory() as temp_dir:
+                path = str(Path(temp_dir) / "state.json")
+                state = self.state(path)
+                control = SetupControl(self.actor(state=actor_state))
+                with self.assertRaises(ActorFailedToStart):
+                    asyncio_run(
+                        gate5_setup.ensure_actor(
+                            control,
+                            self.args(path),
+                            "live-agent-gate-v2",
+                            "template-new",
+                            state,
+                        )
+                    )
+                self.assertEqual(control.resumed, 0)
+
+    def test_new_actor_is_resumed_and_uid_is_saved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = {
+                "run_id": "run-3",
+                "actor_uid": None,
+                "template_uid": "template-new",
+            }
+            control = SetupControl(None)
+            uid = asyncio_run(
+                gate5_setup.ensure_actor(
+                    control,
+                    self.args(path),
+                    "live-agent-gate-v2",
+                    "template-new",
+                    state,
+                )
+            )
+            self.assertEqual(uid, "actor-new")
+            self.assertEqual(control.resumed, 1)
+            self.assertEqual(
+                json.loads(Path(path).read_text())["actor_uid"], "actor-new"
+            )
+
+
+def asyncio_run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+if __name__ == "__main__":
+    unittest.main()

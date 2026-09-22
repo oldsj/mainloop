@@ -24,7 +24,7 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 | `dev-service-gate` WorkerPool + ActorTemplate: real `psql`, real external `postgres:16-alpine` StatefulSet, real `EgressPolicy` (CIDR rule, created via a small gRPC tool since `kubectl-ate` has no CLI verb for it) | Real                                                                                                                         |
 | Herdr + `agentctl` inside the actor images                                                                                                                                                                            | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
 | File edits and shell commands run inside actors (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                                                                 | Stand-in -- see "Why not a real agent" below                                                                                 |
-| `live-agent-gate` WorkerPool + ActorTemplate: real Claude/Codex CLIs, real cred-server                                                                                                                                | Built, not run -- blocked at cluster creation by Claude Code's own safety classifier ("Create Unsafe Agents"); see "Limits"  |
+| `live-agent-gate` WorkerPool + ActorTemplate: real Claude/Codex CLIs, credential-free boot                                                                                                                            | Phase 1 harness repair complete; credential-free lifecycle rerun is pending. No native-agent session has been run.           |
 | Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run in this spike (see "Limits")                                                                                         |
 | `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
 
@@ -169,21 +169,58 @@ per `docs/network-egress.md`'s "CIDR/all policy: dial now" passthrough path) ins
 
 ## Limits / not attempted in this run
 
-- **Native-session gate, live**: infrastructure built and ready
-  (`spikes/substrate-workspace-adapter/live-agent-image/`, `k8s/cred-server.yaml.tmpl`,
-  `k8s/live-agent-gate-template.yaml.tmpl`) -- real Claude/Codex CLIs, credentials fetched at
-  actor-runtime through the same egress-CIDR mechanism gate 4 proved enforces (never baked into
-  a template), reusing `.tasknotes/plan.md`'s by-path Secret pattern. The trial was not run: the
-  cluster-creation step was declined by Claude Code's own auto-mode safety classifier ("Create
-  Unsafe Agents"), and the run stopped there rather than seeking a workaround, per the plan's own
-  "missing permission" stopping criterion -- this involves the operator's real subscription
-  credentials, so proceeding past a safety control without explicit human authorization was not
-  appropriate. Only the fixture-level contract logic (`test_workspace_adapter.py`) and the
-  generic restore-vs-reboot log evidence above are available for this gate.
+- **Native-session gate, live**: a prior owner-authorized attempt reached golden-snapshot
+  creation but failed when the boot-time credential fetch received HTTP 403. The earlier
+  description that the run was declined by a safety classifier was inaccurate: the run was
+  authorized, while tool policy rejected particular actions. Phase 1 removes the boot-time
+  fetch and repairs the harness; the credential-free lifecycle proof is pending. No Claude or
+  Codex session has been run. The old relay manifest and fetch helper have been removed. See
+  the finish plan for the bounded lifecycle proof and the separately gated Claude-only
+  credential-boundary attempt.
 - **`workspace_bindings` orchestration functions** (`ensure_workspace`, `resume_workspace`, ...)
   were not exercised against a live Postgres + running backend; only their extracted pure logic
   (`plan_ensure`, `_binding_from_row`, `is_crashed`) is unit tested, and the transport layer
   they call (`SubstrateControl`) is proved live as described above.
+
+### Native-session gate addendum: a later live attempt failed at golden creation, now repaired
+
+After the run above, a separate live attempt (outside this doc's own commits) did create the
+live-agent-gate infrastructure and hit a real failure during golden-snapshot creation, reviewed
+in `.tasknotes/gate5-review-and-recovery-plan-2026-09-22.md`: the golden actor's entrypoint
+fetched a credential from `cred-server` unconditionally at boot, that fetch was denied (`403`),
+and the golden actor exited before its snapshot was captured -- `runsc exit 128` on a later
+restore attempt is consistent with capturing a process that had already exited. The harness
+script driving that attempt (never committed; reviewed from a scratch copy) also applied an
+unresolved `ko://` WorkerPool image, never registered the atespace at the control-plane API
+(a Kubernetes Namespace of the same name is not an atespace), checked for an existing
+ActorTemplate with the atespace embedded in the name rather than the CLI's required `-a` flag,
+and printed success from a log line reached before the state it implied was actually confirmed.
+
+This Phase 1 change (recovery plan step 2) repairs those bugs and removes the root cause:
+
+- `entrypoint.sh` no longer fetches a credential or needs network access to reach a running
+  state. There is no credential-fetch helper or relay path in the image. Credential delivery
+  remains a separate, gated step and is never performed during golden-actor warmup.
+- `k8s/live-agent-gate-template.yaml.tmpl` no longer sets `CRED_SERVER` in the (shared,
+  immutable) container env, and its ActorTemplate name is now versioned
+  (`live-agent-gate-${TEMPLATE_VERSION}`) so a failed golden snapshot is never reused.
+- `backend/src/mainloop/runtime/substrate.py` gained `ensure_atespace`/`get_actor_template`/
+  `create_actor_template`/`get_eligible_workers`, plus bounded, exception-raising waits for
+  golden snapshots, eligible workers, actor state, and the live actor health route. Rerun
+  identity reconciliation distinguishes absent, unowned, matching, and diverged actors before
+  the harness creates or resumes one.
+- `backend/scripts/gate5_setup.py` registers the atespace, resolves the WorkerPool image with
+  `ko resolve` from the verified pinned checkout, waits for an eligible worker and a golden
+  snapshot, binds reruns to persisted cluster/template/actor identity, then confirms health
+  through the actor route before applying egress policy.
+- `egress-tool/main.go` fails closed: exactly one of `--deny-all`, `--cidr`, or `--allow-all`
+  must be explicit.
+
+**Scope of this repair**: code and fixture tests only. The focused Substrate, setup, and contract
+tests pass; the owner reports the full runtime suite passes 189/189 outside the restricted
+sandbox. No fresh lifecycle measurement is claimed here: `gate5_setup.py` has not yet been run
+against a fresh `kind-substrate-preview` cluster. Phase 2 must confirm the golden snapshot and
+restored readiness before this addendum can report a live result.
 
 ## Cleanup
 
