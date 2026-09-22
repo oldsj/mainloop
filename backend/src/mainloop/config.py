@@ -37,6 +37,18 @@ class Settings(BaseSettings):
         "main-0"  # pod that runs the native main thread (scratch cwd, no repo)
     )
 
+    # Substrate workspace-runtime adapter (bounded integration spike; see
+    # docs/architecture/native-agent-inventory.md and .tasknotes/plan.md). Empty
+    # kubeconfig/context falls back to the ambient kubeconfig. One actor per session
+    # replaces the fixed workspace_namespace/workspace_pod pair above for Substrate-backed
+    # sessions; Herdr pod-exec keeps working unchanged for sessions that are not.
+    substrate_kubeconfig: str = ""
+    substrate_context: str = ""
+    substrate_atespace: str = "mainloop-workspaces"
+    substrate_actor_template: str = "mainloop-workspace"
+    substrate_cli: str = "kubectl-ate"
+    substrate_preview_base_url: str = ""
+
     # Native main thread (context model). MAIN_THREAD_MODE=native replaces the SDK chat path.
     main_thread_mode: str = "sdk"  # sdk | native
     main_thread_model: str = "sonnet"

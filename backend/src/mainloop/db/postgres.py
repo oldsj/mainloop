@@ -223,6 +223,33 @@ ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFA
 CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(token_hash) WHERE token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
 
+-- Substrate workspace-runtime adapter: durable mapping from a Mainloop session to a Substrate
+-- actor. Separate from native_bindings (the Herdr agent/native-session identity) because a
+-- session's workspace runtime is a distinct concept -- see ROADMAP.md "Workspace platform".
+-- One actor per session (workspace_id = session_id) replaces the fixed workspace pod for
+-- Substrate-backed sessions. ownership_generation fences resume/suspend/revert the same way
+-- native_bindings.generation fences Herdr sends: a stale caller's mutation is rejected, and a
+-- retry re-inspects the actor and this row rather than creating a second one.
+CREATE TABLE IF NOT EXISTS workspace_bindings (
+    workspace_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    provider TEXT NOT NULL DEFAULT 'substrate',
+    atespace TEXT NOT NULL,
+    actor_name TEXT NOT NULL,
+    actor_template TEXT NOT NULL,
+    native_session_id TEXT,
+    preview_route TEXT,
+    runtime_endpoint TEXT,
+    observed_state TEXT NOT NULL DEFAULT 'unknown',
+    observed_at TIMESTAMPTZ,
+    external_snapshot_uri TEXT,
+    ownership_generation INTEGER NOT NULL DEFAULT 1,
+    desired_state TEXT NOT NULL DEFAULT 'active',
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (atespace, actor_name)
+);
+
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY,
