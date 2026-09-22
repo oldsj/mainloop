@@ -1,0 +1,68 @@
+# The "actual external PostgreSQL development service" gate 4 measures connectivity to, matching
+# k8s/apps/mainloop/overlays/test/postgres-statefulset.yaml's image/auth shape (postgres:16-alpine,
+# mainloop/mainloop/mainloop). Deployed as a plain K8s StatefulSet in its own namespace -- outside
+# any atespace -- since it represents a real external service, not a Substrate actor.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: postgres-target
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: postgres-target
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: postgres-target
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: mainloop
+            - name: POSTGRES_PASSWORD
+              value: mainloop
+            - name: POSTGRES_DB
+              value: mainloop
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests: { memory: 256Mi, cpu: 100m }
+            limits: { memory: 512Mi, cpu: 500m }
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, mainloop]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi

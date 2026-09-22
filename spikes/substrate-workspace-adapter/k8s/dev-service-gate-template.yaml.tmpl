@@ -1,0 +1,47 @@
+# WorkerPool + ActorTemplate for the dev-service gate measurement (gate 4 in
+# .tasknotes/plan.md): a real psql client, driven by the same generic exec shim as the
+# preview-gate template, to test egress connectivity to an external PostgreSQL Service. See
+# spikes/substrate-workspace-adapter/dev-service-image/.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: dev-service-gate
+  namespace: ${ATESPACE}
+  labels:
+    workload: dev-service-gate
+spec:
+  replicas: 1
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    resources:
+      limits: { cpu: '1', memory: 1Gi }
+      requests: { cpu: 250m, memory: 1Gi }
+---
+metadata:
+  atespace: ${ATESPACE}
+  name: dev-service-gate
+workerSelector:
+  matchLabels:
+    workload: dev-service-gate
+containers:
+- name: dev-service
+  image: __IMAGE__
+  env:
+  - { name: HOME, value: /home/agent }
+  - { name: HERDR_SESSION, value: mainloop-dev-service }
+  resources:
+    limits:
+    - { name: cpu, quantity: "1" }
+    - { name: memory, quantity: 1Gi }
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/dev-service-gate/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

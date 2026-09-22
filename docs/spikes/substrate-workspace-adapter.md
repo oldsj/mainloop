@@ -16,15 +16,16 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 
 ## Real versus stand-in
 
-| Layer                                                                                                                                                           | Status                                                                                                                       |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane)                                                        | Real                                                                                                                         |
-| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete                                                                  | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
-| `preview-gate` WorkerPool + ActorTemplate: real Herdr server, real Vite dev server, real NGINX header-proxy, real browser (`agent-browser`), real WebSocket HMR | Real                                                                                                                         |
-| Herdr + `agentctl` inside the actor images                                                                                                                      | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
-| The preview-gate's file edits (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                             | Stand-in -- see "Why not a real agent" below                                                                                 |
-| Claude/Codex agent processes, credentials                                                                                                                       | Not run in this spike (see "Not attempted")                                                                                  |
-| `workspace_bindings` durable mapping (Postgres)                                                                                                                 | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
+| Layer                                                                                                                                                                                                                 | Status                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane)                                                                                                              | Real                                                                                                                         |
+| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete                                                                                                                        | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
+| `preview-gate` WorkerPool + ActorTemplate: real Herdr server, real Vite dev server, real NGINX header-proxy, real browser (`agent-browser`), real WebSocket HMR                                                       | Real                                                                                                                         |
+| `dev-service-gate` WorkerPool + ActorTemplate: real `psql`, real external `postgres:16-alpine` StatefulSet, real `EgressPolicy` (CIDR rule, created via a small gRPC tool since `kubectl-ate` has no CLI verb for it) | Real                                                                                                                         |
+| Herdr + `agentctl` inside the actor images                                                                                                                                                                            | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
+| File edits and shell commands run inside actors (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                                                                 | Stand-in -- see "Why not a real agent" below                                                                                 |
+| Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run in this spike (see "Not attempted")                                                                                  |
+| `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
 
 ## Why not a real agent for the preview-gate edit (credential-injection gap)
 
@@ -59,11 +60,13 @@ KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
 KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
   KUBECONFIG=/tmp/substrate-preview-kubeconfig \
   /tmp/substrate-preview-src/hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=agentgateway
-# build kubectl-ate, build+push an actor image, apply either:
-#   k8s/actor-template.yaml.tmpl        -- the mainloop-workspace template (Herdr + agentctl)
-#   k8s/preview-gate-template.yaml.tmpl -- the preview-gate template (+ image/, a real Vite dev
-#                                          server and exec shim, for the preview/HMR gate)
-#   k8s/preview-proxy.yaml.tmpl         -- the NGINX ate-target-actor header-proxy in front of it
+# build kubectl-ate, build+push an actor image, apply one of:
+#   k8s/actor-template.yaml.tmpl            -- mainloop-workspace: Herdr + agentctl
+#   k8s/preview-gate-template.yaml.tmpl      -- preview-gate: real Vite dev server + exec shim
+#     + k8s/preview-proxy.yaml.tmpl          -- the NGINX ate-target-actor header-proxy in front
+#   k8s/dev-service-gate-template.yaml.tmpl -- dev-service-gate: real psql + exec shim
+#     + k8s/postgres-target.yaml             -- the external postgres:16-alpine StatefulSet
+#     + egress-tool/main.go                  -- creates the actor's EgressPolicy (no CLI verb)
 # (WorkerPool via `ko resolve | kubectl apply`, ActorTemplate via `kubectl ate create actor-template -f -`)
 ```
 
@@ -134,10 +137,37 @@ suit a proxied deployment, and (3) is a filesystem-semantics fact worth knowing 
 editors already write this way, so it may not affect a real native-agent's edits, which is
 exactly why gate 5's live proof matters and was not reached in this run).
 
+### Dev-service gate (gate 4): proved live, including real policy enforcement
+
+A real `postgres:16-alpine` StatefulSet (same image/auth shape as
+`k8s/apps/mainloop/overlays/test/postgres-statefulset.yaml`) in its own namespace, reached from a
+`dev-service-gate` actor (real `psql`, driven through the same generic exec shim) under an
+`EgressPolicy` scoped to exactly the Postgres Service's `/32` ClusterIP.
+
+`kubectl-ate` has **no CLI verb for egress policies** -- confirmed by the pinned checkout's own
+`demos/egress/README.md`: `"test-egress.sh creates and resumes the Actor but cannot create its
+EgressPolicy (no CLI verb yet)"`. Its own e2e suite calls the gRPC API directly
+(`internal/e2e/egresspolicy.go`). This spike does the same:
+`spikes/substrate-workspace-adapter/egress-tool/main.go`, a small standalone `main` mirroring
+that helper without the `testing.T` dependency (build instructions are in the file's header
+comment; it must be built inside a Substrate checkout since it imports `internal/` packages).
+
+**Result**: DNS resolution (bypasses the policy enforcement point entirely -- port 53 is always
+allowed), a real `SELECT` query over the actual Postgres wire protocol, and reconnection after an
+explicit suspend/resume cycle (a second query, `SELECT 43`, succeeded cleanly post-resume, no
+policy re-creation needed -- the policy is attached to the actor, not the connection) all worked
+on the first try. Authorization is real, not merely passive: a request to a _different_ Service's
+ClusterIP (not covered by the `/32` rule) was cleanly rejected --
+`HTTP 403 actor egress policy denied destination` from the egress gateway itself, not a silent
+timeout or a security-group-shaped ambiguity. This is a materially better outcome than the prior
+Kind preview proof's own external-backend trial (`403 -> 503`, "reconnection after wake was
+therefore not proved") -- the difference was using a **CIDR rule** (works for any TCP protocol
+per `docs/network-egress.md`'s "CIDR/all policy: dial now" passthrough path) instead of a
+**hostname rule** (HTTP/TLS-SNI-specific, and Postgres is neither), which the prior proof's HTTP
+`fetch`-based trial did not have reason to distinguish.
+
 ## Limits / not attempted in this run
 
-- **Dev-service gate**: no Postgres actor, no egress policy, no reconnect-after-wake trial against
-  our template.
 - **Native-session gate, live**: no real Claude/Codex session was started inside a Substrate
   actor; the credential wiring authorized by `.tasknotes/plan.md` was not used. Only the
   fixture-level contract logic (`test_workspace_adapter.py`) and the generic
@@ -149,10 +179,10 @@ exactly why gate 5's live proof matters and was not reached in this run).
 
 ## Cleanup
 
-Each cluster lane in this spike (the initial adapter/CRASHED trial, and the later preview-gate
-trial) deleted its own test actors, then the `substrate-preview` cluster and its `kind-registry`
-(`hack/delete-kind-cluster.sh`), and pruned the locally built, unpushed-elsewhere Docker images.
-Final `kind get clusters` / `docker ps` showed only `mainloop-test` /
+Each of the three cluster lanes in this spike (adapter/CRASHED, preview-gate, dev-service-gate)
+deleted its own test actors and target resources, then the `substrate-preview` cluster and its
+`kind-registry` (`hack/delete-kind-cluster.sh`), and pruned the locally built, unpushed-elsewhere
+Docker images. Final `kind get clusters` / `docker ps` showed only `mainloop-test` /
 `mainloop-test-control-plane` after every lane. Root disk stayed in the 19-27G-free range
 throughout (above the plan's 8G in-flight-trial abort threshold at all times); available RAM
 stayed above 8G. No Mainloop repository files outside this branch's own commits were changed.
