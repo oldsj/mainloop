@@ -16,13 +16,13 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 
 ## Real versus stand-in
 
-| Layer | Status |
-| --- | --- |
-| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane) | Real |
-| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
-| Herdr + `agentctl` inside the actor image | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs |
-| Claude/Codex agent processes, credentials | Not run in this spike (see "Not attempted") |
-| `workspace_bindings` durable mapping (Postgres) | Fixture/unit-tested only; not exercised against a live backend + database in this run |
+| Layer                                                                                                    | Status                                                                                                                       |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane) | Real                                                                                                                         |
+| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete           | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls) |
+| Herdr + `agentctl` inside the actor image                                                                | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                  |
+| Claude/Codex agent processes, credentials                                                                | Not run in this spike (see "Not attempted")                                                                                  |
+| `workspace_bindings` durable mapping (Postgres)                                                          | Fixture/unit-tested only; not exercised against a live backend + database in this run                                        |
 
 ## Run it
 
