@@ -25,10 +25,12 @@ COPY claude /usr/local/bin/claude
 COPY codex /usr/local/bin/codex
 COPY codex-code-mode-host /usr/local/bin/codex-code-mode-host
 COPY bin/agentctl bin/mainloop /usr/local/bin/
+COPY bin/start-native-agent /usr/local/bin/start-native-agent
+COPY bin/prepare-native-agent-config.cjs /usr/local/bin/prepare-native-agent-config.cjs
 COPY agent-config /etc/agent-config
 COPY exec-shim.js /usr/local/bin/exec-shim.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/agentctl /usr/local/bin/mainloop \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/agentctl /usr/local/bin/mainloop /usr/local/bin/start-native-agent \
     && mkdir -p /work && chown -R agent:agent /work
 ENV EXEC_SHIM=/usr/local/bin/exec-shim.js
 ENV HOME=/home/agent

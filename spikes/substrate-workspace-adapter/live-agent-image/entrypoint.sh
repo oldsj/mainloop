@@ -10,24 +10,9 @@
 # and provider credentials only after the final actor is RUNNING. The golden actor stays clean.
 # The template controller checks `/healthz` before accepting the golden actor.
 set -eu
-mkdir -p "${HOME}" "${HOME}/.claude" "${CODEX_HOME}"
-
-# Claude Code: onboarding done, workspace trusted, bypass-permissions warning accepted.
-if [[ ! -s "${HOME}/.claude.json" ]]; then
-  jq -n --arg p "${WORKSPACE_PATH}" '{
-    hasCompletedOnboarding: true,
-    numStartups: 1,
-    theme: "dark",
-    projects: {($p): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true, allowedTools: []}}
-  }' >"${HOME}/.claude.json"
-fi
-[[ -s "${HOME}/.claude/settings.json" ]] || echo '{"skipDangerousModePermissionPrompt": true}' >"${HOME}/.claude/settings.json"
-
-# Codex: trust the workspace.
-if [[ ! -s "${CODEX_HOME}/config.toml" ]]; then
-  printf '[projects."%s"]\ntrust_level = "trusted"\n' "${WORKSPACE_PATH}" >"${CODEX_HOME}/config.toml"
-fi
-grep -q '^\[notice\]' "${CODEX_HOME}/config.toml" || printf '\n[notice]\nhide_rate_limit_model_nudge = true\n' >>"${CODEX_HOME}/config.toml"
+# Seed supported first-run defaults before either CLI is started. Native sessions start only
+# through start-native-agent, after the final actor receives its credential.
+node /usr/local/bin/prepare-native-agent-config.cjs
 
 mkdir -p "${WORKSPACE_PATH}"
 [[ -d "${WORKSPACE_PATH}/.git" ]] || git -C "${WORKSPACE_PATH}" init -q

@@ -130,8 +130,8 @@ test('shim token gates run/read, is one-time, private, and survives process rest
   assert.equal((await request(running.port, 'POST', '/token', { body: { token } })).status, 409);
 });
 
-test('Codex auth write requires an installed shim token and creates a private one-time file', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-codex-auth-'));
+test('credential delivery requires a shim token and writes only allowlisted private files once', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-credentials-'));
   const home = path.join(root, 'home');
   const fakeBin = path.join(root, 'bin');
   const shimPath = path.join(root, 'exec-shim.js');
@@ -152,32 +152,42 @@ test('Codex auth write requires an installed shim token and creates a private on
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  const claudeContents = 'fixture-claude-token-never-logged';
   const authContents = JSON.stringify({ fixture: 'codex-auth-never-logged' });
-  const contentBase64 = Buffer.from(authContents).toString('base64');
-  const write = (encoded, token) =>
-    request(running.port, 'POST', '/write-codex-auth', {
-      body: { contentBase64: encoded },
+  const write = (name, contents, token) =>
+    request(running.port, 'POST', '/credential', {
+      body: { name, contents },
       ...(token === undefined ? {} : { token }),
     });
 
-  assert.equal((await write(contentBase64)).status, 401, 'golden actor must reject writes before token installation');
+  assert.equal((await write('codex-auth', authContents)).status, 401, 'golden actor must reject writes before token installation');
   assert.equal(fs.existsSync(codexHome), false);
 
   const token = 'fixture-only-codex-shim-token-at-least-thirty-two-chars';
   assert.equal((await request(running.port, 'POST', '/token', { body: { token } })).status, 201);
-  assert.equal((await write(contentBase64)).status, 401);
-  assert.equal((await write(contentBase64, `${token}-wrong`)).status, 401);
-  assert.equal((await write(Buffer.from('[]').toString('base64'), token)).status, 400);
-  assert.equal((await write('!!!!', token)).status, 400);
+  assert.equal((await write('claude-token', claudeContents)).status, 401);
+  assert.equal((await write('claude-token', claudeContents, `${token}-wrong`)).status, 401);
+  assert.equal((await write('../outside', claudeContents, token)).status, 403);
+  assert.equal(fs.existsSync(path.join(root, 'outside')), false);
+  assert.equal((await write('codex-auth', '[]', token)).status, 400);
+  assert.equal((await write('codex-auth', 'not-json', token)).status, 400);
+  assert.equal((await request(running.port, 'POST', '/write-codex-auth', { token, body: {} })).status, 404);
 
-  assert.equal((await write(contentBase64, token)).status, 201);
+  assert.equal((await write('claude-token', claudeContents, token)).status, 201);
+  const claudePath = path.join(home, '.mainloop', 'claude-token');
+  assert.equal(fs.readFileSync(claudePath, 'utf8'), claudeContents);
+  assert.equal(fs.statSync(claudePath).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(claudePath)).mode & 0o777, 0o700);
+  assert.equal((await write('claude-token', 'replacement', token)).status, 409);
+
+  assert.equal((await write('codex-auth', authContents, token)).status, 201);
   const authPath = path.join(codexHome, 'auth.json');
   assert.equal(fs.readFileSync(authPath, 'utf8'), authContents);
   assert.equal(fs.statSync(codexHome).mode & 0o777, 0o700);
   assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
-  assert.equal((await write(contentBase64, token)).status, 409, 'auth file must not be overwritten');
+  assert.equal((await write('codex-auth', authContents, token)).status, 409, 'auth file must not be overwritten');
+  assert.equal(running.output().includes(claudeContents), false);
   assert.equal(running.output().includes(authContents), false);
-  assert.equal(running.output().includes(contentBase64), false);
 });
 
 test('healthz bounds Herdr calls and reuses a recent successful check', async (t) => {
