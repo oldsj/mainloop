@@ -18,6 +18,8 @@ const path = require('node:path');
 
 const PANE_ID = process.env.EXEC_SHIM_PANE_ID;
 const SESSION = process.env.HERDR_SESSION;
+const HEALTH_COMMAND_TIMEOUT_MS = 1500;
+const HEALTH_CACHE_MS = 3000;
 if (!PANE_ID || !SESSION) {
   console.error('exec-shim: EXEC_SHIM_PANE_ID and HERDR_SESSION are required');
   process.exit(1);
@@ -85,22 +87,63 @@ function herdr(args, res) {
   });
 }
 
-function healthz(res) {
-  execFile('herdr', ['--session', SESSION, 'status', 'server'], (statusErr, stdout) => {
-    if (statusErr || !/^status:\s+running\s*$/m.test(stdout)) {
-      res.writeHead(503, { 'content-type': 'text/plain' }).end('not ready');
-      return;
-    }
-    execFile('herdr', ['--session', SESSION, 'pane', 'read', PANE_ID], (paneErr) => {
-      if (paneErr) {
-        res.writeHead(503, { 'content-type': 'text/plain' }).end('not ready');
-        return;
-      }
-      // The request is served by this shim, Herdr reports a running server, and pane read
-      // confirms the shell pane still exists. Do not expose status output or pane contents.
-      res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
-    });
+function runHealthCheck() {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'herdr',
+      ['--session', SESSION, 'status', 'server'],
+      { timeout: HEALTH_COMMAND_TIMEOUT_MS },
+      (statusErr, stdout) => {
+        if (statusErr || !/^status:\s+running\s*$/m.test(stdout)) {
+          reject(statusErr || new Error('Herdr server is not running'));
+          return;
+        }
+        execFile(
+          'herdr',
+          ['--session', SESSION, 'pane', 'read', PANE_ID],
+          { timeout: HEALTH_COMMAND_TIMEOUT_MS },
+          (paneErr) => {
+            if (paneErr) {
+              reject(paneErr);
+              return;
+            }
+            resolve();
+          },
+        );
+      },
+    );
   });
+}
+
+let lastGoodHealthAt = 0;
+let healthCheckInFlight = null;
+
+function healthz(res) {
+  const respond = (ready) => {
+    if (res.destroyed) return;
+    if (ready) {
+      // The shim is responsive, Herdr reports a running server, and the shell pane exists.
+      // Never return status output or pane contents.
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+    } else {
+      res.writeHead(503, { 'content-type': 'text/plain' }).end('not ready');
+    }
+  };
+
+  if (Date.now() - lastGoodHealthAt < HEALTH_CACHE_MS) {
+    respond(true);
+    return;
+  }
+  if (!healthCheckInFlight) {
+    healthCheckInFlight = runHealthCheck()
+      .then(() => {
+        lastGoodHealthAt = Date.now();
+      })
+      .finally(() => {
+        healthCheckInFlight = null;
+      });
+  }
+  healthCheckInFlight.then(() => respond(true), () => respond(false));
 }
 
 const server = http.createServer((req, res) => {

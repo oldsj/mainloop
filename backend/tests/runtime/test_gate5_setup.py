@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from mainloop.runtime.substrate import (
     ActorFailedToStart,
@@ -30,6 +31,61 @@ def completed(argv, returncode=0, stdout="", stderr=""):
 
 
 class Gate5SourceAndBuildTests(unittest.TestCase):
+    def test_image_manifest_preflight_checks_registry_endpoint_and_accept_types(self):
+        calls = []
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        def opener(request, *, timeout):
+            calls.append((request, timeout))
+            return Response()
+
+        image = "localhost:5001/live-agent-gate@sha256:" + "a" * 64
+        gate5_setup.verify_image_manifest(image, opener=opener)
+
+        request, timeout = calls[0]
+        self.assertEqual(
+            request.full_url,
+            f"http://localhost:5001/v2/live-agent-gate/manifests/sha256:{'a' * 64}",
+        )
+        self.assertEqual(request.get_method(), "HEAD")
+        self.assertEqual(request.get_header("Accept"), gate5_setup.IMAGE_MANIFEST_ACCEPT)
+        self.assertEqual(timeout, 10)
+
+    def test_image_manifest_preflight_fails_before_template_on_missing_manifest(self):
+        image = "localhost:5001/live-agent-gate@sha256:" + "b" * 64
+
+        def missing(request, *, timeout):
+            error = HTTPError(request.full_url, 404, "MANIFEST_UNKNOWN", {}, None)
+            error.close()
+            raise error
+
+        with self.assertRaisesRegex(RuntimeError, "registry returned HTTP 404"):
+            gate5_setup.verify_image_manifest(image, opener=missing)
+
+    def test_image_manifest_preflight_rejects_tag_or_malformed_digest(self):
+        calls = []
+
+        def opener(*_args, **_kwargs):
+            calls.append(True)
+
+        for image in (
+            "localhost:5001/live-agent-gate:latest",
+            "localhost:5001/live-agent-gate@sha256:bad",
+        ):
+            with self.subTest(image=image), self.assertRaisesRegex(
+                RuntimeError, "full sha256 digest"
+            ):
+                gate5_setup.verify_image_manifest(image, opener=opener)
+        self.assertEqual(calls, [])
+
     def make_source(self, root: Path) -> Path:
         (root / ".git").mkdir(parents=True)
         (root / "go.mod").write_text("module fixture\n")

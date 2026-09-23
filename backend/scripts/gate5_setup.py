@@ -58,6 +58,8 @@ import subprocess  # nosec B404 - drives trusted local kubectl/ko/egress-tool bi
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -191,6 +193,54 @@ def verify_substrate_source(source: str, *, runner=subprocess.run) -> str:
             f"--substrate-src must be pinned at {PINNED_SUBSTRATE_COMMIT}; found {commit!r}"
         )
     return str(root)
+
+
+IMAGE_MANIFEST_ACCEPT = ", ".join(
+    (
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+    )
+)
+
+
+def verify_image_manifest(image: str, *, opener=urllib.request.urlopen) -> None:
+    """Verify the digest-addressed image is present in the registry workers will use.
+
+    Local Docker RepoDigests can refer to a registry that has since been deleted. A HEAD
+    against the registry endpoint catches that setup error before creating an immutable
+    ActorTemplate and its golden actor.
+    """
+    reference, separator, digest = image.partition("@")
+    registry, slash, repository = reference.partition("/")
+    if (
+        not separator
+        or not slash
+        or not registry
+        or not repository
+        or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)
+    ):
+        raise RuntimeError("--image must be a registry/repository pinned by a full sha256 digest")
+
+    request = urllib.request.Request(
+        f"http://{registry}/v2/{repository}/manifests/{digest}",
+        headers={"Accept": IMAGE_MANIFEST_ACCEPT},
+        method="HEAD",
+    )
+    try:
+        with opener(request, timeout=10) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"image manifest preflight failed: registry returned HTTP {exc.code}"
+        ) from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(f"image manifest preflight failed: {exc}") from exc
+    if not 200 <= status < 300:
+        raise RuntimeError(
+            f"image manifest preflight failed: registry returned HTTP {status}"
+        )
+    print(f"-- registry manifest confirmed for {repository}@{digest}")
 
 
 def get_cluster_identity(
@@ -702,6 +752,7 @@ async def ensure_actor(
 
 
 async def async_main(args: argparse.Namespace) -> None:
+    verify_image_manifest(args.image)
     substrate_src = verify_substrate_source(args.substrate_src)
     cluster = get_cluster_identity(context=args.context, kubeconfig=args.kubeconfig)
     state = prepare_run_state(args, cluster)

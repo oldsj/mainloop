@@ -13,10 +13,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const shim = path.resolve(__dirname, '../live-agent-image/exec-shim.js');
 
-async function startShim(home, fakeBin, shimPath) {
+async function startShim(home, fakeBin, shimPath, extraEnv = {}) {
   const child = spawn(process.execPath, [shimPath], {
     env: {
       ...process.env,
+      ...extraEnv,
       HOME: home,
       PATH: `${fakeBin}:${process.env.PATH}`,
       HERDR_SESSION: 'shim-test',
@@ -67,7 +68,7 @@ function request(port, method, route, { body, token } = {}) {
 }
 
 async function stop(child) {
-  if (child.exitCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
   await once(child, 'exit');
 }
@@ -127,4 +128,45 @@ test('shim token gates run/read, is one-time, private, and survives process rest
   assert.equal((await request(running.port, 'GET', '/read')).status, 401);
   assert.equal((await request(running.port, 'GET', '/read', { token })).status, 200);
   assert.equal((await request(running.port, 'POST', '/token', { body: { token } })).status, 409);
+});
+
+test('healthz bounds Herdr calls and reuses a recent successful check', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-health-'));
+  const home = path.join(root, 'home');
+  const fakeBin = path.join(root, 'bin');
+  const shimPath = path.join(root, 'exec-shim.js');
+  const logPath = path.join(root, 'herdr-calls.log');
+  fs.mkdirSync(home);
+  fs.mkdirSync(fakeBin);
+  fs.copyFileSync(shim, shimPath);
+  const herdr = path.join(fakeBin, 'herdr');
+  fs.writeFileSync(
+    herdr,
+    '#!/bin/sh\nif [ -n "${EXEC_SHIM_TEST_LOG:-}" ]; then printf "%s %s\\n" "$3" "$4" >> "$EXEC_SHIM_TEST_LOG"; fi\nif [ "$3" = "status" ] && [ "$4" = "server" ]; then if [ "${HERDR_TEST_SLOW_STATUS:-}" = "1" ]; then exec sleep 5; fi; echo "status: running"; exit 0; fi\nif [ "$3" = "pane" ] && [ "$4" = "read" ]; then echo "fixture pane"; exit 0; fi\nexit 0\n',
+    { mode: 0o700 },
+  );
+
+  const running = await startShim(home, fakeBin, shimPath, {
+    EXEC_SHIM_TEST_LOG: logPath,
+  });
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.equal((await request(running.port, 'GET', '/healthz')).status, 200);
+  assert.equal((await request(running.port, 'GET', '/healthz')).status, 200);
+  assert.deepEqual(fs.readFileSync(logPath, 'utf8').trim().split('\n'), [
+    'status server',
+    'pane read',
+  ]);
+
+  await stop(running.child);
+  const slow = await startShim(home, fakeBin, shimPath, {
+    HERDR_TEST_SLOW_STATUS: '1',
+  });
+  t.after(async () => stop(slow.child));
+  const startedAt = Date.now();
+  assert.equal((await request(slow.port, 'GET', '/healthz')).status, 503);
+  assert.ok(Date.now() - startedAt < 4000, 'hung Herdr status must be bounded by execFile timeout');
 });
