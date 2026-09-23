@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Live-agent-gate spike image (gate 5, bounded live proof): real Herdr + real Claude Code /
 # Codex CLIs + agentctl, driven by the same generic exec shim as the other gate images.
 # herdr/claude/codex/codex-code-mode-host are copied from the host into the build context by the
@@ -9,6 +10,16 @@ FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends jq ca-certificates git curl procps ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
+# The run-specific Substrate MITM CA is a public trust anchor. BuildKit mounts
+# it without retaining the input file or putting the PEM in the build command.
+ARG EGRESS_MITM_CA_SHA256=""
+RUN --mount=type=secret,id=egress-mitm-ca,target=/run/secrets/egress-mitm-ca,required=false \
+    if [ -s /run/secrets/egress-mitm-ca ]; then \
+      test -n "${EGRESS_MITM_CA_SHA256}" && \
+      test "$(sha256sum /run/secrets/egress-mitm-ca | cut -d' ' -f1)" = "${EGRESS_MITM_CA_SHA256}" && \
+      install -m 0644 /run/secrets/egress-mitm-ca /usr/local/share/ca-certificates/substrate-egress-mitm.crt && \
+      update-ca-certificates; \
+    fi
 COPY herdr /usr/local/bin/herdr
 COPY claude /usr/local/bin/claude
 COPY codex /usr/local/bin/codex
@@ -25,5 +36,7 @@ ENV WORKSPACE_PATH=/work/repo
 ENV CODEX_HOME=/home/agent/.codex
 ENV AGENT_CONFIG_DIR=/etc/agent-config
 ENV HERDR_SESSION=mainloop-live-agent
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

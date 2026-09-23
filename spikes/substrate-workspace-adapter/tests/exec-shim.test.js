@@ -130,6 +130,56 @@ test('shim token gates run/read, is one-time, private, and survives process rest
   assert.equal((await request(running.port, 'POST', '/token', { body: { token } })).status, 409);
 });
 
+test('Codex auth write requires an installed shim token and creates a private one-time file', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-codex-auth-'));
+  const home = path.join(root, 'home');
+  const fakeBin = path.join(root, 'bin');
+  const shimPath = path.join(root, 'exec-shim.js');
+  const codexHome = path.join(home, '.codex');
+  fs.mkdirSync(home);
+  fs.mkdirSync(fakeBin);
+  fs.copyFileSync(shim, shimPath);
+  const herdr = path.join(fakeBin, 'herdr');
+  fs.writeFileSync(
+    herdr,
+    '#!/bin/sh\nif [ "$3" = "status" ] && [ "$4" = "server" ]; then echo "status: running"; exit 0; fi\nif [ "$3" = "pane" ] && [ "$4" = "read" ]; then echo "fixture pane"; exit 0; fi\nexit 0\n',
+    { mode: 0o700 },
+  );
+
+  const running = await startShim(home, fakeBin, shimPath, { CODEX_HOME: codexHome });
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const authContents = JSON.stringify({ fixture: 'codex-auth-never-logged' });
+  const contentBase64 = Buffer.from(authContents).toString('base64');
+  const write = (encoded, token) =>
+    request(running.port, 'POST', '/write-codex-auth', {
+      body: { contentBase64: encoded },
+      ...(token === undefined ? {} : { token }),
+    });
+
+  assert.equal((await write(contentBase64)).status, 401, 'golden actor must reject writes before token installation');
+  assert.equal(fs.existsSync(codexHome), false);
+
+  const token = 'fixture-only-codex-shim-token-at-least-thirty-two-chars';
+  assert.equal((await request(running.port, 'POST', '/token', { body: { token } })).status, 201);
+  assert.equal((await write(contentBase64)).status, 401);
+  assert.equal((await write(contentBase64, `${token}-wrong`)).status, 401);
+  assert.equal((await write(Buffer.from('[]').toString('base64'), token)).status, 400);
+  assert.equal((await write('!!!!', token)).status, 400);
+
+  assert.equal((await write(contentBase64, token)).status, 201);
+  const authPath = path.join(codexHome, 'auth.json');
+  assert.equal(fs.readFileSync(authPath, 'utf8'), authContents);
+  assert.equal(fs.statSync(codexHome).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
+  assert.equal((await write(contentBase64, token)).status, 409, 'auth file must not be overwritten');
+  assert.equal(running.output().includes(authContents), false);
+  assert.equal(running.output().includes(contentBase64), false);
+});
+
 test('healthz bounds Herdr calls and reuses a recent successful check', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-health-'));
   const home = path.join(root, 'home');

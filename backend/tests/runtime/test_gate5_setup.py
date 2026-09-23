@@ -605,6 +605,28 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                 json.loads(Path(path).read_text())["actor_uid"], "actor-new"
             )
 
+    def test_worker_wait_uses_the_selected_atespace_namespace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            args = self.args(path)
+            args.atespace = "native-codex"
+            control = SetupControl(None)
+            observed = {}
+
+            async def wait_for_worker(_control, namespace, *_args, **_kwargs):
+                observed["namespace"] = namespace
+
+            with patch.object(gate5_setup, "wait_for_eligible_worker", wait_for_worker):
+                asyncio_run(
+                    gate5_setup.wait_for_worker_if_actor_is_absent(
+                        control,
+                        args,
+                        {"run_id": "run-codex", "actor_uid": None, "template_uid": "template-codex"},
+                    )
+                )
+
+            self.assertEqual(observed["namespace"], "native-codex")
+
     def test_owned_rerun_skips_worker_wait_when_its_actor_occupies_only_worker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = str(Path(temp_dir) / "state.json")

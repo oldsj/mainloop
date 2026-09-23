@@ -5,6 +5,15 @@ Status: local spike, not a product feature. Adapter code lives in
 lives in `spikes/substrate-workspace-adapter/`. See `docs/spikes/k8s-herdr-agents.md` for the
 native-session/Herdr spike this one builds on and does not replace.
 
+## Current status — Round 3 and Phase 4 (2026-09-23)
+
+Substrate actors, the Cilium-backed preview cluster, router ingress controls, per-actor shim
+tokens, and Envoy hostname enforcement were measured live. Claude completed a native turn and
+recalled a nonce after suspend/resume. Codex's auth file was installed safely, but its native
+turn failed at Envoy's upstream connection to the OpenAI API (HTTP 503, reset before response
+headers). Gate 5 is partial/live, so defer production adoption of the native-session path until
+Codex egress and session continuity are proved.
+
 ## What it shows
 
 [Substrate](https://github.com/agent-substrate/substrate) can provide the per-session isolated
@@ -14,7 +23,7 @@ owner of the session<->actor mapping, delivery, and audit state. A Mainloop-auth
 Substrate actor instead of a fixed StatefulSet pod, and `backend/src/mainloop/runtime/substrate.py`
 drives its lifecycle through the real `kubectl ate` control-plane CLI.
 
-## Real versus stand-in
+## Earlier real-versus-stand-in inventory (before Round 3)
 
 | Layer                                                                                                                                                                                                                 | Status                                                                                                                                                                                             |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,7 +37,7 @@ drives its lifecycle through the real `kubectl ate` control-plane CLI.
 | Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run; the 2026-09-23 live lane stopped before credential work (see "Limits")                                                                                                                      |
 | `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                                                                                              |
 
-## Why not a real agent for the preview-gate edit (credential-injection gap)
+## Preview-gate edit path and Round 3 credential boundary
 
 Substrate's pinned commit has no generic secret-injection mechanism equivalent to a Kubernetes
 Secret volume/env mount. `ActorTemplate` container env values are literal only (no
@@ -40,16 +49,19 @@ identity, that injects a credential into an outbound request; it does not hand a
 CLI's local environment or filesystem.
 
 The pinned commit also has experimental static-header injection from a Kubernetes Secret URI
-into decrypted outbound requests. It requires Envoy with SDSMint and the experimental
-credential-injection flag. Envoy 1.39.1 crashed on this host, while agentgateway does not support
-the injection path. The revised Phase 3 uses a Mainloop-owned router NetworkPolicy and a per-actor
-shim token instead; credentials are delivered through that closed channel. This keeps the
-credential path separate from the unsupported Envoy feature, though actor snapshots will contain
-credentials after delivery. The earlier unauthenticated relay is not used. The preview-gate
-measurement below instead uses
-a generic exec shim (`spikes/substrate-workspace-adapter/image/exec-shim.js`) that pastes text
-into a real Herdr shell pane via `herdr pane run` -- a real shell executing a real command, just
-not a credentialed agent's own tool call.
+into decrypted outbound requests. HTTPS hostname rules require the Envoy sdsmint overlay and
+`--experimental-egress-credential-injection`; the plain Envoy overlay has no MITM egress, and
+agentgateway does not implement this injection path. Envoy 1.39.1 crashed during an earlier
+install attempt, but the rebuilt Round 3 cluster ran Envoy with sdsmint and the credential
+provider. Claude's credential was injected on the upstream leg and stayed out of actor snapshots.
+Codex instead received `auth.json` through the authenticated shim because Codex refreshes that
+file locally; its actor snapshots therefore contain that credential. Neither credential value
+was logged or copied into a golden snapshot. The old unauthenticated relay was not used.
+
+The preview/HMR edit itself still uses a generic exec shim
+(`spikes/substrate-workspace-adapter/image/exec-shim.js`) that pastes text into a real Herdr shell
+pane via `herdr pane run` -- a real shell executing a real command, but not a native agent's own
+Bash tool.
 
 ## Run it
 
@@ -336,7 +348,7 @@ The Codex sandbox could not see the stalled `unittest discover` processes 229364
 the reviewing session killed both on 2026-09-23. The full runtime result 189/189 is attributed
 to that reviewing session, not to a sandbox process killed by this agent.
 
-## CapabilityResult
+## Historical CapabilityResult (before Round 3)
 
 | Capability                    | State   | Scope      | Evidence and limit |
 | ----------------------------- | ------- | ---------- | ------------------ |
@@ -352,7 +364,7 @@ to that reviewing session, not to a sandbox process killed by this agent.
 | `native_session_continuity`   | partial | unverified | Phase 3d failed before credential delivery; no native session was run. |
 | `failure_recovery`            | partial | live       | Earlier CRASHED/revert mechanics were proved; worker-loss recovery and the backend-restart `recorded` case remain unproved live. |
 
-## Recommendation
+## Historical recommendation (superseded by the Round 3/Phase 4 result)
 
 The corrected preview image resolves the earlier `npm ENOENT`/dead-checkpoint harness error;
 that result does not justify deferring native-session adoption. The current agentgateway run
@@ -363,7 +375,7 @@ is added. Production also needs a GitOps-managed router NetworkPolicy on an enfo
 shim-token issuance by the real Mainloop backend, and snapshot-bucket access controls. The
 credential-bearing snapshot trade-off remains open because no credential entered an actor.
 
-## Cleanup and current cluster state
+## Historical cleanup note (superseded by the Phase 4 owner-review hold)
 
 Phase 0 removed the approved relay resources and both named Secrets, then deleted the
 owner-confirmed failed-trial cluster. Per the owner's 2026-09-23 instruction, cleanup of the
@@ -372,3 +384,62 @@ The actor's EgressPolicy is zero-rule deny-all. `mainloop-test` remains outside 
 provider Secret or credential-bearing snapshot was created. Current Kind/Docker inventory and
 disk headroom are recorded in the task proof note. The owner handles rotation of credentials
 previously served by the removed relay.
+
+## Current CapabilityResult — Round 3 and Phase 4
+
+| Capability | State | Scope | Evidence and limit |
+| --- | --- | --- | --- |
+| `workspace_adapter_contract` | partial | fixture | Contract and identity reconciliation are covered by fakes; the `workspace_bindings` orchestration was not run against live Postgres and a running backend. |
+| `substrate_actor_lifecycle` | proved | live | Golden, actor readiness, router ingress, and suspend/resume passed on the Cilium preview cluster. |
+| `preview_hmr` | proved | live | The earlier real Vite/WebSocket HMR route remains measured and passed. |
+| `dev_service_postgres` | proved | live | The earlier real PostgreSQL query, narrow CIDR rule, denied destination, and wake reconnection remain measured and passed. |
+| `networkpolicy_enforcement` | proved | live | Cilium blocked the denied probe and allowed the control-namespace probe. |
+| `router_ingress_boundary` | proved | live | `default` was denied; `mainloop-control` was admitted; the preview route remained functional. |
+| `shim_token_auth` | proved | live | Missing/wrong/correct token, one-time install, and suspend/resume persistence passed. |
+| `image_manifest_preflight` | proved | live | The exact pushed digest returned registry HTTP 200 before template creation; fake-backed tests cover the manifest check and rejection cases. |
+| `shim_healthz` | proved | live | Readiness checks pass through the actor route; bounded Herdr calls and cached health have fixture coverage. |
+| `cilium_kube_proxy_replacement` | partial | live | KPR=true core checks passed. DNS to the CoreDNS Pod IP worked, while DNS to the kube-dns Service IP timed out. The exact failing component was not isolated; kube-proxy replacement ClusterIP translation from the nested actor network is only a hypothesis. The cluster fell back to KPR=false as directed. |
+| `provider_hostname_egress` | proved | live | Actor A's listed Claude host returned 404 while unlisted `example.com` and raw IP returned 403. Actor B's differing rule allowed `example.com` to reach an upstream 503, denied `api.anthropic.com`, and denied raw IP. Track B was skipped because Track A passed. |
+| `dummy_header_injection` | proved | live | The compare-only provider returned a fixed match boolean; the final actor had no injected value in its env/files and received no echoed value. Earlier dummy-only diagnostic history is in the task proof note. |
+| `credential_delivery` | proved | live | Claude's credential was retrieved by the actor-bound provider and injected on the Envoy upstream leg. Codex `auth.json` was installed through the authenticated shim, once, mode 0600. These delivery proofs do not imply successful authentication for both CLIs. |
+| `claude_native_session` | proved | live | Claude Code 2.1.280 completed a turn, preserved its session ID through suspend/resume, and recalled a prior nonce. |
+| `codex_native_session` | partial | live | Codex CLI 0.156.1 created a thread, but Envoy returned an upstream-connect 503 before the turn completed; the model was not reported, and there was no marker or recall. No Codex revert was attempted. |
+| `native_session_continuity` | partial | live | Claude suspend/resume recall passed. Claude post-worker-loss recall and transcript rollback after snapshot revert remain unverified; Codex continuity did not pass. |
+| `snapshot_revert` | partial | live | Claude state-A restore and actor lifecycle passed, but transcript/history rollback was not conclusively measured. Codex revert was not attempted. |
+| `worker_loss_recovery` | partial | live | The Claude actor recovered on a replacement worker from its completed snapshot. Post-loss native recall did not complete. |
+| `backend_restart_delivery_reconciliation` | proved | fixture | The `ContractStore` fake test models a persisted `recorded` row across ownership restart, requires `not_delivered` evidence before retry, and rejects a duplicate attempt. |
+| `snapshot_bucket_access_control` | unknown | unverified | Read access to snapshot storage was not established in this install. |
+
+## Current recommendation
+
+**Defer production adoption of the Substrate native-session path.** The live run proves that
+Substrate can host the isolated workspace lifecycle, enforce router ingress and actor hostname
+egress, inject Claude credentials outside the actor snapshot, and preserve a Claude session
+through suspend/resume. It does not prove the required two-agent path: Codex could not complete a
+turn because the egress Envoy reset its OpenAI upstream connection before response headers
+(HTTP 503). The same credential-free API request returned `server: envoy` and an
+`upstream connect error`, while TLS verification succeeded and the unlisted-host rule still
+returned 403. The bounded review found no image, CA, install-flag, actor identity, or hostname
+policy mismatch.
+
+Before production, resolve and retest that Envoy-to-OpenAI upstream hop, then prove Codex
+authentication and nonce recall across suspend/resume. Production also needs a GitOps-managed
+router NetworkPolicy, a CNI that enforces it, shim-token issuance from the real Mainloop backend,
+and snapshot-bucket access control. The snapshot containing Codex `auth.json` must be removed
+when the actor is deleted; the owner handles credential rotation.
+
+## Current cleanup and review hold
+
+The Phase 4 owner-review brief requires both actors to remain SUSPENDED for review and their
+credential Secrets to be deleted. The dedicated preview cluster and run-built images remain
+available for that review; `mainloop-test` remains untouched. Temporary delivery Jobs,
+ConfigMaps, shim-token Secrets, the Claude provider, and the Claude/Codex credential Secrets are
+removed. The actor snapshots are intentionally retained for owner inspection, so the Codex
+snapshot still contains `auth.json`. The proof note records the final inventory and identifies
+this review hold as the reason the older finish-plan teardown was not applied.
+
+The Round 3 helper sources are under `spikes/substrate-workspace-adapter/tools/`; the captured
+sources match the pinned Substrate checkout. The Codex file-write route now requires an installed
+shim token even on a tokenless golden and validates a JSON object. That source hardening is
+fixture-tested, but the retained actor image digest predates the change; rebuild before using
+that route in another run.

@@ -81,7 +81,6 @@ from mainloop.runtime.substrate import (  # noqa: E402
 )
 
 PINNED_SUBSTRATE_COMMIT = "cdac9baef81dd319b46086d695266e6161e9e592"
-WORKER_NAMESPACE = "live-agent-gate"
 WORKER_SELECTOR = "workload=live-agent-gate"
 WORKER_SANDBOX_CLASS = "gvisor"
 ACTOR_SHIM_PORT = 8090
@@ -672,12 +671,12 @@ async def wait_for_worker_if_actor_is_absent(
         return
 
     print(
-        f"-- waiting for an eligible worker in namespace={WORKER_NAMESPACE}, "
+        f"-- waiting for an eligible worker in namespace={args.atespace}, "
         f"selector={WORKER_SELECTOR}, sandbox={WORKER_SANDBOX_CLASS}"
     )
     await wait_for_eligible_worker(
         control,
-        WORKER_NAMESPACE,
+        args.atespace,
         WORKER_SELECTOR,
         WORKER_SANDBOX_CLASS,
         timeout_s=args.worker_timeout,

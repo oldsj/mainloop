@@ -75,6 +75,45 @@ function installToken(token) {
   return true;
 }
 
+function installCodexAuth(contentBase64) {
+  if (typeof contentBase64 !== 'string') return false;
+  const contents = Buffer.from(contentBase64, 'base64');
+  if (
+    contents.length === 0 ||
+    contents.length > 65536 ||
+    contents.toString('base64') !== contentBase64
+  ) return false;
+  let auth;
+  try {
+    auth = JSON.parse(contents.toString('utf8'));
+  } catch {
+    return false;
+  }
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return false;
+  const codexHome = process.env.CODEX_HOME || path.join(process.env.HOME || '/home/agent', '.codex');
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  fs.chmodSync(codexHome, 0o700);
+  const destination = path.join(codexHome, 'auth.json');
+  let fd;
+  try {
+    fd = fs.openSync(destination, 'wx', 0o600);
+  } catch (err) {
+    if (err.code === 'EEXIST') return null;
+    throw err;
+  }
+  try {
+    fs.writeFileSync(fd, contents);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fs.chmodSync(destination, 0o600);
+  } catch (err) {
+    try { fs.closeSync(fd); } catch {}
+    fs.rmSync(destination, { force: true });
+    throw err;
+  }
+  return true;
+}
+
 function herdr(args, res) {
   execFile('herdr', ['--session', SESSION, ...args], (err, stdout, stderr) => {
     if (err) {
@@ -184,6 +223,33 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/read') {
     if (!authorized(req)) return unauthorized(res);
     herdr(['pane', 'read', PANE_ID], res);
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/write-codex-auth') {
+    if (bearerToken === null || !authorized(req)) return unauthorized(res);
+    requestBody(req, (body) => {
+      let contentBase64;
+      try {
+        contentBase64 = JSON.parse(body).contentBase64;
+      } catch {
+        res.writeHead(400).end('invalid json');
+        return;
+      }
+      try {
+        const installed = installCodexAuth(contentBase64);
+        if (installed === null) {
+          res.writeHead(409).end('auth file already exists');
+          return;
+        }
+        if (!installed) {
+          res.writeHead(400).end('invalid auth payload');
+          return;
+        }
+        res.writeHead(201).end('Codex auth installed');
+      } catch {
+        res.writeHead(500).end('Codex auth could not be stored');
+      }
+    });
     return;
   }
   if (req.method !== 'POST' || req.url !== '/run') {
