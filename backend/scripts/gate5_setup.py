@@ -351,7 +351,7 @@ def actor_router_tunnel(args: argparse.Namespace):
         "--namespace",
         "ate-system",
         "service/atenet-router",
-        f"{args.router_port}:80",
+        f"{args.router_port}:8081",
     ]
     process = (
         subprocess.Popen(  # nosec B603 - fixed kubectl argv, explicit kube context
@@ -463,6 +463,55 @@ async def ensure_golden_template(
     return record.uid or existing.uid
 
 
+async def wait_for_worker_if_actor_is_absent(
+    control: SubstrateControl, args: argparse.Namespace, state: dict
+) -> None:
+    """Reconcile actor ownership before waiting for capacity needed by a new actor."""
+    live = await control.get_actor(args.atespace, args.actor_name)
+    outcome = reconcile_actor_identity(state.get("actor_uid"), live)
+    if outcome is IdentityOutcome.UNOWNED:
+        raise IdentityConflict(
+            f"actor {args.atespace}/{args.actor_name} already exists with uid {live.uid}, "
+            f"but {args.state_file} has no actor uid; refusing to adopt it. Use a new "
+            "--actor-name or reconcile the state file explicitly"
+        )
+    if outcome is IdentityOutcome.DIVERGED:
+        raise IdentityConflict(
+            f"actor {args.atespace}/{args.actor_name} exists with uid {live.uid}, but "
+            f"{args.state_file} recorded {state.get('actor_uid')} from a prior run -- "
+            "refusing to resume or recreate it; reconcile manually or use a different "
+            "--actor-name"
+        )
+    if outcome is IdentityOutcome.MATCHES:
+        if (
+            state.get("template_uid")
+            and live.current_actor_template_uid != state["template_uid"]
+        ):
+            raise IdentityConflict(
+                f"actor {args.atespace}/{args.actor_name} references template uid "
+                f"{live.current_actor_template_uid!r}, but {args.state_file} recorded "
+                f"{state['template_uid']!r}"
+            )
+        if live.state in {ActorState.CRASHED, ActorState.DELETING}:
+            raise ActorFailedToStart(
+                f"actor {args.atespace}/{args.actor_name} is {live.state.value}; "
+                "choose an explicit revert or a new --actor-name before retrying"
+            )
+        return
+
+    print(
+        f"-- waiting for an eligible worker in namespace={WORKER_NAMESPACE}, "
+        f"selector={WORKER_SELECTOR}, sandbox={WORKER_SANDBOX_CLASS}"
+    )
+    await wait_for_eligible_worker(
+        control,
+        WORKER_NAMESPACE,
+        WORKER_SELECTOR,
+        WORKER_SANDBOX_CLASS,
+        timeout_s=args.worker_timeout,
+    )
+
+
 async def ensure_actor(
     control: SubstrateControl,
     args: argparse.Namespace,
@@ -558,18 +607,7 @@ async def async_main(args: argparse.Namespace) -> None:
         substrate_src=substrate_src,
     )
 
-    print(
-        f"-- waiting for an eligible worker in namespace={WORKER_NAMESPACE}, "
-        f"selector={WORKER_SELECTOR}, sandbox={WORKER_SANDBOX_CLASS}"
-    )
-    await wait_for_eligible_worker(
-        control,
-        WORKER_NAMESPACE,
-        WORKER_SELECTOR,
-        WORKER_SANDBOX_CLASS,
-        timeout_s=args.worker_timeout,
-    )
-
+    await wait_for_worker_if_actor_is_absent(control, args, state)
     template_uid = await ensure_golden_template(
         control, args, template_name, actor_template_doc, state
     )

@@ -475,9 +475,18 @@ class SubstrateControl:
             doc = json.loads(text)
         except json.JSONDecodeError as exc:
             raise TransportError(f"get workers returned invalid JSON: {exc}") from exc
-        if not isinstance(doc, dict) or "workers" not in doc:
+        if not isinstance(doc, dict):
             raise TransportError("get workers JSON is missing its 'workers' list")
-        workers = doc["workers"]
+        # The pinned CLI uses protojson's default omission behavior: a valid
+        # ListWorkers response with zero matches is `{}`, not `{"workers": []}`.
+        # Treat only that empty object as the empty list; a non-empty object
+        # without the field is still a contract error.
+        if "workers" not in doc:
+            if doc:
+                raise TransportError("get workers JSON is missing its 'workers' list")
+            workers = []
+        else:
+            workers = doc["workers"]
         if not isinstance(workers, list):
             raise TransportError("get workers JSON field 'workers' is not a list")
         return sum(

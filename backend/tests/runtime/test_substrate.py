@@ -507,6 +507,17 @@ class GetEligibleWorkersTests(unittest.TestCase):
             0,
         )
 
+    def test_empty_object_matches_pinned_cli_empty_result(self):
+        ctl = FakeControl([ExecResult(0, "{}", "")])
+        self.assertEqual(
+            run(
+                ctl.get_eligible_workers(
+                    "live-agent-gate", "workload=live-agent-gate", "gvisor"
+                )
+            ),
+            0,
+        )
+
     def test_missing_workers_field_is_a_contract_error(self):
         ctl = FakeControl([ExecResult(0, json.dumps({"items": []}), "")])
         with self.assertRaisesRegex(TransportError, "missing its 'workers' list"):

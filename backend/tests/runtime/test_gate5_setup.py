@@ -185,6 +185,49 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
         )
         self.assertEqual(connections[0].requested, ("GET", "/healthz"))
 
+    def test_actor_router_tunnel_forwards_to_connect_listener(self):
+        class FakeSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class FakeProcess:
+            def __init__(self):
+                self.terminated = False
+                self.stdout = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout):
+                self.wait_timeout = timeout
+
+        args = SimpleNamespace(
+            context="kind-substrate-preview",
+            kubeconfig=FIXTURE_KUBECONFIG,
+            router_port=18081,
+        )
+        process = FakeProcess()
+        with (
+            patch.object(
+                gate5_setup.subprocess, "Popen", return_value=process
+            ) as popen,
+            patch.object(
+                gate5_setup.socket, "create_connection", return_value=FakeSocket()
+            ),
+            gate5_setup.actor_router_tunnel(args) as route_port,
+        ):
+            self.assertEqual(route_port, 18081)
+
+        command = popen.call_args.args[0]
+        self.assertIn("18081:8081", command)
+        self.assertTrue(process.terminated)
+
 
 class Gate5StateTests(unittest.TestCase):
     def args(self, state_file: str, **overrides):
@@ -242,11 +285,14 @@ class SetupControl:
         self.actor = actor
         self.created = []
         self.resumed = 0
+        self.events = []
 
     async def get_actor(self, _atespace, _name):
+        self.events.append("get_actor")
         return self.actor
 
     async def create_actor(self, atespace, name, *, template):
+        self.events.append("create_actor")
         self.created.append((atespace, name, template))
         self.actor = ActorRecord(
             atespace=atespace,
@@ -260,6 +306,7 @@ class SetupControl:
         return self.actor
 
     async def resume_actor(self, _atespace, _name):
+        self.events.append("resume_actor")
         self.resumed += 1
         self.actor = replace(self.actor, state=ActorState.RUNNING)
         return self.actor
@@ -296,6 +343,7 @@ class Gate5ActorIdentityTests(unittest.TestCase):
             atespace="live-agent-gate",
             actor_name="claude-gate5",
             actor_timeout=5,
+            worker_timeout=5,
         )
 
     def test_exact_old_template_collision_with_new_template_is_refused(self):
@@ -336,9 +384,10 @@ class Gate5ActorIdentityTests(unittest.TestCase):
 
     def test_crashed_and_deleting_actors_are_refused_before_resume(self):
         for actor_state in (ActorState.CRASHED, ActorState.DELETING):
-            with self.subTest(
-                actor_state=actor_state
-            ), tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                self.subTest(actor_state=actor_state),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
                 path = str(Path(temp_dir) / "state.json")
                 state = self.state(path)
                 control = SetupControl(self.actor(state=actor_state))
@@ -363,20 +412,96 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                 "template_uid": "template-new",
             }
             control = SetupControl(None)
-            uid = asyncio_run(
-                gate5_setup.ensure_actor(
-                    control,
-                    self.args(path),
-                    "live-agent-gate-v2",
-                    "template-new",
-                    state,
+
+            async def wait_for_worker(*_args, **_kwargs):
+                control.events.append("wait_for_eligible_worker")
+
+            with patch.object(gate5_setup, "wait_for_eligible_worker", wait_for_worker):
+                asyncio_run(
+                    gate5_setup.wait_for_worker_if_actor_is_absent(
+                        control, self.args(path), state
+                    )
                 )
-            )
+                uid = asyncio_run(
+                    gate5_setup.ensure_actor(
+                        control,
+                        self.args(path),
+                        "live-agent-gate-v2",
+                        "template-new",
+                        state,
+                    )
+                )
             self.assertEqual(uid, "actor-new")
             self.assertEqual(control.resumed, 1)
+            self.assertLess(
+                control.events.index("get_actor"),
+                control.events.index("wait_for_eligible_worker"),
+            )
+            self.assertLess(
+                control.events.index("wait_for_eligible_worker"),
+                control.events.index("create_actor"),
+            )
             self.assertEqual(
                 json.loads(Path(path).read_text())["actor_uid"], "actor-new"
             )
+
+    def test_owned_rerun_skips_worker_wait_when_its_actor_occupies_only_worker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = self.state(path)
+            control = SetupControl(self.actor())
+
+            async def unexpected_worker_wait(*_args, **_kwargs):
+                self.fail("owned rerun must not wait for a spare worker")
+
+            with patch.object(
+                gate5_setup, "wait_for_eligible_worker", unexpected_worker_wait
+            ):
+                asyncio_run(
+                    gate5_setup.wait_for_worker_if_actor_is_absent(
+                        control, self.args(path), state
+                    )
+                )
+                uid = asyncio_run(
+                    gate5_setup.ensure_actor(
+                        control,
+                        self.args(path),
+                        "live-agent-gate-v2",
+                        "template-new",
+                        state,
+                    )
+                )
+
+            self.assertEqual(uid, "actor-1")
+            self.assertEqual(control.created, [])
+            self.assertEqual(control.resumed, 0)
+
+    def test_unowned_actor_is_refused_before_worker_wait(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = {
+                "run_id": "run-4",
+                "actor_uid": None,
+                "actor_name": "claude-gate5",
+                "template_name": "live-agent-gate-v2",
+                "template_uid": "template-new",
+            }
+            control = SetupControl(self.actor(template_uid="template-old"))
+
+            async def unexpected_worker_wait(*_args, **_kwargs):
+                self.fail("unowned actor must be refused before worker discovery")
+
+            with patch.object(
+                gate5_setup, "wait_for_eligible_worker", unexpected_worker_wait
+            ):
+                with self.assertRaisesRegex(IdentityConflict, "no actor uid"):
+                    asyncio_run(
+                        gate5_setup.wait_for_worker_if_actor_is_absent(
+                            control, self.args(path), state
+                        )
+                    )
+
+            self.assertEqual(control.events, ["get_actor"])
 
 
 def asyncio_run(coro):
