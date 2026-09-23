@@ -24,7 +24,6 @@ from typing import Callable
 
 CONTROL_NAMESPACE = "mainloop-control"
 DEFAULT_CONTEXT = "kind-substrate-preview"
-DEFAULT_KUBECONFIG = "/tmp/substrate-preview-kubeconfig"
 DEFAULT_IMAGE = (
     "localhost:5001/live-agent-gate@sha256:"
     "8ec007c56b070a2357f20203807197e42ebdb8d0c0e155d57a3bd48fb8d10f57"
@@ -32,9 +31,7 @@ DEFAULT_IMAGE = (
 MAX_SECRET_BYTES = 1024 * 1024
 ACTOR_NAMESPACES = {"claude": "native-claude", "codex": "native-codex"}
 SHARED_CLUSTER_NOTE = (
-    Path(__file__).resolve().parents[2]
-    / ".tasknotes"
-    / "shared-cluster-2026-09-23.md"
+    Path(__file__).resolve().parents[2] / ".tasknotes" / "shared-cluster-2026-09-23.md"
 )
 DELIVERY_SCRIPT = (
     Path(__file__).resolve().parents[2]
@@ -49,7 +46,7 @@ DELIVERY_SCRIPT = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--context", default=DEFAULT_CONTEXT)
-    parser.add_argument("--kubeconfig", default=DEFAULT_KUBECONFIG)
+    parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--actor-namespace", required=True)
     parser.add_argument("--actor-name", required=True)
     parser.add_argument("--state-file", required=True)
@@ -94,12 +91,16 @@ def require_handover(path: Path = SHARED_CLUSTER_NOTE) -> None:
     except OSError:
         raise RuntimeError("shared-cluster handover note is unavailable") from None
     if not re.search(r"(?m)^\*\*Handover:\*\*\s+done(?:\s|$)", note):
-        raise RuntimeError("shared-cluster handover is not done; no resources were created")
+        raise RuntimeError(
+            "shared-cluster handover is not done; no resources were created"
+        )
 
 
 def kubectl_prefix(context: str, kubeconfig: str) -> list[str]:
     if context != DEFAULT_CONTEXT:
-        raise RuntimeError(f"refusing context {context!r}; expected {DEFAULT_CONTEXT!r}")
+        raise RuntimeError(
+            f"refusing context {context!r}; expected {DEFAULT_CONTEXT!r}"
+        )
     return ["kubectl", "--context", context, "--kubeconfig", kubeconfig]
 
 
@@ -305,9 +306,7 @@ def build_job(
                             "secret": {
                                 "secretName": credential_secret,
                                 "defaultMode": 0o440,
-                                "items": [
-                                    {"key": "credential", "path": "credential"}
-                                ],
+                                "items": [{"key": "credential", "path": "credential"}],
                             },
                         },
                         {
@@ -338,7 +337,9 @@ def deliver_credentials(
     if not re.fullmatch(
         r"localhost:5001/live-agent-gate@sha256:[0-9a-f]{64}", args.image
     ):
-        raise RuntimeError("delivery image must be the digest-pinned live-agent-gate image")
+        raise RuntimeError(
+            "delivery image must be the digest-pinned live-agent-gate image"
+        )
 
     state = read_private_state(
         args.state_file,

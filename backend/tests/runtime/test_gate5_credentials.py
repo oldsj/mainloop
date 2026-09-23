@@ -2,12 +2,13 @@
 
 import json
 import os
+import tempfile
+import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-import tempfile
-import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from scripts import gate5_deliver_credentials
 
@@ -34,7 +35,9 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.handover_path = self.root / "shared-cluster.md"
-        self.handover_path.write_text("**Handover:** done — 2026-09-23 17:00 UTC\n", encoding="utf-8")
+        self.handover_path.write_text(
+            "**Handover:** done — 2026-09-23 17:00 UTC\n", encoding="utf-8"
+        )
         self.args = SimpleNamespace(
             context="kind-substrate-preview",
             kubeconfig="/fixture/kubeconfig",
@@ -46,6 +49,34 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
             codex_auth_file="/fixture/not-used",
             image=gate5_deliver_credentials.DEFAULT_IMAGE,
         )
+
+    def test_kubeconfig_is_required_by_cli(self):
+        required = [
+            "--actor-namespace",
+            "native-claude",
+            "--actor-name",
+            "claude-final",
+            "--state-file",
+            "/fixture/state.json",
+            "--credential",
+            "claude",
+        ]
+        with patch("sys.argv", ["gate5_deliver_credentials.py", *required]):
+            with self.assertRaises(SystemExit) as raised:
+                gate5_deliver_credentials.parse_args()
+        self.assertEqual(raised.exception.code, 2)
+
+        with patch(
+            "sys.argv",
+            [
+                "gate5_deliver_credentials.py",
+                *required,
+                "--kubeconfig",
+                "/fixture/kubeconfig",
+            ],
+        ):
+            parsed = gate5_deliver_credentials.parse_args()
+        self.assertEqual(parsed.kubeconfig, "/fixture/kubeconfig")
 
     def fake_runner(self, calls, data_seen):
         def runner(argv, **kwargs):
@@ -59,7 +90,9 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
 
         return runner
 
-    def test_credentials_flow_through_control_secret_and_authenticated_job_without_path_or_value_in_argv(self):
+    def test_credentials_flow_through_control_secret_and_authenticated_job_without_path_or_value_in_argv(
+        self,
+    ):
         calls = []
         data_seen = []
         output = StringIO()
@@ -85,7 +118,9 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
             self.assertNotIn(self.args.state_file, joined)
 
         secret_argv = calls[0][0]
-        from_file = next(part for part in secret_argv if part.startswith("--from-file="))
+        from_file = next(
+            part for part in secret_argv if part.startswith("--from-file=")
+        )
         self.assertRegex(from_file, r"^--from-file=credential=/proc/self/fd/\d+$")
         job_manifest = json.loads(calls[5][1]["input"])
         self.assertEqual(job_manifest["kind"], "Job")
@@ -94,8 +129,12 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
         self.assertEqual(pod_spec["securityContext"]["fsGroup"], 10001)
         self.assertEqual(pod_spec["volumes"][1]["secret"]["defaultMode"], 0o440)
         container = pod_spec["containers"][0]
-        self.assertEqual(container["env"][0], {"name": "CREDENTIAL_KIND", "value": "claude"})
-        self.assertEqual(container["env"][1], {"name": "ACTOR_NAMESPACE", "value": "native-claude"})
+        self.assertEqual(
+            container["env"][0], {"name": "CREDENTIAL_KIND", "value": "claude"}
+        )
+        self.assertEqual(
+            container["env"][1], {"name": "ACTOR_NAMESPACE", "value": "native-claude"}
+        )
         self.assertNotIn(self.credential_value.decode(), str(job_manifest))
         self.assertNotIn(str(self.credential_path), str(job_manifest))
         self.assertEqual(
@@ -128,7 +167,9 @@ class Gate5CredentialDeliveryTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_credentials_are_not_wired_into_the_golden_setup_flow(self):
-        setup_source = Path(gate5_deliver_credentials.__file__).with_name("gate5_setup.py")
+        setup_source = Path(gate5_deliver_credentials.__file__).with_name(
+            "gate5_setup.py"
+        )
         source = setup_source.read_text(encoding="utf-8")
         self.assertNotIn("gate5_deliver_credentials", source)
         self.assertNotIn("deliver_credentials(", source)

@@ -1,3 +1,4 @@
+// Seed stable first-run defaults for the headless per-turn Claude and Codex CLIs.
 'use strict';
 
 const fs = require('node:fs');
@@ -15,18 +16,26 @@ fs.mkdirSync(claudeSettingsDir, { recursive: true, mode: 0o700 });
 fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
 
 if (!fs.existsSync(claudeConfig) || fs.statSync(claudeConfig).size === 0) {
-  fs.writeFileSync(claudeConfig, `${JSON.stringify({
-    hasCompletedOnboarding: true,
-    numStartups: 1,
-    theme: 'dark',
-    projects: {
-      [workspace]: {
-        hasTrustDialogAccepted: true,
-        hasCompletedProjectOnboarding: true,
-        allowedTools: [],
+  fs.writeFileSync(
+    claudeConfig,
+    `${JSON.stringify(
+      {
+        hasCompletedOnboarding: true,
+        numStartups: 1,
+        theme: 'dark',
+        projects: {
+          [workspace]: {
+            hasTrustDialogAccepted: true,
+            hasCompletedProjectOnboarding: true,
+            allowedTools: []
+          }
+        }
       },
-    },
-  }, null, 2)}\n`, { mode: 0o600 });
+      null,
+      2
+    )}\n`,
+    { mode: 0o600 }
+  );
 }
 if (!fs.existsSync(claudeSettings) || fs.statSync(claudeSettings).size === 0) {
   fs.writeFileSync(claudeSettings, '{"skipDangerousModePermissionPrompt":true}\n', { mode: 0o600 });
@@ -45,7 +54,7 @@ if (!fs.existsSync(codexConfig) || fs.statSync(codexConfig).size === 0) {
     '',
     '[notice]',
     'hide_rate_limit_model_nudge = true',
-    '',
+    ''
   ].join('\n');
   fs.writeFileSync(codexConfig, defaults, { mode: 0o600 });
 }

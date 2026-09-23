@@ -1,10 +1,11 @@
 # WorkerPool + ActorTemplate for the bounded live native-agent proof (gate 5 in
-# .tasknotes/plan.md): real Claude Code / Codex CLIs under Herdr, driven by the exec shim. See
-# spikes/substrate-workspace-adapter/live-agent-image/.
+# .tasknotes/plan.md): headless per-turn Claude Code / Codex CLIs, driven by the actor-local
+# shim. Substrate owns suspend/resume/revert; no terminal manager runs in the actor.
+# See spikes/substrate-workspace-adapter/live-agent-image/.
 #
 # Deliberately no credential-relay env: the golden actor boots without credentials or external
-# network access. The pinned ActorTemplate API supports readyz; the probe waits for the control
-# server, shell pane, and exec shim before the golden snapshot or final actor is considered ready.
+# network access. The pinned ActorTemplate API supports readyz; the probe waits for the shim and
+# workspace to become healthy before the golden snapshot or final actor is considered ready.
 apiVersion: v1
 kind: Namespace
 metadata:

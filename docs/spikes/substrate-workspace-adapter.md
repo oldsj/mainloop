@@ -2,40 +2,63 @@
 
 Status: local spike, not a product feature. Adapter code lives in
 `backend/src/mainloop/runtime/substrate.py` and `workspace_adapter.py`; the actor manifest
-lives in `spikes/substrate-workspace-adapter/`. See `docs/spikes/k8s-herdr-agents.md` for the
-native-session/Herdr spike this one builds on and does not replace.
+lives in `spikes/substrate-workspace-adapter/`. The earlier live proof used a Herdr-backed
+actor; the target described by this closeout has no Herdr server or terminal manager in the
+actor and invokes native CLIs headlessly once per turn. See
+`docs/spikes/k8s-herdr-agents.md` for the historical native-session/Herdr spike.
 
-## Current status — Round 3 and Phase 4 (2026-09-23)
+## Current status — Phase 5 closeout (2026-09-23)
 
-Substrate actors, the Cilium-backed preview cluster, router ingress controls, per-actor shim
-tokens, and Envoy hostname enforcement were measured live. Claude completed a native turn and
-recalled a nonce after suspend/resume. Codex's auth file was installed safely, but its native
-turn failed at Envoy's upstream connection to the OpenAI API (HTTP 503, reset before response
-headers). Gate 5 is partial/live, so defer production adoption of the native-session path until
-Codex egress and session continuity are proved.
+The Round 3 and Phase 4 runs measured Substrate actors, Cilium-enforced router ingress,
+per-actor shim tokens, Envoy hostname egress, and native sessions for both Claude Code and
+Codex in the earlier Herdr-backed actor. Both agents completed a native turn and recalled a
+nonce in the same session after suspend/resume. Measured suspend/resume times were 393/408 ms
+for Claude and 573/789 ms for Codex. Those results do not prove the headless per-turn actor
+model. Its rebuilt image is **not yet live-proved**. The Codex file marker was not confirmed in
+the recorded run; its follow-up result, Claude recall after worker loss, and Claude history
+after revert remain pending in the cluster lane.
+
+The earlier Codex API HTTP 503 came from Envoy selecting unreachable IPv6 upstream addresses
+when its DNS caches used `ALL`; `V4_PREFERRED` corrected that path. A separate ChatGPT SAN
+failure was traced by reviewer-provided evidence to cross-SNI upstream TLS session reuse in
+Envoy 1.39.1. After applying both settings, a credential-free probe returned the expected API
+401 and ChatGPT 200 with no TLS verification failures, then the native Codex turn and recall
+completed. Native-session support behind the Phase 3 boundary is proved for both agents in the
+earlier actor design. The requested headless actor design remains unproved, the broader
+continuity gate is partial, and production adoption is deferred pending live proof of its
+rebuilt image and the requirements below.
 
 ## What it shows
 
 [Substrate](https://github.com/agent-substrate/substrate) can provide the per-session isolated
 compute Mainloop's roadmap calls for ("Workspace platform"), while Mainloop stays the durable
-owner of the session<->actor mapping, delivery, and audit state. A Mainloop-authored
-`ActorTemplate` (Herdr + `agentctl`, the same image contents as the Herdr spike) runs as a
-Substrate actor instead of a fixed StatefulSet pod, and `backend/src/mainloop/runtime/substrate.py`
-drives its lifecycle through the real `kubectl ate` control-plane CLI.
+owner of session-to-actor mapping, delivery, and audit state. The target actor has no Herdr
+server or terminal manager; Mainloop delivers each turn to a headless native CLI process. The
+actor holds files between turns, with no attachable TUI; callers watch progress through streamed
+events. The rebuilt image for that design is not yet live-proved. Existing live lifecycle and
+native-session results below came from the earlier Herdr-backed actor and are historical evidence
+for Substrate and the Phase 3 boundary, not proof of the target image.
+
+The headless shim exposes authenticated `POST /turn` and `GET /turn/:id` endpoints. Prompts are
+sent to the native CLI on stdin; the shim stores bounded JSONL events per turn and reports the
+native session/thread id and final message. It permits one in-flight turn per agent and returns
+409 instead of queueing. `POST /run` starts a shell command with a bounded timeout and actor-local
+output file; `GET /run/:id` reports its status and bounded output. `/healthz` and `/readyz` check
+only the shim and workspace. The actor image and these routes still need live proof.
 
 ## Earlier real-versus-stand-in inventory (before Round 3)
 
-| Layer                                                                                                                                                                                                                 | Status                                                                                                                                                                                             |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane)                                                                                                              | Real                                                                                                                                                                                               |
-| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete                                                                                                                        | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls)                                                                       |
-| `preview-gate` WorkerPool + ActorTemplate: real Herdr server, real Vite dev server, real NGINX header-proxy, real browser (`agent-browser`), real WebSocket HMR                                                       | Real                                                                                                                                                                                               |
-| `dev-service-gate` WorkerPool + ActorTemplate: real `psql`, real external `postgres:16-alpine` StatefulSet, real `EgressPolicy` (CIDR rule, created via a small gRPC tool since `kubectl-ate` has no CLI verb for it) | Real                                                                                                                                                                                               |
-| Herdr + `agentctl` inside the actor images                                                                                                                                                                            | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                                                                                        |
-| File edits and shell commands run inside actors (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                                                                 | Stand-in -- see "Why not a real agent" below                                                                                                                                                       |
-| `live-agent-gate` WorkerPool + ActorTemplate: real Claude/Codex CLIs, credential-free boot                                                                                                                            | Golden snapshot READY and actor RUNNING proved live. A later credential-free preview actor hit the pinned gVisor restore error described below. No provider session ran.                                  |
-| Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run; the 2026-09-23 live lane stopped before credential work (see "Limits")                                                                                                                      |
-| `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                                                                                              |
+| Layer                                                                                                                                                                                                                 | Status                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| kind cluster `substrate-preview`, pinned Substrate `cdac9baef8...` (ate-system + agentgateway dataplane)                                                                                                              | Real                                                                                                                                                                     |
+| `mainloop-workspace` WorkerPool + ActorTemplate, actor create/get/resume/suspend/revert/delete                                                                                                                        | Real, driven through `backend/src/mainloop/runtime/substrate.py`'s actual code (not a separate probe script's own CLI calls)                                             |
+| `preview-gate` WorkerPool + ActorTemplate: real Herdr server, real Vite dev server, real NGINX header-proxy, real browser (`agent-browser`), real WebSocket HMR                                                       | Real                                                                                                                                                                     |
+| `dev-service-gate` WorkerPool + ActorTemplate: real `psql`, real external `postgres:16-alpine` StatefulSet, real `EgressPolicy` (CIDR rule, created via a small gRPC tool since `kubectl-ate` has no CLI verb for it) | Real                                                                                                                                                                     |
+| Herdr + `agentctl` inside the actor images                                                                                                                                                                            | Real (same image contents as `spikes/k8s-herdr-agents`), without the real Claude/Codex CLIs                                                                              |
+| File edits and shell commands run inside actors (a generic `herdr pane run` shim, not a native agent's own Bash tool)                                                                                                 | Stand-in -- see "Why not a real agent" below                                                                                                                             |
+| `live-agent-gate` WorkerPool + ActorTemplate: real Claude/Codex CLIs, credential-free boot                                                                                                                            | Golden snapshot READY and actor RUNNING proved live. A later credential-free preview actor hit the pinned gVisor restore error described below. No provider session ran. |
+| Claude/Codex agent processes, credentials                                                                                                                                                                             | Not run; the 2026-09-23 live lane stopped before credential work (see "Limits")                                                                                          |
+| `workspace_bindings` durable mapping (Postgres)                                                                                                                                                                       | Fixture/unit-tested only; not exercised against a live backend + database in this run                                                                                    |
 
 ## Preview-gate edit path and Round 3 credential boundary
 
@@ -51,12 +74,21 @@ CLI's local environment or filesystem.
 The pinned commit also has experimental static-header injection from a Kubernetes Secret URI
 into decrypted outbound requests. HTTPS hostname rules require the Envoy sdsmint overlay and
 `--experimental-egress-credential-injection`; the plain Envoy overlay has no MITM egress, and
-agentgateway does not implement this injection path. Envoy 1.39.1 crashed during an earlier
-install attempt, but the rebuilt Round 3 cluster ran Envoy with sdsmint and the credential
-provider. Claude's credential was injected on the upstream leg and stayed out of actor snapshots.
-Codex instead received `auth.json` through the authenticated shim because Codex refreshes that
-file locally; its actor snapshots therefore contain that credential. Neither credential value
-was logged or copied into a golden snapshot. The old unauthenticated relay was not used.
+agentgateway does not implement this injection path. An earlier Envoy 1.39.1 router install
+crashed, while the later Round 3 Cilium setup ran Envoy egress with sdsmint and the
+actor-bound credential provider. Claude's credential was injected on the upstream leg and stayed
+out of actor snapshots. Codex instead received `auth.json` through the authenticated shim because
+Codex refreshes that file locally; its actor snapshots therefore contain that credential. Moving
+Codex credentials out of snapshots remains a production requirement. Neither credential value
+was logged or copied into a golden snapshot, and the old unauthenticated relay was not used.
+
+The Round 3 egress run also found that `dns_lookup_family: ALL` selected unreachable IPv6
+addresses on the IPv4-only Kind node. Setting the five egress DNS caches to `V4_PREFERRED`
+allowed the credential-free API and ChatGPT probes to reach upstreams. A separate
+reviewer-provided diagnosis tied the earlier ChatGPT SAN failures to cross-SNI TLS session
+resumption; setting `max_session_keys: 0` on the four approved upstream TLS clusters preserved
+SAN verification and the later probe passed. These are Envoy-specific settings; they do not make
+agentgateway hostname enforcement safe.
 
 The preview/HMR edit itself still uses a generic exec shim
 (`spikes/substrate-workspace-adapter/image/exec-shim.js`) that pastes text into a real Herdr shell
@@ -183,23 +215,21 @@ per `docs/network-egress.md`'s "CIDR/all policy: dial now" passthrough path) ins
 **hostname rule** (HTTP/TLS-SNI-specific, and Postgres is neither), which the prior proof's HTTP
 `fetch`-based trial did not have reason to distinguish.
 
-## Limits from the earlier Phase 2 checkpoint
+## Historical limits from the earlier Phase 2 checkpoint
 
-- **Native-session gate, live**: no Claude or Codex session ran in the earlier checkpoint. The
-  owner authorized the work; earlier tool-policy decisions rejected particular actions after
-  the old relay returned HTTP 403. The relay was removed. The first Phase 3 preview restore
-  error was later diagnosed as a dead app from the old image and missing readiness probe, then
-  corrected with a new image and template. The current Phase 3 run passed 3a–3c and stopped at
-  the hostname-egress bypass described below; no provider credential was delivered.
+- **Native-session gate, live at that checkpoint**: no Claude or Codex session ran then. The
+  owner authorized the work; a tool policy rejected particular actions after the old relay
+  returned HTTP 403. The relay was removed. The first Phase 3 preview restore error was later
+  diagnosed as a dead app from the old image and missing readiness probe, then corrected with a
+  new image and template. Those earlier limits were superseded by the Round 3 and Phase 4 results
+  above.
 - Preview/HMR under the router policy and actor-to-actor access were unverified at the earlier
   checkpoint. In the current finish run, preview HMR passed, and an unrelated actor's CONNECT
   to the shim was rejected at the actor egress gateway before reaching the router. The
-  per-actor shim token passed live checks, including suspend/resume persistence. Provider Secret
-  delivery and Phase 4 session continuity remain unproved; no provider Secret was created or
-  read.
-- Phase 2's counter/marker persistence and worker-loss revert were not proved in their original
-  run. The current token suspend/resume check did not cover worker loss or those markers; those
-  checks remain open.
+  per-actor shim token passed live checks, including suspend/resume persistence.
+- Phase 2's counter/marker persistence and worker-loss revert were not proved in that original
+  run. Later Phase 4 checks proved Claude's file marker across suspend/resume; the three pending
+  Phase 4 checks are listed in the current results below.
 - **`workspace_bindings` orchestration functions** (`ensure_workspace`, `resume_workspace`, ...)
   were not exercised against a live Postgres + running backend; only their extracted pure logic
   (`plan_ensure`, `_binding_from_row`, `is_crashed`) is unit tested, and the transport layer
@@ -251,11 +281,13 @@ returned 200. Suspend produced snapshot
 
 The first setup pass exposed one additional pinned-CLI result shape: a valid zero-match worker
 query serializes as `{}`. The adapter now treats only an empty object as zero workers and still
-rejects non-empty objects missing `workers`. The 9 worker-discovery regression tests pass. The
-unchanged rerun did not create a duplicate actor, but waited for spare worker capacity before
-checking the persisted actor UID and failed because the single worker was already occupied by
-`claude-gate5`. The harness's own health check also used router Service port 80 instead of its
-CONNECT listener on 8081; direct `/healthz` through 8081 worked.
+rejects non-empty objects missing `workers`. The affected correction run passed 30 tests: 9
+worker-discovery tests and 21 contract tests. The live Phase 2 run reached a READY golden and a
+RUNNING actor, returned `/healthz` 200 through the CONNECT listener on port 8081, and suspended
+then resumed the same actor to RUNNING with `/healthz` 200. Its unchanged rerun did not create a
+duplicate actor, but waited for spare worker capacity before checking the persisted actor UID and
+failed because the single worker was already occupied. The marker/counter and process PID were
+not measured in that run.
 
 Before any provider credential work, a separate tokenless Pod in `default` POSTed a harmless
 command through `atenet-router:8081` to `actor-upstream:8090/run` with the actor-routing header;
@@ -350,19 +382,19 @@ to that reviewing session, not to a sandbox process killed by this agent.
 
 ## Historical CapabilityResult (before Round 3)
 
-| Capability                    | State   | Scope      | Evidence and limit |
-| ----------------------------- | ------- | ---------- | ------------------ |
-| `workspace_adapter_contract`  | partial | fixture    | `SubstrateControl` is exercised live; `workspace_bindings` orchestration is fixture-tested, not run against a live backend and Postgres. |
-| `substrate_actor_lifecycle`   | partial | live       | READY golden creation and actor RUNNING proved live; full marker and worker-loss recovery remain unproved. |
-| `preview_hmr`                 | proved  | live       | Real Vite HMR edit and WebSocket upgrade succeeded through the preview proxy. |
-| `dev_service_postgres`        | proved  | live       | Real Postgres query, narrow allow rule, denied destination, and reconnect after wake. |
-| `phase3a_networkpolicy`       | proved  | live       | Kindnet blocked and then allowed the in-cluster HTTP probe according to NetworkPolicy. |
-| `router_ingress_boundary`     | proved  | live       | `default` was blocked; `mainloop-control` was admitted; unrelated actor CONNECT to the shim was rejected at actor egress; preview traffic passed. |
-| `shim_token_auth`             | proved  | live       | 401/409 behavior, successful bearer use, and token persistence across suspend/resume passed on the final actor. |
-| `provider_egress`             | failed  | live       | Exact hostname policy was confirmed, but HTTPS to unlisted `example.com` returned 200 through agentgateway. Actor returned to deny-all. |
-| `credential_delivery`         | unknown | unverified | No provider Secret was created or read; credentials were not delivered. |
-| `native_session_continuity`   | partial | unverified | Phase 3d failed before credential delivery; no native session was run. |
-| `failure_recovery`            | partial | live       | Earlier CRASHED/revert mechanics were proved; worker-loss recovery and the backend-restart `recorded` case remain unproved live. |
+| Capability                   | State   | Scope      | Evidence and limit                                                                                                                                |
+| ---------------------------- | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_adapter_contract` | partial | fixture    | `SubstrateControl` is exercised live; `workspace_bindings` orchestration is fixture-tested, not run against a live backend and Postgres.          |
+| `substrate_actor_lifecycle`  | partial | live       | READY golden creation and actor RUNNING proved live; full marker and worker-loss recovery remain unproved.                                        |
+| `preview_hmr`                | proved  | live       | Real Vite HMR edit and WebSocket upgrade succeeded through the preview proxy.                                                                     |
+| `dev_service_postgres`       | proved  | live       | Real Postgres query, narrow allow rule, denied destination, and reconnect after wake.                                                             |
+| `phase3a_networkpolicy`      | proved  | live       | Kindnet blocked and then allowed the in-cluster HTTP probe according to NetworkPolicy.                                                            |
+| `router_ingress_boundary`    | proved  | live       | `default` was blocked; `mainloop-control` was admitted; unrelated actor CONNECT to the shim was rejected at actor egress; preview traffic passed. |
+| `shim_token_auth`            | proved  | live       | 401/409 behavior, successful bearer use, and token persistence across suspend/resume passed on the final actor.                                   |
+| `provider_egress`            | failed  | live       | Exact hostname policy was confirmed, but HTTPS to unlisted `example.com` returned 200 through agentgateway. Actor returned to deny-all.           |
+| `credential_delivery`        | unknown | unverified | No provider Secret was created or read; credentials were not delivered.                                                                           |
+| `native_session_continuity`  | partial | unverified | Phase 3d failed before credential delivery; no native session was run.                                                                            |
+| `failure_recovery`           | partial | live       | Earlier CRASHED/revert mechanics were proved; worker-loss recovery and the backend-restart `recorded` case remain unproved live.                  |
 
 ## Historical recommendation (superseded by the Round 3/Phase 4 result)
 
@@ -385,48 +417,54 @@ provider Secret or credential-bearing snapshot was created. Current Kind/Docker 
 disk headroom are recorded in the task proof note. The owner handles rotation of credentials
 previously served by the removed relay.
 
-## Current CapabilityResult — Round 3 and Phase 4
+## Current CapabilityResult — gates 1–6 and Phase 4
 
-| Capability | State | Scope | Evidence and limit |
-| --- | --- | --- | --- |
-| `workspace_adapter_contract` | partial | fixture | Contract and identity reconciliation are covered by fakes; the `workspace_bindings` orchestration was not run against live Postgres and a running backend. |
-| `substrate_actor_lifecycle` | proved | live | Golden, actor readiness, router ingress, and suspend/resume passed on the Cilium preview cluster. |
-| `preview_hmr` | proved | live | The earlier real Vite/WebSocket HMR route remains measured and passed. |
-| `dev_service_postgres` | proved | live | The earlier real PostgreSQL query, narrow CIDR rule, denied destination, and wake reconnection remain measured and passed. |
-| `networkpolicy_enforcement` | proved | live | Cilium blocked the denied probe and allowed the control-namespace probe. |
-| `router_ingress_boundary` | proved | live | `default` was denied; `mainloop-control` was admitted; the preview route remained functional. |
-| `shim_token_auth` | proved | live | Missing/wrong/correct token, one-time install, and suspend/resume persistence passed. |
-| `image_manifest_preflight` | proved | live | The exact pushed digest returned registry HTTP 200 before template creation; fake-backed tests cover the manifest check and rejection cases. |
-| `shim_healthz` | proved | live | Readiness checks pass through the actor route; bounded Herdr calls and cached health have fixture coverage. |
-| `cilium_kube_proxy_replacement` | partial | live | KPR=true core checks passed. DNS to the CoreDNS Pod IP worked, while DNS to the kube-dns Service IP timed out. The exact failing component was not isolated; kube-proxy replacement ClusterIP translation from the nested actor network is only a hypothesis. The cluster fell back to KPR=false as directed. |
-| `provider_hostname_egress` | proved | live | Actor A's listed Claude host returned 404 while unlisted `example.com` and raw IP returned 403. Actor B's differing rule allowed `example.com` to reach an upstream 503, denied `api.anthropic.com`, and denied raw IP. Track B was skipped because Track A passed. |
-| `dummy_header_injection` | proved | live | The compare-only provider returned a fixed match boolean; the final actor had no injected value in its env/files and received no echoed value. Earlier dummy-only diagnostic history is in the task proof note. |
-| `credential_delivery` | proved | live | Claude's credential was retrieved by the actor-bound provider and injected on the Envoy upstream leg. Codex `auth.json` was installed through the authenticated shim, once, mode 0600. These delivery proofs do not imply successful authentication for both CLIs. |
-| `claude_native_session` | proved | live | Claude Code 2.1.280 completed a turn, preserved its session ID through suspend/resume, and recalled a prior nonce. |
-| `codex_native_session` | partial | live | Codex CLI 0.156.1 created a thread, but Envoy returned an upstream-connect 503 before the turn completed; the model was not reported, and there was no marker or recall. No Codex revert was attempted. |
-| `native_session_continuity` | partial | live | Claude suspend/resume recall passed. Claude post-worker-loss recall and transcript rollback after snapshot revert remain unverified; Codex continuity did not pass. |
-| `snapshot_revert` | partial | live | Claude state-A restore and actor lifecycle passed, but transcript/history rollback was not conclusively measured. Codex revert was not attempted. |
-| `worker_loss_recovery` | partial | live | The Claude actor recovered on a replacement worker from its completed snapshot. Post-loss native recall did not complete. |
-| `backend_restart_delivery_reconciliation` | proved | fixture | The `ContractStore` fake test models a persisted `recorded` row across ownership restart, requires `not_delivered` evidence before retry, and rejects a duplicate attempt. |
-| `snapshot_bucket_access_control` | unknown | unverified | Read access to snapshot storage was not established in this install. |
+| Gate / capability                               | State   | Scope      | Evidence and limit                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------- | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gate 1 — native contract                        | proved  | fixture    | Record transitions, ownership fencing, and reconciliation are exercised with `ContractStore` fakes; this is not a database-backed restart proof.                                                                                                                                      |
+| Gate 2 — workspace binding adapter              | partial | fixture    | Planning and row-mapping logic use fakes; `workspace_bindings` orchestration was not run against live Postgres and a running backend.                                                                                                                                                 |
+| Gate 2 — Substrate control adapter              | proved  | live       | Actor lifecycle operations used the real `kubectl ate` adapter and the Cilium preview cluster.                                                                                                                                                                                        |
+| Gate 3 — preview/HMR                            | proved  | live       | Real Vite edits updated the open browser session over WebSocket, including across suspend/resume.                                                                                                                                                                                     |
+| Gate 4 — dev-service access                     | proved  | live       | Real PostgreSQL query, narrow CIDR policy, denied destination, and reconnect after wake passed.                                                                                                                                                                                       |
+| Gate 5 — native sessions in prior actor design  | proved  | live       | Claude and Codex each completed a native turn and recalled a nonce after suspend/resume in the same Herdr-backed actor. Suspend/resume measured 393/408 ms for Claude and 573/789 ms for Codex.                                                                                       |
+| Gate 5 — headless per-turn CLI actor            | unknown | unverified | Target design has no Herdr server or terminal manager in the actor. Its rebuilt image is not yet live-proved; the earlier Phase 4 measurements do not establish this gate.                                                                                                            |
+| Gate 5 — complete continuity                    | partial | live       | In the earlier actor design, the Codex file marker was not confirmed. Claude recall after worker loss, Claude history after revert, and the Codex marker follow-up remain pending.                                                                                                    |
+| Gate 6 — actor failure recovery                 | partial | live       | CRASHED-to-revert-to-resume and replacement-worker restore were measured; native recall after worker loss and history after revert are not established.                                                                                                                               |
+| Phase 4 — Claude native session (prior actor)   | proved  | live       | In the earlier Herdr-backed actor, Claude Code completed a turn and same-session nonce recall after suspend/resume; the post-worker-loss and post-revert history checks remain pending.                                                                                               |
+| Phase 4 — Codex native session (prior actor)    | partial | live       | In the earlier Herdr-backed actor, Codex CLI completed a turn and same-session nonce recall after suspend/resume; file-marker continuity remains pending.                                                                                                                             |
+| `backend_restart_delivery_reconciliation`       | proved  | fixture    | A new fake-backed test reloads a persisted message and `recorded` attempt into a fresh `ContractStore`; retry is blocked until `not_delivered` evidence, and the same payload reference remains pending. It does not exercise Postgres, a transport, or the production delivery loop. |
+| `router_ingress_boundary` and `shim_token_auth` | proved  | live       | The unrelated namespace was denied, control-namespace access succeeded, and missing/wrong/correct token plus one-time install and suspend/resume checks passed.                                                                                                                       |
+| `provider_hostname_egress`                      | proved  | live       | Envoy/Cilium actor policies denied unlisted hosts; the earlier agentgateway HTTPS path allowed an unlisted host and is not a supported hostname boundary.                                                                                                                             |
+| `credential_delivery`                           | proved  | live       | Claude was injected on the Envoy upstream leg. Codex `auth.json` was installed through the shim and remains in the actor snapshot; production must move Codex credentials to egress injection.                                                                                        |
+| `cilium_kube_proxy_replacement`                 | partial | live       | KPR=true CoreDNS Pod-IP queries worked, but kube-dns Service-IP queries timed out. The cause was not isolated; the run continued with KPR=false.                                                                                                                                      |
+| `snapshot_bucket_access_control`                | unknown | unverified | Snapshot-bucket read access was not established.                                                                                                                                                                                                                                      |
+| `stuck_state_timeouts`                          | unknown | unverified | Production timeouts and surfaced recovery for stuck states remain to be implemented and measured.                                                                                                                                                                                     |
 
-## Current recommendation
+## Current recommendation and production requirements
 
-**Defer production adoption of the Substrate native-session path.** The live run proves that
-Substrate can host the isolated workspace lifecycle, enforce router ingress and actor hostname
-egress, inject Claude credentials outside the actor snapshot, and preserve a Claude session
-through suspend/resume. It does not prove the required two-agent path: Codex could not complete a
-turn because the egress Envoy reset its OpenAI upstream connection before response headers
-(HTTP 503). The same credential-free API request returned `server: envoy` and an
-`upstream connect error`, while TLS verification succeeded and the unlisted-host rule still
-returned 403. The bounded review found no image, CA, install-flag, actor identity, or hostname
-policy mismatch.
+**Defer production adoption of the headless per-turn actor design.** The earlier Herdr-backed
+actor proved that Substrate and the Phase 3 boundary can host native Claude and Codex sessions;
+both completed a turn and same-session nonce recall across suspend/resume. This does not prove
+the target actor, which has no Herdr server or terminal manager and invokes native CLIs headlessly
+per turn. Its rebuilt image is not yet live-proved. Production readiness also remains partial
+because the Codex marker and two Claude post-worker-loss/revert-history checks are pending, and
+durable backend integration and snapshot access controls are not proved.
 
-Before production, resolve and retest that Envoy-to-OpenAI upstream hop, then prove Codex
-authentication and nonce recall across suspend/resume. Production also needs a GitOps-managed
-router NetworkPolicy, a CNI that enforces it, shim-token issuance from the real Mainloop backend,
-and snapshot-bucket access control. The snapshot containing Codex `auth.json` must be removed
-when the actor is deleted; the owner handles credential rotation.
+Production requirements:
+
+- Isolate worker selection by tenant. Substrate does not scope selection by atespace or
+  namespace; require unique per-tenant WorkerPool names/selectors and enforce uniqueness with
+  admission policy.
+- Manage the router `NetworkPolicy` through GitOps and use a CNI that enforces it.
+- Issue and rotate per-actor shim tokens from the real Mainloop backend.
+- Enforce snapshot-bucket access controls. The Codex snapshot currently contains `auth.json`.
+- Move Codex credentials from the actor snapshot to a supported egress-injection flow.
+- Use Envoy sdsmint for experimental credential injection; agentgateway does not implement it.
+- Set `dns_lookup_family: V4_PREFERRED` on the egress DNS caches and `max_session_keys: 0` on
+  the relevant upstream TLS clusters; retain hostname and SAN verification.
+- Resolve KPR=true actor DNS: CoreDNS Pod-IP lookup worked, but kube-dns Service-IP lookup
+  timed out and the exact cause remains unknown.
+- Add bounded timeouts and visible recovery for actors and deliveries that remain stuck.
 
 ## Current cleanup and review hold
 

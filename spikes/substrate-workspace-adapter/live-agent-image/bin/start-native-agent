@@ -1,47 +1,61 @@
 #!/usr/bin/env bash
-# Start one native CLI in the actor's persistent Herdr shell pane after credential delivery.
+# Run one headless native CLI turn. The prompt is inherited on stdin, never passed in argv.
 set -euo pipefail
 
-kind="${1:?usage: start-native-agent claude|codex}"
-if [[ $# -ne 1 ]]; then
-  echo 'usage: start-native-agent claude|codex' >&2
-  exit 2
+kind="${1:?usage: start-native-agent claude|codex [native-session-id]}"
+if [[ $# -gt 2 ]]; then
+	echo 'usage: start-native-agent claude|codex [native-session-id]' >&2
+	exit 2
+fi
+session_id="${2-}"
+if [[ -n ${session_id} && ! ${session_id} =~ ^[A-Za-z0-9._:-]{1,256}$ ]]; then
+	echo 'invalid native session id' >&2
+	exit 2
 fi
 
 workspace="${WORKSPACE_PATH:-/work/repo}"
 cd "${workspace}"
 
+# Keep telemetry and automatic network chatter disabled for every native invocation.
+export DISABLE_TELEMETRY=1
+export DISABLE_ERROR_REPORTING=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export DISABLE_AUTOUPDATER=1
+
 case "${kind}" in
-  claude)
-    token_file="${HOME}/.mainloop/claude-token"
-    if [[ ! -s "${token_file}" ]]; then
-      echo 'Claude credential is not installed' >&2
-      exit 1
-    fi
-    CLAUDE_CODE_OAUTH_TOKEN="$(tr -d ' \r\n' <"${token_file}")"
-    if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]]; then
-      echo 'Claude credential is empty' >&2
-      exit 1
-    fi
-    export CLAUDE_CODE_OAUTH_TOKEN
-    export DISABLE_TELEMETRY=1
-    export DISABLE_ERROR_REPORTING=1
-    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-    export DISABLE_AUTOUPDATER=1
-    exec claude \
-      --dangerously-skip-permissions \
-      --append-system-prompt-file "${AGENT_SYSTEM_PROMPT_FILE:-/etc/agent-config/mainloop-system.txt}"
-    ;;
-  codex)
-    auth_file="${CODEX_HOME:-${HOME}/.codex}/auth.json"
-    if [[ ! -s "${auth_file}" ]]; then
-      echo 'Codex credential is not installed' >&2
-      exit 1
-    fi
-    exec codex --dangerously-bypass-approvals-and-sandbox
-    ;;
-  *)
-    echo 'unsupported native CLI' >&2
-    exit 2
-    ;;
+claude)
+	token_file="${HOME}/.mainloop/claude-token"
+	if [[ ! -s ${token_file} ]]; then
+		echo 'Claude credential is not installed' >&2
+		exit 1
+	fi
+	CLAUDE_CODE_OAUTH_TOKEN="$(tr -d ' \r\n' <"${token_file}")"
+	if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN} ]]; then
+		echo 'Claude credential is empty' >&2
+		exit 1
+	fi
+	export CLAUDE_CODE_OAUTH_TOKEN
+	args=(-p)
+	if [[ -n ${session_id} ]]; then
+		args+=(--resume "${session_id}")
+	fi
+	args+=(--output-format stream-json --dangerously-skip-permissions
+		--append-system-prompt-file "${AGENT_SYSTEM_PROMPT_FILE:-/etc/agent-config/mainloop-system.txt}")
+	exec claude "${args[@]}"
+	;;
+codex)
+	auth_file="${CODEX_HOME:-${HOME}/.codex}/auth.json"
+	if [[ ! -s ${auth_file} ]]; then
+		echo 'Codex credential is not installed' >&2
+		exit 1
+	fi
+	if [[ -n ${session_id} ]]; then
+		exec codex exec resume --json "${session_id}" --dangerously-bypass-approvals-and-sandbox
+	fi
+	exec codex exec --json --dangerously-bypass-approvals-and-sandbox
+	;;
+*)
+	echo 'unsupported native CLI' >&2
+	exit 2
+	;;
 esac

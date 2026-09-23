@@ -1,11 +1,12 @@
 """Thin Substrate adapter: drives ``kubectl ate`` (control-plane CLI over gRPC to
 ``ate-api-server``) to manage per-session actors as Mainloop workspaces.
 
-Unlike ``herdr.py`` (pod-exec into an already-running workspace), this adapter talks to
-Substrate's cluster-level control plane: actors are created, suspended, resumed, reverted and
-deleted through ``ateapipb.Control`` (see the pinned checkout's ``pkg/proto/ateapipb/ateapi.proto``
-and ``cmd/kubectl-ate/internal/cmd/actor.go``). ``TransportError`` means the outcome of the call
-is unknown; callers must inspect the actor before retrying rather than blindly re-creating it.
+The actor image is designed for headless, per-turn native CLI invocations; no Herdr server or
+terminal manager runs inside it. This adapter talks to Substrate's cluster-level control plane:
+actors are created, suspended, resumed, reverted and deleted through ``ateapipb.Control`` (see
+the pinned checkout's ``pkg/proto/ateapipb/ateapi.proto`` and
+``cmd/kubectl-ate/internal/cmd/actor.go``). ``TransportError`` means the outcome of the call is
+unknown; callers must inspect the actor before retrying rather than blindly re-creating it.
 """
 
 from __future__ import annotations

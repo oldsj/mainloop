@@ -3,7 +3,7 @@ r"""
 Gate 5 (native-session continuity, .tasknotes/plan.md) credential-free harness: registers
 the atespace, resolves and applies the WorkerPool, creates a *versioned* ActorTemplate and
 waits for its golden snapshot, then creates/resumes one actor and waits for it to become
-RUNNING with its persistent control service (Herdr) confirmed ready -- all without a
+RUNNING with its actor-local headless shim confirmed ready -- all without a
 provider credential, a credential server, or a native Claude/Codex session.
 
 Implements recovery step 2 of .tasknotes/gate5-review-and-recovery-plan-2026-09-22.md. That
@@ -15,8 +15,9 @@ happened before the read that mattered -- while the underlying golden-snapshot f
 credential fetch built into the shared, immutable template, which this script's manifest no
 longer has (see spikes/substrate-workspace-adapter/live-agent-image/entrypoint.sh).
 
-Deliberately out of scope here (recovery plan steps 3-4, a separate task): fetching a real
-credential, attaching it to a running actor, and starting a native Claude/Codex session.
+This setup harness remains credential-free: it installs and checks the shim token but does not
+fetch provider credentials or submit a native turn. The image's authenticated /turn endpoint
+runs one headless native CLI process per request; Mainloop owns delivery and retry decisions.
 
 Prerequisites:
     kubectl, kubectl-ate, and ko built from the pinned Substrate checkout.
@@ -39,7 +40,7 @@ Usage:
         --egress-tool /tmp/substrate-preview-src/bin/mainloop-egress-tool \\
         --egress-deny-all
 
-Re-running with the same --state-file reconciles the persisted actor uid against the
+    Re-running with the same --state-file reconciles the persisted actor uid against the
 cluster's current state rather than blindly creating or resuming; a name collision with a
 *different* uid is refused, not silently overwritten.
 """
@@ -219,7 +220,9 @@ def verify_image_manifest(image: str, *, opener=urllib.request.urlopen) -> None:
         or not repository
         or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)
     ):
-        raise RuntimeError("--image must be a registry/repository pinned by a full sha256 digest")
+        raise RuntimeError(
+            "--image must be a registry/repository pinned by a full sha256 digest"
+        )
 
     request = urllib.request.Request(
         f"http://{registry}/v2/{repository}/manifests/{digest}",
@@ -535,10 +538,10 @@ def ensure_shim_token(
             atespace=args.atespace,
             actor_name=args.actor_name,
             method="GET",
-            path="/read",
+            path="/turn/00000000-0000-4000-8000-000000000000",
             token=token,
         )
-        if already_installed != 200:
+        if already_installed != 404:
             raise RuntimeError(
                 "the actor already has a shim token that does not match the private state; "
                 "manual reconciliation is required"
@@ -549,9 +552,30 @@ def ensure_shim_token(
         )
 
     checks = (
-        ("missing-token /read", "GET", "/read", None, None, 401),
-        ("wrong-token /read", "GET", "/read", f"{token}x", None, 401),
-        ("authenticated /read", "GET", "/read", token, None, 200),
+        (
+            "missing-token /turn/<id>",
+            "GET",
+            "/turn/00000000-0000-4000-8000-000000000000",
+            None,
+            None,
+            401,
+        ),
+        (
+            "wrong-token /turn/<id>",
+            "GET",
+            "/turn/00000000-0000-4000-8000-000000000000",
+            f"{token}x",
+            None,
+            401,
+        ),
+        (
+            "authenticated unknown /turn/<id>",
+            "GET",
+            "/turn/00000000-0000-4000-8000-000000000000",
+            token,
+            None,
+            404,
+        ),
         (
             "second /token",
             "POST",
@@ -577,7 +601,9 @@ def ensure_shim_token(
                 f"shim token acceptance failed at {label} "
                 f"(HTTP {observed or 'no response'}, expected {expected})"
             )
-    print("-- per-actor shim token installed; missing/wrong/correct and one-time checks passed")
+    print(
+        "-- per-actor shim token installed; missing/wrong/correct and one-time checks passed"
+    )
 
 
 async def ensure_golden_template(

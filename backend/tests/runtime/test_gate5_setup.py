@@ -1,11 +1,11 @@
 """Credential-free regressions for the gate-5 setup script's build and rerun identity."""
 
 import json
-from contextlib import redirect_stdout
-from io import StringIO
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -56,7 +56,9 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
             f"http://localhost:5001/v2/live-agent-gate/manifests/sha256:{'a' * 64}",
         )
         self.assertEqual(request.get_method(), "HEAD")
-        self.assertEqual(request.get_header("Accept"), gate5_setup.IMAGE_MANIFEST_ACCEPT)
+        self.assertEqual(
+            request.get_header("Accept"), gate5_setup.IMAGE_MANIFEST_ACCEPT
+        )
         self.assertEqual(timeout, 10)
 
     def test_image_manifest_preflight_fails_before_template_on_missing_manifest(self):
@@ -80,8 +82,9 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
             "localhost:5001/live-agent-gate:latest",
             "localhost:5001/live-agent-gate@sha256:bad",
         ):
-            with self.subTest(image=image), self.assertRaisesRegex(
-                RuntimeError, "full sha256 digest"
+            with (
+                self.subTest(image=image),
+                self.assertRaisesRegex(RuntimeError, "full sha256 digest"),
             ):
                 gate5_setup.verify_image_manifest(image, opener=opener)
         self.assertEqual(calls, [])
@@ -429,8 +432,8 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                 atespace="live-agent-gate",
                 actor_name="claude-gate5",
             )
-            token = "fixture-shim-token-with-at-least-32-characters"
-            statuses = [201, 401, 401, 200, 409, 200]
+            token = "fixture-shim-" + "v" * 40
+            statuses = [201, 401, 401, 404, 409, 200]
             calls = []
 
             def requester(**kwargs):
@@ -452,6 +455,9 @@ class Gate5ActorIdentityTests(unittest.TestCase):
             self.assertEqual(calls[0]["path"], "/token")
             self.assertEqual(calls[0]["body"], {"token": token})
             self.assertNotIn("token", calls[0])
+            self.assertEqual(
+                calls[1]["path"], "/turn/00000000-0000-4000-8000-000000000000"
+            )
             self.assertEqual(calls[1]["token"], None)
             self.assertEqual(calls[2]["token"], f"{token}x")
             self.assertEqual(calls[3]["token"], token)
@@ -460,7 +466,7 @@ class Gate5ActorIdentityTests(unittest.TestCase):
     def test_shim_token_rerun_verifies_existing_token_without_rotating_it(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = str(Path(temp_dir) / "state.json")
-            token = "existing-shim-token-with-at-least-32-characters"
+            token = "existing-shim-" + "v" * 40
             state = {"run_id": "run-token", "shim_token": token}
             gate5_setup.save_state(path, state)
             args = SimpleNamespace(
@@ -468,7 +474,7 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                 atespace="live-agent-gate",
                 actor_name="claude-gate5",
             )
-            statuses = [409, 200, 401, 401, 200, 409, 200]
+            statuses = [409, 404, 401, 401, 404, 409, 200]
             calls = []
 
             def requester(**kwargs):
@@ -621,7 +627,11 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                     gate5_setup.wait_for_worker_if_actor_is_absent(
                         control,
                         args,
-                        {"run_id": "run-codex", "actor_uid": None, "template_uid": "template-codex"},
+                        {
+                            "run_id": "run-codex",
+                            "actor_uid": None,
+                            "template_uid": "template-codex",
+                        },
                     )
                 )
 

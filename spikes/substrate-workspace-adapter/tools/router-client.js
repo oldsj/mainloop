@@ -24,9 +24,12 @@ process.stdin.on('end', () => {
   if (
     !/^[a-z0-9-]+$/.test(request.atespace || '') ||
     !/^[a-z0-9-]+$/.test(request.actor || '') ||
-    !Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535 ||
+    !Number.isInteger(targetPort) ||
+    targetPort < 1 ||
+    targetPort > 65535 ||
     !['GET', 'POST'].includes(request.method) ||
-    typeof request.path !== 'string' || !request.path.startsWith('/')
+    typeof request.path !== 'string' ||
+    !request.path.startsWith('/')
   ) {
     process.stdout.write('{"error":"invalid request"}\n');
     process.exitCode = 2;
@@ -47,9 +50,9 @@ process.stdin.on('end', () => {
     path: `actor-upstream:${targetPort}`,
     headers: {
       host: `actor-upstream:${targetPort}`,
-      'ate-target-actor': `${request.atespace}/${request.actor}`,
+      'ate-target-actor': `${request.atespace}/${request.actor}`
     },
-    timeout: 8000,
+    timeout: 8000
   });
   tunnel.on('connect', (response, socket) => {
     if (response.statusCode !== 200) {
@@ -74,7 +77,7 @@ process.stdin.on('end', () => {
     }
     const headerLines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
     const requestHeader = Buffer.from(
-      `${request.method} ${request.path} HTTP/1.1\r\n${headerLines.join('\r\n')}\r\n\r\n`,
+      `${request.method} ${request.path} HTTP/1.1\r\n${headerLines.join('\r\n')}\r\n\r\n`
     );
     const responseChunks = [];
     if (response.head && response.head.length) responseChunks.push(response.head);
@@ -90,9 +93,7 @@ process.stdin.on('end', () => {
       const statusLine = responseBytes.subarray(0, headerEnd).toString('latin1').split('\r\n')[0];
       const status = Number(statusLine.split(' ')[1]);
       const responseBody = responseBytes.subarray(headerEnd + 4).toString('utf8');
-      finish(request.includeResponseBody
-        ? { status, body: responseBody }
-        : { status });
+      finish(request.includeResponseBody ? { status, body: responseBody } : { status });
     });
     socket.on('error', (err) => finish({ transportError: err.code || 'request-failed' }));
     socket.write(Buffer.concat([requestHeader, body]));

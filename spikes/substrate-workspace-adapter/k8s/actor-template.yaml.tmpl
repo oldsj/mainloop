@@ -31,11 +31,9 @@ spec:
         cpu: 250m
         memory: 2Gi
 ---
-# ActorTemplate: one Herdr + agentctl container per actor, same image and entrypoint as
-# spikes/k8s-herdr-agents (see that spike's Dockerfile/bin/entrypoint.sh), running under
-# Substrate instead of a StatefulSet. snapshotsConfig captures full process memory on
-# suspend/commit so a resumed actor's native agent session (Claude/Codex under Herdr) continues
-# rather than cold-booting -- this is the behavior gate 5 (native-session continuity) measures.
+# ActorTemplate: one headless per-turn native-agent container per actor, running under Substrate.
+# Substrate owns lifecycle and snapshots; the actor retains workspace files between turns and
+# has no Herdr server or terminal manager. Gate 5 must live-prove the rebuilt image.
 metadata:
   atespace: ${ATESPACE}
   name: ${TEMPLATE_NAME}
@@ -50,10 +48,9 @@ containers:
   env:
   - { name: HOME, value: /workspace/.home }
   - { name: WORKSPACE_PATH, value: /workspace/repo }
-  - { name: STANDIN_STATE_DIR, value: /workspace/.standin }
-  - { name: HERDR_SESSION, value: mainloop-substrate }
   - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
   - { name: CODEX_HOME, value: /workspace/.codex }
+  - { name: EXEC_SHIM_STATE_DIR, value: /workspace/.mainloop/exec-shim }
   volumeMounts:
   - { name: workspace, mountPath: /workspace }
   # ateapipb.SecurityContext only models Linux capability adjustments (no

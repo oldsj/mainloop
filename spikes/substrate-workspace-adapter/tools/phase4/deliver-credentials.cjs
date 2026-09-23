@@ -5,7 +5,7 @@ const http = require('node:http');
 
 const CREDENTIALS = Object.freeze({
   claude: Object.freeze({ name: 'claude-token' }),
-  codex: Object.freeze({ name: 'codex-auth' }),
+  codex: Object.freeze({ name: 'codex-auth' })
 });
 
 function validateActorIdentity(namespace, actor) {
@@ -55,7 +55,7 @@ function postViaRouter({ host, port, namespace, actor, token, payload, timeoutMs
       port,
       method: 'CONNECT',
       path: 'actor-upstream:8090',
-      headers: { 'ate-target-actor': `${namespace}/${actor}` },
+      headers: { 'ate-target-actor': `${namespace}/${actor}` }
     });
     tunnel.setTimeout(timeoutMs, () => tunnel.destroy(new Error('router timed out')));
     tunnel.once('error', (error) => finish(error));
@@ -88,16 +88,19 @@ function postViaRouter({ host, port, namespace, actor, token, payload, timeoutMs
         socket.end();
       });
 
-      const headers = Buffer.from([
-        'POST /credential HTTP/1.1',
-        'Host: actor-upstream:8090',
-        `Authorization: Bearer ${token}`,
-        'Content-Type: application/json',
-        `Content-Length: ${body.length}`,
-        'Connection: close',
-        '',
-        '',
-      ].join('\r\n'), 'ascii');
+      const headers = Buffer.from(
+        [
+          'POST /credential HTTP/1.1',
+          'Host: actor-upstream:8090',
+          `Authorization: Bearer ${token}`,
+          'Content-Type: application/json',
+          `Content-Length: ${body.length}`,
+          'Connection: close',
+          '',
+          ''
+        ].join('\r\n'),
+        'ascii'
+      );
       socket.write(Buffer.concat([headers, body]));
     });
     tunnel.end();
@@ -112,7 +115,7 @@ async function deliverFromMountedFiles({
   actor,
   host = 'atenet-router.ate-system.svc.cluster.local',
   port = 8081,
-  request = postViaRouter,
+  request = postViaRouter
 }) {
   validateActorIdentity(namespace, actor);
   const payload = buildCredentialPayload(kind, fs.readFileSync(credentialFile, 'utf8'));
@@ -126,7 +129,7 @@ async function deliverFromMountedFiles({
     namespace,
     actor,
     token,
-    payload,
+    payload
   });
   if (status !== 201) throw new Error('shim rejected credential delivery');
   return { kind, namespace, actor };
@@ -140,7 +143,7 @@ async function main() {
     namespace: process.env.ACTOR_NAMESPACE,
     actor: process.env.ACTOR_NAME,
     host: process.env.ROUTER_HOST || 'atenet-router.ate-system.svc.cluster.local',
-    port: Number(process.env.ROUTER_PORT || '8081'),
+    port: Number(process.env.ROUTER_PORT || '8081')
   });
   process.stdout.write(`credential delivered for ${process.env.CREDENTIAL_KIND}\n`);
 }

@@ -1,11 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# Live-agent-gate spike image (gate 5, bounded live proof): real Herdr + real Claude Code /
-# Codex CLIs + agentctl, driven by the same generic exec shim as the other gate images.
-# herdr/claude/codex/codex-code-mode-host are copied from the host into the build context by the
-# build script (never committed). No credentials are baked into this image, and entrypoint.sh
-# never fetches one: the golden actor built from this image boots to a ready control service
-# with no credential and no external network access. Credential delivery remains deferred until
-# a reviewed boundary exists (see docs/spikes/substrate-workspace-adapter.md).
+# Headless Substrate actor image: Substrate owns lifecycle; the shim starts one native CLI
+# process per delivered turn. Claude/Codex binaries are supplied in the local build context.
+# No credentials are baked in or fetched during startup; the golden actor reaches readiness
+# without credentials or external network access.
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends jq ca-certificates git curl procps ripgrep \
     && rm -rf /var/lib/apt/lists/* \
@@ -20,24 +17,23 @@ RUN --mount=type=secret,id=egress-mitm-ca,target=/run/secrets/egress-mitm-ca,req
       install -m 0644 /run/secrets/egress-mitm-ca /usr/local/share/ca-certificates/substrate-egress-mitm.crt && \
       update-ca-certificates; \
     fi
-COPY herdr /usr/local/bin/herdr
 COPY claude /usr/local/bin/claude
 COPY codex /usr/local/bin/codex
 COPY codex-code-mode-host /usr/local/bin/codex-code-mode-host
-COPY bin/agentctl bin/mainloop /usr/local/bin/
 COPY bin/start-native-agent /usr/local/bin/start-native-agent
 COPY bin/prepare-native-agent-config.cjs /usr/local/bin/prepare-native-agent-config.cjs
-COPY agent-config /etc/agent-config
+COPY agent-config/mainloop-system.txt /etc/agent-config/mainloop-system.txt
 COPY exec-shim.js /usr/local/bin/exec-shim.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/agentctl /usr/local/bin/mainloop /usr/local/bin/start-native-agent \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-native-agent \
     && mkdir -p /work && chown -R agent:agent /work
 ENV EXEC_SHIM=/usr/local/bin/exec-shim.js
+ENV NATIVE_AGENT_LAUNCHER=/usr/local/bin/start-native-agent
 ENV HOME=/home/agent
 ENV WORKSPACE_PATH=/work/repo
 ENV CODEX_HOME=/home/agent/.codex
-ENV AGENT_CONFIG_DIR=/etc/agent-config
-ENV HERDR_SESSION=mainloop-live-agent
+ENV EXEC_SHIM_STATE_DIR=/work/repo/.mainloop/exec-shim
+ENV AGENT_SYSTEM_PROMPT_FILE=/etc/agent-config/mainloop-system.txt
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 10001:10001

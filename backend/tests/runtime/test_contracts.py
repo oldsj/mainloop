@@ -246,6 +246,61 @@ class ContractTests(unittest.TestCase):
             [DeliveryState.FAILED, DeliveryState.RECORDED],
         )
 
+    def test_restart_rehydrates_recorded_prompt_without_replay_or_loss(self):
+        # Model a backend restart with fake durable rows, then load those rows into
+        # a fresh ContractStore before taking ownership. ContractStore has no I/O;
+        # this proves the contract semantics, not a database or transport restart.
+        before_restart = ContractStore(binding())
+        prompt = {**message(), "payload_ref": "fixture://prompts/restart-window"}
+        before_restart.record_message(prompt, 1)
+        before_restart.create_attempt(attempt(), 1)
+        fake_database = {
+            "binding": before_restart.binding.model_dump(mode="json"),
+            "messages": [
+                item.model_dump(mode="json") for item in before_restart.messages
+            ],
+            "attempts": [
+                item.model_dump(mode="json") for item in before_restart.attempts
+            ],
+        }
+
+        after_restart = ContractStore(fake_database["binding"])
+        for persisted_message in fake_database["messages"]:
+            after_restart.record_message(persisted_message, 1)
+        for persisted_attempt in fake_database["attempts"]:
+            after_restart.create_attempt(persisted_attempt, 1)
+
+        binding_after_takeover = after_restart.take_ownership(1)
+        self.assertEqual(binding_after_takeover.ownership_generation, 2)
+        self.assertEqual(after_restart.messages[0].payload_ref, prompt["payload_ref"])
+        pending = after_restart.checkpoint(2).pending_delivery
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].state, DeliveryState.RECORDED)
+        with self.assertRaises(ContractError):
+            after_restart.create_attempt(attempt("replay", generation=2), 2)
+
+        retired = after_restart.reconcile(
+            {
+                "attempt_id": "attempt",
+                "binding_id": "binding",
+                "evidence_ref": "fixture://journal/no-prompt-receipt",
+                "observed_at": NOW,
+                "outcome": "not_delivered",
+            },
+            2,
+        )
+        self.assertEqual(retired.state, DeliveryState.FAILED)
+        self.assertEqual(after_restart.messages[0].payload_ref, prompt["payload_ref"])
+        retry = after_restart.create_attempt(attempt("retry", generation=2), 2)
+        self.assertEqual(retry.logical_message_id, "message")
+        self.assertEqual(
+            [
+                (item.attempt_id, item.state)
+                for item in after_restart.checkpoint(2).pending_delivery
+            ],
+            [("retry", DeliveryState.RECORDED)],
+        )
+
     def test_takeover_reconnect_deduplicates_source_event(self):
         original = self.store.ingest(attention(), 1)
         self.store.take_ownership(1)

@@ -13,33 +13,33 @@ spec:
     matchLabels:
       app: atenet-router
   policyTypes:
-  - Ingress
+    - Ingress
   ingress:
-  # Trusted Mainloop backend. It uses HTTP plus the Substrate CONNECT listener
-  # for actor control and arbitrary-port workspace traffic.
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          mainloop.dev/role: control
-    ports:
-    - { protocol: TCP, port: 8080 }
-    - { protocol: TCP, port: 8081 }
-    - { protocol: TCP, port: 8443 }
-    - { protocol: TCP, port: 8444 }
-  # The fixed NGINX preview proxy injects ate-target-actor and only needs HTTP.
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          mainloop.dev/role: workspace
-      podSelector:
-        matchLabels:
-          app: preview-proxy
-    ports:
-    - { protocol: TCP, port: 8080 }
-  # The installer annotates the router for Prometheus scraping on 15020.
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: otel-system
-    ports:
-    - { protocol: TCP, port: 15020 }
+    # Trusted Mainloop backend. It uses HTTP plus the Substrate CONNECT listener
+    # for actor control and arbitrary-port workspace traffic.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              mainloop.dev/role: control
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8081 }
+        - { protocol: TCP, port: 8443 }
+        - { protocol: TCP, port: 8444 }
+    # The fixed NGINX preview proxy injects ate-target-actor and only needs HTTP.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              mainloop.dev/role: workspace
+          podSelector:
+            matchLabels:
+              app: preview-proxy
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # The installer annotates the router for Prometheus scraping on 15020.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: otel-system
+      ports:
+        - { protocol: TCP, port: 15020 }
