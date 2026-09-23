@@ -1,6 +1,8 @@
 """Credential-free regressions for the gate-5 setup script's build and rerun identity."""
 
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 import tempfile
 import unittest
 from dataclasses import replace
@@ -228,6 +230,38 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
         self.assertIn("18081:8081", command)
         self.assertTrue(process.terminated)
 
+    def test_egress_hostname_rules_are_passed_as_repeatable_flags(self):
+        args = SimpleNamespace(
+            egress_tool="/fixture/mainloop-egress-tool",
+            kubeconfig=FIXTURE_KUBECONFIG,
+            context="kind-substrate-preview",
+            atespace="live-agent-gate",
+            actor_name="claude-gate5",
+            egress_deny_all=False,
+            egress_allow_all=False,
+            egress_hostnames=["api.anthropic.com", "api.openai.com"],
+        )
+        with patch.object(gate5_setup.subprocess, "run") as run:
+            gate5_setup.run_egress_tool(args)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/fixture/mainloop-egress-tool",
+                "--kubeconfig",
+                FIXTURE_KUBECONFIG,
+                "--context",
+                "kind-substrate-preview",
+                "--atespace",
+                "live-agent-gate",
+                "--actor",
+                "claude-gate5",
+                "--hostname",
+                "api.anthropic.com",
+                "--hostname",
+                "api.openai.com",
+            ],
+        )
+
 
 class Gate5StateTests(unittest.TestCase):
     def args(self, state_file: str, **overrides):
@@ -323,6 +357,76 @@ class Gate5ActorIdentityTests(unittest.TestCase):
         }
         gate5_setup.save_state(path, state)
         return state
+
+    def test_state_file_is_private_for_future_shim_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            gate5_setup.save_state(path, {"shim_token": "fixture-secret"})
+            self.assertEqual(Path(path).stat().st_mode & 0o777, 0o600)
+
+    def test_shim_token_is_persisted_before_body_only_install_and_verified(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            state = {"run_id": "run-token"}
+            args = SimpleNamespace(
+                state_file=path,
+                atespace="live-agent-gate",
+                actor_name="claude-gate5",
+            )
+            token = "fixture-shim-token-with-at-least-32-characters"
+            statuses = [201, 401, 401, 200, 409, 200]
+            calls = []
+
+            def requester(**kwargs):
+                calls.append(kwargs)
+                return statuses.pop(0)
+
+            output = StringIO()
+            with (
+                patch.object(gate5_setup.secrets, "token_urlsafe", return_value=token),
+                redirect_stdout(output),
+            ):
+                gate5_setup.ensure_shim_token(
+                    args=args, state=state, port=18091, requester=requester
+                )
+
+            self.assertEqual(json.loads(Path(path).read_text())["shim_token"], token)
+            self.assertEqual(Path(path).stat().st_mode & 0o777, 0o600)
+            self.assertEqual(calls[0]["method"], "POST")
+            self.assertEqual(calls[0]["path"], "/token")
+            self.assertEqual(calls[0]["body"], {"token": token})
+            self.assertNotIn("token", calls[0])
+            self.assertEqual(calls[1]["token"], None)
+            self.assertEqual(calls[2]["token"], f"{token}x")
+            self.assertEqual(calls[3]["token"], token)
+            self.assertNotIn(token, output.getvalue())
+
+    def test_shim_token_rerun_verifies_existing_token_without_rotating_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            token = "existing-shim-token-with-at-least-32-characters"
+            state = {"run_id": "run-token", "shim_token": token}
+            gate5_setup.save_state(path, state)
+            args = SimpleNamespace(
+                state_file=path,
+                atespace="live-agent-gate",
+                actor_name="claude-gate5",
+            )
+            statuses = [409, 200, 401, 401, 200, 409, 200]
+            calls = []
+
+            def requester(**kwargs):
+                calls.append(kwargs)
+                return statuses.pop(0)
+
+            with patch.object(gate5_setup.secrets, "token_urlsafe") as generate:
+                gate5_setup.ensure_shim_token(
+                    args=args, state=state, port=18091, requester=requester
+                )
+
+            generate.assert_not_called()
+            self.assertEqual(calls[1]["token"], token)
+            self.assertEqual(json.loads(Path(path).read_text())["shim_token"], token)
 
     def actor(
         self, *, uid="actor-1", template_uid="template-new", state=ActorState.RUNNING

@@ -6,11 +6,9 @@
 # "Credential-injection gap").
 #
 # Credential-free by construction: this entrypoint never fetches a credential and never
-# requires network access to reach a running state. The template controller uses the
-# ActorTemplate's `/healthz` readiness check before accepting the golden actor. A boot path
-# that depends on a credential fetch succeeding can fail golden creation when its relay is
-# denied or unreachable, which is what happened. Credential delivery is deferred to a
-# reviewed boundary and is never performed during golden-actor warmup or from this entrypoint.
+# requires network access to reach a running state. Mainloop installs a per-actor shim token
+# and provider credentials only after the final actor is RUNNING. The golden actor stays clean.
+# The template controller checks `/healthz` before accepting the golden actor.
 set -eu
 mkdir -p "${HOME}" "${HOME}/.claude" "${CODEX_HOME}"
 

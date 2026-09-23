@@ -25,7 +25,7 @@ shell_ws=$(herdr --session "${HERDR_SESSION}" workspace create --label shell --c
 shell_pane=$(echo "${shell_ws}" | jq -r '.result.root_pane.pane_id')
 echo "${shell_pane}" >"${STATE_DIR}/shell-pane-id"
 
-herdr --session "${HERDR_SESSION}" pane run "${dev_pane}" "npm run dev"
+herdr --session "${HERDR_SESSION}" pane run "${dev_pane}" "cd '${VITE_DIR}' && npm run dev -- --host 0.0.0.0"
 
 EXEC_SHIM_PANE_ID="${shell_pane}" HERDR_SESSION="${HERDR_SESSION}" node "${EXEC_SHIM}" &
 

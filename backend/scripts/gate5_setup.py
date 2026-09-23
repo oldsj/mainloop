@@ -51,6 +51,7 @@ import http.client
 import json
 import os
 import re
+import secrets
 import socket
 import string
 import subprocess  # nosec B404 - drives trusted local kubectl/ko/egress-tool binaries, argv only
@@ -116,6 +117,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--egress-tool", required=True)
     egress = p.add_mutually_exclusive_group(required=True)
     egress.add_argument("--egress-cidr", help="CIDR to allow")
+    egress.add_argument(
+        "--egress-hostname",
+        action="append",
+        dest="egress_hostnames",
+        metavar="HOSTNAME",
+        help="provider hostname to allow (repeatable)",
+    )
     egress.add_argument("--egress-allow-all", action="store_true")
     egress.add_argument("--egress-deny-all", action="store_true")
     return p.parse_args()
@@ -130,9 +138,12 @@ def load_state(path: str) -> dict:
 
 def save_state(path: str, state: dict) -> None:
     tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(state, f, indent=2)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+    os.chmod(path, 0o600)
 
 
 def render_manifest(
@@ -329,6 +340,9 @@ def run_egress_tool(args: argparse.Namespace) -> None:
         cmd.append("--deny-all")
     elif args.egress_allow_all:
         cmd.append("--allow-all")
+    elif args.egress_hostnames:
+        for hostname in args.egress_hostnames:
+            cmd.extend(["--hostname", hostname])
     else:
         cmd += ["--cidr", args.egress_cidr]
     subprocess.run(
@@ -407,6 +421,114 @@ def actor_health_check(
         return False
     finally:
         connection.close()
+
+
+def actor_shim_request(
+    *,
+    port: int,
+    atespace: str,
+    actor_name: str,
+    method: str,
+    path: str,
+    token: str | None = None,
+    body: dict | None = None,
+    timeout_s: float = 5,
+) -> int | None:
+    """Send a request through the actor's CONNECT route without logging its body."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout_s)
+    connection.set_tunnel(
+        f"actor-upstream:{ACTOR_SHIM_PORT}",
+        headers={"ate-target-actor": f"{atespace}/{actor_name}"},
+    )
+    headers = {}
+    request_body = None
+    if body is not None:
+        request_body = json.dumps(body)
+        headers["Content-Type"] = "application/json"
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        connection.request(method, path, body=request_body, headers=headers)
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        connection.close()
+
+
+def ensure_shim_token(
+    *,
+    args: argparse.Namespace,
+    state: dict,
+    port: int,
+    requester=actor_shim_request,
+) -> None:
+    """Persist a per-actor token before installing it, then verify the auth boundary."""
+    token = state.get("shim_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        state["shim_token"] = token
+        save_state(args.state_file, state)
+
+    status = requester(
+        port=port,
+        atespace=args.atespace,
+        actor_name=args.actor_name,
+        method="POST",
+        path="/token",
+        body={"token": token},
+    )
+    if status == 409:
+        already_installed = requester(
+            port=port,
+            atespace=args.atespace,
+            actor_name=args.actor_name,
+            method="GET",
+            path="/read",
+            token=token,
+        )
+        if already_installed != 200:
+            raise RuntimeError(
+                "the actor already has a shim token that does not match the private state; "
+                "manual reconciliation is required"
+            )
+    elif status != 201:
+        raise RuntimeError(
+            f"shim token installation failed (HTTP {status or 'no response'})"
+        )
+
+    checks = (
+        ("missing-token /read", "GET", "/read", None, None, 401),
+        ("wrong-token /read", "GET", "/read", f"{token}x", None, 401),
+        ("authenticated /read", "GET", "/read", token, None, 200),
+        (
+            "second /token",
+            "POST",
+            "/token",
+            None,
+            {"token": "one-time-install-probe"},
+            409,
+        ),
+        ("open /healthz", "GET", "/healthz", None, None, 200),
+    )
+    for label, method, path, bearer, request_body, expected in checks:
+        observed = requester(
+            port=port,
+            atespace=args.atespace,
+            actor_name=args.actor_name,
+            method=method,
+            path=path,
+            token=bearer,
+            body=request_body,
+        )
+        if observed != expected:
+            raise RuntimeError(
+                f"shim token acceptance failed at {label} "
+                f"(HTTP {observed or 'no response'}, expected {expected})"
+            )
+    print("-- per-actor shim token installed; missing/wrong/correct and one-time checks passed")
 
 
 async def ensure_golden_template(
@@ -613,8 +735,10 @@ async def async_main(args: argparse.Namespace) -> None:
     )
     await ensure_actor(control, args, template_name, template_uid, state)
 
-    print("-- confirming current control-service health through the actor route")
+    print("-- installing and checking the per-actor shim token through the actor route")
     with actor_router_tunnel(args) as route_port:
+        ensure_shim_token(args=args, state=state, port=route_port)
+        print("-- confirming current control-service health through the actor route")
         await wait_for_actor_health(
             lambda: actor_health_check(
                 port=route_port,

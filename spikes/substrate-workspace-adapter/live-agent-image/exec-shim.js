@@ -12,12 +12,65 @@
 'use strict';
 const http = require('node:http');
 const { execFile } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const PANE_ID = process.env.EXEC_SHIM_PANE_ID;
 const SESSION = process.env.HERDR_SESSION;
 if (!PANE_ID || !SESSION) {
   console.error('exec-shim: EXEC_SHIM_PANE_ID and HERDR_SESSION are required');
   process.exit(1);
+}
+
+const tokenPath = path.join(process.env.HOME || '/home/agent', '.mainloop', 'exec-shim-token');
+let bearerToken = null;
+try {
+  bearerToken = fs.readFileSync(tokenPath, 'utf8');
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+}
+
+function authorized(req) {
+  if (bearerToken === null) return true;
+  const header = req.headers.authorization;
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+  const provided = Buffer.from(header.slice('Bearer '.length));
+  const expected = Buffer.from(bearerToken);
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
+function unauthorized(res) {
+  res.writeHead(401, { 'content-type': 'text/plain' }).end('unauthorized');
+}
+
+function requestBody(req, onBody) {
+  let body = '';
+  req.on('data', (chunk) => {
+    body += chunk;
+    if (body.length > 65536) req.destroy();
+  });
+  req.on('end', () => onBody(body));
+}
+
+function installToken(token) {
+  if (bearerToken !== null) return false;
+  if (typeof token !== 'string' || token.length < 32 || token.length > 4096) return null;
+  const directory = path.dirname(tokenPath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const fd = fs.openSync(tokenPath, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, token, 'utf8');
+    fs.fsyncSync(fd);
+  } catch (err) {
+    fs.closeSync(fd);
+    fs.rmSync(tokenPath, { force: true });
+    throw err;
+  }
+  fs.closeSync(fd);
+  bearerToken = token;
+  return true;
 }
 
 function herdr(args, res) {
@@ -55,7 +108,38 @@ const server = http.createServer((req, res) => {
     healthz(res);
     return;
   }
+  if (req.method === 'POST' && req.url === '/token') {
+    if (bearerToken !== null) {
+      res.writeHead(409).end('token already set');
+      return;
+    }
+    requestBody(req, (body) => {
+      let token;
+      try {
+        token = JSON.parse(body).token;
+      } catch {
+        res.writeHead(400).end('invalid json');
+        return;
+      }
+      try {
+        const installed = installToken(token);
+        if (installed === null) {
+          res.writeHead(400).end('invalid token');
+          return;
+        }
+        if (!installed) {
+          res.writeHead(409).end('token already set');
+          return;
+        }
+        res.writeHead(201).end('token set');
+      } catch {
+        res.writeHead(500).end('token could not be stored');
+      }
+    });
+    return;
+  }
   if (req.method === 'GET' && req.url === '/read') {
+    if (!authorized(req)) return unauthorized(res);
     herdr(['pane', 'read', PANE_ID], res);
     return;
   }
@@ -63,12 +147,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(404).end();
     return;
   }
-  let body = '';
-  req.on('data', (chunk) => {
-    body += chunk;
-    if (body.length > 65536) req.destroy();
-  });
-  req.on('end', () => {
+  if (!authorized(req)) return unauthorized(res);
+  requestBody(req, (body) => {
     let command;
     try {
       command = JSON.parse(body).command;
@@ -84,6 +164,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(8090, '0.0.0.0', () => {
-  console.log('exec-shim listening on :8090, pane', PANE_ID);
+server.listen(Number(process.env.EXEC_SHIM_PORT || 8090), '0.0.0.0', () => {
+  const address = server.address();
+  console.log(`exec-shim listening on :${address.port}`);
 });

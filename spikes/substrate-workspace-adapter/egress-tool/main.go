@@ -12,9 +12,9 @@
 // cdac9baef81dd319b46086d695266e6161e9e592 when this was written).
 //
 // Usage: mainloop-egress-tool --kubeconfig <path> --context <ctx> --atespace <as> --actor <name>
-// --deny-all | --cidr <cidr> | --allow-all
+// --deny-all | --cidr <cidr> | --hostname <hostname>... | --allow-all
 //
-// Fails closed: exactly one of --deny-all, --cidr, or --allow-all is required. An earlier version of this
+// Fails closed: exactly one of --deny-all, --cidr, --hostname, or --allow-all is required. An earlier version of this
 // tool silently allowed all destinations whenever --cidr was omitted (see
 // .tasknotes/gate5-review-and-recovery-plan-2026-09-22.md, "Make missing egress configuration
 // fail closed"); --allow-all must now be passed explicitly to get that behavior.
@@ -37,9 +37,12 @@ import (
 
 // validateEgressInput is the fail-closed check, isolated as a pure function so it can be
 // exercised without a cluster or a Substrate checkout.
-func validateEgressInput(cidr string, denyAll, allowAll bool) error {
+func validateEgressInput(cidr string, hostnames []string, denyAll, allowAll bool) error {
 	selected := 0
 	if cidr != "" {
+		selected++
+	}
+	if len(hostnames) > 0 {
 		selected++
 	}
 	if denyAll {
@@ -49,7 +52,7 @@ func validateEgressInput(cidr string, denyAll, allowAll bool) error {
 		selected++
 	}
 	if selected != 1 {
-		return fmt.Errorf("exactly one of --deny-all, --cidr <cidr>, or --allow-all is required")
+		return fmt.Errorf("exactly one of --deny-all, --cidr <cidr>, --hostname <hostname>, or --allow-all is required")
 	}
 	return nil
 }
@@ -60,11 +63,16 @@ func main() {
 	atespace := flag.String("atespace", "", "")
 	actorName := flag.String("actor", "", "")
 	cidr := flag.String("cidr", "", "CIDR to allow")
+	var hostnames []string
+	flag.Func("hostname", "exact hostname to allow (repeatable)", func(value string) error {
+		hostnames = append(hostnames, value)
+		return nil
+	})
 	denyAll := flag.Bool("deny-all", false, "explicitly deny all actor egress")
 	allowAll := flag.Bool("allow-all", false, "explicitly allow all egress destinations")
 	flag.Parse()
 
-	if err := validateEgressInput(*cidr, *denyAll, *allowAll); err != nil {
+	if err := validateEgressInput(*cidr, hostnames, *denyAll, *allowAll); err != nil {
 		log.Fatalf("%v", err)
 	}
 
@@ -82,6 +90,8 @@ func main() {
 		rules = []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
 	} else if *cidr != "" {
 		rules = []*ateapipb.EgressRule{{Cidrs: &ateapipb.CIDRRule{Cidrs: []string{*cidr}}}}
+	} else if len(hostnames) > 0 {
+		rules = []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: hostnames}}}
 	}
 	policy := &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: *atespace, Name: "default"},

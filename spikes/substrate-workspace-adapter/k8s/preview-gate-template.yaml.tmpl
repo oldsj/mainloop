@@ -11,10 +11,10 @@ metadata:
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: preview-gate
+  name: ${TEMPLATE_NAME}
   namespace: ${ATESPACE}
   labels:
-    workload: preview-gate
+    workload: ${TEMPLATE_NAME}
 spec:
   replicas: 1
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -29,10 +29,11 @@ spec:
 ---
 metadata:
   atespace: ${ATESPACE}
-  name: preview-gate
+  # ActorTemplates are immutable; use a new name after the old image failed warmup.
+  name: ${TEMPLATE_NAME}
 workerSelector:
   matchLabels:
-    workload: preview-gate
+    workload: ${TEMPLATE_NAME}
 containers:
 - name: preview
   image: __IMAGE__
@@ -43,6 +44,9 @@ containers:
     limits:
     - { name: cpu, quantity: "1" }
     - { name: memory, quantity: 1Gi }
+  readyz:
+    httpGet: { path: /, port: 80 }
+    timeoutSeconds: 60
 snapshotsConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
