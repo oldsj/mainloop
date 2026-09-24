@@ -130,29 +130,7 @@ function installCredential(name, contents, replace = false) {
     Buffer.byteLength(contents, 'utf8') > MAX_CREDENTIAL_BYTES
   )
     return null;
-  if (name === 'codex-auth') {
-    let auth;
-    try {
-      auth = JSON.parse(contents);
-    } catch {
-      return null;
-    }
-    if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return null;
-    if (
-      replace &&
-      (!auth.tokens ||
-        auth.tokens.refresh_token !== '' ||
-        typeof auth.tokens.account_id !== 'string' ||
-        !isJwt(auth.tokens.access_token) ||
-        !isJwt(auth.tokens.id_token))
-    ) {
-      return null;
-    }
-  } else if (
-    replace &&
-    name === 'claude-token' &&
-    !contents.startsWith('sk-ant-oat01-mainloop-egress-')
-  ) {
+  if (!isPlaceholderCredential(name, contents)) {
     return null;
   }
 
@@ -201,8 +179,39 @@ function installCredential(name, contents, replace = false) {
   return true;
 }
 
-function isJwt(value) {
-  return typeof value === 'string' && value.split('.').length === 3;
+function isSyntheticJwt(value) {
+  if (typeof value !== 'string') return false;
+  const parts = value.split('.');
+  if (parts.length !== 3 || parts[2] !== 'synthetic') return false;
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return header?.alg === 'none' && Number.isSafeInteger(payload?.exp);
+  } catch {
+    return false;
+  }
+}
+
+function isPlaceholderCredential(name, contents) {
+  if (name === 'claude-token') {
+    return contents === 'sk-ant-oat01-mainloop-egress-placeholder';
+  }
+  if (name !== 'codex-auth') return false;
+  try {
+    const auth = JSON.parse(contents);
+    const tokens = auth?.tokens;
+    return (
+      auth?.auth_mode === 'chatgpt' &&
+      typeof auth?.last_refresh === 'string' &&
+      typeof tokens?.account_id === 'string' &&
+      tokens.account_id.trim().length > 0 &&
+      tokens.refresh_token === '' &&
+      isSyntheticJwt(tokens.access_token) &&
+      isSyntheticJwt(tokens.id_token)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function atomicJsonWrite(file, document) {
@@ -213,6 +222,14 @@ function atomicJsonWrite(file, document) {
 
 function metadataPath(directory, id) {
   return path.join(directory, id + '.json');
+}
+
+function turnKey(agent, sessionKey) {
+  return `${agent}:${sessionKey}`;
+}
+
+function validSessionKey(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
 }
 
 function loadJobs(directory, kind) {
@@ -229,12 +246,13 @@ function loadJobs(directory, kind) {
         atomicJsonWrite(path.join(directory, name), record);
       }
       jobs.set(record.id, { ...record, kind });
-      if (kind === 'turn' && record.agent) {
-        const previous = latestTurns.get(record.agent);
+      if (kind === 'turn' && record.agent && validSessionKey(record.session_key)) {
+        const key = turnKey(record.agent, record.session_key);
+        const previous = latestTurns.get(key);
         if (!previous || String(record.created_at) > String(previous.created_at)) {
-          latestTurns.set(record.agent, record);
+          latestTurns.set(key, record);
         }
-        if (record.blocking) activeTurns.set(record.agent, record.id);
+        if (record.blocking) activeTurns.set(key, record.id);
       }
     } catch {
       // Ignore an incomplete or corrupt record; it cannot safely be resumed.
@@ -274,6 +292,7 @@ function publicMetadata(job) {
     updated_at,
     truncated,
     agent,
+    session_key,
     native_session_id,
     blocking
   } = job;
@@ -286,6 +305,7 @@ function publicMetadata(job) {
     updated_at,
     truncated,
     agent,
+    session_key,
     native_session_id,
     blocking
   };
@@ -365,8 +385,9 @@ function runChild(job, child, timeoutMs, onStart) {
     job.blocking = false;
     if (spawnError) job.error = 'process could not start';
     saveJob(job);
-    if (job.kind === 'turn' && activeTurns.get(job.agent) === job.id) {
-      activeTurns.delete(job.agent);
+    const key = turnKey(job.agent, job.session_key);
+    if (job.kind === 'turn' && activeTurns.get(key) === job.id) {
+      activeTurns.delete(key);
     }
     if (job.kind === 'turn') turnProcesses.delete(job.id);
     if (job.finishTurn) job.finishTurn();
@@ -648,6 +669,8 @@ function startTurn(document, res) {
   const agent = document.agent;
   const prompt = document.prompt;
   const sessionId = document.session_id;
+  const sessionKey = document.session_key;
+  const resume = document.resume;
   const timeoutMs = validateTimeout(document.timeout_ms, DEFAULT_TURN_TIMEOUT_MS);
   if (agent !== 'claude' && agent !== 'codex') {
     res.writeHead(400).end('unsupported agent');
@@ -657,11 +680,27 @@ function startTurn(document, res) {
     res.writeHead(400).end('missing prompt');
     return;
   }
+  if (!validSessionKey(sessionKey)) {
+    res.writeHead(400).end('invalid session_key');
+    return;
+  }
+  if (typeof resume !== 'boolean') {
+    res.writeHead(400).end('invalid resume intent');
+    return;
+  }
   if (
     sessionId !== undefined &&
     (typeof sessionId !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(sessionId))
   ) {
     res.writeHead(400).end('invalid session_id');
+    return;
+  }
+  if (resume && !sessionId) {
+    res.writeHead(400).end('resume requires an established session_id');
+    return;
+  }
+  if (!resume && agent === 'claude' && !sessionId) {
+    res.writeHead(400).end('new Claude sessions require a session_id');
     return;
   }
   if (timeoutMs === null) {
@@ -672,28 +711,35 @@ function startTurn(document, res) {
     res.writeHead(503).end('workspace is not ready');
     return;
   }
-  if (activeTurns.has(agent)) {
-    res.writeHead(409).end('turn already in flight for agent');
+  const key = turnKey(agent, sessionKey);
+  if (activeTurns.has(key)) {
+    res.writeHead(409).end('turn already in flight for session');
     return;
   }
 
   const job = createJob('turn', {
     agent,
+    session_key: sessionKey,
     native_session_id: sessionId || null,
+    resume,
     blocking: true
   });
   job.completion = new Promise((resolve) => {
     job.finishTurn = resolve;
   });
-  activeTurns.set(agent, job.id);
-  latestTurns.set(agent, job);
+  activeTurns.set(key, job.id);
+  latestTurns.set(key, job);
   try {
-    const child = spawn(LAUNCHER, [agent, ...(sessionId ? [sessionId] : [])], {
-      cwd: WORKSPACE_PATH,
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true
-    });
+    const child = spawn(
+      LAUNCHER,
+      [agent, resume ? 'resume' : 'create', ...(sessionId ? [sessionId] : [])],
+      {
+        cwd: WORKSPACE_PATH,
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true
+      }
+    );
     runChild(job, child, timeoutMs, (processChild) => {
       turnProcesses.set(job.id, processChild);
       processChild.stdout.on('data', (chunk) => appendBounded(job, turnEventsPath(job), chunk));
@@ -703,7 +749,7 @@ function startTurn(document, res) {
     });
     json(res, 202, { id: job.id, status: job.status });
   } catch {
-    activeTurns.delete(agent);
+    activeTurns.delete(key);
     job.status = 'failed';
     job.blocking = false;
     job.error = 'process could not start';
@@ -712,12 +758,16 @@ function startTurn(document, res) {
   }
 }
 
-function currentTurn(agent, res) {
+function currentTurn(agent, sessionKey, res) {
   if (agent !== 'claude' && agent !== 'codex') {
     res.writeHead(400).end('unsupported agent');
     return;
   }
-  const job = latestTurns.get(agent);
+  if (!validSessionKey(sessionKey)) {
+    res.writeHead(400).end('invalid session_key');
+    return;
+  }
+  const job = latestTurns.get(turnKey(agent, sessionKey));
   if (!job) {
     res.writeHead(404).end('no turn');
     return;
@@ -745,11 +795,17 @@ function agentReady(agent, res) {
 
 async function stopTurn(document, res) {
   const agent = document.agent;
+  const sessionKey = document.session_key;
   if (agent !== 'claude' && agent !== 'codex') {
     res.writeHead(400).end('unsupported agent');
     return;
   }
-  const id = activeTurns.get(agent);
+  if (!validSessionKey(sessionKey)) {
+    res.writeHead(400).end('invalid session_key');
+    return;
+  }
+  const key = turnKey(agent, sessionKey);
+  const id = activeTurns.get(key);
   const child = id && turnProcesses.get(id);
   const job = id && jobs.get(id);
   if (!job) {
@@ -762,7 +818,7 @@ async function stopTurn(document, res) {
     job.status = 'interrupted';
     job.blocking = false;
     saveJob(job);
-    activeTurns.delete(agent);
+    activeTurns.delete(key);
     json(res, 200, { id, status: job.status });
     return;
   }
@@ -1027,7 +1083,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/turn/status?')) {
     if (!authorized(req)) return unauthorized(res);
     const query = new URL(req.url, 'http://exec-shim.invalid').searchParams;
-    currentTurn(query.get('agent'), res);
+    currentTurn(query.get('agent'), query.get('session_key'), res);
     return;
   }
   if (req.method === 'GET' && req.url.startsWith('/agent/ready?')) {

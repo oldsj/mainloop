@@ -44,7 +44,7 @@ You (phone/laptop)
 # Copy example environment file and configure
 cp .env.example .env
 # Set the Substrate router, actor bindings, and shim Secret names.
-# Keep provider credentials in the configured actors, not in the backend environment.
+# Keep provider credentials in Mainloop's configured control-plane Secrets; actors receive synthetic placeholders only.
 
 # Start all services
 make dev

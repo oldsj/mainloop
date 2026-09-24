@@ -2,14 +2,23 @@
 # Run one headless native CLI turn. The prompt is inherited on stdin, never passed in argv.
 set -euo pipefail
 
-kind="${1:?usage: start-native-agent claude|codex [native-session-id]}"
-if [[ $# -gt 2 ]]; then
-	echo 'usage: start-native-agent claude|codex [native-session-id]' >&2
+kind="${1:?usage: start-native-agent claude|codex create|resume [native-session-id]}"
+mode="${2:?usage: start-native-agent claude|codex create|resume [native-session-id]}"
+if [[ $# -gt 3 ]]; then
+	echo 'usage: start-native-agent claude|codex create|resume [native-session-id]' >&2
 	exit 2
 fi
-session_id="${2-}"
+if [[ ${mode} != create && ${mode} != resume ]]; then
+	echo 'invalid session mode' >&2
+	exit 2
+fi
+session_id="${3-}"
 if [[ -n ${session_id} && ! ${session_id} =~ ^[A-Za-z0-9._:-]{1,256}$ ]]; then
 	echo 'invalid native session id' >&2
+	exit 2
+fi
+if [[ ${mode} == resume && -z ${session_id} ]]; then
+	echo 'resume requires an established native session id' >&2
 	exit 2
 fi
 
@@ -36,8 +45,14 @@ claude)
 	fi
 	export CLAUDE_CODE_OAUTH_TOKEN
 	args=(-p)
-	if [[ -n ${session_id} ]]; then
+	if [[ ${mode} == resume ]]; then
 		args+=(--resume "${session_id}")
+	else
+		if [[ -z ${session_id} ]]; then
+			echo 'new Claude sessions require a native session id' >&2
+			exit 2
+		fi
+		args+=(--session-id "${session_id}")
 	fi
 	args+=(--output-format stream-json --dangerously-skip-permissions
 		--append-system-prompt-file "${AGENT_SYSTEM_PROMPT_FILE:-/etc/agent-config/mainloop-system.txt}")
@@ -49,7 +64,7 @@ codex)
 		echo 'Codex credential is not installed' >&2
 		exit 1
 	fi
-	if [[ -n ${session_id} ]]; then
+	if [[ ${mode} == resume ]]; then
 		exec codex exec resume --json "${session_id}" --dangerously-bypass-approvals-and-sandbox
 	fi
 	exec codex exec --json --dangerously-bypass-approvals-and-sandbox

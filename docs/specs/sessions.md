@@ -22,7 +22,7 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
 ## Creating and messaging sessions
 
 - `/agents` offers Claude Code and Codex. `POST /sessions` accepts `agent_kind`; when omitted, it defaults to Claude Code.
-- Native CLI execution and provider credentials live in the Substrate actor selected by the configured provider binding. Mainloop does not create a Claude SDK worker or a Kubernetes Job.
+- Native CLI execution lives in the Substrate actor selected by the configured provider binding. Mainloop's credential broker owns real provider credentials in control-side Secrets; actors receive synthetic placeholder files only. Mainloop does not create a Claude SDK worker for each session.
 - Each user message is recorded with a delivery state before it is sent. Delivery states include `recorded`, `sending`, `delivered`, `completed`, `queued`, `failed`, and `uncertain`.
 - An uncertain delivery is never replayed automatically. A message is rejected with `409` while another turn is in flight or while the workspace is suspending or suspended.
 - Session conversations mirror messages and turn evidence from the native journal.

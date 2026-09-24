@@ -30,8 +30,8 @@ class FakeRouterAndShim:
         self.suspended = False
         self.capacity = False
         self.expected_token = FIXTURE_VALUE
-        self.inflight: set[str] = set()
-        self.turns: dict[str, dict] = {}
+        self.inflight: set[tuple[str, str]] = set()
+        self.turns: dict[tuple[str, str], dict] = {}
         self.journal_lines = [
             '{"type":"user"}',
             '{"type":"assistant"}',
@@ -75,28 +75,34 @@ class FakeRouterAndShim:
         if method == "GET" and parsed.path == "/ports":
             return _Response(200, json.dumps({"ports": [3000, 5173, 3000]}))
         if method == "GET" and parsed.path == "/turn/status":
-            turn = self.turns.get(query.get("agent", [""])[0])
+            key = (
+                query.get("agent", [""])[0],
+                query.get("session_key", [""])[0],
+            )
+            turn = self.turns.get(key)
             return (
                 _Response(200, json.dumps(turn)) if turn else _Response(404, "no turn")
             )
         if method == "POST" and parsed.path == "/turn":
             agent = body.get("agent")
-            if agent in self.inflight:
+            key = (agent, body.get("session_key", ""))
+            if key in self.inflight:
                 return _Response(409, "turn already in flight")
             turn = {
                 "id": str(uuid4()),
                 "agent": agent,
+                "session_key": key[1],
                 "status": "running",
-                "native_session_id": body.get("session_id") or "native-fixture-id",
+                "native_session_id": body.get("session_id") or f"native-{key[1]}",
                 "events": [],
             }
-            self.turns[agent] = turn
-            self.inflight.add(agent)
+            self.turns[key] = turn
+            self.inflight.add(key)
             return _Response(202, json.dumps({"id": turn["id"], "status": "running"}))
         if method == "POST" and parsed.path == "/turn/stop":
-            agent = body.get("agent")
-            self.inflight.discard(agent)
-            turn = self.turns.get(agent)
+            key = (body.get("agent"), body.get("session_key", ""))
+            self.inflight.discard(key)
+            turn = self.turns.get(key)
             if turn:
                 turn["status"] = "interrupted"
             return _Response(200, json.dumps({"status": "interrupted"}))
@@ -149,6 +155,7 @@ def fake_workspace(router: FakeRouterAndShim, *, shim_name=FAKE_SHIM_NAME):
         actor="actor-fixture",
         agent="claude",
         shim_token_secret_name=shim_name,
+        logical_session_id="session-fixture",
         router_address="http://router-fixture:8081",
         timeout=2,
         credential_broker=FakeCredentialBroker(),
@@ -174,6 +181,49 @@ class FakeCredentialBroker:
 
 
 class SubstrateWorkspaceTests(unittest.TestCase):
+    def test_same_provider_bindings_have_distinct_logical_transports(self):
+        first = {
+            "session_id": "claude-session-a",
+            "kind": "claude",
+            "native_session_id": "native-a",
+        }
+        second = {
+            "session_id": "claude-session-b",
+            "kind": "claude",
+            "native_session_id": "native-b",
+        }
+        actor_binding = SubstrateActorBinding(
+            atespace="atespace-fixture",
+            actor="actor-fixture",
+            shim_token_secret_name=FAKE_SHIM_NAME,
+        )
+        keys = [
+            (
+                binding["session_id"],
+                "atespace-fixture",
+                "actor-fixture",
+                FAKE_SHIM_NAME,
+                "claude",
+            )
+            for binding in (first, second)
+        ]
+        with patch.object(
+            settings, "substrate_actor_bindings", {"claude": actor_binding}
+        ):
+            try:
+                ws_a = native_sessions.workspace_for(first)
+                ws_b = native_sessions.workspace_for(second)
+                self.assertIsNot(ws_a, ws_b)
+                self.assertEqual(ws_a.logical_session_id, "claude-session-a")
+                self.assertEqual(ws_b.logical_session_id, "claude-session-b")
+                self.assertEqual(ws_a.native_session_id, "native-a")
+                self.assertEqual(ws_b.native_session_id, "native-b")
+                ws_a.set_native_session_id("native-a-updated")
+                self.assertEqual(ws_b.native_session_id, "native-b")
+            finally:
+                for key in keys:
+                    native_sessions._workspaces.pop(key, None)
+
     def test_codex_start_and_resume_install_only_synthetic_auth(self):
         async def exercise():
             router = FakeRouterAndShim()
@@ -231,10 +281,14 @@ class SubstrateWorkspaceTests(unittest.TestCase):
             status = await workspace.agent_status("agent-fixture")
             self.assertEqual(status["status"], "running")
             self.assertEqual(
-                await workspace.native_id("agent-fixture"), "native-fixture-id"
+                await workspace.native_id("agent-fixture"), "native-session-fixture"
             )
-            first = await workspace.journal("agent-fixture", "native-fixture-id", 0)
-            next_page = await workspace.journal("agent-fixture", "native-fixture-id", 1)
+            first = await workspace.journal(
+                "agent-fixture", "native-session-fixture", 0
+            )
+            next_page = await workspace.journal(
+                "agent-fixture", "native-session-fixture", 1
+            )
             self.assertEqual(first.file, "/fake/fixture-session.jsonl")
             self.assertEqual(first.total_lines, 3)
             self.assertEqual(first.lines[0], (1, '{"type":"user"}'))
@@ -248,7 +302,39 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 for method, path, body in router.requests
                 if method == "POST" and path == "/turn"
             ]
-            self.assertEqual(sent, [{"agent": "claude", "prompt": "fixture prompt"}])
+            self.assertEqual(
+                sent,
+                [
+                    {
+                        "agent": "claude",
+                        "prompt": "fixture prompt",
+                        "session_key": "session-fixture",
+                        "resume": False,
+                    }
+                ],
+            )
+
+        asyncio.run(exercise())
+
+    def test_established_native_session_is_marked_for_resume_on_next_turn(self):
+        async def exercise():
+            router = FakeRouterAndShim()
+            workspace = fake_workspace(router)
+            await workspace.start(
+                "claude",
+                "agent-fixture",
+                native_id="native-established-session",
+                resume=True,
+            )
+            await workspace.send("agent-fixture", "resumed fixture prompt")
+            turn = next(
+                body
+                for method, path, body in router.requests
+                if method == "POST" and path == "/turn"
+            )
+            self.assertEqual(turn["session_id"], "native-established-session")
+            self.assertEqual(turn["session_key"], "session-fixture")
+            self.assertTrue(turn["resume"])
 
         asyncio.run(exercise())
 
@@ -343,6 +429,7 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 shim_token_secret_name=FAKE_SHIM_NAME,
             )
             key = (
+                binding["session_id"],
                 workspace_binding.atespace,
                 workspace_binding.actor,
                 workspace_binding.shim_token_secret_name,
@@ -431,6 +518,8 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                             {
                                 "agent": "claude",
                                 "prompt": "configured fixture prompt",
+                                "session_key": "session-fixture",
+                                "resume": False,
                                 "session_id": "native-fixture-id",
                             },
                         )

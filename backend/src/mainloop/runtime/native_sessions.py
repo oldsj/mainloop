@@ -34,6 +34,7 @@ from mainloop.runtime.journal import completed_turns, parse_journal
 from mainloop.runtime.standing import content_hash
 from mainloop.runtime.substrate import TransportError
 from mainloop.runtime.substrate_workspace import (
+    JournalSlice,
     SubstrateWorkspace,
     WorkspaceUnavailable,
 )
@@ -101,6 +102,7 @@ def workspace_for(binding: dict) -> SubstrateWorkspace:
             f"no Substrate actor binding is configured for native agent {agent}"
         )
     key = (
+        binding["session_id"],
         actor_binding.atespace,
         actor_binding.actor,
         actor_binding.shim_token_secret_name,
@@ -112,6 +114,7 @@ def workspace_for(binding: dict) -> SubstrateWorkspace:
             actor=actor_binding.actor,
             agent=agent,
             shim_token_secret_name=actor_binding.shim_token_secret_name,
+            logical_session_id=binding["session_id"],
             native_session_id=binding.get("native_session_id"),
         )
     workspace = _workspaces[key]
@@ -361,11 +364,11 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
     ws = workspace_for(binding)
     await ws.require_ready()
     name = binding["agent_name"]
+    resume = binding["journal_ref"] is not None
     status = await ws.agent_status(name)
     fields: dict = {}
     if status is None:
         # A journal already seen for this native session id means an earlier run: resume it.
-        resume = binding["journal_ref"] is not None
         extra, standing_hash = await _start_extra(binding)
         await ws.start(
             binding["kind"],
@@ -378,6 +381,7 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
         if standing_hash:
             fields["standing_hash"] = standing_hash
     else:
+        ws.set_resume_history(resume)
         # An already running agent may have resumed from a parked actor snapshot.
         await ws.prepare_credentials()
     await _update_binding(session_id, **fields)
@@ -532,7 +536,8 @@ async def _sync_locked(session_id: str) -> dict | None:
                     return None
                 await _update_binding(session_id, native_session_id=nid)
                 binding["native_session_id"] = nid
-            jl = await ws.journal(
+            jl = await _journal_through_high_water(
+                ws,
                 binding["agent_name"],
                 binding["native_session_id"],
                 binding["journal_cursor"],
@@ -681,6 +686,30 @@ async def _sync_locked(session_id: str) -> dict | None:
         ):
             follow["fallback_report"] = new_reply
         return follow
+
+
+async def _journal_through_high_water(
+    ws: SubstrateWorkspace, name: str, native_id: str, from_line: int
+) -> JournalSlice:
+    """Read bounded journal pages through the first page's captured line high-water mark."""
+    first = await ws.journal(name, native_id, from_line)
+    if first.file is None or not first.lines:
+        return first
+    high_water = first.total_lines
+    lines = list(first.lines)
+    cursor = lines[-1][0]
+    while cursor < high_water:
+        page = await ws.journal(name, native_id, cursor)
+        if page.file != first.file:
+            raise TransportError("native journal changed while paging")
+        additions = [line for line in page.lines if cursor < line[0] <= high_water]
+        if not additions:
+            raise TransportError(
+                "native journal page did not advance to its high-water mark"
+            )
+        lines.extend(additions)
+        cursor = additions[-1][0]
+    return JournalSlice(first.file, high_water, lines)
 
 
 async def cancel(session_id: str) -> str:

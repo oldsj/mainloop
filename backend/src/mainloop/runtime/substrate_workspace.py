@@ -205,6 +205,7 @@ class SubstrateWorkspace:
         actor: str,
         agent: str,
         shim_token_secret_name: str,
+        logical_session_id: str | None = None,
         native_session_id: str | None = None,
         router_address: str | None = None,
         timeout: float | None = None,
@@ -218,7 +219,13 @@ class SubstrateWorkspace:
         self.actor = actor
         self.workspace_name = actor
         self.agent = agent
+        if logical_session_id is not None and not re.fullmatch(
+            r"[A-Za-z0-9._:-]{1,256}", logical_session_id
+        ):
+            raise ValueError("Substrate logical session id is invalid")
+        self._logical_session_id = logical_session_id
         self.native_session_id = native_session_id
+        self._resume_history = False
         address = urlsplit(router_address or settings.substrate_router_address)
         if (
             address.scheme != "http"
@@ -243,6 +250,10 @@ class SubstrateWorkspace:
 
     def set_native_session_id(self, native_session_id: str | None) -> None:
         self.native_session_id = native_session_id
+
+    @property
+    def logical_session_id(self) -> str | None:
+        return self._logical_session_id
 
     async def _token(self) -> str:
         if self._token_value is None:
@@ -359,7 +370,9 @@ class SubstrateWorkspace:
     async def agent_status(self, name: str) -> dict | None:
         if not name:
             raise ValueError("native agent name is required")
-        query = urlencode({"agent": self.agent})
+        query = urlencode(
+            {"agent": self.agent, "session_key": self._require_session_key()}
+        )
         response = await self._request("GET", f"/turn/status?{query}")
         if response.status == 404:
             return None
@@ -374,8 +387,9 @@ class SubstrateWorkspace:
         resume: bool,
         extra: dict[str, str] | None = None,
     ) -> dict:
-        del binding, name, resume, extra
+        del binding, name, extra
         self.native_session_id = native_id
+        self._resume_history = resume
         await self.require_ready()
         await self.prepare_credentials()
         query = urlencode({"agent": self.agent})
@@ -388,7 +402,12 @@ class SubstrateWorkspace:
     async def send(self, name: str, text: str) -> None:
         if not name:
             raise ValueError("native agent name is required")
-        payload = {"agent": self.agent, "prompt": text}
+        payload = {
+            "agent": self.agent,
+            "prompt": text,
+            "session_key": self._require_session_key(),
+            "resume": self._resume_history,
+        }
         if self.native_session_id:
             payload["session_id"] = self.native_session_id
         response = await self._request("POST", "/turn", body=payload)
@@ -397,7 +416,11 @@ class SubstrateWorkspace:
     async def stop(self, name: str) -> None:
         if not name:
             raise ValueError("native agent name is required")
-        response = await self._request("POST", "/turn/stop", body={"agent": self.agent})
+        response = await self._request(
+            "POST",
+            "/turn/stop",
+            body={"agent": self.agent, "session_key": self._require_session_key()},
+        )
         self._json(response, method="POST /turn/stop")
 
     async def listening_ports(self) -> tuple[int, ...]:
@@ -416,7 +439,9 @@ class SubstrateWorkspace:
         return tuple(sorted(set(ports)))
 
     async def _latest_turn(self) -> dict | None:
-        query = urlencode({"agent": self.agent})
+        query = urlencode(
+            {"agent": self.agent, "session_key": self._require_session_key()}
+        )
         response = await self._request("GET", f"/turn/status?{query}")
         if response.status == 404:
             return None
@@ -443,6 +468,7 @@ class SubstrateWorkspace:
         query = urlencode(
             {
                 "agent": self.agent,
+                "session_key": self._require_session_key(),
                 "id": native_id,
                 "from": max(0, from_line),
                 "limit": _JOURNAL_PAGE_SIZE,
@@ -471,3 +497,12 @@ class SubstrateWorkspace:
                 raise TransportError("Substrate journal response has an invalid line")
             lines.append((item["line"], item["text"]))
         return JournalSlice(file, total, lines)
+
+    def _require_session_key(self) -> str:
+        if self._logical_session_id is None:
+            raise RuntimeError("Substrate transport is not bound to a logical session")
+        return self._logical_session_id
+
+    def set_resume_history(self, resume: bool) -> None:
+        """Set the create-versus-resume intent for this session's next turn."""
+        self._resume_history = resume

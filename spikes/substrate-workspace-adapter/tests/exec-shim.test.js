@@ -18,6 +18,21 @@ const dockerfile = path.join(image, 'Dockerfile');
 const entrypoint = path.join(image, 'entrypoint.sh');
 const fixtures = path.join(__dirname, 'fixtures/native');
 const token = 'fixture-only-shim-token-long-enough-for-testing';
+const claudePlaceholder = 'sk-ant-oat01-mainloop-egress-placeholder';
+function codexPlaceholder(accountId = 'fixture-account') {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const jwt = `${encode({ alg: 'none' })}.${encode({ exp: 1_799_999_999 })}.synthetic`;
+  return JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      id_token: jwt,
+      access_token: jwt,
+      refresh_token: '',
+      account_id: accountId
+    },
+    last_refresh: '2026-09-24T00:00:00Z'
+  });
+}
 
 async function startShim(root, extraEnv = {}) {
   const home = path.join(root, 'home');
@@ -230,8 +245,17 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  const claudeContents = 'fixture-claude-token-never-logged';
-  const authContents = JSON.stringify({ fixture: 'codex-auth-never-logged' });
+  const claudeContents = 'fixture-real-provider-token-never-logged';
+  const authContents = JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      id_token: 'fixture.header.signature',
+      access_token: 'fixture.header.signature',
+      refresh_token: 'fixture-real-refresh-token',
+      account_id: 'fixture-account'
+    },
+    last_refresh: '2026-09-24T00:00:00Z'
+  });
   assert.equal(
     (
       await request(running.port, 'POST', '/credential', {
@@ -259,6 +283,16 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     ).status,
     403
   );
+  const claudePath = path.join(running.home, '.mainloop', 'claude-token');
+  assert.equal(
+    (
+      await request(running.port, 'POST', '/credential', {
+        bearer: token,
+        body: { name: 'claude-token', contents: claudeContents }
+      })
+    ).status,
+    400
+  );
   assert.equal(
     (
       await request(running.port, 'POST', '/credential', {
@@ -272,24 +306,22 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     (
       await request(running.port, 'POST', '/credential', {
         bearer: token,
-        body: { name: 'claude-token', contents: claudeContents }
+        body: { name: 'claude-token', contents: claudePlaceholder }
       })
     ).status,
     201
   );
-  const claudePath = path.join(running.home, '.mainloop', 'claude-token');
-  assert.equal(fs.readFileSync(claudePath, 'utf8'), claudeContents);
+  assert.equal(fs.readFileSync(claudePath, 'utf8'), claudePlaceholder);
   assert.equal(fs.statSync(claudePath).mode & 0o777, 0o600);
   assert.equal(
     (
       await request(running.port, 'POST', '/credential', {
         bearer: token,
-        body: { name: 'claude-token', contents: 'replacement' }
+        body: { name: 'claude-token', contents: claudePlaceholder }
       })
     ).status,
     409
   );
-  const claudePlaceholder = 'sk-ant-oat01-mainloop-egress-placeholder';
   assert.equal(
     (
       await request(running.port, 'PUT', '/credential', {
@@ -309,6 +341,7 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     ).status,
     400
   );
+  const authPath = path.join(running.home, '.codex', 'auth.json');
   assert.equal(
     (
       await request(running.port, 'POST', '/credential', {
@@ -316,21 +349,20 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
         body: { name: 'codex-auth', contents: authContents }
       })
     ).status,
+    400
+  );
+  const placeholder = codexPlaceholder();
+  assert.equal(
+    (
+      await request(running.port, 'POST', '/credential', {
+        bearer: token,
+        body: { name: 'codex-auth', contents: placeholder }
+      })
+    ).status,
     201
   );
-  const authPath = path.join(running.home, '.codex', 'auth.json');
-  assert.equal(fs.readFileSync(authPath, 'utf8'), authContents);
+  assert.equal(fs.readFileSync(authPath, 'utf8'), placeholder);
   assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
-
-  const placeholder = JSON.stringify({
-    tokens: {
-      id_token: 'fixture.header.synthetic',
-      access_token: 'fixture.header.synthetic',
-      refresh_token: '',
-      account_id: 'fixture-account'
-    },
-    last_refresh: '2026-09-24T00:00:00Z'
-  });
   const replaced = await request(running.port, 'PUT', '/credential', {
     bearer: token,
     body: { name: 'codex-auth', contents: placeholder }
@@ -342,6 +374,7 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     body: { name: 'codex-auth', contents: authContents }
   });
   assert.equal(rejectedReplacement.status, 400);
+  assert.equal(fs.readFileSync(authPath, 'utf8'), placeholder);
   assert.equal(running.output().includes(claudeContents), false);
   assert.equal(running.output().includes(authContents), false);
 });
@@ -361,11 +394,17 @@ test('turn prompt is piped on stdin and never appears in argv or shim logs', asy
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'fixture-claude-token');
+  await installCredential(running, 'claude-token', claudePlaceholder);
   const prompt = 'private fixture prompt must travel only on stdin';
   const started = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'claude', prompt }
+    body: {
+      agent: 'claude',
+      prompt,
+      session_key: 'stdin-session',
+      session_id: 'native-stdin-session',
+      resume: false
+    }
   });
   assert.equal(started.status, 202, started.body);
   const { id } = JSON.parse(started.body);
@@ -376,6 +415,7 @@ test('turn prompt is piped on stdin and never appears in argv or shim logs', asy
   assert.equal(fs.readFileSync(path.join(root, 'claude-prompt'), 'utf8'), prompt);
   const argv = fs.readFileSync(path.join(root, 'claude-args'), 'utf8');
   assert.match(argv, /-p/);
+  assert.match(argv, /--session-id\s+native-stdin-session/);
   assert.match(argv, /--output-format/);
   assert.equal(argv.includes(prompt), false);
   assert.equal(running.output().includes(prompt), false);
@@ -387,7 +427,7 @@ test('turn prompt is piped on stdin and never appears in argv or shim logs', asy
   );
 });
 
-test('a second concurrent turn for the same agent receives 409 and is not queued', async (t) => {
+test('a second concurrent turn for the same logical session receives 409', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-concurrency-'));
   const running = await startShim(root, { TURN_DELAY: '0.4' });
   fakeCli(
@@ -399,14 +439,112 @@ test('a second concurrent turn for the same agent receives 409 and is not queued
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'fixture-claude-token');
-  const body = { agent: 'claude', prompt: 'turn prompt' };
+  await installCredential(running, 'claude-token', claudePlaceholder);
+  const body = {
+    agent: 'claude',
+    prompt: 'turn prompt',
+    session_key: 'same-session',
+    session_id: 'native-same-session',
+    resume: false
+  };
   const first = await request(running.port, 'POST', '/turn', { bearer: token, body });
   assert.equal(first.status, 202, first.body);
   const second = await request(running.port, 'POST', '/turn', { bearer: token, body });
   assert.equal(second.status, 409);
   const result = await waitForJob(running, 'turn', JSON.parse(first.body).id);
   assert.equal(result.status, 'completed');
+});
+
+test('same-provider sessions scope status, cancellation, and interleaved sends', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-session-scope-'));
+  const running = await startShim(root);
+  fakeCli(
+    path.join(running.fakeBin, 'claude'),
+    '#!/bin/sh\nprompt="$(cat)"\ncase "$prompt" in\n  slow-A) native_id=native-A; sleep 5 ;;\n  slow-B) native_id=native-B; sleep 1 ;;\n  second-B) native_id=native-B ;;\n  *) exit 2 ;;\nesac\nprintf \'{"type":"result","session_id":"%s","result":"%s"}\\n\' "$native_id" "$prompt"\n'
+  );
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+  await installCredential(running, 'claude-token', claudePlaceholder);
+
+  const sessionA = {
+    agent: 'claude',
+    prompt: 'slow-A',
+    session_key: 'logical-session-A',
+    session_id: 'native-A',
+    resume: false
+  };
+  const sessionB = {
+    agent: 'claude',
+    prompt: 'slow-B',
+    session_key: 'logical-session-B',
+    session_id: 'native-B',
+    resume: false
+  };
+  const startedA = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: sessionA
+  });
+  assert.equal(startedA.status, 202, startedA.body);
+  const startedB = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: sessionB
+  });
+  assert.equal(startedB.status, 202, startedB.body);
+  const jobA = JSON.parse(startedA.body).id;
+  const jobB = JSON.parse(startedB.body).id;
+  const statusA = await request(
+    running.port,
+    'GET',
+    '/turn/status?agent=claude&session_key=logical-session-A',
+    { bearer: token }
+  );
+  const statusB = await request(
+    running.port,
+    'GET',
+    '/turn/status?agent=claude&session_key=logical-session-B',
+    { bearer: token }
+  );
+  assert.equal(JSON.parse(statusA.body).id, jobA);
+  assert.equal(JSON.parse(statusA.body).status, 'running');
+  assert.equal(JSON.parse(statusB.body).id, jobB);
+  assert.equal(JSON.parse(statusB.body).status, 'running');
+  assert.equal(JSON.parse(statusB.body).native_session_id, 'native-B');
+
+  const stoppedA = await request(running.port, 'POST', '/turn/stop', {
+    bearer: token,
+    body: { agent: 'claude', session_key: 'logical-session-A' }
+  });
+  assert.equal(JSON.parse(stoppedA.body).status, 'interrupted');
+  assert.equal((await waitForJob(running, 'turn', jobA)).status, 'interrupted');
+  const statusBAfterStop = await request(
+    running.port,
+    'GET',
+    '/turn/status?agent=claude&session_key=logical-session-B',
+    { bearer: token }
+  );
+  assert.equal(JSON.parse(statusBAfterStop.body).status, 'running');
+  const completedB = await waitForJob(running, 'turn', jobB);
+  assert.equal(completedB.final_message, 'slow-B');
+
+  const secondB = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: { ...sessionB, prompt: 'second-B', resume: true }
+  });
+  assert.equal(secondB.status, 202, secondB.body);
+  const completedSecondB = await waitForJob(running, 'turn', JSON.parse(secondB.body).id);
+  assert.equal(completedSecondB.final_message, 'second-B');
+
+  const finalStatusB = await request(
+    running.port,
+    'GET',
+    '/turn/status?agent=claude&session_key=logical-session-B',
+    { bearer: token }
+  );
+  assert.equal(JSON.parse(finalStatusB.body).id, JSON.parse(secondB.body).id);
+  assert.equal(JSON.parse(finalStatusB.body).status, 'completed');
 });
 
 test('turn status locates the latest turn after it completes', async (t) => {
@@ -423,22 +561,41 @@ test('turn status locates the latest turn after it completes', async (t) => {
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'fixture-claude-token');
+  await installCredential(running, 'claude-token', claudePlaceholder);
 
   const submitted = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'claude', prompt: 'fixture status prompt' }
+    body: {
+      agent: 'claude',
+      prompt: 'fixture status prompt',
+      session_key: 'status-session',
+      session_id: 'native-status-session',
+      resume: false
+    }
   });
   assert.equal(submitted.status, 202, submitted.body);
   const { id } = JSON.parse(submitted.body);
   const current = await waitForJob(running, 'turn', id);
-  const status = await request(running.port, 'GET', '/turn/status?agent=claude', {
-    bearer: token
-  });
+  const status = await request(
+    running.port,
+    'GET',
+    '/turn/status?agent=claude&session_key=status-session',
+    {
+      bearer: token
+    }
+  );
   assert.equal(status.status, 200, status.body);
   assert.equal(JSON.parse(status.body).id, id);
   assert.equal(JSON.parse(status.body).status, 'completed');
   assert.equal(JSON.parse(status.body).native_session_id, current.native_session_id);
+  assert.equal(
+    (
+      await request(running.port, 'GET', '/turn/status?agent=claude&session_key=other-session', {
+        bearer: token
+      })
+    ).status,
+    404
+  );
 });
 
 test('turn status exposes only a boolean provider-auth rejection signal', async (t) => {
@@ -453,18 +610,24 @@ test('turn status exposes only a boolean provider-auth rejection signal', async 
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'synthetic-claude-token');
+  await installCredential(running, 'claude-token', claudePlaceholder);
 
   const submitted = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'claude', prompt: 'synthetic rejected turn' }
+    body: {
+      agent: 'claude',
+      prompt: 'synthetic rejected turn',
+      session_key: 'rejected-session',
+      session_id: 'native-rejected-session',
+      resume: false
+    }
   });
   assert.equal(submitted.status, 202, submitted.body);
   const { id } = JSON.parse(submitted.body);
   const result = await waitForJob(running, 'turn', id);
   assert.equal(result.status, 'failed');
   assert.equal(result.credential_rejected, true);
-  assert.equal(running.output().includes('synthetic-claude-token'), false);
+  assert.equal(running.output().includes(claudePlaceholder), false);
 });
 
 test('agent readiness requires its credential and rejects unauthenticated checks', async (t) => {
@@ -483,7 +646,7 @@ test('agent readiness requires its credential and rejects unauthenticated checks
   const unauthorized = await request(running.port, 'GET', '/agent/ready?agent=codex');
   assert.equal(unauthorized.status, 401);
 
-  await installCredential(running, 'codex-auth', '{"auth_mode":"fixture"}');
+  await installCredential(running, 'codex-auth', codexPlaceholder());
   const configured = await request(running.port, 'GET', '/agent/ready?agent=codex', {
     bearer: token
   });
@@ -624,17 +787,23 @@ test('stop interrupts an in-flight turn and releases its slot', async (t) => {
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'fixture-claude-token');
+  await installCredential(running, 'claude-token', claudePlaceholder);
 
   const submitted = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'claude', prompt: 'stop fixture turn' }
+    body: {
+      agent: 'claude',
+      prompt: 'stop fixture turn',
+      session_key: 'stop-session',
+      session_id: 'native-stop-session',
+      resume: false
+    }
   });
   assert.equal(submitted.status, 202, submitted.body);
   const { id } = JSON.parse(submitted.body);
   const stopped = await request(running.port, 'POST', '/turn/stop', {
     bearer: token,
-    body: { agent: 'claude' }
+    body: { agent: 'claude', session_key: 'stop-session' }
   });
   assert.equal(stopped.status, 200, stopped.body);
   assert.equal(JSON.parse(stopped.body).status, 'interrupted');
@@ -680,7 +849,7 @@ test('Claude stream-json and Codex JSONL produce native ids and final messages',
   });
   fakeCli(
     path.join(running.fakeBin, 'claude'),
-    '#!/bin/sh\nprintf "%s\\n" "$@" >"$CLAUDE_ARGS_CAPTURE"\ncat >/dev/null\ncat "$CLAUDE_EVENTS"\n'
+    '#!/bin/sh\nprintf "%s\\n" "$@" >>"$CLAUDE_ARGS_CAPTURE"\ncat >/dev/null\ncat "$CLAUDE_EVENTS"\n'
   );
   fakeCli(
     path.join(running.fakeBin, 'codex'),
@@ -691,26 +860,62 @@ test('Claude stream-json and Codex JSONL produce native ids and final messages',
     fs.rmSync(root, { recursive: true, force: true });
   });
   await installToken(running);
-  await installCredential(running, 'claude-token', 'fixture-claude-token');
-  await installCredential(running, 'codex-auth', '{"fixture":"auth"}');
+  await installCredential(running, 'claude-token', claudePlaceholder);
+  await installCredential(running, 'codex-auth', codexPlaceholder());
 
   const claudeStart = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'claude', session_id: 'resume-session-001', prompt: 'claude fixture prompt' }
+    body: {
+      agent: 'claude',
+      session_key: 'events-claude',
+      session_id: 'new-claude-session-001',
+      resume: false,
+      prompt: 'claude first turn'
+    }
   });
   assert.equal(claudeStart.status, 202, claudeStart.body);
   const claude = await waitForJob(running, 'turn', JSON.parse(claudeStart.body).id);
   assert.equal(claude.native_session_id, 'fixture-claude-session');
   assert.equal(claude.final_message, 'fixture Claude final');
   assert.equal(claude.events.length, 3);
-  assert.match(
-    fs.readFileSync(path.join(root, 'claude-args'), 'utf8'),
-    /--resume\s+resume-session-001/
-  );
+  const firstClaudeArgs = fs.readFileSync(path.join(root, 'claude-args'), 'utf8');
+  assert.match(firstClaudeArgs, /--session-id\s+new-claude-session-001/);
+
+  const resumedClaudeStart = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: {
+      agent: 'claude',
+      session_key: 'events-claude',
+      session_id: 'fixture-claude-session',
+      resume: true,
+      prompt: 'claude follow-up turn'
+    }
+  });
+  assert.equal(resumedClaudeStart.status, 202, resumedClaudeStart.body);
+  await waitForJob(running, 'turn', JSON.parse(resumedClaudeStart.body).id);
+  const claudeArgs = fs.readFileSync(path.join(root, 'claude-args'), 'utf8');
+  assert.match(claudeArgs, /--resume\s+fixture-claude-session/);
+
+  const invalidResume = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: {
+      agent: 'claude',
+      session_key: 'invalid-resume',
+      resume: true,
+      prompt: 'must not start'
+    }
+  });
+  assert.equal(invalidResume.status, 400);
 
   const codexStart = await request(running.port, 'POST', '/turn', {
     bearer: token,
-    body: { agent: 'codex', session_id: 'resume-thread-001', prompt: 'codex fixture prompt' }
+    body: {
+      agent: 'codex',
+      session_key: 'events-codex',
+      session_id: 'resume-thread-001',
+      resume: true,
+      prompt: 'codex fixture prompt'
+    }
   });
   assert.equal(codexStart.status, 202, codexStart.body);
   const codex = await waitForJob(running, 'turn', JSON.parse(codexStart.body).id);
