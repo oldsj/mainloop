@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2312,SC2310,SC2311,SC2249  # pedantic optional checks; spike scripts
 # `mainloop`: the agents' thin client for the Mainloop control plane. It holds no policy.
-# Identity is the per-binding token in .mainloop/token (found by walking up from $PWD, written
-# by `agentctl start`); the server decides what this token may do and answers in plain text.
+# Identity is the per-binding token in .mainloop/token; the server decides what this token may
+# do and answers in plain text.
 set -u
 API="${MAINLOOP_API:-http://mainloop-backend.mainloop.svc.cluster.local:8000}"
 
