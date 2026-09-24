@@ -102,9 +102,7 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
 
             def runner(argv, **kwargs):
                 calls.append(argv)
-                return completed(
-                    argv, stdout=gate5_setup.PINNED_SUBSTRATE_COMMIT + "\n"
-                )
+                return completed(argv, stdout=gate5_setup.SUBSTRATE_FORK_COMMIT + "\n")
 
             self.assertEqual(
                 gate5_setup.verify_substrate_source(str(source), runner=runner),
@@ -139,7 +137,7 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
                 calls.append((argv, kwargs))
                 if argv[0] == "git":
                     return completed(
-                        argv, stdout=gate5_setup.PINNED_SUBSTRATE_COMMIT + "\n"
+                        argv, stdout=gate5_setup.SUBSTRATE_FORK_COMMIT + "\n"
                     )
                 if argv[1:3] == ["resolve", "-f"]:
                     return completed(argv, stdout="resolved-yaml")
@@ -289,40 +287,115 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
         self.assertIn("18081:8081", command)
         self.assertTrue(process.terminated)
 
-    def test_egress_hostname_rules_are_passed_as_repeatable_flags(self):
-        args = SimpleNamespace(
-            egress_tool="/fixture/mainloop-egress-tool",
+    def egress_args(self, **mode):
+        base = dict(
+            ate_cli="/fixture/kubectl-ate",
             kubeconfig=FIXTURE_KUBECONFIG,
             context="kind-substrate-preview",
             atespace="live-agent-gate",
             actor_name="claude-gate5",
             egress_deny_all=False,
             egress_allow_all=False,
-            egress_hostnames=["api.anthropic.com", "api.openai.com"],
+            egress_hostnames=None,
+            egress_cidr=None,
         )
-        with patch.object(gate5_setup.subprocess, "run") as run:
-            gate5_setup.run_egress_tool(args)
-        self.assertEqual(
-            run.call_args.args[0],
+        base.update(mode)
+        return SimpleNamespace(**base)
+
+    def test_egress_policy_manifest_has_one_rule_per_mode(self):
+        cases = [
+            ({"egress_deny_all": True}, []),
+            ({"egress_allow_all": True}, [{"all": {}}]),
+            (
+                {"egress_hostnames": ["api.anthropic.com", "api.openai.com"]},
+                [{"hostnames": {"patterns": ["api.anthropic.com", "api.openai.com"]}}],
+            ),
+            ({"egress_cidr": "192.0.2.1/32"}, [{"cidrs": {"cidrs": ["192.0.2.1/32"]}}]),
+        ]
+        for mode, rules in cases:
+            with self.subTest(mode=mode):
+                manifest = json.loads(
+                    gate5_setup.egress_policy_manifest(self.egress_args(**mode))
+                )
+                self.assertEqual(manifest, {"rules": rules})
+
+    def test_egress_policy_manifest_refuses_no_mode(self):
+        with self.assertRaises(ValueError):
+            gate5_setup.egress_policy_manifest(self.egress_args())
+
+    def expected_egress_argv(self, verb):
+        return [
+            "/fixture/kubectl-ate",
+            "--kubeconfig",
+            FIXTURE_KUBECONFIG,
+            "--context",
+            "kind-substrate-preview",
+            verb,
+            "egress-policy",
+            "claude-gate5",
+            "--atespace",
+            "live-agent-gate",
+            "--filename",
+            "-",
+        ]
+
+    def test_apply_egress_policy_creates_through_explicit_kube_target(self):
+        args = self.egress_args(egress_deny_all=True)
+        with patch.object(
+            gate5_setup.subprocess,
+            "run",
+            side_effect=lambda argv, **_: completed(argv),
+        ) as run:
+            gate5_setup.apply_egress_policy(args)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], self.expected_egress_argv("create"))
+        self.assertEqual(run.call_args.kwargs["input"], '{"rules": []}')
+
+    def test_apply_egress_policy_updates_an_existing_policy(self):
+        args = self.egress_args(egress_hostnames=["api.openai.com"])
+        results = iter(
             [
-                "/fixture/mainloop-egress-tool",
-                "--kubeconfig",
-                FIXTURE_KUBECONFIG,
-                "--context",
-                "kind-substrate-preview",
-                "--atespace",
-                "live-agent-gate",
-                "--actor",
-                "claude-gate5",
-                "--hostname",
-                "api.anthropic.com",
-                "--hostname",
-                "api.openai.com",
-            ],
+                (
+                    1,
+                    "rpc error: code = AlreadyExists desc = EgressPolicy already exists",
+                ),
+                (0, ""),
+            ]
         )
 
+        def fake_run(argv, **_):
+            code, stderr = next(results)
+            return completed(argv, returncode=code, stderr=stderr)
 
-class Gate5StateTests(unittest.TestCase):
+        with patch.object(gate5_setup.subprocess, "run", side_effect=fake_run) as run:
+            gate5_setup.apply_egress_policy(args)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [self.expected_egress_argv("create"), self.expected_egress_argv("update")],
+        )
+        for call in run.call_args_list:
+            self.assertEqual(
+                json.loads(call.kwargs["input"]),
+                {"rules": [{"hostnames": {"patterns": ["api.openai.com"]}}]},
+            )
+
+    def test_apply_egress_policy_does_not_update_after_other_create_failures(self):
+        args = self.egress_args(egress_deny_all=True)
+        with (
+            patch.object(
+                gate5_setup.subprocess,
+                "run",
+                side_effect=lambda argv, **_: completed(
+                    argv,
+                    returncode=1,
+                    stderr="rpc error: code = FailedPrecondition desc = parent Actor does not exist",
+                ),
+            ) as run,
+            self.assertRaisesRegex(RuntimeError, "create egress-policy failed"),
+        ):
+            gate5_setup.apply_egress_policy(args)
+        self.assertEqual(run.call_count, 1)
+
     def args(self, state_file: str, **overrides):
         values = {
             "context": "kind-substrate-preview",

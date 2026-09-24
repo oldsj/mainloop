@@ -20,7 +20,8 @@ fetch provider credentials or submit a native turn. The image's authenticated /t
 runs one headless native CLI process per request; Mainloop owns delivery and retry decisions.
 
 Prerequisites:
-    kubectl, kubectl-ate, and ko built from the pinned Substrate checkout.
+    kubectl, plus kubectl-ate and ko built from a checkout of the oldsj/substrate fork at
+    SUBSTRATE_FORK_COMMIT (see docs/spikes/substrate-workspace-adapter.md).
     A running kind-substrate-preview cluster with the ate-system + agentgateway dataplane
     installed (this script accepts only the exact kind-substrate-preview context).
     The live-agent-gate image already built and pushed (see live-agent-image/), its digest
@@ -30,14 +31,13 @@ Usage:
     cd backend
     uv run python scripts/gate5_setup.py \\
         --context kind-substrate-preview --kubeconfig /tmp/substrate-preview-kubeconfig \\
-        --ate-cli /tmp/substrate-preview-src/bin/kubectl-ate \\
-        --ko /tmp/substrate-preview-src/bin/ko \\
-        --substrate-src /tmp/substrate-preview-src \\
+        --ate-cli "$SUBSTRATE_SRC/bin/kubectl-ate" \\
+        --ko "$SUBSTRATE_SRC/bin/ko" \\
+        --substrate-src "$SUBSTRATE_SRC" \\
         --atespace live-agent-gate --template-version v1 \\
         --image localhost:5001/live-agent-gate@sha256:... \\
         --manifest ../spikes/substrate-workspace-adapter/k8s/live-agent-gate-template.yaml.tmpl \\
         --state-file /tmp/gate5-run-state.json \\
-        --egress-tool /tmp/substrate-preview-src/bin/mainloop-egress-tool \\
         --egress-deny-all
 
     Re-running with the same --state-file reconciles the persisted actor uid against the
@@ -55,7 +55,7 @@ import re
 import secrets
 import socket
 import string
-import subprocess  # nosec B404 - drives trusted local kubectl/ko/egress-tool binaries, argv only
+import subprocess  # nosec B404 - drives trusted local kubectl/kubectl-ate/ko binaries, argv only
 import sys
 import tempfile
 import time
@@ -81,7 +81,9 @@ from mainloop.runtime.substrate import (  # noqa: E402
     wait_for_golden_snapshot,
 )
 
-PINNED_SUBSTRATE_COMMIT = "cdac9baef81dd319b46086d695266e6161e9e592"
+# The `patched` branch of https://github.com/oldsj/substrate: upstream Substrate at
+# cdac9baef81dd319b46086d695266e6161e9e592 plus the patches listed in its FORK.md.
+SUBSTRATE_FORK_COMMIT = "ab1995089e1804df8f62fc1144cfe2f92b18fe20"
 WORKER_SELECTOR = "workload=live-agent-gate"
 WORKER_SANDBOX_CLASS = "gvisor"
 ACTOR_SHIM_PORT = 8090
@@ -116,7 +118,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--worker-timeout", type=float, default=120)
     p.add_argument("--actor-timeout", type=float, default=120)
     p.add_argument("--readiness-timeout", type=float, default=60)
-    p.add_argument("--egress-tool", required=True)
     egress = p.add_mutually_exclusive_group(required=True)
     egress.add_argument("--egress-cidr", help="CIDR to allow")
     egress.add_argument(
@@ -188,9 +189,9 @@ def verify_substrate_source(source: str, *, runner=subprocess.run) -> str:
         timeout=15,
     )
     commit = result.stdout.strip()
-    if commit != PINNED_SUBSTRATE_COMMIT:
+    if commit != SUBSTRATE_FORK_COMMIT:
         raise RuntimeError(
-            f"--substrate-src must be pinned at {PINNED_SUBSTRATE_COMMIT}; found {commit!r}"
+            f"--substrate-src must be pinned at {SUBSTRATE_FORK_COMMIT}; found {commit!r}"
         )
     return str(root)
 
@@ -376,30 +377,58 @@ def apply_worker_pool(
         os.unlink(doc_path)
 
 
-def run_egress_tool(args: argparse.Namespace) -> None:
-    cmd = [
-        args.egress_tool,
-        "--kubeconfig",
-        args.kubeconfig,
-        "--context",
-        args.context,
-        "--atespace",
-        args.atespace,
-        "--actor",
-        args.actor_name,
-    ]
+def egress_policy_manifest(args: argparse.Namespace) -> str:
+    """Return the actor's EgressPolicy as a protojson manifest.
+
+    The argument parser admits exactly one egress mode, so a missing mode never falls through
+    to a permissive policy; deny-all is a policy with no rules.
+    """
     if args.egress_deny_all:
-        cmd.append("--deny-all")
+        rules: list[dict] = []
     elif args.egress_allow_all:
-        cmd.append("--allow-all")
+        rules = [{"all": {}}]
     elif args.egress_hostnames:
-        for hostname in args.egress_hostnames:
-            cmd.extend(["--hostname", hostname])
+        rules = [{"hostnames": {"patterns": list(args.egress_hostnames)}}]
+    elif args.egress_cidr:
+        rules = [{"cidrs": {"cidrs": [args.egress_cidr]}}]
     else:
-        cmd += ["--cidr", args.egress_cidr]
-    subprocess.run(
-        cmd, check=True, timeout=60
-    )  # nosec B603 - argv list, path is an operator-supplied flag
+        raise ValueError("no egress mode selected")
+    return json.dumps({"rules": rules})
+
+
+def apply_egress_policy(args: argparse.Namespace) -> None:
+    """Create the actor's EgressPolicy, or replace it when one already exists."""
+    manifest = egress_policy_manifest(args)
+    for verb in ("create", "update"):
+        result = subprocess.run(  # nosec B603 - argv list, CLI path is an operator-supplied flag
+            [
+                args.ate_cli,
+                "--kubeconfig",
+                args.kubeconfig,
+                "--context",
+                args.context,
+                verb,
+                "egress-policy",
+                args.actor_name,
+                "--atespace",
+                args.atespace,
+                "--filename",
+                "-",
+            ],
+            input=manifest,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            print(f"-- egress policy {verb}d")
+            return
+        if verb == "create" and "code = AlreadyExists" in result.stderr:
+            continue
+        raise RuntimeError(
+            f"{verb} egress-policy failed (exit {result.returncode}): "
+            f"{result.stderr.strip()[-300:]}"
+        )
 
 
 @contextlib.contextmanager
@@ -825,7 +854,7 @@ async def async_main(args: argparse.Namespace) -> None:
         )
 
     print("-- applying the actor's EgressPolicy")
-    run_egress_tool(args)
+    apply_egress_policy(args)
 
     print()
     print(f"== actor {args.atespace}/{args.actor_name} is RUNNING, credential-free ==")

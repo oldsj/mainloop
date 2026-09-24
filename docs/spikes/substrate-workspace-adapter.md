@@ -120,27 +120,39 @@ The preview/HMR edit itself still uses a generic exec shim
 pane via `herdr pane run` -- a real shell executing a real command, but not a native agent's own
 Bash tool.
 
+## Substrate source
+
+Mainloop runs Substrate from a fork, [`oldsj/substrate`](https://github.com/oldsj/substrate),
+branch `patched`, pinned at `ab1995089e1804df8f62fc1144cfe2f92b18fe20`. That branch is upstream
+`cdac9baef81dd319b46086d695266e6161e9e592` plus a short patch stack listed in the fork's
+`FORK.md`: notably, actor containers run as the image's `USER` in its `WORKDIR`, and
+`kubectl ate` gains `get`, `create` and `update egress-policy`. The fork carries no
+Mainloop-specific code. `backend/scripts/gate5_setup.py` refuses any other commit. The
+evidence below records the commit each result was measured on; results before the fork were
+measured on upstream `cdac9ba`.
+
 ## Run it
 
 There is no single demo script yet (unlike `spikes/k8s-herdr-agents/demo.sh`); the commands used
 are recorded in the task's proof note. In outline:
 
 ```bash
+# SUBSTRATE_SRC is a checkout of oldsj/substrate at the pinned commit above.
 KIND_CLUSTER_NAME=substrate-preview KUBECONFIG=/tmp/substrate-preview-kubeconfig \
-  /tmp/substrate-preview-src/hack/create-kind-cluster.sh
+  "$SUBSTRATE_SRC"/hack/create-kind-cluster.sh
 KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
   KUBECONFIG=/tmp/substrate-preview-kubeconfig \
-  /tmp/substrate-preview-src/hack/install-ate-kind.sh --deploy-ate-system
+  "$SUBSTRATE_SRC"/hack/install-ate-kind.sh --deploy-ate-system
 KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
   KUBECONFIG=/tmp/substrate-preview-kubeconfig \
-  /tmp/substrate-preview-src/hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=agentgateway
+  "$SUBSTRATE_SRC"/hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=agentgateway
 # build kubectl-ate, build+push an actor image, apply one of:
 #   k8s/actor-template.yaml.tmpl            -- mainloop-workspace: Herdr + agentctl
 #   k8s/preview-gate-template.yaml.tmpl      -- preview-gate: real Vite dev server + exec shim
 #     + k8s/preview-proxy.yaml.tmpl          -- the NGINX ate-target-actor header-proxy in front
 #   k8s/dev-service-gate-template.yaml.tmpl -- dev-service-gate: real psql + exec shim
 #     + k8s/postgres-target.yaml             -- the external postgres:16-alpine StatefulSet
-#     + egress-tool/main.go                  -- creates the actor's EgressPolicy (no CLI verb)
+#     + `kubectl ate create egress-policy`   -- the actor's EgressPolicy
 # (WorkerPool via `ko resolve | kubectl apply`, ActorTemplate via `kubectl ate create actor-template -f -`)
 ```
 
@@ -221,10 +233,9 @@ A real `postgres:16-alpine` StatefulSet (same image/auth shape as
 `kubectl-ate` has **no CLI verb for egress policies** -- confirmed by the pinned checkout's own
 `demos/egress/README.md`: `"test-egress.sh creates and resumes the Actor but cannot create its
 EgressPolicy (no CLI verb yet)"`. Its own e2e suite calls the gRPC API directly
-(`internal/e2e/egresspolicy.go`). This spike does the same:
-`spikes/substrate-workspace-adapter/egress-tool/main.go`, a small standalone `main` mirroring
-that helper without the `testing.T` dependency (build instructions are in the file's header
-comment; it must be built inside a Substrate checkout since it imports `internal/` packages).
+(`internal/e2e/egresspolicy.go`). This spike originally did the same with a small gRPC tool.
+Upstream has since added `kubectl ate get` and `create egress-policy`, and the fork adds
+`update`, so `gate5_setup.py` now writes the policy manifest and applies it with those verbs.
 
 **Result**: DNS resolution (bypasses the policy enforcement point entirely -- port 53 is always
 allowed), a real `SELECT` query over the actual Postgres wire protocol, and reconnection after an
@@ -291,8 +302,8 @@ Phase 1 (recovery plan step 2) repairs the harness findings and removes the boot
   `ko resolve` from the verified pinned checkout, waits for an eligible worker and a golden
   snapshot, binds reruns to persisted cluster/template/actor identity, then confirms health
   through the actor route before applying egress policy.
-- `egress-tool/main.go` fails closed: exactly one of `--deny-all`, `--cidr`, or `--allow-all`
-  must be explicit.
+- The egress step fails closed: exactly one of `--egress-deny-all`, `--egress-cidr`,
+  `--egress-hostname` or `--egress-allow-all` must be explicit.
 
 Phase 2 used pinned Substrate `cdac9baef81dd319b46086d695266e6161e9e592`, a fresh
 `kind-substrate-preview` cluster, agentgateway, and image
