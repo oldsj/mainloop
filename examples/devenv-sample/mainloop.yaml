@@ -1,0 +1,21 @@
+---
+repo_url: https://github.com/example/devenv-sample
+branch: main
+agent_kinds: [claude, codex]
+resource_class: default
+dev:
+  image: mainloop-devenv-sample:latest
+  actor_template: devenv-sample
+  services:
+    - name: postgres
+      image: postgres:16-alpine
+      env:
+        POSTGRES_DB: workspace
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: dev-only
+      ports: [5432]
+  ports:
+    - name: app
+      number: 3000
+      protocol: http
+  idle_timeout_minutes: 30

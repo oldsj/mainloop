@@ -216,6 +216,29 @@ export interface WorkspaceManifest {
   mcp_servers: string[];
   egress_allowlist: string[];
   resource_class: string;
+  dev: WorkspaceDev | null;
+}
+
+export interface WorkspacePort {
+  name: string;
+  number: number;
+  protocol: 'http';
+}
+
+export interface WorkspaceService {
+  name: string;
+  image: string;
+  env: Record<string, string>;
+  ports: number[];
+}
+
+export interface WorkspaceDev {
+  image: string | null;
+  devcontainer_ref: string | null;
+  actor_template: string | null;
+  services: WorkspaceService[];
+  ports: WorkspacePort[];
+  idle_timeout_minutes: number;
 }
 
 export interface WorkspaceCondition {
@@ -243,6 +266,7 @@ export interface WorkspaceLifecycle {
   last_transition: WorkspaceTransition | null;
   operation_id: string | null;
   snapshot_ref: string | null;
+  last_activity_at: string | null;
   ownership_generation: number;
   updated_at: string;
 }
@@ -445,6 +469,25 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error('Failed to refresh project');
+  },
+
+  async createWorkspace(
+    projectId: string,
+    branch: string,
+    dev: WorkspaceDev
+  ): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, branch, dev })
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to create workspace'));
+    return response.json();
+  },
+
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to delete workspace'));
   },
 
   /**

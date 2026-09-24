@@ -1,12 +1,13 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { get } from 'svelte/store';
   import { api, type WorkspaceLifecycle } from '$lib/api';
   import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
   import { connection } from '$lib/stores/connection';
   import { workspaces } from '$lib/stores/workspaces';
 
-  type WorkspaceAction = 'suspend' | 'resume' | 'refresh';
+  type WorkspaceAction = 'suspend' | 'resume' | 'refresh' | 'delete';
 
   let workspaceId = $derived($page.params.id);
   let loading = $state(false);
@@ -67,6 +68,20 @@
 
   async function runAction(action: WorkspaceAction) {
     if (!workspace) return;
+    if (action === 'delete') {
+      if (!window.confirm('Delete this branch workspace and its actor?')) return;
+      pendingAction = action;
+      actionError = null;
+      try {
+        await api.deleteWorkspace(workspace.workspace_id);
+        await goto('/');
+      } catch (error) {
+        actionError = error instanceof Error ? error.message : 'Failed to delete workspace';
+      } finally {
+        pendingAction = null;
+      }
+      return;
+    }
     pendingAction = action;
     actionError = null;
     try {
@@ -76,7 +91,8 @@
       else result = await api.refreshWorkspace(workspace.workspace_id);
       workspaces.upsert(result);
       if (result.observed_state === 'unknown') {
-        actionError = 'Substrate has not confirmed this lifecycle state. Refresh status before retrying.';
+        actionError =
+          'Substrate has not confirmed this lifecycle state. Refresh status before retrying.';
       }
     } catch (error) {
       actionError = error instanceof Error ? error.message : `Failed to ${action} workspace`;
@@ -105,45 +121,53 @@
 </svelte:head>
 
 {#if pageError}
-  <main class="flex h-full items-center justify-center bg-term-bg px-4 text-term-fg">
+  <main class="bg-term-bg text-term-fg flex h-full items-center justify-center px-4">
     <div class="max-w-lg text-center">
       <h1 class="text-lg font-medium">{pageError}</h1>
       {#if unreachable}
-        <p class="mt-2 text-sm text-term-fg-muted">The page will retry when the backend reconnects.</p>
+        <p class="text-term-fg-muted mt-2 text-sm">
+          The page will retry when the backend reconnects.
+        </p>
       {/if}
-      <a href="/" class="mt-4 inline-block text-term-accent underline underline-offset-4">Back to sessions</a>
+      <a href="/" class="text-term-accent mt-4 inline-block underline underline-offset-4"
+        >Back to sessions</a
+      >
     </div>
   </main>
 {:else if loading && !workspace}
-  <main class="h-full overflow-y-auto bg-term-bg p-4 text-term-fg sm:p-6" aria-busy="true">
+  <main class="bg-term-bg text-term-fg h-full overflow-y-auto p-4 sm:p-6" aria-busy="true">
     <div class="mx-auto max-w-4xl animate-pulse space-y-4" aria-label="Loading workspace">
-      <div class="h-6 w-40 bg-term-bg-secondary"></div>
-      <div class="h-24 border border-term-border bg-term-bg-secondary/50"></div>
-      <div class="h-48 border border-term-border bg-term-bg-secondary/50"></div>
+      <div class="bg-term-bg-secondary h-6 w-40"></div>
+      <div class="border-term-border bg-term-bg-secondary/50 h-24 border"></div>
+      <div class="border-term-border bg-term-bg-secondary/50 h-48 border"></div>
     </div>
   </main>
 {:else if workspace}
-  <main class="h-full overflow-y-auto bg-term-bg px-4 py-5 text-term-fg sm:px-6 sm:py-7">
+  <main class="bg-term-bg text-term-fg h-full overflow-y-auto px-4 py-5 sm:px-6 sm:py-7">
     <div class="mx-auto max-w-4xl">
-      <header class="flex flex-wrap items-start justify-between gap-4 border-b border-term-border pb-5">
+      <header
+        class="border-term-border flex flex-wrap items-start justify-between gap-4 border-b pb-5"
+      >
         <div class="min-w-0">
           <a
             href={`/sessions/${workspace.session_id}`}
-            class="text-xs text-term-fg-muted underline underline-offset-4 hover:text-term-accent"
+            class="text-term-fg-muted hover:text-term-accent text-xs underline underline-offset-4"
           >
             Back to session
           </a>
           <h1 class="mt-3 text-xl font-medium">Workspace</h1>
-          <p class="mt-1 break-all font-mono text-xs text-term-fg-muted">{workspace.workspace_id}</p>
+          <p class="text-term-fg-muted mt-1 font-mono text-xs break-all">
+            {workspace.workspace_id}
+          </p>
         </div>
         <WorkspaceLifecycleBadge {workspace} />
       </header>
 
-      <section class="border-b border-term-border py-5" aria-labelledby="lifecycle-heading">
+      <section class="border-term-border border-b py-5" aria-labelledby="lifecycle-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 id="lifecycle-heading" class="text-base font-medium">Lifecycle</h2>
-            <p class="mt-1 text-sm text-term-fg-muted">
+            <p class="text-term-fg-muted mt-1 text-sm">
               Desired <span class="text-term-fg">{workspace.desired_state}</span>
               <span class="px-1">·</span>
               Observed <span class="text-term-fg">{workspace.observed_state}</span>
@@ -152,7 +176,7 @@
           <div class="flex flex-wrap gap-2">
             <button
               type="button"
-              class="border border-term-border px-3 py-2 text-sm text-term-fg hover:border-term-accent hover:text-term-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent disabled:cursor-not-allowed disabled:opacity-50"
+              class="border-term-border text-term-fg hover:border-term-accent hover:text-term-accent focus-visible:outline-term-accent border px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isBusy || workspace.observed_state !== 'running'}
               onclick={() => runAction('suspend')}
               aria-busy={pendingAction === 'suspend'}
@@ -161,7 +185,15 @@
             </button>
             <button
               type="button"
-              class="border border-term-accent bg-term-accent/10 px-3 py-2 text-sm text-term-accent hover:bg-term-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent disabled:cursor-not-allowed disabled:opacity-50"
+              class="border-term-red/60 text-term-red hover:border-term-red focus-visible:outline-term-red border px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 disabled:opacity-50"
+              disabled={isBusy}
+              onclick={() => runAction('delete')}
+            >
+              {pendingAction === 'delete' ? 'Deleting…' : 'Delete workspace'}
+            </button>
+            <button
+              type="button"
+              class="border-term-accent bg-term-accent/10 text-term-accent hover:bg-term-accent/20 focus-visible:outline-term-accent border px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isBusy || workspace.observed_state !== 'suspended'}
               onclick={() => runAction('resume')}
               aria-busy={pendingAction === 'resume'}
@@ -170,7 +202,7 @@
             </button>
             <button
               type="button"
-              class="border border-term-border px-3 py-2 text-sm text-term-fg-muted hover:border-term-accent hover:text-term-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent disabled:cursor-not-allowed disabled:opacity-50"
+              class="border-term-border text-term-fg-muted hover:border-term-accent hover:text-term-accent focus-visible:outline-term-accent border px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isBusy}
               onclick={() => runAction('refresh')}
               aria-busy={pendingAction === 'refresh'}
@@ -181,26 +213,32 @@
         </div>
 
         {#if actionError}
-          <p class="mt-3 border-l-2 border-term-yellow px-3 py-2 text-sm text-term-yellow" role="alert">
+          <p
+            class="border-term-yellow text-term-yellow mt-3 border-l-2 px-3 py-2 text-sm"
+            role="alert"
+          >
             {actionError}
           </p>
         {:else if failedCondition}
-          <p class="mt-3 border-l-2 border-term-red px-3 py-2 text-sm text-term-red" role="alert">
+          <p class="border-term-red text-term-red mt-3 border-l-2 px-3 py-2 text-sm" role="alert">
             {failedCondition.message}
           </p>
         {:else if operationCondition?.status === 'Unknown'}
-          <p class="mt-3 border-l-2 border-term-yellow px-3 py-2 text-sm text-term-yellow" role="status">
+          <p
+            class="border-term-yellow text-term-yellow mt-3 border-l-2 px-3 py-2 text-sm"
+            role="status"
+          >
             {operationCondition.message}
           </p>
         {/if}
 
         {#if workspace.snapshot_ref}
-          <p class="mt-3 break-all text-xs text-term-fg-muted">
+          <p class="text-term-fg-muted mt-3 text-xs break-all">
             Last observed snapshot: <code class="text-term-fg">{workspace.snapshot_ref}</code>
           </p>
         {/if}
         {#if workspace.last_transition}
-          <p class="mt-2 text-xs text-term-fg-muted">
+          <p class="text-term-fg-muted mt-2 text-xs">
             Last transition: {workspace.last_transition.from_state ?? 'new'} →
             {workspace.last_transition.to_state} · {workspace.last_transition.reason} ·
             {formatTime(workspace.last_transition.occurred_at)}
@@ -208,17 +246,19 @@
         {/if}
       </section>
 
-      <section class="border-b border-term-border py-5" aria-labelledby="conditions-heading">
+      <section class="border-term-border border-b py-5" aria-labelledby="conditions-heading">
         <h2 id="conditions-heading" class="text-base font-medium">Conditions</h2>
         {#if workspace.conditions.length}
-          <ul class="mt-3 divide-y divide-term-border">
+          <ul class="divide-term-border mt-3 divide-y">
             {#each workspace.conditions as condition (condition.type)}
               <li class="grid gap-1 py-3 sm:grid-cols-[10rem_6rem_minmax(0,1fr)] sm:gap-3">
                 <span class="text-sm">{condition.type}</span>
-                <span class="text-xs font-medium {conditionColor(condition.status)}">{condition.status}</span>
+                <span class="text-xs font-medium {conditionColor(condition.status)}"
+                  >{condition.status}</span
+                >
                 <div class="min-w-0">
-                  <p class="break-words text-sm">{condition.message}</p>
-                  <p class="mt-1 break-words text-xs text-term-fg-muted">
+                  <p class="text-sm break-words">{condition.message}</p>
+                  <p class="text-term-fg-muted mt-1 text-xs break-words">
                     {condition.reason} · {formatTime(condition.last_transition_time)}
                   </p>
                 </div>
@@ -226,19 +266,21 @@
             {/each}
           </ul>
         {:else}
-          <p class="mt-3 text-sm text-term-fg-muted">No lifecycle conditions have been reported.</p>
+          <p class="text-term-fg-muted mt-3 text-sm">No lifecycle conditions have been reported.</p>
         {/if}
       </section>
 
       <section class="py-5" aria-labelledby="manifest-heading">
-        <div class="border-b border-term-border pb-3">
+        <div class="border-term-border border-b pb-3">
           <h2 id="manifest-heading" class="text-base font-medium">Workspace manifest</h2>
-          <p class="mt-1 text-xs text-term-fg-muted">Declarative intent; these settings do not provision resources yet.</p>
+          <p class="text-term-fg-muted mt-1 text-xs">
+            Project settings applied to this branch workspace.
+          </p>
         </div>
         <dl class="grid gap-x-6 sm:grid-cols-2">
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">Repository</dt>
-            <dd class="mt-1 break-all text-sm">
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Repository</dt>
+            <dd class="mt-1 text-sm break-all">
               {#if workspace.manifest.repo_url}
                 <a
                   href={workspace.manifest.repo_url}
@@ -253,29 +295,77 @@
               {/if}
             </dd>
           </div>
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">Branch</dt>
-            <dd class="mt-1 break-all font-mono text-sm">{workspace.manifest.branch}</dd>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Branch</dt>
+            <dd class="mt-1 font-mono text-sm break-all">{workspace.manifest.branch}</dd>
           </div>
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">Agent kinds</dt>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Agent kinds</dt>
             <dd class="mt-1 text-sm">{formatList(workspace.manifest.agent_kinds)}</dd>
           </div>
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">Resource class</dt>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Resource class</dt>
             <dd class="mt-1 font-mono text-sm">{workspace.manifest.resource_class}</dd>
           </div>
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">Skills (references)</dt>
-            <dd class="mt-1 break-words text-sm">{formatList(workspace.manifest.skills)}</dd>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Idle timeout</dt>
+            <dd class="mt-1 text-sm">
+              {workspace.manifest.dev?.idle_timeout_minutes ?? 'Not configured'} minutes
+            </dd>
           </div>
-          <div class="border-b border-term-border py-3">
-            <dt class="text-xs text-term-fg-muted">MCP servers (references)</dt>
-            <dd class="mt-1 break-words text-sm">{formatList(workspace.manifest.mcp_servers)}</dd>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Last activity</dt>
+            <dd class="mt-1 text-sm">
+              {workspace.last_activity_at ? formatTime(workspace.last_activity_at) : 'Not recorded'}
+            </dd>
           </div>
-          <div class="border-b border-term-border py-3 sm:col-span-2">
-            <dt class="text-xs text-term-fg-muted">Egress host allowlist</dt>
-            <dd class="mt-1 break-words font-mono text-sm">{formatList(workspace.manifest.egress_allowlist)}</dd>
+          {#if workspace.manifest.dev}
+            <div class="border-term-border border-b py-3">
+              <dt class="text-term-fg-muted text-xs">Development image</dt>
+              <dd class="mt-1 font-mono text-sm break-all">
+                {workspace.manifest.dev.image ?? workspace.manifest.dev.devcontainer_ref}
+              </dd>
+            </div>
+            <div class="border-term-border border-b py-3">
+              <dt class="text-term-fg-muted text-xs">Actor template</dt>
+              <dd class="mt-1 font-mono text-sm">
+                {workspace.manifest.dev.actor_template ?? 'Default project template'}
+              </dd>
+            </div>
+            <div class="border-term-border border-b py-3 sm:col-span-2">
+              <dt class="text-term-fg-muted text-xs">Services</dt>
+              <dd class="mt-1 text-sm break-words">
+                {workspace.manifest.dev.services.length
+                  ? workspace.manifest.dev.services
+                      .map((service) => `${service.name} (${service.image})`)
+                      .join(', ')
+                  : 'None declared'}
+              </dd>
+            </div>
+            <div class="border-term-border border-b py-3 sm:col-span-2">
+              <dt class="text-term-fg-muted text-xs">Preview ports</dt>
+              <dd class="mt-1 text-sm break-words">
+                {workspace.manifest.dev.ports.length
+                  ? workspace.manifest.dev.ports
+                      .map((port) => `${port.name}: ${port.number}/${port.protocol}`)
+                      .join(', ')
+                  : 'None declared'}
+              </dd>
+            </div>
+          {/if}
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">Skills (references)</dt>
+            <dd class="mt-1 text-sm break-words">{formatList(workspace.manifest.skills)}</dd>
+          </div>
+          <div class="border-term-border border-b py-3">
+            <dt class="text-term-fg-muted text-xs">MCP servers (references)</dt>
+            <dd class="mt-1 text-sm break-words">{formatList(workspace.manifest.mcp_servers)}</dd>
+          </div>
+          <div class="border-term-border border-b py-3 sm:col-span-2">
+            <dt class="text-term-fg-muted text-xs">Egress host allowlist</dt>
+            <dd class="mt-1 font-mono text-sm break-words">
+              {formatList(workspace.manifest.egress_allowlist)}
+            </dd>
           </div>
         </dl>
       </section>

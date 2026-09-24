@@ -47,10 +47,13 @@ class WorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             {
                 ("/workspaces", "GET"),
+                ("/workspaces", "POST"),
                 ("/workspaces/{workspace_id}", "GET"),
+                ("/workspaces/{workspace_id}", "DELETE"),
                 ("/workspaces/{workspace_id}/suspend", "POST"),
                 ("/workspaces/{workspace_id}/resume", "POST"),
                 ("/workspaces/{workspace_id}/refresh", "POST"),
+                ("/workspaces/{workspace_id}/touch", "POST"),
             }.issubset(route_methods)
         )
 

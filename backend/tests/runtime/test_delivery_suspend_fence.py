@@ -44,6 +44,8 @@ class FakeConnection:
     async def execute(self, query, *_args):
         if "INSERT INTO native_deliveries" in query:
             self.events.append("delivery-insert")
+        elif "UPDATE workspace_lifecycles" in query:
+            self.events.append("activity-touch")
 
 
 def fake_connection(connection):
@@ -93,6 +95,7 @@ class DeliverySuspendFenceTests(unittest.IsolatedAsyncioTestCase):
                 "lifecycle-read",
                 "message-insert",
                 "delivery-insert",
+                "activity-touch",
                 "commit",
             ],
         )

@@ -3,7 +3,7 @@
 import ipaddress
 import re
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, ConfigDict, Field, StrictStr, field_validator
@@ -52,8 +52,78 @@ class WorkspaceObservedState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class WorkspacePort(WorkspaceContractModel):
+    name: Annotated[StrictStr, Field(min_length=1, pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    number: Annotated[int, Field(ge=1, le=65535, strict=True)]
+    protocol: Literal["http"] = "http"
+
+
+class WorkspaceService(WorkspaceContractModel):
+    name: Annotated[StrictStr, Field(min_length=1, pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    image: Annotated[StrictStr, Field(min_length=1)]
+    env: dict[StrictStr, StrictStr] = Field(default_factory=dict)
+    ports: tuple[Annotated[int, Field(ge=1, le=65535, strict=True)], ...] = ()
+
+    @field_validator("ports", mode="before")
+    @classmethod
+    def parse_json_ports(cls, values):
+        return tuple(values) if isinstance(values, list) else values
+
+    @field_validator("ports")
+    @classmethod
+    def unique_ports(cls, values: tuple[int, ...]) -> tuple[int, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("service ports must be unique")
+        return values
+
+
+class WorkspaceDev(WorkspaceContractModel):
+    image: Annotated[StrictStr, Field(min_length=1)] | None = None
+    devcontainer_ref: Annotated[StrictStr, Field(min_length=1)] | None = None
+    actor_template: (
+        Annotated[StrictStr, Field(pattern=r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")]
+        | None
+    ) = None
+    services: tuple[WorkspaceService, ...] = ()
+    ports: tuple[WorkspacePort, ...] = ()
+    idle_timeout_minutes: Annotated[int, Field(ge=1, le=1440, strict=True)] = 30
+
+    @field_validator("services", "ports", mode="before")
+    @classmethod
+    def parse_json_collections(cls, values):
+        return tuple(values) if isinstance(values, list) else values
+
+    @field_validator("image", "devcontainer_ref")
+    @classmethod
+    def validate_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("image and devcontainer_ref must not be blank")
+        return value
+
+    @field_validator("services")
+    @classmethod
+    def unique_service_names(
+        cls, values: tuple[WorkspaceService, ...]
+    ) -> tuple[WorkspaceService, ...]:
+        names = [service.name for service in values]
+        if len(names) != len(set(names)):
+            raise ValueError("service names must be unique")
+        return values
+
+    @field_validator("ports")
+    @classmethod
+    def unique_port_names_and_numbers(
+        cls, values: tuple[WorkspacePort, ...]
+    ) -> tuple[WorkspacePort, ...]:
+        names = [port.name for port in values]
+        numbers = [port.number for port in values]
+        if len(names) != len(set(names)) or len(numbers) != len(set(numbers)):
+            raise ValueError("workspace port names and numbers must be unique")
+        return values
+
+
 class WorkspaceManifest(WorkspaceContractModel):
-    """Declarative workspace policy. It is stored and displayed, not provisioned yet."""
+    """Declarative workspace policy and dev environment settings."""
 
     repo_url: StrictStr | None = None
     branch: Annotated[StrictStr, Field(min_length=1)]
@@ -62,6 +132,16 @@ class WorkspaceManifest(WorkspaceContractModel):
     mcp_servers: tuple[Annotated[StrictStr, Field(min_length=1)], ...] = ()
     egress_allowlist: tuple[Annotated[StrictStr, Field(min_length=1)], ...] = ()
     resource_class: Annotated[StrictStr, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    dev: WorkspaceDev | None = None
+
+    @field_validator("dev")
+    @classmethod
+    def require_image_source(cls, value: WorkspaceDev | None) -> WorkspaceDev | None:
+        if value is not None and (value.image is None) == (
+            value.devcontainer_ref is None
+        ):
+            raise ValueError("dev requires exactly one of image or devcontainer_ref")
+        return value
 
     @field_validator("repo_url")
     @classmethod
@@ -179,5 +259,6 @@ class WorkspaceLifecycle(WorkspaceContractModel):
     last_transition: WorkspaceTransition | None = None
     operation_id: WorkspaceIdentifier | None = None
     snapshot_ref: WorkspaceIdentifier | None = None
+    last_activity_at: AwareDatetime | None = None
     ownership_generation: Annotated[int, Field(ge=1, strict=True)] = 1
     updated_at: AwareDatetime

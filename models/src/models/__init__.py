@@ -42,9 +42,12 @@ from models.workspace import (
     WorkspaceCondition,
     WorkspaceConditionStatus,
     WorkspaceDesiredState,
+    WorkspaceDev,
     WorkspaceLifecycle,
     WorkspaceManifest,
     WorkspaceObservedState,
+    WorkspacePort,
+    WorkspaceService,
     WorkspaceTransition,
 )
 
@@ -91,8 +94,11 @@ __all__ += [
     "WorkspaceCondition",
     "WorkspaceConditionStatus",
     "WorkspaceDesiredState",
+    "WorkspaceDev",
     "WorkspaceLifecycle",
     "WorkspaceManifest",
     "WorkspaceObservedState",
+    "WorkspacePort",
+    "WorkspaceService",
     "WorkspaceTransition",
 ]

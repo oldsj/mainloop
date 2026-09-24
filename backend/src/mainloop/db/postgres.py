@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS workspace_bindings (
     atespace TEXT NOT NULL,
     actor_name TEXT NOT NULL,
     actor_template TEXT NOT NULL,
+    shim_token_secret_name TEXT,
     native_session_id TEXT,
     preview_route TEXT,
     runtime_endpoint TEXT,
@@ -256,9 +257,12 @@ CREATE TABLE IF NOT EXISTS workspace_lifecycles (
     last_transition JSONB,
     operation_id TEXT,
     snapshot_ref TEXT,
+    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE workspace_bindings ADD COLUMN IF NOT EXISTS shim_token_secret_name TEXT;
+ALTER TABLE workspace_lifecycles ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (

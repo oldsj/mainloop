@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.runtime import workspace_adapter
 from mainloop.runtime.agent_api import hash_token, token_for
 from mainloop.runtime.journal import completed_turns, parse_journal
 from mainloop.runtime.standing import content_hash
@@ -238,10 +239,14 @@ async def _record_delivery_message(
     async with db.connection() as conn:
         async with conn.transaction():
             binding = await conn.fetchrow(
-                """SELECT workspace_id FROM workspace_bindings
+                """SELECT workspace_id,desired_state FROM workspace_bindings
                    WHERE workspace_id=$1 FOR UPDATE""",
                 session_id,
             )
+            if binding and binding.get("desired_state") == "deleting":
+                raise ValueError(
+                    "The workspace is being deleted; start another workspace."
+                )
             lifecycle = (
                 await conn.fetchrow(
                     """SELECT desired_state, observed_state FROM workspace_lifecycles
@@ -272,6 +277,11 @@ async def _record_delivery_message(
                 state,
                 source,
             )
+            if binding:
+                await conn.execute(
+                    "UPDATE workspace_lifecycles SET last_activity_at=NOW(), updated_at=NOW() WHERE workspace_id=$1",
+                    session_id,
+                )
     return message.id
 
 
@@ -283,6 +293,10 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
     task brief to a fresh child). A ``queued`` delivery is sent by ``sync`` once the agent is idle.
     """
     session = await db.get_session(session_id)
+    # Branch workspace turns touch and wake their actor before the delivery is recorded. Static
+    # agent bindings have no workspace_bindings row and continue through their existing path.
+    if await workspace_adapter.get_workspace(session_id) is not None:
+        await workspace_adapter.touch_workspace(session_id, reason="turn")
     if source == "user" and session.status in ENDED_STATUSES:
         raise ValueError(f"This session is {session.status.value}; start a new one.")
     if source == "user" and session_id in _rotating:
@@ -761,6 +775,7 @@ async def rotate(
 async def reconcile_loop(interval: float = 3.0) -> None:
     """Background mirror for sessions with open work, so replies, reports and rotation do not
     depend on a browser polling."""
+    next_idle_check = 0.0
     while True:
         try:
             async with db.connection() as conn:
@@ -775,6 +790,10 @@ async def reconcile_loop(interval: float = 3.0) -> None:
             for sid in ids:
                 if sid not in _rotating:
                     await sync(sid)
+            loop = asyncio.get_running_loop()
+            if loop.time() >= next_idle_check:
+                await workspace_adapter.suspend_idle_workspaces()
+                next_idle_check = loop.time() + 60.0
         except Exception:
             logger.exception("reconcile loop iteration failed")
         await asyncio.sleep(interval)

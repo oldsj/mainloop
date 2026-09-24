@@ -125,6 +125,12 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up on shutdown."""
+    import asyncio
+
+    task = getattr(app.state, "native_reconcile", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     await db.disconnect()
 
 

@@ -20,7 +20,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -274,6 +274,87 @@ async def resume_workspace(
 ) -> WorkspaceLifecycle:
     return await _request_workspace_state(
         session_id, WorkspaceDesiredState.RUNNING, control=control
+    )
+
+
+async def touch_workspace(workspace_id: str, *, reason: str) -> WorkspaceLifecycle:
+    """Record turn or preview activity and wake a parked workspace when needed."""
+    if reason not in {"turn", "delivery", "preview"}:
+        raise ValueError("reason must be turn, delivery, or preview")
+    lifecycle = await ensure_workspace_lifecycle(workspace_id)
+    if lifecycle is None:
+        raise ContractError(f"no workspace binding for {workspace_id}")
+    async with db.connection() as conn:
+        async with conn.transaction():
+            binding = await conn.fetchrow(
+                "SELECT workspace_id,desired_state FROM workspace_bindings WHERE workspace_id=$1 FOR UPDATE",
+                workspace_id,
+            )
+            if binding is None:
+                raise ContractError(f"no workspace binding for {workspace_id}")
+            if binding.get("desired_state") == "deleting":
+                raise ContractError("The workspace is being deleted.")
+            current = await conn.fetchrow(
+                """SELECT desired_state, observed_state FROM workspace_lifecycles
+                   WHERE workspace_id=$1 FOR UPDATE""",
+                workspace_id,
+            )
+            if current is None:
+                raise ContractError(f"no workspace lifecycle for {workspace_id}")
+            await conn.execute(
+                "UPDATE workspace_lifecycles SET last_activity_at=NOW(), updated_at=NOW() WHERE workspace_id=$1",
+                workspace_id,
+            )
+            should_wake = current["desired_state"] == "suspended" or current[
+                "observed_state"
+            ] in {"suspending", "suspended"}
+    if should_wake:
+        return await resume_workspace(workspace_id)
+    return await get_workspace_lifecycle(workspace_id) or lifecycle
+
+
+async def suspend_idle_workspaces() -> int:
+    """Suspend idle dev workspaces via the normal generation and delivery fence."""
+    async with db.connection() as conn:
+        rows = await conn.fetch(
+            """SELECT l.workspace_id
+               FROM workspace_lifecycles l
+               JOIN sessions s ON s.id=l.workspace_id
+               LEFT JOIN LATERAL (
+                   SELECT MAX(created_at) AS last_delivery_at
+                   FROM native_deliveries WHERE session_id=l.workspace_id
+               ) d ON TRUE
+               WHERE l.desired_state='running' AND l.observed_state='running'
+                 AND l.manifest->'dev' IS NOT NULL
+                 AND COALESCE((l.manifest->'dev'->>'idle_timeout_minutes')::integer, 0) > 0
+                 AND GREATEST(l.last_activity_at, COALESCE(d.last_delivery_at, l.last_activity_at))
+                     < NOW() - ((l.manifest->'dev'->>'idle_timeout_minutes')::integer * INTERVAL '1 minute')"""
+        )
+    suspended = 0
+    for row in rows:
+        try:
+            result = await suspend_workspace_if_idle(row["workspace_id"])
+            if result is not None:
+                suspended += 1
+        except ContractError:
+            # The fenced path records the reason; open deliveries are expected to be skipped.
+            continue
+        except Exception:
+            logger.exception(
+                "Idle workspace suspend failed for %s", row["workspace_id"]
+            )
+    return suspended
+
+
+async def suspend_workspace_if_idle(
+    workspace_id: str, *, control: SubstrateControl | None = None
+) -> WorkspaceLifecycle | None:
+    """Recheck activity under the workspace row lock before reserving a suspend."""
+    return await _request_workspace_state(
+        workspace_id,
+        WorkspaceDesiredState.SUSPENDED,
+        control=control,
+        only_if_idle=True,
     )
 
 
@@ -570,6 +651,7 @@ def _lifecycle_from_row(row: dict) -> WorkspaceLifecycle:
         ),
         "operation_id": row.get("operation_id"),
         "snapshot_ref": row.get("snapshot_ref"),
+        "last_activity_at": row.get("last_activity_at"),
         "ownership_generation": row["ownership_generation"],
         "updated_at": row["updated_at"],
     }
@@ -593,6 +675,7 @@ def _manifest_from_session(row: dict) -> WorkspaceManifest:
         mcp_servers=(),
         egress_allowlist=(),
         resource_class="default",
+        dev=None,
     )
 
 
@@ -947,7 +1030,9 @@ async def _record_suspend_fence(
 async def _reserve_operation(
     previous: WorkspaceLifecycle,
     desired_state: WorkspaceDesiredState,
-) -> WorkspaceLifecycle:
+    *,
+    only_if_idle: bool = False,
+) -> WorkspaceLifecycle | None:
     at = datetime.now(UTC)
     transitional = (
         WorkspaceObservedState.SUSPENDING
@@ -1001,16 +1086,45 @@ async def _reserve_operation(
     async with db.connection() as conn:
         async with conn.transaction():
             binding = await conn.fetchrow(
-                """SELECT ownership_generation FROM workspace_bindings
+                """SELECT ownership_generation,desired_state FROM workspace_bindings
                    WHERE workspace_id=$1 FOR UPDATE""",
                 previous.workspace_id,
             )
             if binding is None:
                 raise ContractError(f"no workspace binding for {previous.workspace_id}")
+            if binding.get("desired_state") == "deleting":
+                raise ContractError("The workspace is being deleted.")
             if binding["ownership_generation"] != previous.ownership_generation:
                 raise StaleOwnership(
                     f"workspace {previous.workspace_id} changed during lifecycle request"
                 )
+            if only_if_idle:
+                if desired_state != WorkspaceDesiredState.SUSPENDED:
+                    raise ValueError("only_if_idle applies to suspension")
+                dev = previous.manifest.dev
+                if dev is None:
+                    return None
+                activity = await conn.fetchrow(
+                    """SELECT last_activity_at,
+                              (SELECT MAX(created_at) FROM native_deliveries
+                               WHERE session_id=$1) AS last_delivery_at
+                       FROM workspace_lifecycles WHERE workspace_id=$1 FOR UPDATE""",
+                    previous.workspace_id,
+                )
+                if activity is None:
+                    raise ContractError(
+                        f"no workspace lifecycle for {previous.workspace_id}"
+                    )
+                last_active = max(
+                    value
+                    for value in (
+                        activity["last_activity_at"],
+                        activity["last_delivery_at"],
+                    )
+                    if value is not None
+                )
+                if last_active > at - timedelta(minutes=dev.idle_timeout_minutes):
+                    return None
             if desired_state == WorkspaceDesiredState.SUSPENDED:
                 fence_reason = suspend_fence_reason(
                     await _delivery_states(previous.workspace_id, conn=conn)
@@ -1047,7 +1161,8 @@ async def _request_workspace_state(
     desired_state: WorkspaceDesiredState,
     *,
     control: SubstrateControl | None = None,
-) -> WorkspaceLifecycle:
+    only_if_idle: bool = False,
+) -> WorkspaceLifecycle | None:
     control = control or _control()
     async with _lock(workspace_id):
         previous = await ensure_workspace_lifecycle(workspace_id)
@@ -1066,7 +1181,14 @@ async def _request_workspace_state(
         # can be recorded. First attempts persist intent before the first Substrate call.
         had_pending_operation = previous.operation_id is not None
         if not had_pending_operation:
-            previous = await _reserve_operation(previous, desired_state)
+            reserved = (
+                await _reserve_operation(previous, desired_state, only_if_idle=True)
+                if only_if_idle
+                else await _reserve_operation(previous, desired_state)
+            )
+            if reserved is None:
+                return None
+            previous = reserved
 
         try:
             actor = await control.get_actor(row["atespace"], row["actor_name"])
