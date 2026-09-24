@@ -46,6 +46,23 @@ native session/thread id and final message. It permits one in-flight turn per ag
 output file; `GET /run/:id` reports its status and bounded output. `/healthz` and `/readyz` check
 only the shim and workspace. The actor image and these routes still need live proof.
 
+## Substrate runtime
+
+`WORKSPACE_RUNTIME=substrate` selects the native-session transport; `herdr` remains the default.
+`SUBSTRATE_ROUTER_ADDRESS` configures the HTTP CONNECT listener. `SUBSTRATE_ACTOR_BINDINGS` is a
+JSON object keyed by `claude` and `codex`; each entry supplies `atespace`, `actor`, and
+`shim_token_secret_name`. `SUBSTRATE_SHIM_SECRET_NAMESPACE` selects the Secret namespace and
+defaults to `mainloop-control`. The backend reads the Secret's `token` key there and keeps the
+value out of logs and config. Actor names and Secret names stay in deployment config; Mainloop
+attaches only to the named, pre-created actor. A 401 refreshes the cached token and retries
+read/status operations once; a rejected `POST /turn` clears the cache and is never replayed.
+
+The adapter routes turns and status through the authenticated shim, verifies the selected CLI
+credential is installed before starting a session, then mirrors replies and completion from native
+session journals. The shim's bounded `GET /journal` endpoint pages Claude transcripts and Codex
+rollout files. This is fixture-backed transport behavior; it does not add live-proof claims for the
+headless image or its current actors.
+
 ## Earlier real-versus-stand-in inventory (before Round 3)
 
 | Layer                                                                                                                                                                                                                 | Status                                                                                                                                                                   |

@@ -4,7 +4,9 @@
 # No credentials are baked in or fetched during startup; the golden actor reaches readiness
 # without credentials or external network access.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends jq ca-certificates git curl procps ripgrep \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      jq ca-certificates git curl procps ripgrep util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
 # The run-specific Substrate MITM CA is a public trust anchor. BuildKit mounts
@@ -26,7 +28,7 @@ COPY agent-config/mainloop-system.txt /etc/agent-config/mainloop-system.txt
 COPY exec-shim.js /usr/local/bin/exec-shim.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-native-agent \
-    && mkdir -p /work && chown -R agent:agent /work
+    && mkdir -p /work && chown 10001:10001 /work
 ENV EXEC_SHIM=/usr/local/bin/exec-shim.js
 ENV NATIVE_AGENT_LAUNCHER=/usr/local/bin/start-native-agent
 ENV HOME=/home/agent
@@ -36,5 +38,6 @@ ENV EXEC_SHIM_STATE_DIR=/work/repo/.mainloop/exec-shim
 ENV AGENT_SYSTEM_PROMPT_FILE=/etc/agent-config/mainloop-system.txt
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-USER 10001:10001
+# Substrate currently starts actors as root regardless of this image's USER setting.
+USER 0:0
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

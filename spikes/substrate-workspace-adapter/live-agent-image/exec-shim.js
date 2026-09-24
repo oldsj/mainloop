@@ -13,6 +13,10 @@ const MAX_CREDENTIAL_BYTES = 64 * 1024;
 const MAX_JOB_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_RESPONSE_OUTPUT_BYTES = 32 * 1024;
 const MAX_RETURN_EVENTS = 256;
+const MAX_JOURNAL_LINES = 200;
+const MAX_JOURNAL_LINE_BYTES = 1024 * 1024;
+const MAX_JOURNAL_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_JOURNAL_SEARCH_ENTRIES = 100_000;
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
@@ -25,6 +29,15 @@ const STATE_DIR = path.resolve(
 const RUN_DIR = path.join(STATE_DIR, 'runs');
 const TURN_DIR = path.join(STATE_DIR, 'turns');
 const LAUNCHER = process.env.NATIVE_AGENT_LAUNCHER || '/usr/local/bin/start-native-agent';
+
+if (
+  typeof process.getuid === 'function' &&
+  process.getuid() === 0 &&
+  process.env.EXEC_SHIM_TEST_ALLOW_ROOT !== '1'
+) {
+  process.stderr.write('exec-shim refuses to start as UID 0\n');
+  process.exit(1);
+}
 
 for (const directory of [STATE_DIR, RUN_DIR, TURN_DIR]) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -45,6 +58,8 @@ try {
 
 const jobs = new Map();
 const activeTurns = new Map();
+const latestTurns = new Map();
+const turnProcesses = new Map();
 
 function json(res, status, document) {
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(document));
@@ -171,8 +186,12 @@ function loadJobs(directory, kind) {
         atomicJsonWrite(path.join(directory, name), record);
       }
       jobs.set(record.id, { ...record, kind });
-      if (kind === 'turn' && record.blocking && record.agent) {
-        activeTurns.set(record.agent, record.id);
+      if (kind === 'turn' && record.agent) {
+        const previous = latestTurns.get(record.agent);
+        if (!previous || String(record.created_at) > String(previous.created_at)) {
+          latestTurns.set(record.agent, record);
+        }
+        if (record.blocking) activeTurns.set(record.agent, record.id);
       }
     } catch {
       // Ignore an incomplete or corrupt record; it cannot safely be resumed.
@@ -296,6 +315,7 @@ function runChild(job, child, timeoutMs, onStart) {
     if (finalized) return;
     finalized = true;
     if (timedOut) job.status = 'timed_out';
+    else if (job.stop_requested) job.status = 'interrupted';
     else if (spawnError) job.status = 'failed';
     else job.status = code === 0 ? 'completed' : 'failed';
     job.exit_code = code;
@@ -305,6 +325,8 @@ function runChild(job, child, timeoutMs, onStart) {
     if (job.kind === 'turn' && activeTurns.get(job.agent) === job.id) {
       activeTurns.delete(job.agent);
     }
+    if (job.kind === 'turn') turnProcesses.delete(job.id);
+    if (job.finishTurn) job.finishTurn();
   };
   const timer = setTimeout(() => {
     timedOut = true;
@@ -383,6 +405,118 @@ function turnResponse(job) {
     stderr: stderr.text,
     truncated: job.truncated || stderr.truncated
   };
+}
+
+function findJournal(agent, id) {
+  const root =
+    agent === 'claude'
+      ? path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_PATH, '.claude'), 'projects')
+      : path.join(CODEX_HOME_PATH, 'sessions');
+  const expected = agent === 'claude' ? `${id}.jsonl` : null;
+  const stack = [root];
+  let visited = 0;
+  while (stack.length > 0 && visited < MAX_JOURNAL_SEARCH_ENTRIES) {
+    const directory = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EACCES') continue;
+      throw err;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      if (visited > MAX_JOURNAL_SEARCH_ENTRIES) break;
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) stack.push(candidate);
+      else if (
+        entry.isFile() &&
+        (agent === 'claude'
+          ? entry.name === expected
+          : entry.name.startsWith('rollout-') && entry.name.endsWith(`-${id}.jsonl`))
+      )
+        return candidate;
+    }
+  }
+  return null;
+}
+
+async function journalPage(file, from, limit) {
+  const lines = [];
+  let totalLines = 0;
+  let responseBytes = 0;
+  let pending = Buffer.alloc(0);
+  const stream = fs.createReadStream(file);
+  for await (const chunk of stream) {
+    let offset = 0;
+    let boundary;
+    while ((boundary = chunk.indexOf(0x0a, offset)) !== -1) {
+      const part = chunk.subarray(offset, boundary);
+      const line = pending.length ? Buffer.concat([pending, part]) : part;
+      pending = Buffer.alloc(0);
+      if (line.length > MAX_JOURNAL_LINE_BYTES) throw new RangeError('journal line too large');
+      totalLines += 1;
+      const cost = line.length + 24;
+      if (
+        totalLines > from &&
+        totalLines <= from + limit &&
+        responseBytes + cost <= MAX_JOURNAL_RESPONSE_BYTES
+      ) {
+        lines.push({ line: totalLines, text: line.toString('utf8') });
+        responseBytes += cost;
+      }
+      offset = boundary + 1;
+    }
+    if (offset < chunk.length) {
+      const rest = chunk.subarray(offset);
+      pending = pending.length ? Buffer.concat([pending, rest]) : rest;
+      if (pending.length > MAX_JOURNAL_LINE_BYTES) throw new RangeError('journal line too large');
+    }
+  }
+  return { file, total_lines: totalLines, lines };
+}
+
+async function getJournal(req, res) {
+  const query = new URL(req.url, 'http://exec-shim.invalid').searchParams;
+  const agent = query.get('agent');
+  const id = query.get('id');
+  const fromText = query.get('from') || '0';
+  const limitText = query.get('limit') || String(MAX_JOURNAL_LINES);
+  if (
+    (agent !== 'claude' && agent !== 'codex') ||
+    typeof id !== 'string' ||
+    !/^[A-Za-z0-9._:-]{1,256}$/.test(id) ||
+    !/^\d{1,12}$/.test(fromText) ||
+    !/^\d{1,4}$/.test(limitText)
+  ) {
+    res.writeHead(400).end('invalid journal query');
+    return;
+  }
+  const from = Number(fromText);
+  const limit = Number(limitText);
+  if (
+    !Number.isSafeInteger(from) ||
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_JOURNAL_LINES
+  ) {
+    res.writeHead(400).end('invalid journal page');
+    return;
+  }
+  const file = findJournal(agent, id);
+  if (!file) {
+    json(res, 200, { file: null, total_lines: 0, lines: [] });
+    return;
+  }
+  try {
+    json(res, 200, await journalPage(file, from, limit));
+  } catch (err) {
+    if (err instanceof RangeError) {
+      res.writeHead(413).end('journal line too large');
+      return;
+    }
+    res.writeHead(500).end('journal could not be read');
+  }
 }
 
 function workspaceReady() {
@@ -498,7 +632,11 @@ function startTurn(document, res) {
     native_session_id: sessionId || null,
     blocking: true
   });
+  job.completion = new Promise((resolve) => {
+    job.finishTurn = resolve;
+  });
   activeTurns.set(agent, job.id);
+  latestTurns.set(agent, job);
   try {
     const child = spawn(LAUNCHER, [agent, ...(sessionId ? [sessionId] : [])], {
       cwd: WORKSPACE_PATH,
@@ -507,6 +645,7 @@ function startTurn(document, res) {
       detached: true
     });
     runChild(job, child, timeoutMs, (processChild) => {
+      turnProcesses.set(job.id, processChild);
       processChild.stdout.on('data', (chunk) => appendBounded(job, turnEventsPath(job), chunk));
       processChild.stderr.on('data', (chunk) => appendBounded(job, turnStderrPath(job), chunk));
       processChild.stdin.on('error', () => {});
@@ -521,6 +660,70 @@ function startTurn(document, res) {
     saveJob(job);
     json(res, 500, { id: job.id, status: job.status });
   }
+}
+
+function currentTurn(agent, res) {
+  if (agent !== 'claude' && agent !== 'codex') {
+    res.writeHead(400).end('unsupported agent');
+    return;
+  }
+  const job = latestTurns.get(agent);
+  if (!job) {
+    res.writeHead(404).end('no turn');
+    return;
+  }
+  json(res, 200, turnResponse(job));
+}
+
+function agentReady(agent, res) {
+  if (agent !== 'claude' && agent !== 'codex') {
+    res.writeHead(400).end('unsupported agent');
+    return;
+  }
+  const credential = credentialPaths.get(agent === 'claude' ? 'claude-token' : 'codex-auth');
+  try {
+    const stat = fs.statSync(credential);
+    if (stat.isFile() && stat.size > 0) {
+      json(res, 200, { agent, configured: true });
+      return;
+    }
+  } catch {
+    // A missing credential is a readiness failure; never include file contents or paths.
+  }
+  res.writeHead(503).end('agent credential unavailable');
+}
+
+async function stopTurn(document, res) {
+  const agent = document.agent;
+  if (agent !== 'claude' && agent !== 'codex') {
+    res.writeHead(400).end('unsupported agent');
+    return;
+  }
+  const id = activeTurns.get(agent);
+  const child = id && turnProcesses.get(id);
+  const job = id && jobs.get(id);
+  if (!job) {
+    json(res, 200, { status: 'not_running' });
+    return;
+  }
+  if (!child) {
+    // A restored actor can retain an interrupted job record without a live process. The caller
+    // explicitly requested stop, so release the per-agent turn lock without replaying anything.
+    job.status = 'interrupted';
+    job.blocking = false;
+    saveJob(job);
+    activeTurns.delete(agent);
+    json(res, 200, { id, status: job.status });
+    return;
+  }
+  job.stop_requested = true;
+  saveJob(job);
+  killProcessGroup(child, 'SIGTERM');
+  const killTimer = setTimeout(() => killProcessGroup(child, 'SIGKILL'), 500);
+  killTimer.unref();
+  await job.completion;
+  clearTimeout(killTimer);
+  json(res, 200, { id, status: job.status });
 }
 
 function getJob(kind, id, res) {
@@ -616,6 +819,28 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/turn') {
     if (!authorized(req)) return unauthorized(res);
     handleBody(req, res, (document) => startTurn(document, res));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/turn/stop') {
+    if (!authorized(req)) return unauthorized(res);
+    handleBody(req, res, (document) => void stopTurn(document, res));
+    return;
+  }
+  if (req.method === 'GET' && req.url.startsWith('/turn/status?')) {
+    if (!authorized(req)) return unauthorized(res);
+    const query = new URL(req.url, 'http://exec-shim.invalid').searchParams;
+    currentTurn(query.get('agent'), res);
+    return;
+  }
+  if (req.method === 'GET' && req.url.startsWith('/agent/ready?')) {
+    if (!authorized(req)) return unauthorized(res);
+    const query = new URL(req.url, 'http://exec-shim.invalid').searchParams;
+    agentReady(query.get('agent'), res);
+    return;
+  }
+  if (req.method === 'GET' && req.url.startsWith('/journal?')) {
+    if (!authorized(req)) return unauthorized(res);
+    void getJournal(req, res);
     return;
   }
   const match = req.method === 'GET' && req.url.match(/^\/(run|turn)\/([^/?]+)$/);

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const image = path.resolve(__dirname, '../live-agent-image');
 const shim = path.join(image, 'exec-shim.js');
 const launcher = path.join(image, 'bin/start-native-agent');
+const dockerfile = path.join(image, 'Dockerfile');
+const entrypoint = path.join(image, 'entrypoint.sh');
 const fixtures = path.join(__dirname, 'fixtures/native');
 const token = 'fixture-only-shim-token-long-enough-for-testing';
 
@@ -30,6 +32,7 @@ async function startShim(root, extraEnv = {}) {
   const child = spawn(process.execPath, [shimCopy], {
     env: {
       ...process.env,
+      ...(process.getuid() === 0 ? { EXEC_SHIM_TEST_ALLOW_ROOT: '1' } : {}),
       ...extraEnv,
       HOME: home,
       CODEX_HOME: path.join(home, '.codex'),
@@ -61,6 +64,43 @@ async function startShim(root, extraEnv = {}) {
   });
   return { child, port, output: () => output, home, workspace, fakeBin, state };
 }
+
+test('exec shim refuses UID 0 unless its explicit test-only override is set', () => {
+  const source = `Object.defineProperty(process, 'getuid', { value: () => 0 }); require(${JSON.stringify(shim)});`;
+  const result = spawnSync(process.execPath, ['-e', source], {
+    encoding: 'utf8',
+    env: { ...process.env, EXEC_SHIM_TEST_ALLOW_ROOT: '0' }
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /exec-shim refuses to start as UID 0/);
+});
+
+test('actor image prepares its writable paths before dropping root privileges', () => {
+  const imageDockerfile = fs.readFileSync(dockerfile, 'utf8');
+  const imageEntrypoint = fs.readFileSync(entrypoint, 'utf8');
+  assert.ok(imageDockerfile.includes('util-linux'));
+  assert.match(imageDockerfile, /^USER 0:0$/m);
+  const statePreparation = imageEntrypoint.indexOf(
+    'mkdir -p "${HOME}" /work "${EXEC_SHIM_STATE_DIR}"'
+  );
+  const ownership = imageEntrypoint.indexOf('chown -R "${AGENT_UID}:${AGENT_GID}" "${HOME}" /work');
+  const privilegeDrop = imageEntrypoint.indexOf('exec setpriv');
+  const shimStart = imageEntrypoint.indexOf('node "${EXEC_SHIM}"');
+  assert.ok(statePreparation >= 0 && statePreparation < ownership);
+  assert.ok(ownership >= 0 && ownership < privilegeDrop);
+  assert.ok(privilegeDrop >= 0 && privilegeDrop < shimStart);
+  for (const option of [
+    '--reuid "${AGENT_UID}"',
+    '--regid "${AGENT_GID}"',
+    '--init-groups',
+    '--bounding-set=-all',
+    '--no-new-privs'
+  ]) {
+    assert.ok(imageEntrypoint.includes(option), `entrypoint is missing ${option}`);
+  }
+  assert.equal(imageEntrypoint.includes('IS_SANDBOX'), false);
+  assert.equal(imageDockerfile.includes('EXEC_SHIM_TEST_ALLOW_ROOT'), false);
+});
 
 function request(port, method, route, { body, bearer } = {}) {
   return new Promise((resolve, reject) => {
@@ -326,6 +366,148 @@ test('a second concurrent turn for the same agent receives 409 and is not queued
   assert.equal(second.status, 409);
   const result = await waitForJob(running, 'turn', JSON.parse(first.body).id);
   assert.equal(result.status, 'completed');
+});
+
+test('turn status locates the latest turn after it completes', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-status-'));
+  const running = await startShim(root, {
+    CLAUDE_EVENTS: path.join(fixtures, 'claude-stream-json.jsonl')
+  });
+  fakeCli(
+    path.join(running.fakeBin, 'claude'),
+    '#!/bin/sh\ncat >/dev/null\ncat "$CLAUDE_EVENTS"\n'
+  );
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+  await installCredential(running, 'claude-token', 'fixture-claude-token');
+
+  const submitted = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: { agent: 'claude', prompt: 'fixture status prompt' }
+  });
+  assert.equal(submitted.status, 202, submitted.body);
+  const { id } = JSON.parse(submitted.body);
+  const current = await waitForJob(running, 'turn', id);
+  const status = await request(running.port, 'GET', '/turn/status?agent=claude', {
+    bearer: token
+  });
+  assert.equal(status.status, 200, status.body);
+  assert.equal(JSON.parse(status.body).id, id);
+  assert.equal(JSON.parse(status.body).status, 'completed');
+  assert.equal(JSON.parse(status.body).native_session_id, current.native_session_id);
+});
+
+test('agent readiness requires its credential and rejects unauthenticated checks', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-agent-ready-'));
+  const running = await startShim(root);
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+
+  const missing = await request(running.port, 'GET', '/agent/ready?agent=codex', {
+    bearer: token
+  });
+  assert.equal(missing.status, 503);
+  const unauthorized = await request(running.port, 'GET', '/agent/ready?agent=codex');
+  assert.equal(unauthorized.status, 401);
+
+  await installCredential(running, 'codex-auth', '{"auth_mode":"fixture"}');
+  const configured = await request(running.port, 'GET', '/agent/ready?agent=codex', {
+    bearer: token
+  });
+  assert.equal(configured.status, 200, configured.body);
+  assert.deepEqual(JSON.parse(configured.body), { agent: 'codex', configured: true });
+});
+
+test('journal returns bounded numbered pages for Claude and Codex and rejects a bad token', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-journal-'));
+  const running = await startShim(root);
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+
+  const claudeId = 'fixture-claude-session';
+  const claudeFile = path.join(running.home, '.claude', 'projects', 'p1', `${claudeId}.jsonl`);
+  fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
+  fs.writeFileSync(claudeFile, '{"type":"system"}\n{"type":"user"}\n{"type":"assistant"}\npartial');
+  const firstPage = await request(
+    running.port,
+    'GET',
+    `/journal?agent=claude&id=${claudeId}&from=1&limit=1`,
+    { bearer: token }
+  );
+  assert.equal(firstPage.status, 200, firstPage.body);
+  assert.deepEqual(JSON.parse(firstPage.body), {
+    file: claudeFile,
+    total_lines: 3,
+    lines: [{ line: 2, text: '{"type":"user"}' }]
+  });
+  const wrongToken = await request(
+    running.port,
+    'GET',
+    `/journal?agent=claude&id=${claudeId}&from=0`,
+    { bearer: `${token}-wrong` }
+  );
+  assert.equal(wrongToken.status, 401);
+
+  const codexId = 'fixture-codex-thread';
+  const codexFile = path.join(
+    running.home,
+    '.codex',
+    'sessions',
+    '2026',
+    '09',
+    'rollout-2026-09-24T00-00-00-fixture-codex-thread.jsonl'
+  );
+  fs.mkdirSync(path.dirname(codexFile), { recursive: true });
+  fs.writeFileSync(codexFile, '{"type":"thread.started"}\n{"type":"turn.completed"}\n');
+  const codexPage = await request(
+    running.port,
+    'GET',
+    `/journal?agent=codex&id=${codexId}&from=0&limit=1`,
+    { bearer: token }
+  );
+  assert.equal(codexPage.status, 200, codexPage.body);
+  assert.deepEqual(JSON.parse(codexPage.body), {
+    file: codexFile,
+    total_lines: 2,
+    lines: [{ line: 1, text: '{"type":"thread.started"}' }]
+  });
+  assert.equal(running.output().includes(token), false);
+});
+
+test('stop interrupts an in-flight turn and releases its slot', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-stop-'));
+  const running = await startShim(root);
+  fakeCli(path.join(running.fakeBin, 'claude'), '#!/bin/sh\ncat >/dev/null\nsleep 5\n');
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+  await installCredential(running, 'claude-token', 'fixture-claude-token');
+
+  const submitted = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: { agent: 'claude', prompt: 'stop fixture turn' }
+  });
+  assert.equal(submitted.status, 202, submitted.body);
+  const { id } = JSON.parse(submitted.body);
+  const stopped = await request(running.port, 'POST', '/turn/stop', {
+    bearer: token,
+    body: { agent: 'claude' }
+  });
+  assert.equal(stopped.status, 200, stopped.body);
+  assert.equal(JSON.parse(stopped.body).status, 'interrupted');
+  const result = await waitForJob(running, 'turn', id);
+  assert.equal(result.status, 'interrupted');
 });
 
 test('/run executes a command, stores bounded output, and reports timeout', async (t) => {

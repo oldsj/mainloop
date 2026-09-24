@@ -31,6 +31,7 @@ from mainloop.runtime.agent_api import hash_token, token_for
 from mainloop.runtime.herdr import HerdrWorkspace, TransportError, WorkspaceUnavailable
 from mainloop.runtime.journal import completed_turns, parse_journal
 from mainloop.runtime.standing import content_hash
+from mainloop.runtime.substrate_workspace import SubstrateWorkspace
 
 from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
 
@@ -44,7 +45,7 @@ SEND_RECEIPT_GRACE = timedelta(seconds=60)
 DELIVERED_MAX_AGE = timedelta(minutes=30)
 _NS = uuid.UUID("6f0f7f0e-3f1e-4a3c-9d3b-0e4b6f5c2a11")
 _locks: dict[str, asyncio.Lock] = {}
-_workspaces: dict[str, HerdrWorkspace] = {}
+_workspaces: dict[tuple[str, ...], HerdrWorkspace | SubstrateWorkspace] = {}
 _rotating: set[str] = set()
 OPEN_STATES = ("recorded", "sending", "delivered")
 # Ended by the user or by failure. Agent activity never moves a session out of these.
@@ -80,12 +81,50 @@ def is_rotating(session_id: str) -> bool:
     return session_id in _rotating
 
 
-def workspace_for(binding: dict) -> HerdrWorkspace:
-    """One Herdr workspace pod per binding: ``main-0`` for the main thread, else ``workspace-0``."""
+def workspace_for(binding: dict) -> HerdrWorkspace | SubstrateWorkspace:
+    """Select the configured transport and map a native binding to its workspace.
+
+    In Substrate mode, the native kind selects its atespace, actor, and shim Secret from
+    ``SUBSTRATE_ACTOR_BINDINGS``. No actor identity is inferred from a session or binding.
+    Herdr's existing pod mapping remains the default and is unchanged.
+    """
+    if settings.workspace_runtime == "substrate":
+        agent = binding["kind"]
+        actor_binding = settings.substrate_actor_bindings.get(agent)
+        if actor_binding is None:
+            raise RuntimeError(
+                f"no Substrate actor binding is configured for native agent {agent}"
+            )
+        atespace = actor_binding.atespace
+        actor = actor_binding.actor
+        key = (
+            "substrate",
+            atespace,
+            actor,
+            actor_binding.shim_token_secret_name,
+            binding["kind"],
+        )
+        if key not in _workspaces:
+            _workspaces[key] = SubstrateWorkspace(
+                atespace=atespace,
+                actor=actor,
+                agent=agent,
+                shim_token_secret_name=actor_binding.shim_token_secret_name,
+                native_session_id=binding.get("native_session_id"),
+            )
+        workspace = _workspaces[key]
+        if not isinstance(workspace, SubstrateWorkspace):
+            raise RuntimeError("workspace cache has an incompatible Substrate entry")
+        workspace.set_native_session_id(binding.get("native_session_id"))
+        return workspace
     pod = binding.get("pod") or settings.workspace_pod
-    if pod not in _workspaces:
-        _workspaces[pod] = HerdrWorkspace(pod=pod)
-    return _workspaces[pod]
+    key = ("herdr", pod)
+    if key not in _workspaces:
+        _workspaces[key] = HerdrWorkspace(pod=pod)
+    workspace = _workspaces[key]
+    if not isinstance(workspace, HerdrWorkspace):
+        raise RuntimeError("workspace cache has an incompatible Herdr entry")
+    return workspace
 
 
 def rotation_due(
@@ -768,7 +807,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         ready, uid = pod.ready, pod.uid
         if ready:
             live = (await ws.agent_status(binding["agent_name"])) is not None
-    except TransportError as exc:
+    except (TransportError, WorkspaceUnavailable) as exc:
         note = f"workspace unreachable: {exc}"
     if any(d.state == "uncertain" for d in deliveries):
         note = "delivery unknown: the last prompt was not replayed; check the reply, then send again if needed"

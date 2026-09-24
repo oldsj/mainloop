@@ -1,9 +1,20 @@
 """Configuration management."""
 
+from typing import Literal
 from urllib.parse import quote_plus
 
-from pydantic import computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class SubstrateActorBinding(BaseModel):
+    """Deployment-provided route and token Secret for one pre-created actor."""
+
+    atespace: str
+    actor: str
+    shim_token_secret_name: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class Settings(BaseSettings):
@@ -36,6 +47,18 @@ class Settings(BaseSettings):
     main_pod: str = (
         "main-0"  # pod that runs the native main thread (scratch cwd, no repo)
     )
+
+    # Native-session workspace transport. Herdr remains the default; Substrate attaches to
+    # pre-created actors through the CONNECT router and never creates or resumes actors itself.
+    workspace_runtime: Literal["herdr", "substrate"] = "herdr"
+    substrate_router_address: str = (
+        "http://atenet-router.ate-system.svc.cluster.local:8081"
+    )
+    substrate_shim_secret_namespace: str = "mainloop-control"
+    substrate_actor_bindings: dict[
+        Literal["claude", "codex"], SubstrateActorBinding
+    ] = Field(default_factory=dict)
+    substrate_resume_timeout_seconds: float = 120.0
 
     # Substrate workspace-runtime adapter (bounded integration spike; see
     # docs/architecture/native-agent-inventory.md and .tasknotes/plan.md). Empty
