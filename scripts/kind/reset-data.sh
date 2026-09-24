@@ -1,24 +1,11 @@
 #!/usr/bin/env bash
-# Reset database and k8s task namespaces
+# Reset the local development database
 set -euo pipefail
 
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-mainloop-test}"
 CONTEXT="kind-${CLUSTER_NAME}"
 
 echo "=== Using context: ${CONTEXT} ==="
-
-echo "=== Cleaning up k8s task namespaces ==="
-# Delete all task-* namespaces (legacy worker workflows)
-for ns in $(kubectl --context "${CONTEXT}" get ns -o name 2>/dev/null | grep "^namespace/task-" | cut -d/ -f2); do
-  echo "Deleting namespace: ${ns}"
-  kubectl --context "${CONTEXT}" delete ns "${ns}" --wait=false 2>/dev/null || true
-done
-
-# Delete all mainloop-session-* namespaces (session workers)
-for ns in $(kubectl --context "${CONTEXT}" get ns -o name 2>/dev/null | grep "^namespace/mainloop-session-" | cut -d/ -f2); do
-  echo "Deleting namespace: ${ns}"
-  kubectl --context "${CONTEXT}" delete ns "${ns}" --wait=false 2>/dev/null || true
-done
 
 echo "=== Resetting database ==="
 # Drop both public and dbos schemas to fully reset state

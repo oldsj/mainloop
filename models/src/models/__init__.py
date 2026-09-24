@@ -1,6 +1,5 @@
 """Shared Pydantic models for mainloop."""
 
-from models.agent import AgentResponse, AgentTask
 from models.conversation import Conversation, Message
 from models.native_agent import (
     AttentionItem,
@@ -53,8 +52,6 @@ __all__ = [
     # Existing
     "Conversation",
     "Message",
-    "AgentTask",
-    "AgentResponse",
     # Session models
     "Session",
     "SessionCreate",

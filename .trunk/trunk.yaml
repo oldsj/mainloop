@@ -36,7 +36,6 @@ lint:
         - backend/src/mainloop/config.py
         - backend/src/mainloop/db/postgres.py
         - backend/src/mainloop/services/github_pr.py
-        - claude-agent/server.py
     # DL3008: Pinning apt versions causes build failures when versions are removed from repos
     # Terrascan Docker checks have platform differences (Linux vs macOS) and false positives
     # for multi-stage builds with --chown flags

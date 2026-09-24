@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all setup-claude-creds setup-claude-creds-k8s build-backend build-frontend build-agent-controller build-all push-backend push-frontend push-agent-controller push-all build-all-parallel push-all-parallel deploy deploy-loop deploy-loop-all deploy-backend deploy-agent deploy-frontend-k8s deploy-manifests prod-reset kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel deploy deploy-loop deploy-loop-all deploy-backend deploy-frontend-k8s deploy-manifests prod-reset kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -11,7 +11,6 @@ GHCR_USER ?= yourusername
 IMAGE_TAG ?= latest
 BACKEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-backend:$(IMAGE_TAG)
 FRONTEND_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-frontend:$(IMAGE_TAG)
-AGENT_CONTROLLER_IMAGE := $(GHCR_REGISTRY)/$(GHCR_USER)/mainloop-agent-controller:$(IMAGE_TAG)
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -26,7 +25,7 @@ dev: ## Start dev environment with hot reload (DevSpace + Kind)
 dev-stop: ## Stop DevSpace and purge resources
 	devspace purge --kube-context kind-$(KIND_CLUSTER_NAME) -n mainloop
 
-dev-reset: ## Reset ALL data (database + task namespaces + restart backend)
+dev-reset: ## Reset local database and restart the backend
 	@./scripts/kind/reset-data.sh
 
 dev-clear-cache: ## Clear Vite cache (fixes stale HMR issues)
@@ -70,72 +69,6 @@ fmt-all: ## Format and fix all files
 	trunk fmt -a
 	trunk check -a -y
 
-setup-claude-creds: ## Login to Claude inside Linux container, credentials saved to shared volume
-	@echo "=== Claude Container Login ==="
-	@echo "This will start a container where you can login to Claude."
-	@echo "Credentials will be saved to the 'claude-config' Docker volume."
-	@echo ""
-	@docker build -q -t mainloop-claude-agent ./claude-agent > /dev/null
-	@docker volume create claude-config > /dev/null 2>&1 || true
-	@docker rm -f claude-login-tmp > /dev/null 2>&1 || true
-	@docker run -d --entrypoint "" --name claude-login-tmp \
-		-v claude-config:/home/claude/.claude \
-		mainloop-claude-agent sleep 3600 > /dev/null
-	@echo "Container started with shared claude-config volume."
-	@echo "Run: claude login"
-	@echo "Complete the browser OAuth flow, then type 'exit'"
-	@echo ""
-	@docker exec -it claude-login-tmp bash; \
-	echo ""; \
-	echo "Checking credentials..."; \
-	if docker exec claude-login-tmp test -f /home/claude/.claude/.credentials.json; then \
-		echo "✓ Credentials saved to claude-config volume"; \
-		echo "  All containers mounting this volume will have access."; \
-	else \
-		echo "⚠ No credentials found. Did you complete the login?"; \
-	fi; \
-	docker rm -f claude-login-tmp > /dev/null
-
-setup-claude-creds-mac: ## Extract Claude credentials from macOS Keychain (Mac only)
-	@echo "Extracting Claude credentials from macOS Keychain..."
-	@CREDS=$$(security find-generic-password -s "Claude Code-credentials" -a "$(USER)" -w 2>/dev/null); \
-	if [ -z "$$CREDS" ]; then \
-		echo "Error: Claude credentials not found in Keychain."; \
-		echo "Make sure you're logged in to Claude Code on this Mac."; \
-		exit 1; \
-	fi; \
-	if [ -f .env ]; then \
-		echo "Updating CLAUDE_CREDENTIALS in .env (preserving other variables)..."; \
-		grep -v "^CLAUDE_CREDENTIALS=" .env > .env.tmp || true; \
-		mv .env.tmp .env; \
-	else \
-		echo "Creating .env file..."; \
-		touch .env; \
-	fi; \
-	echo "CLAUDE_CREDENTIALS=$$CREDS" >> .env; \
-	echo "✓ Claude credentials updated in .env"
-
-setup-claude-creds-k8s: ## Push Claude credentials from Docker volume to 1Password for k8s
-	@echo "Extracting credentials from Docker volume and pushing to 1Password..."
-	@if ! command -v op >/dev/null 2>&1; then \
-		echo "Error: 1Password CLI (op) not found."; \
-		echo "Install it: brew install --cask 1password-cli"; \
-		exit 1; \
-	fi; \
-	docker run --rm -v claude-config:/config:ro alpine cat /config/.credentials.json > /tmp/claude-creds.json 2>/dev/null; \
-	if [ ! -s /tmp/claude-creds.json ]; then \
-		echo "Error: No credentials in claude-config volume"; \
-		echo "Run 'make setup-claude-creds' first"; \
-		rm -f /tmp/claude-creds.json; \
-		exit 1; \
-	fi; \
-	echo "Creating/updating claude-credentials item in kubernetes vault..."; \
-	op item get claude-credentials --vault kubernetes >/dev/null 2>&1 && \
-		op item delete claude-credentials --vault kubernetes || true; \
-	op document create /tmp/claude-creds.json --title=claude-credentials --vault=kubernetes >/dev/null; \
-	rm -f /tmp/claude-creds.json; \
-	echo "✓ Claude credentials pushed to 1Password vault 'kubernetes'"
-
 # Backend commands
 backend-dev: ## Run backend in development mode
 	cd backend && uv run uvicorn mainloop.api:app --reload --host 0.0.0.0 --port 8000
@@ -151,10 +84,7 @@ build-backend: ## Build backend Docker image
 build-frontend: ## Build frontend Docker image
 	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
 
-build-agent-controller: ## Build agent controller Docker image
-	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent
-
-build-all: build-backend build-frontend build-agent-controller ## Build all Docker images
+build-all: build-backend build-frontend ## Build all Docker images
 
 push-backend: build-backend ## Push backend to GHCR
 	docker push $(BACKEND_IMAGE)
@@ -162,17 +92,13 @@ push-backend: build-backend ## Push backend to GHCR
 push-frontend: build-frontend ## Push frontend to GHCR
 	docker push $(FRONTEND_IMAGE)
 
-push-agent-controller: build-agent-controller ## Push agent controller to GHCR
-	docker push $(AGENT_CONTROLLER_IMAGE)
-
-push-all: push-backend push-frontend push-agent-controller ## Push all images to GHCR
+push-all: push-backend push-frontend ## Push all images to GHCR
 
 # Parallel build + push (much faster)
 build-all-parallel: ## Build all Docker images in parallel
 	@echo "Building all images in parallel..."
 	@docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) . & \
 	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) . & \
-	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent & \
 	wait
 	@echo "All builds complete"
 
@@ -180,7 +106,6 @@ push-all-parallel: build-all-parallel ## Build and push all images in parallel
 	@echo "Pushing all images in parallel..."
 	@docker push $(BACKEND_IMAGE) & \
 	docker push $(FRONTEND_IMAGE) & \
-	docker push $(AGENT_CONTROLLER_IMAGE) & \
 	wait
 	@echo "All pushes complete"
 
@@ -190,7 +115,6 @@ deploy: push-all-parallel ## Full deployment to k8s (parallel builds + pushes)
 	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
 	@echo "Restarting Kubernetes deployments in parallel..."
 	@kubectl rollout restart deployment/mainloop-backend -n mainloop & \
-	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop & \
 	kubectl rollout restart deployment/mainloop-frontend -n mainloop & \
 	wait
 	@echo "Rollouts triggered"
@@ -203,7 +127,7 @@ deploy-loop: ## Pull and deploy every 10 seconds
 	done
 
 deploy-loop-all: ## Watch all and redeploy everything (old behavior)
-	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models -w claude-agent \
+	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models \
 		-e py,ts,svelte,yaml,toml,Dockerfile \
 		-i 'test*' -i '*_test.py' -i 'tests/' -i '__pycache__/' -i '.pytest_cache/' -i 'scripts/' \
 		--on-busy-update restart \
@@ -215,11 +139,6 @@ deploy-backend: ## Build, push, and restart backend only
 	docker push $(BACKEND_IMAGE)
 	kubectl rollout restart deployment/mainloop-backend -n mainloop
 
-deploy-agent: ## Build, push, and restart agent controller only
-	docker build -f claude-agent/Dockerfile -t $(AGENT_CONTROLLER_IMAGE) ./claude-agent
-	docker push $(AGENT_CONTROLLER_IMAGE)
-	kubectl rollout restart deployment/mainloop-agent-controller -n mainloop
-
 deploy-frontend-k8s: ## Build, push, and restart frontend only (k8s version)
 	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
 	docker push $(FRONTEND_IMAGE)
@@ -230,13 +149,8 @@ deploy-manifests: ## Apply k8s manifests only (no image builds)
 
 PROD_CONTEXT ?= admin@internal-01
 
-prod-reset: ## Reset prod database + task namespaces + restart backend
+prod-reset: ## Reset prod database + restart backend
 	@echo "=== Using context: $(PROD_CONTEXT) ==="
-	@echo "=== Cleaning up k8s task namespaces ==="
-	@for ns in $$(kubectl --context $(PROD_CONTEXT) get ns -o name 2>/dev/null | grep "^namespace/task-" | cut -d/ -f2); do \
-		echo "Deleting namespace: $$ns"; \
-		kubectl --context $(PROD_CONTEXT) delete ns "$$ns" --wait=false 2>/dev/null || true; \
-	done
 	@echo "=== Deleting CNPG Database CR ==="
 	kubectl --context $(PROD_CONTEXT) delete database mainloop-db-database -n mainloop --wait=true
 	@echo "=== Recreating Database CR ==="
@@ -293,26 +207,13 @@ test-k8s: kind-create kind-load kind-secrets kind-deploy ## Start local K8s test
 
 test-loop: ## Watch for changes and auto-redeploy to Kind
 	@echo "Starting Kind deploy loop (Ctrl+C to stop)..."
-	@echo "Watching: backend/, frontend/src/, claude-agent/"
+	@echo "Watching: backend/, frontend/src/"
 	@trap 'kill 0' INT; \
 	watchexec -w backend/src -w models -e py \
 		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
 	watchexec -w frontend/src -e ts,svelte,css \
 		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
-	watchexec -w claude-agent -e py \
-		--on-busy-update restart -- bash -c 'make kind-load && make kind-deploy' & \
 	wait
-
-# E2E Testing
-test-k8s-components: ## Test K8s namespace/secret creation (quick)
-	cd backend && uv run python scripts/test_k8s_components.py
-
-test-k8s-job: ## Test K8s job creation (creates a real job)
-	cd backend && uv run python scripts/test_k8s_components.py --job
-
-test-worker-e2e: ## Run full worker E2E test (disabled; ENABLE_E2E=1 to opt in)
-	@./scripts/e2e-guard.sh
-	cd backend && REPO_URL="$(or $(REPO_URL),https://github.com/oldsj/mainloop)" uv run python scripts/test_worker_e2e.py
 
 # =============================================================================
 # Testing (DevSpace + Playwright)
@@ -340,10 +241,6 @@ test-reset: dev-reset ## Alias for dev-reset
 
 test-ci: ## Run tests with legacy kind scripts (disabled; ENABLE_E2E=1 to opt in)
 	@./scripts/e2e-guard.sh
-	@if [ -z "$(CLAUDE_CODE_OAUTH_TOKEN)" ]; then \
-		echo "Error: CLAUDE_CODE_OAUTH_TOKEN not set"; \
-		exit 1; \
-	fi
 	@if ! kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		$(MAKE) kind-create; \
 	fi

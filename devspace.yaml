@@ -3,8 +3,6 @@ name: mainloop
 
 # Variables from .env
 vars:
-  CLAUDE_CODE_OAUTH_TOKEN:
-    source: env
   GITHUB_TOKEN:
     source: env
     default: ''
@@ -34,16 +32,6 @@ images:
       useBuildKit: true
       args:
         - --target=dev
-
-  agent-controller:
-    image: mainloop-agent-controller
-    tags:
-      - dev
-    dockerfile: claude-agent/Dockerfile
-    context: claude-agent
-    rebuildStrategy: ignoreContextChanges
-    docker:
-      useBuildKit: true
 
 # Deployments using Kustomize
 deployments:
@@ -163,32 +151,6 @@ dev:
         value: http://localhost:8081
     logs: {}
 
-  agent-controller:
-    labelSelector:
-      app: mainloop-agent-controller
-    namespace: mainloop
-    devImage: mainloop-agent-controller:dev
-    sync:
-      - path: ./claude-agent:/app
-        excludePaths:
-          - __pycache__/
-          - '*.pyc'
-          - .venv/
-        disableDownload: true
-        onUpload:
-          exec:
-            - name: rebuild-agent-image
-              command: |-
-                echo "[agent] Rebuilding image for Jobs..."
-                docker build -t mainloop-agent-controller:dev claude-agent/ && \
-                kind load docker-image mainloop-agent-controller:dev --name mainloop-test && \
-                echo "[agent] Done - new Jobs will use updated code"
-              local: true
-              onChange: ['*.py']
-    command:
-      - /entrypoint.sh
-    logs: {}
-
 # Hooks for Kind cluster management
 hooks:
   - name: ensure-kind-cluster
@@ -214,7 +176,6 @@ hooks:
       echo "Loading images into Kind..."
       kind load docker-image mainloop-backend:dev --name mainloop-test
       kind load docker-image mainloop-frontend:dev --name mainloop-test
-      kind load docker-image mainloop-agent-controller:dev --name mainloop-test
 
 # Commands
 commands:

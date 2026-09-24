@@ -1,7 +1,6 @@
 """Fixture-only normalization for the native Claude Code stream boundary.
 
-This module deliberately does not import ``claude_agent_sdk`` or start a Claude
-process.  It accepts validated, JSON-shaped observations from a native Claude
+It accepts validated, JSON-shaped observations from a native Claude
 session and maps the observable parts to the provider-neutral runtime contract.
 The fixture envelope supplies the source cursor and raw-evidence reference;
 neither is synthesized from a process identity or a transcript message.
@@ -398,8 +397,6 @@ def binding_from_init(
     *,
     binding_id: str,
     workspace_id: str,
-    herdr_session_id: str,
-    herdr_agent_id: str,
     creation_mode: Literal["created", "attached", "discovered"] = "created",
     ownership_generation: int = 1,
 ) -> NativeBinding:
@@ -417,8 +414,6 @@ def binding_from_init(
             "provider": CLAUDE_PROVIDER,
             "runtime_type": "claude-native-cli",
             "native_session_id": native_session_id,
-            "herdr_session_id": herdr_session_id,
-            "herdr_agent_id": herdr_agent_id,
             "creation_mode": creation_mode,
             "ownership_generation": ownership_generation,
             "observed": _extension(event),

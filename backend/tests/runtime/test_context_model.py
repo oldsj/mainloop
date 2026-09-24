@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from mainloop.runtime import agent_api, policy
 from mainloop.runtime.agent_api import AgentService, hash_token
 from mainloop.runtime.journal import parse_claude
-from mainloop.runtime.native_sessions import config_name, rotation_due
+from mainloop.runtime.native_sessions import rotation_due
 from mainloop.runtime.policy import Actor, PolicyError
 from mainloop.runtime.standing import (
     RecentMessage,
@@ -97,11 +97,6 @@ class RotationTests(unittest.TestCase):
             )
         )
 
-    def test_binding_config_names(self):
-        self.assertEqual(config_name({"role": "main", "kind": "claude"}), "claude-main")
-        self.assertEqual(config_name({"role": "child", "kind": "codex"}), "codex-child")
-        self.assertEqual(config_name({"role": "agent", "kind": "claude"}), "claude")
-
 
 class StandingTests(unittest.TestCase):
     def test_carry_over_is_small_and_lists_topic_index_pending_and_recent(self):
@@ -175,7 +170,7 @@ class JournalUsageTests(unittest.TestCase):
                 ),
             ),
         ]
-        ev = parse_claude(lines, file_ref="f.jsonl", native_id="n", agent="a")
+        ev = parse_claude(lines, file_ref="f.jsonl", native_id="n")
         self.assertEqual([e.context_tokens for e in ev], [None, 20624, None])
         self.assertEqual(ev[2].native_type, "claude.system.compact_boundary")
 

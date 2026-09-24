@@ -34,23 +34,7 @@ class Settings(BaseSettings):
         encoded_password = quote_plus(self.db_password)
         return f"postgresql://{self.db_user}:{encoded_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
-    # Claude
-    claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
-    claude_agent_url: str = "http://claude-agent:8001"
-    claude_workspace: str = "/workspace"
-    claude_model: str = "sonnet"  # Main thread model
-    claude_worker_model: str = "opus"  # Worker model (for background tasks)
-
-    # Native agents under Herdr (workspace pod reached over Kubernetes pod-exec)
-    workspace_namespace: str = "herdr-spike"
-    workspace_pod: str = "workspace-0"
-    main_pod: str = (
-        "main-0"  # pod that runs the native main thread (scratch cwd, no repo)
-    )
-
-    # Native-session workspace transport. Herdr remains the default; Substrate attaches to
-    # pre-created actors through the CONNECT router and never creates or resumes actors itself.
-    workspace_runtime: Literal["herdr", "substrate"] = "herdr"
+    # Native sessions connect to pre-created Substrate actors through the CONNECT router.
     substrate_router_address: str = (
         "http://atenet-router.ate-system.svc.cluster.local:8081"
     )
@@ -60,11 +44,7 @@ class Settings(BaseSettings):
     ] = Field(default_factory=dict)
     substrate_resume_timeout_seconds: float = 120.0
 
-    # Substrate workspace-runtime adapter (bounded integration spike; see
-    # docs/architecture/native-agent-inventory.md and .tasknotes/plan.md). Empty
-    # kubeconfig/context falls back to the ambient kubeconfig. One actor per session
-    # replaces the fixed workspace_namespace/workspace_pod pair above for Substrate-backed
-    # sessions; Herdr pod-exec keeps working unchanged for sessions that are not.
+    # Substrate actor lifecycle control. Empty kubeconfig/context falls back to ambient config.
     substrate_kubeconfig: str = ""
     substrate_context: str = ""
     substrate_atespace: str = "mainloop-workspaces"
@@ -72,8 +52,7 @@ class Settings(BaseSettings):
     substrate_cli: str = "kubectl-ate"
     substrate_preview_base_url: str = ""
 
-    # Native main thread (context model). MAIN_THREAD_MODE=native replaces the SDK chat path.
-    main_thread_mode: str = "sdk"  # sdk | native
+    # Native main thread (context model).
     main_thread_model: str = "sonnet"
     main_thread_effort: str = "medium"
     # Rotation: cut to a fresh native session when the context grew by this many tokens above
@@ -99,15 +78,6 @@ class Settings(BaseSettings):
     def frontend_origin(self) -> str:
         """Construct frontend origin URL from domain."""
         return f"https://{self.frontend_domain}"
-
-    # K8s Job callback URL (internal service URL for Jobs to call back)
-    backend_internal_url: str = (
-        "http://mainloop-backend.mainloop.svc.cluster.local:8000"
-    )
-
-    # Worker image for K8s Jobs (use local image for dev)
-    worker_image: str = "ghcr.io/oldsj/mainloop-agent-controller:latest"
-    worker_image_pull_policy: str = "IfNotPresent"  # Use "Never" for local dev
 
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False

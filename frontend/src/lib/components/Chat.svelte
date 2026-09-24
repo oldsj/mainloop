@@ -12,8 +12,7 @@
   import ConversationView from './ConversationView.svelte';
   import MainThreadHeader from './MainThreadHeader.svelte';
 
-  // Native main thread (MAIN_THREAD_MODE=native): a Claude session under Herdr whose window
-  // Mainloop rotates. The reply is mirrored from the native journal, so we poll for it.
+  // Mainloop mirrors the native Substrate session journal, so we poll for its reply.
   let mainThread = $state<MainThreadInfo | null>(null);
   let sendError = $state<string | null>(null);
 

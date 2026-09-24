@@ -18,7 +18,7 @@ You (phone/laptop)
     ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Main Thread                        │
-│           Claude with spawn_session tool            │
+│       Native Claude Code session in Substrate        │
 │                                                      │
 │   user@mainloop$ research X      ← inline sessions  │
 │   ├── [research X] thinking...   ← threaded reply   │
@@ -33,20 +33,18 @@ You (phone/laptop)
        └──────────────┘  └──────────────┘
 ```
 
-- **Main thread**: One continuous conversation — sessions spawn inline and surface results back
-- **Sessions**: Background AI work with their own conversations; appear as colored threads in your timeline
+- **Main thread**: One continuous native conversation; delegated sessions surface results back
+- **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
-- **Persistence**: Conversations and sessions survive restarts via compaction + [DBOS](https://docs.dbos.dev/)
+- **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in Substrate
 
 ## Quick Start
 
 ```bash
 # Copy example environment file and configure
 cp .env.example .env
-# Edit .env with your GitHub username (GHCR_USER) and domains
-
-# Optional: authenticate the current Claude integration
-make setup-claude-creds
+# Set the Substrate router, actor bindings, and shim Secret names.
+# Keep provider credentials in the configured actors, not in the backend environment.
 
 # Start all services
 make dev
@@ -65,7 +63,6 @@ The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and e
 mainloop/
 ├── backend/       # Python FastAPI + DBOS workflows
 ├── frontend/      # SvelteKit + Tailwind v4 (mobile-first responsive)
-├── claude-agent/  # Claude Code CLI container
 ├── models/        # Shared Pydantic models
 ├── packages/ui/   # Design tokens + theme.css
 └── k8s/           # Kubernetes manifests
@@ -92,12 +89,12 @@ mainloop/
 
 ## Agent Workflow
 
-Agents are sessions spawned for development tasks. Each agent gets its own K8s namespace for isolated iteration.
+Agents are native sessions spawned for development tasks. Mainloop records the session and its deliveries; the native CLI runs in the Substrate actor selected by the configured provider binding.
 
 ```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │   Spawn     │────►│    Work     │────►│     PR      │────►│    Close    │
-│   (main)    │     │  (k8s ns)   │     │  (GitHub)   │     │  (summary)  │
+│   (main)    │     │(Substrate) │     │  (GitHub)   │     │  (summary)  │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
        ▲                   │
        └───────────────────┘
@@ -105,7 +102,7 @@ Agents are sessions spawned for development tasks. Each agent gets its own K8s n
 ```
 
 1. **Spawn** - Main thread creates agent for a task
-2. **Work** - Agent iterates in its own K8s namespace (build, test, debug)
+2. **Work** - A native Claude Code or Codex session runs in its configured Substrate actor
 3. **PR** - Agent creates and merges GitHub PR when ready
 4. **Close** - Agent posts summary back to main thread
 

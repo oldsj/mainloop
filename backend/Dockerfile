@@ -29,42 +29,30 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Development stage - includes uv for live dependency updates
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS dev
 
-# Install Node.js and Claude CLI (required by claude-agent-sdk)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code@latest \
-    && npm cache clean --force \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm
+    && rm -rf /var/lib/apt/lists/* /tmp/*
 
-# Create non-root user for Claude and workspace directory
-RUN useradd -m -s /bin/bash claude \
-    && mkdir -p /home/claude/.claude /workspace \
-    && chown -R claude:claude /home/claude /workspace
+RUN useradd -m -s /bin/bash mainloop
 
 WORKDIR /app
 
 # Copy dependency files (owned by claude for live updates)
-COPY --from=builder --chown=claude:claude /app/.venv /app/.venv
-COPY --chown=claude:claude backend/pyproject.toml backend/uv.lock backend/README.md ./
+COPY --from=builder --chown=mainloop:mainloop /app/.venv /app/.venv
+COPY --chown=mainloop:mainloop backend/pyproject.toml backend/uv.lock backend/README.md ./
 
 # Copy source code (owned by claude)
-COPY --chown=claude:claude backend/src ./src
+COPY --chown=mainloop:mainloop backend/src ./src
 
 # Copy shared models package (owned by claude)
-COPY --chown=claude:claude models ../models
-
-# Copy entrypoint script
-COPY --chown=claude:claude backend/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chown=mainloop:mainloop models ../models
 
 # Set up PATH for venv and uv
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Switch to non-root user
-USER claude
+USER mainloop
 
 EXPOSE 8000
 
@@ -73,47 +61,35 @@ CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000", "--re
 # Runtime stage (production)
 FROM python:3.13-slim AS prod
 
-# Install Node.js and Claude CLI (required by claude-agent-sdk)
+# Install the health-check client and CA certificates.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code@latest \
-    && npm cache clean --force \
     && apt-get purge -y --auto-remove ca-certificates \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm
+    && rm -rf /var/lib/apt/lists/* /tmp/*
 
-# Create non-root user for Claude and workspace directory
-RUN useradd -m -s /bin/bash claude \
-    && mkdir -p /home/claude/.claude /workspace \
-    && chown -R claude:claude /home/claude /workspace
+RUN useradd -m -s /bin/bash mainloop
 
 WORKDIR /app
 
 # Copy the virtual environment from builder (owned by claude)
-COPY --from=builder --chown=claude:claude /app/.venv /app/.venv
+COPY --from=builder --chown=mainloop:mainloop /app/.venv /app/.venv
 
 # Copy source code (owned by claude)
-COPY --chown=claude:claude backend/src ./src
+COPY --chown=mainloop:mainloop backend/src ./src
 
 # Copy shared models package (owned by claude)
-COPY --chown=claude:claude models ../models
-
-# Copy entrypoint script
-COPY --chown=claude:claude backend/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chown=mainloop:mainloop models ../models
 
 # Set up PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Switch to non-root user (required for Claude SDK bypass permissions)
-USER claude
+# Run without root privileges.
+USER mainloop
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000"]

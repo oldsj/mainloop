@@ -1,8 +1,7 @@
 """Native-session transport to a pre-created Substrate actor through its CONNECT router.
 
-The actor shim owns the native CLI turn and journal files. This adapter preserves the
-``HerdrWorkspace`` method contract used by ``native_sessions`` while treating delivery errors
-after ``POST /turn`` as unknown; callers must reconcile the journal and never replay blindly.
+The actor-local shim owns the native CLI turn and journal files. Delivery errors after
+``POST /turn`` are unknown; callers must reconcile the journal and never replay blindly.
 """
 
 from __future__ import annotations
@@ -20,14 +19,28 @@ from urllib.parse import urlencode, urlsplit
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from mainloop.config import settings
-from mainloop.runtime.herdr import (
-    JournalSlice,
-    PodState,
-    TransportError,
-    WorkspaceUnavailable,
-)
+from mainloop.runtime.substrate import TransportError
 
 logger = logging.getLogger(__name__)
+
+
+class WorkspaceUnavailable(RuntimeError):
+    """The Substrate actor is not ready; no turn was attempted."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceState:
+    name: str
+    uid: str | None
+    ready: bool
+
+
+@dataclass(frozen=True, slots=True)
+class JournalSlice:
+    file: str | None
+    total_lines: int
+    lines: list[tuple[int, str]]
+
 
 _AGENT = re.compile(r"^(claude|codex)$")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
@@ -201,7 +214,7 @@ class SubstrateWorkspace:
             raise ValueError("Substrate native agent must be claude or codex")
         self.atespace = atespace
         self.actor = actor
-        self.pod = actor  # The existing native-session view exposes this display field.
+        self.workspace_name = actor
         self.agent = agent
         self.native_session_id = native_session_id
         address = urlsplit(router_address or settings.substrate_router_address)
@@ -301,21 +314,21 @@ class SubstrateWorkspace:
             raise TransportError("Substrate shim returned an invalid response")
         return document
 
-    async def pod_state(self) -> PodState:
+    async def workspace_state(self) -> WorkspaceState:
         try:
             response = await self._request("GET", "/healthz", authenticated=False)
         except WorkspaceUnavailable:
-            return PodState(self.actor, None, False)
+            return WorkspaceState(self.actor, None, False)
         if response.status == 503:
-            return PodState(self.actor, None, False)
+            return WorkspaceState(self.actor, None, False)
         if response.status != 200:
             raise TransportError(
                 f"Substrate health check failed (HTTP {response.status})"
             )
-        return PodState(self.actor, None, True)
+        return WorkspaceState(self.actor, None, True)
 
-    async def require_ready(self) -> PodState:
-        state = await self.pod_state()
+    async def require_ready(self) -> WorkspaceState:
+        state = await self.workspace_state()
         if not state.ready:
             raise WorkspaceUnavailable(
                 f"Substrate actor {self.atespace}/{self.actor} is not ready"

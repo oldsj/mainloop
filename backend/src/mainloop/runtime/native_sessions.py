@@ -1,4 +1,4 @@
-"""Sessions bound to a real native agent (Claude Code / Codex) under Herdr in the workspace pod.
+"""Sessions bound to a native Claude Code or Codex agent in a Substrate workspace.
 
 Control-plane rules implemented here:
 - A user message is recorded, then a delivery row is persisted as ``sending`` *before* the
@@ -7,8 +7,8 @@ Control-plane rules implemented here:
 - The native journal is the receipt: a prompt record after the recorded cursor proves delivery,
   the turn-completion record proves completion, and the assistant text in between is mirrored
   into the session conversation (deterministic ids, so repeated syncs are idempotent).
-- After pod replacement the agent is not live in Herdr; the next delivery restarts it with the
-  native resume flag against the same native session id, then sends.
+- The actor-local shim owns native CLI process lifetime and journal access. Before sending, the
+  adapter checks the existing native session and never replays a prompt blindly.
 
 Context model (plan r7): a binding has a ``role``. ``main`` is the conversation agent whose window
 Mainloop owns by rotation (a lineage of disposable native sessions; ``rotate``); ``child`` is a
@@ -28,10 +28,13 @@ from datetime import UTC, datetime, timedelta
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime.agent_api import hash_token, token_for
-from mainloop.runtime.herdr import HerdrWorkspace, TransportError, WorkspaceUnavailable
 from mainloop.runtime.journal import completed_turns, parse_journal
 from mainloop.runtime.standing import content_hash
-from mainloop.runtime.substrate_workspace import SubstrateWorkspace
+from mainloop.runtime.substrate import TransportError
+from mainloop.runtime.substrate_workspace import (
+    SubstrateWorkspace,
+    WorkspaceUnavailable,
+)
 
 from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
 
@@ -39,13 +42,13 @@ logger = logging.getLogger(__name__)
 
 APPROVAL_POLICY = "bypass-permissions"
 SEND_RECEIPT_GRACE = timedelta(seconds=60)
-# A prompt seen in the journal whose turn never completes (agent exited or wedged, pod replaced):
+# A prompt seen in the journal whose turn never completes (agent exited, wedged, or actor replaced):
 # after this long, or as soon as the agent is no longer live, it becomes 'uncertain' (never
 # replayed, never blocking) instead of holding the session in flight forever.
 DELIVERED_MAX_AGE = timedelta(minutes=30)
 _NS = uuid.UUID("6f0f7f0e-3f1e-4a3c-9d3b-0e4b6f5c2a11")
 _locks: dict[str, asyncio.Lock] = {}
-_workspaces: dict[tuple[str, ...], HerdrWorkspace | SubstrateWorkspace] = {}
+_workspaces: dict[tuple[str, ...], SubstrateWorkspace] = {}
 _rotating: set[str] = set()
 OPEN_STATES = ("recorded", "sending", "delivered")
 # Ended by the user or by failure. Agent activity never moves a session out of these.
@@ -81,49 +84,30 @@ def is_rotating(session_id: str) -> bool:
     return session_id in _rotating
 
 
-def workspace_for(binding: dict) -> HerdrWorkspace | SubstrateWorkspace:
-    """Select the configured transport and map a native binding to its workspace.
-
-    In Substrate mode, the native kind selects its atespace, actor, and shim Secret from
-    ``SUBSTRATE_ACTOR_BINDINGS``. No actor identity is inferred from a session or binding.
-    Herdr's existing pod mapping remains the default and is unchanged.
-    """
-    if settings.workspace_runtime == "substrate":
-        agent = binding["kind"]
-        actor_binding = settings.substrate_actor_bindings.get(agent)
-        if actor_binding is None:
-            raise RuntimeError(
-                f"no Substrate actor binding is configured for native agent {agent}"
-            )
-        atespace = actor_binding.atespace
-        actor = actor_binding.actor
-        key = (
-            "substrate",
-            atespace,
-            actor,
-            actor_binding.shim_token_secret_name,
-            binding["kind"],
+def workspace_for(binding: dict) -> SubstrateWorkspace:
+    """Map a native binding to the Substrate actor configured for its agent kind."""
+    agent = binding["kind"]
+    actor_binding = settings.substrate_actor_bindings.get(agent)
+    if actor_binding is None:
+        raise RuntimeError(
+            f"no Substrate actor binding is configured for native agent {agent}"
         )
-        if key not in _workspaces:
-            _workspaces[key] = SubstrateWorkspace(
-                atespace=atespace,
-                actor=actor,
-                agent=agent,
-                shim_token_secret_name=actor_binding.shim_token_secret_name,
-                native_session_id=binding.get("native_session_id"),
-            )
-        workspace = _workspaces[key]
-        if not isinstance(workspace, SubstrateWorkspace):
-            raise RuntimeError("workspace cache has an incompatible Substrate entry")
-        workspace.set_native_session_id(binding.get("native_session_id"))
-        return workspace
-    pod = binding.get("pod") or settings.workspace_pod
-    key = ("herdr", pod)
+    key = (
+        actor_binding.atespace,
+        actor_binding.actor,
+        actor_binding.shim_token_secret_name,
+        agent,
+    )
     if key not in _workspaces:
-        _workspaces[key] = HerdrWorkspace(pod=pod)
+        _workspaces[key] = SubstrateWorkspace(
+            atespace=actor_binding.atespace,
+            actor=actor_binding.actor,
+            agent=agent,
+            shim_token_secret_name=actor_binding.shim_token_secret_name,
+            native_session_id=binding.get("native_session_id"),
+        )
     workspace = _workspaces[key]
-    if not isinstance(workspace, HerdrWorkspace):
-        raise RuntimeError("workspace cache has an incompatible Herdr entry")
+    workspace.set_native_session_id(binding.get("native_session_id"))
     return workspace
 
 
@@ -194,15 +178,6 @@ async def _set_delivery(
         )
 
 
-def config_name(binding: dict) -> str:
-    """Agentctl binding config (ConfigMap ``<name>.env``) for this binding."""
-    if binding["role"] == "main":
-        return "claude-main"
-    if binding["role"] == "child":
-        return f"{binding['kind']}-child"
-    return binding["kind"]
-
-
 async def create_binding(
     session_id: str,
     kind: str,
@@ -214,22 +189,20 @@ async def create_binding(
     # Claude takes the native session id up front (--session-id); Codex reports it in its journal.
     native_id = str(uuid.uuid4()) if kind == "claude" else None
     name = "ml-main" if role == "main" else agent_name(session_id, kind)
-    pod = settings.main_pod if role == "main" else None
     token_hash = (
         hash_token(token_for(session_id)) if role in ("main", "child") else None
     )
     async with db.connection() as conn:
         await conn.execute(
             """INSERT INTO native_bindings (session_id, kind, agent_name, native_session_id, approval_policy,
-                   role, pod, parent_session_id, topic_id, token_hash, model)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
+                   role, parent_session_id, topic_id, token_hash, model)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
             session_id,
             kind,
             name,
             native_id,
             APPROVAL_POLICY if role != "main" else "restricted: Bash(mainloop:*) only",
             role,
-            pod,
             parent_session_id,
             topic_id,
             token_hash,
@@ -251,6 +224,55 @@ async def _open_count(session_id: str) -> int:
             session_id,
             list(OPEN_STATES),
         )
+
+
+async def _record_delivery_message(
+    *,
+    session_id: str,
+    conversation_id: str,
+    text: str,
+    state: str,
+    source: str,
+) -> str:
+    """Record the message and delivery under the workspace lock used by suspension."""
+    async with db.connection() as conn:
+        async with conn.transaction():
+            binding = await conn.fetchrow(
+                """SELECT workspace_id FROM workspace_bindings
+                   WHERE workspace_id=$1 FOR UPDATE""",
+                session_id,
+            )
+            lifecycle = (
+                await conn.fetchrow(
+                    """SELECT desired_state, observed_state FROM workspace_lifecycles
+                       WHERE workspace_id=$1""",
+                    session_id,
+                )
+                if binding
+                else None
+            )
+            if lifecycle and (
+                lifecycle["desired_state"] == "suspended"
+                or lifecycle["observed_state"] in {"suspending", "suspended"}
+            ):
+                raise ValueError(
+                    "The workspace is suspending or suspended; resume it before sending a message."
+                )
+
+            message = await db.create_message(
+                conversation_id=conversation_id,
+                role="user",
+                content=text,
+                conn=conn,
+            )
+            await conn.execute(
+                "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
+                message.id,
+                session_id,
+                state,
+                source,
+            )
+    return message.id
 
 
 async def submit_message(session_id: str, text: str, *, source: str = "user") -> str:
@@ -281,20 +303,16 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
             if busy or (source == "report" and session_id in _rotating)
             else "recorded"
         )
-        message = await db.create_message(
-            conversation_id=session.conversation_id, role="user", content=text
+        message_id = await _record_delivery_message(
+            session_id=session_id,
+            conversation_id=session.conversation_id,
+            text=text,
+            state=state,
+            source=source,
         )
-        async with db.connection() as conn:
-            await conn.execute(
-                "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
-                message.id,
-                session_id,
-                state,
-                source,
-            )
     if state == "recorded":
-        asyncio.create_task(_deliver(session_id, message.id, text))
-    return message.id
+        asyncio.create_task(_deliver(session_id, message_id, text))
+    return message_id
 
 
 async def _start_extra(binding: dict) -> tuple[dict[str, str], str | None]:
@@ -318,9 +336,9 @@ async def _start_extra(binding: dict) -> tuple[dict[str, str], str | None]:
 
 
 async def _ensure_agent(session_id: str, binding: dict) -> dict:
-    """Make sure the agent is live in Herdr, resuming the native session after pod replacement."""
+    """Check native session readiness in its Substrate actor."""
     ws = workspace_for(binding)
-    pod = await ws.require_ready()
+    await ws.require_ready()
     name = binding["agent_name"]
     status = await ws.agent_status(name)
     fields: dict = {}
@@ -328,27 +346,16 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
         # A journal already seen for this native session id means an earlier run: resume it.
         resume = binding["journal_ref"] is not None
         extra, standing_hash = await _start_extra(binding)
-        ident = await ws.start(
-            config_name(binding),
+        await ws.start(
+            binding["kind"],
             name,
             native_id=binding["native_session_id"],
             resume=resume,
             extra=extra,
         )
-        fields.update(
-            herdr_pane_id=ident.get("pane_id"),
-            herdr_terminal_id=ident.get("terminal_id"),
-            herdr_workspace_id=ident.get("workspace_id"),
-            generation=binding["generation"] + (1 if resume else 0),
-        )
+        fields.update(generation=binding["generation"] + (1 if resume else 0))
         if standing_hash:
             fields["standing_hash"] = standing_hash
-    else:
-        fields.update(
-            herdr_pane_id=status.get("pane_id"),
-            herdr_terminal_id=status.get("terminal_id"),
-        )
-    fields["pod_uid"] = pod.uid
     await _update_binding(session_id, **fields)
     return await get_binding(session_id)  # type: ignore[return-value]
 
@@ -474,7 +481,6 @@ async def _sync_locked(session_id: str) -> dict | None:
             jl.lines,
             file_ref=ref,
             native_id=binding["native_session_id"],
-            agent=binding["agent_name"],
         )
         session = await db.get_session(session_id)
         async with db.connection() as conn:
@@ -611,7 +617,7 @@ async def cancel(session_id: str) -> str:
 
     The status is set first and is sticky, so no later sync brings the session back, and open
     deliveries are failed so the reconcile loop stops visiting it. Returns ``stopped``,
-    ``not_running`` (Herdr had no such agent) or ``unknown`` (the stop could not be
+    ``not_running`` (the actor had no active turn) or ``unknown`` (the stop could not be
     confirmed; the agent may still be running, and it is not retried blindly).
     """
     binding = await get_binding(session_id)
@@ -801,10 +807,10 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         for r in rows
     ]
     ws = workspace_for(binding)
-    ready, live, uid, note = False, None, None, None
+    ready, live, _uid, note = False, None, None, None
     try:
-        pod = await ws.pod_state()
-        ready, uid = pod.ready, pod.uid
+        workspace = await ws.workspace_state()
+        ready = workspace.ready
         if ready:
             live = (await ws.agent_status(binding["agent_name"])) is not None
     except (TransportError, WorkspaceUnavailable) as exc:
@@ -821,11 +827,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         native_session_id=binding["native_session_id"],
         model=binding["model"],
         approval_policy=binding["approval_policy"],
-        herdr_pane_id=binding["herdr_pane_id"],
-        herdr_terminal_id=binding["herdr_terminal_id"],
-        herdr_workspace_id=binding["herdr_workspace_id"],
-        workspace_pod=ws.pod,
-        workspace_pod_uid=uid,
+        workspace_name=ws.workspace_name,
         workspace_ready=ready,
         agent_live=live,
         generation=binding["generation"],

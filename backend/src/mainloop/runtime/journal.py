@@ -1,6 +1,6 @@
 """Read real native journals (Claude transcript JSONL, Codex rollout JSONL).
 
-The journal is the authority for receipts, replies, completion and model. Herdr only
+The journal is the authority for receipts, replies, completion and model. The actor shim
 delivers input and reports liveness. ``NativeEvent`` carries no text, so reply text is
 extracted here from the raw record; the same record is also passed through the existing
 adapters (``ClaudeSessionNormalizer``, ``observe_codex_event``) after a small translation
@@ -50,7 +50,7 @@ class JournalEvent:
 
 
 def unwrap_paste(text: str) -> str:
-    """Claude Code wraps pasted (Herdr-delivered) input in ``<pasted_content>`` tags."""
+    """Unwrap pasted input that Claude Code returns in ``<pasted_content>`` tags."""
     match = _PASTED.match(text)
     return (match.group(1) if match else text).strip()
 
@@ -70,15 +70,13 @@ def _text_blocks(content: Any, block_types: tuple[str, ...]) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _binding(kind: str, native_id: str, agent: str) -> NativeBinding:
+def _binding(kind: str, native_id: str) -> NativeBinding:
     return NativeBinding(
         binding_id=f"{kind}-{native_id}",
-        workspace_id="herdr-spike/workspace-0",
+        workspace_id="fixture/workspace-0",
         provider=kind,
         runtime_type=f"{kind}-native-cli",
         native_session_id=native_id,
-        herdr_session_id="mainloop-spike",
-        herdr_agent_id=agent,
         creation_mode="created",
         ownership_generation=1,
     )
@@ -92,9 +90,9 @@ _EPOCH = datetime.fromtimestamp(0, tz=UTC)
 
 
 def parse_claude(
-    lines: Iterable[tuple[int, str]], *, file_ref: str, native_id: str, agent: str
+    lines: Iterable[tuple[int, str]], *, file_ref: str, native_id: str
 ) -> list[JournalEvent]:
-    normalizer = ClaudeSessionNormalizer(_binding("claude", native_id, agent))
+    normalizer = ClaudeSessionNormalizer(_binding("claude", native_id))
     out: list[JournalEvent] = []
     for cursor, line in lines:
         try:
@@ -208,9 +206,9 @@ def _claude_normalize(
 
 
 def parse_codex(
-    lines: Iterable[tuple[int, str]], *, file_ref: str, native_id: str, agent: str
+    lines: Iterable[tuple[int, str]], *, file_ref: str, native_id: str
 ) -> list[JournalEvent]:
-    binding = _binding("codex", native_id, agent)
+    binding = _binding("codex", native_id)
     out: list[JournalEvent] = []
     model: str | None = None
     for cursor, line in lines:
@@ -290,12 +288,11 @@ def parse_journal(
     *,
     file_ref: str,
     native_id: str,
-    agent: str,
 ) -> list[JournalEvent]:
     if kind == "claude":
-        return parse_claude(lines, file_ref=file_ref, native_id=native_id, agent=agent)
+        return parse_claude(lines, file_ref=file_ref, native_id=native_id)
     if kind == "codex":
-        return parse_codex(lines, file_ref=file_ref, native_id=native_id, agent=agent)
+        return parse_codex(lines, file_ref=file_ref, native_id=native_id)
     raise ValueError(f"no journal reader for kind {kind}")
 
 

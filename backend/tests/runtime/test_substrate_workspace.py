@@ -11,8 +11,11 @@ from uuid import uuid4
 
 from mainloop.config import SubstrateActorBinding, settings
 from mainloop.runtime import native_sessions
-from mainloop.runtime.herdr import WorkspaceUnavailable
-from mainloop.runtime.substrate_workspace import SubstrateWorkspace, _Response
+from mainloop.runtime.substrate_workspace import (
+    SubstrateWorkspace,
+    WorkspaceUnavailable,
+    _Response,
+)
 
 FIXTURE_VALUE = "fixture-shim-value-one"
 ROTATED_FIXTURE_VALUE = "fixture-shim-value-two"
@@ -271,7 +274,6 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 shim_token_secret_name=FAKE_SHIM_NAME,
             )
             key = (
-                "substrate",
                 workspace_binding.atespace,
                 workspace_binding.actor,
                 workspace_binding.shim_token_secret_name,
@@ -292,7 +294,6 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 return FIXTURE_VALUE
 
             with (
-                patch.object(settings, "workspace_runtime", "substrate"),
                 patch.object(
                     settings,
                     "substrate_router_address",
@@ -322,7 +323,6 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 patch.object(native_sessions, "sync", new=AsyncMock()) as sync,
             ):
                 native_sessions._workspaces.pop(key, None)
-                self.assertEqual(settings.workspace_runtime, "substrate")
                 self.assertIsInstance(
                     native_sessions.workspace_for(binding), SubstrateWorkspace
                 )

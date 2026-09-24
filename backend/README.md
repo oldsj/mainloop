@@ -1,6 +1,6 @@
 # mainloop-backend
 
-FastAPI backend for the mainloop AI agent orchestrator.
+FastAPI control plane for native-agent sessions and Substrate workspaces.
 
 ## Development
 
@@ -17,7 +17,7 @@ make backend-dev
 
 ## Environment Variables
 
-See `.env.example` for required environment variables.
+See `.env.example` for the Substrate router, actor bindings, lifecycle settings, and database environment variables. Provider credentials are held by the configured actors, not by the backend.
 
 ## API Documentation
 

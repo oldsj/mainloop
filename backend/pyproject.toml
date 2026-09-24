@@ -1,7 +1,7 @@
 [project]
 name = "mainloop-backend"
 version = "0.1.0"
-description = "Mainloop AI agent orchestrator backend"
+description = "Mainloop native-agent control plane backend"
 readme = "README.md"
 authors = [
   { name = "James Olds", email = "12104969+oldsj@users.noreply.github.com" },
@@ -16,12 +16,10 @@ dependencies = [
   "githubkit>=0.11.0",
   "pydantic>=2.12.5",
   "pydantic-settings>=2.0.0",
-  "claude-agent-sdk>=0.1.18",
   "asyncpg>=0.30.0",
   "dbos>=2.7.0",
   "pydantic-ai[dbos]>=1.39.0",
   "kubernetes>=34.1.0",
-  "anthropic>=0.75.0",
 ]
 
 [project.scripts]

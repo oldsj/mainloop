@@ -4,6 +4,9 @@ Status labels: **Implemented** = built and exercised on the local kind cluster; 
 agents (Claude Code 2.1.278, codex-cli 0.155.1); **Proposed** = design intent not yet built. Nothing here is
 production-tested. Fixtures and fakes cover the default tests; live evidence is outside the repository.
 
+Historical note: this plan predates the 2026-09-24 cutover. The mode flag, former workspace transport, and SDK
+fallback described below have been removed. Current chat always uses the native Substrate session path.
+
 ## What was built (Implemented)
 
 - `MAIN_THREAD_MODE=native`: `POST /chat` records the user message and delivers it, through the r6 delivery ledger,

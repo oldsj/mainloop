@@ -69,7 +69,6 @@ Thank you for your interest in contributing to mainloop! This document provides 
 mainloop/
 ├── backend/       # Python FastAPI + DBOS workflows
 ├── frontend/      # SvelteKit + Tailwind v4
-├── claude-agent/  # Claude Code CLI container
 ├── models/        # Shared Pydantic models
 ├── packages/ui/   # Design tokens + theme
 └── k8s/           # Kubernetes manifests

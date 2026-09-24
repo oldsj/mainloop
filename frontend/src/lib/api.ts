@@ -254,7 +254,7 @@ export interface TopicLine {
 }
 
 export interface MainThreadInfo {
-  mode: 'sdk' | 'native';
+  mode: 'native';
   session_id: string | null;
   conversation_id: string | null;
   native: NativeSessionInfo | null;
@@ -293,11 +293,7 @@ export interface NativeSessionInfo {
   native_session_id: string | null;
   model: string | null;
   approval_policy: string;
-  herdr_pane_id: string | null;
-  herdr_terminal_id: string | null;
-  herdr_workspace_id: string | null;
-  workspace_pod: string | null;
-  workspace_pod_uid: string | null;
+  workspace_name: string | null;
   workspace_ready: boolean;
   agent_live: boolean | null;
   generation: number;

@@ -149,9 +149,9 @@ class SessionCreate(BaseModel):
         None, description="Main thread message ID to anchor this session to"
     )
 
-    # Optional: run a real native agent under Herdr in the workspace pod
+    # Optional native runtime selection. Omitted sessions use Claude Code by default.
     agent_kind: Literal["claude", "codex"] | None = Field(
-        None, description="Native agent kind; omit for the existing session worker"
+        None, description="Native agent kind; defaults to Claude Code"
     )
 
 
@@ -183,7 +183,7 @@ class NativeDeliveryInfo(BaseModel):
 
 
 class NativeSessionInfo(BaseModel):
-    """Identity strip for a session bound to a native agent under Herdr."""
+    """Identity strip for a session bound to a native agent in Substrate."""
 
     session_id: str
     kind: Literal["claude", "codex"]
@@ -194,11 +194,7 @@ class NativeSessionInfo(BaseModel):
     native_session_id: str | None = None
     model: str | None = None
     approval_policy: str
-    herdr_pane_id: str | None = None
-    herdr_terminal_id: str | None = None
-    herdr_workspace_id: str | None = None
-    workspace_pod: str | None = None
-    workspace_pod_uid: str | None = None
+    workspace_name: str | None = None
     workspace_ready: bool = False
     agent_live: bool | None = None
     generation: int = 1

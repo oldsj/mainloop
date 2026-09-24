@@ -25,18 +25,10 @@ set +a
 # Create mainloop namespace if not exists
 kubectl --context="${KIND_CONTEXT}" create namespace mainloop --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
 
-# Create claude-credentials secret (for agent-controller)
-echo "Creating claude-credentials..."
-kubectl --context="${KIND_CONTEXT}" create secret generic claude-credentials \
-  --namespace mainloop \
-  --from-literal=oauth-token="${CLAUDE_CODE_OAUTH_TOKEN-}" \
-  --dry-run=client -o yaml | kubectl --context="${KIND_CONTEXT}" apply -f -
-
-# Create mainloop-secrets secret (for backend)
+# Create mainloop-secrets secret (for backend control-plane access)
 echo "Creating mainloop-secrets..."
 kubectl --context="${KIND_CONTEXT}" create secret generic mainloop-secrets \
   --namespace mainloop \
-  --from-literal=claude-secret-token="${CLAUDE_CODE_OAUTH_TOKEN-}" \
   --from-literal=github-token="${GITHUB_TOKEN-}" \
   --from-literal=db-username=mainloop \
   --from-literal=db-password=mainloop \

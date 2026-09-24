@@ -163,7 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 
--- Native agent bindings (one per session bound to a real agent under Herdr)
+-- Native agent bindings (one per session bound to a real agent in a Substrate workspace)
 CREATE TABLE IF NOT EXISTS native_bindings (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id),
     kind TEXT NOT NULL,
@@ -171,10 +171,6 @@ CREATE TABLE IF NOT EXISTS native_bindings (
     native_session_id TEXT,
     approval_policy TEXT NOT NULL,
     model TEXT,
-    herdr_pane_id TEXT,
-    herdr_terminal_id TEXT,
-    herdr_workspace_id TEXT,
-    pod_uid TEXT,
     generation INTEGER NOT NULL DEFAULT 1,
     journal_cursor INTEGER NOT NULL DEFAULT 0,
     journal_ref TEXT,
@@ -197,7 +193,6 @@ CREATE INDEX IF NOT EXISTS idx_native_deliveries_session ON native_deliveries(se
 
 -- Context model (main thread window, session tree, topics). Additive to the r6 tables.
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'agent';
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS pod TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS topic_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS token_hash TEXT;
@@ -224,11 +219,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(t
 CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
 
 -- Substrate workspace-runtime adapter: durable mapping from a Mainloop session to a Substrate
--- actor. Separate from native_bindings (the Herdr agent/native-session identity) because a
+-- actor. Separate from native_bindings (native-agent session identity) because a
 -- session's workspace runtime is a distinct concept -- see ROADMAP.md "Workspace platform".
 -- One actor per session (workspace_id = session_id) replaces the fixed workspace pod for
 -- Substrate-backed sessions. ownership_generation fences resume/suspend/revert the same way
--- native_bindings.generation fences Herdr sends: a stale caller's mutation is rejected, and a
+-- native_bindings.generation fences native sends: a stale caller's mutation is rejected, and a
 -- retry re-inspects the actor and this row rather than creating a second one.
 CREATE TABLE IF NOT EXISTS workspace_bindings (
     workspace_id TEXT PRIMARY KEY REFERENCES sessions(id),
@@ -1184,9 +1179,9 @@ class Database:
         )
 
     async def create_message(
-        self, conversation_id: str, role: str, content: str
+        self, conversation_id: str, role: str, content: str, *, conn: Any | None = None
     ) -> Message:
-        """Create a new message in a conversation."""
+        """Create a new message, optionally inside a caller-owned transaction."""
         import uuid
 
         message = Message(
@@ -1196,10 +1191,11 @@ class Database:
             content=content,
             created_at=datetime.now(timezone.utc),
         )
-        if not self._pool:
+        if not self._pool and conn is None:
             return message
-        async with self.connection() as conn:
-            await conn.execute(
+
+        async def insert(connection) -> None:
+            await connection.execute(
                 """
                 INSERT INTO messages (id, conversation_id, role, content, created_at)
                 VALUES ($1, $2, $3, $4, $5)
@@ -1211,11 +1207,17 @@ class Database:
                 message.created_at,
             )
             # Update conversation's updated_at
-            await conn.execute(
+            await connection.execute(
                 "UPDATE conversations SET updated_at = $1 WHERE id = $2",
                 datetime.now(timezone.utc),
                 conversation_id,
             )
+
+        if conn is not None:
+            await insert(conn)
+        else:
+            async with self.connection() as connection:
+                await insert(connection)
         return message
 
     async def get_messages(self, conversation_id: str) -> list[Message]:

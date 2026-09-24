@@ -43,11 +43,6 @@ jobs:
             context: .
             tag: mainloop-frontend:test
             build-args: VITE_API_URL=http://localhost:8081
-          - image: agent
-            file: claude-agent/Dockerfile
-            context: ./claude-agent
-            tag: mainloop-agent-controller:test
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4

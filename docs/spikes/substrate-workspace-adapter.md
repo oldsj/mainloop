@@ -7,6 +7,10 @@ actor; the target described by this closeout has no Herdr server or terminal man
 actor and invokes native CLIs headlessly once per turn. See
 `docs/spikes/k8s-herdr-agents.md` for the historical native-session/Herdr spike.
 
+Historical scope: this closeout records evidence and design as of 2026-09-23. The 2026-09-24
+cutover made Substrate the only runtime and removed the `WORKSPACE_RUNTIME` switch and its former
+default. Results below remain evidence for the versions and actors actually measured at that time.
+
 ## Current status — Phase 5 closeout (2026-09-23)
 
 The Round 3 and Phase 4 runs measured Substrate actors, Cilium-enforced router ingress,
@@ -46,9 +50,11 @@ native session/thread id and final message. It permits one in-flight turn per ag
 output file; `GET /run/:id` reports its status and bounded output. `/healthz` and `/readyz` check
 only the shim and workspace. The actor image and these routes still need live proof.
 
-## Substrate runtime
+## Pre-cutover Substrate configuration (2026-09-23)
 
-`WORKSPACE_RUNTIME=substrate` selects the native-session transport; `herdr` remains the default.
+At the time of this spike, `WORKSPACE_RUNTIME=substrate` selected the native-session transport and
+the former runtime was the default. The cutover removed this switch; this paragraph is retained as
+historical configuration context only.
 `SUBSTRATE_ROUTER_ADDRESS` configures the HTTP CONNECT listener. `SUBSTRATE_ACTOR_BINDINGS` is a
 JSON object keyed by `claude` and `codex`; each entry supplies `atespace`, `actor`, and
 `shim_token_secret_name`. `SUBSTRATE_SHIM_SECRET_NAMESPACE` selects the Secret namespace and

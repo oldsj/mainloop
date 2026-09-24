@@ -15,4 +15,3 @@ patches:
     target:
       kind: Cluster
       name: mainloop-db
-  - path: shutdown-patch.yaml

@@ -27,12 +27,6 @@ patches:
       kind: Deployment
       name: mainloop-frontend
 
-  # Patch agent-controller deployment for test environment
-  - path: agent-controller-patch.yaml
-    target:
-      kind: Deployment
-      name: mainloop-agent-controller
-
   # Disable HTTPRoutes that don't exist in test (prevent errors)
   # Note: These resources don't exist in base anymore, no patching needed
 
@@ -43,7 +37,4 @@ images:
     newTag: test
   - name: ghcr.io/oldsj/mainloop-frontend
     newName: mainloop-frontend
-    newTag: test
-  - name: ghcr.io/oldsj/mainloop-agent-controller
-    newName: mainloop-agent-controller
     newTag: test

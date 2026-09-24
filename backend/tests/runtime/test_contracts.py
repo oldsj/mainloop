@@ -24,8 +24,6 @@ def binding():
         "provider": "fixture",
         "runtime_type": "native",
         "native_session_id": "native-session",
-        "herdr_session_id": "herdr-session",
-        "herdr_agent_id": "agent",
         "creation_mode": "created",
         "ownership_generation": 1,
     }

@@ -17,7 +17,7 @@
     try {
       const session = await api.createSession({
         title: title.trim() || `${kind} session`,
-        description: `Native ${kind} agent under Herdr in the workspace pod`,
+        description: `Native ${kind} agent in a Substrate workspace`,
         prompt: prompt.trim(),
         agent_kind: kind
       });
@@ -40,7 +40,7 @@
   <a href="/" class="text-sm text-term-fg-muted hover:text-term-accent">&larr; Back</a>
   <h1 class="text-lg font-medium">New agent session</h1>
   <p class="text-sm text-term-fg-muted">
-    Starts a real agent in the workspace pod, under Herdr, in bypass-permissions mode. Replies are read from the
+    Starts a real agent in a Substrate workspace, in bypass-permissions mode. Replies are read from the
     agent's native journal.
   </p>
 

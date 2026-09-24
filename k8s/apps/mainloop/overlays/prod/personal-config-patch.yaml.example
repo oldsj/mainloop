@@ -52,14 +52,3 @@ spec:
             - name: FRONTEND_DOMAIN
               value: "mainloop.example.com"  # Your frontend domain (for CORS)
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: mainloop-agent-controller
-  namespace: mainloop
-spec:
-  template:
-    spec:
-      containers:
-        - name: agent-controller
-          image: ghcr.io/yourusername/mainloop-agent-controller:latest  # Your GHCR username

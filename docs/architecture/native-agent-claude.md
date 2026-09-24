@@ -1,10 +1,8 @@
 # Native Claude session adapter
 
-Status: implemented as a sanitized fixture-backed normalizer only. This slice
-does not start Claude, use a subscription, import the Claude Agent SDK, or wire
-the adapter into a production call path. `ROADMAP.md` remains the intended
-architecture; the existing `claude-agent/` worker and its SDK entrypoints are
-unchanged.
+Status: fixture-backed stream normalizer, used by the native Substrate session path. This note's
+description of the former SDK worker is historical: that worker and its backend entrypoints were
+removed by the 2026-09-24 Substrate cutover. This document does not claim live-cluster proof.
 
 ## Boundary
 
@@ -93,9 +91,9 @@ Claude capability has been established.
 
 ## Existing SDK separation
 
-The current `backend/src/mainloop/claude_agent.py`,
-`backend/src/mainloop/services/claude_agent.py`, and `claude-agent/` service use
-the existing Claude Agent SDK worker. This adapter does not call those modules,
+The former `backend/src/mainloop/claude_agent.py`,
+`backend/src/mainloop/services/claude_agent.py`, and worker service used the old SDK path; those
+entrypoints were removed by the Substrate cutover. This adapter does not call those modules,
 does not parse their result wrapper as native evidence, and does not change
 their production behavior. Replacing those paths requires a later architecture
 decision backed by live native proof.

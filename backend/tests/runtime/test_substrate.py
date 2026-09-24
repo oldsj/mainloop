@@ -1,5 +1,5 @@
 """Substrate transport adapter over a fake ``kubectl ate`` subprocess: no cluster, no actors,
-no credentials. Mirrors test_herdr.py's fake-transport pattern for the Herdr adapter."""
+no credentials. Uses a fake transport to test the Substrate control adapter."""
 
 import asyncio
 import json
