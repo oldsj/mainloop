@@ -53,9 +53,18 @@ from the manifest until the workspace is running. A preview request itself may w
 
 Preview hosts have the form `<port>--<workspace>.preview.<domain>`. Mainloop checks workspace
 ownership and permits only ports declared by the manifest or reported by the authenticated
-actor shim. It strips browser cookies and authorization headers before using the router's
-CONNECT stream, including WebSocket upgrades. A single bounded retry is used after a wake/connect
-failure, followed by a clear waking response.
+actor shim. The preview listener accepts identity only from the Cloudflare Access email header
+when `SUBSTRATE_PREVIEW_TRUSTED_INGRESS=true`; that ingress must remove any client-supplied copy
+before setting its authenticated value. It never treats `X-User-ID` as identity. Without trusted
+ingress, requests receive `401` (WebSocket close `4401`). The Kind overlay alone enables
+`SUBSTRATE_PREVIEW_LOCAL_DEV_MODE=true`, which uses the fixed local development owner.
+
+The proxy strips browser cookies, authorization, and identity headers before using the router's
+CONNECT stream, including WebSocket upgrades. It retries only a router CONNECT failure before
+forwarding the request to the actor. After forwarding, a disconnect has an unknown outcome and
+the proxy does not replay the request. HTTP streams read at most 64 KiB per block and use a
+bounded socket read timeout. Active HTTP streams and WebSocket connections refresh workspace
+activity every 20 seconds until they close, so idle suspension waits for active previews to end.
 
 Suspend is refused while the native delivery ledger contains a recorded, queued, sending,
 delivered-but-incomplete, or uncertain delivery. The API reports `409` with the reason. A

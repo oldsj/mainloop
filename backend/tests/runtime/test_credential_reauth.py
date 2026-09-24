@@ -17,7 +17,22 @@ from mainloop.runtime.credential_reauth import (
 from starlette.requests import Request
 
 
+async def _run_sync_in_test(function, *args, **kwargs):
+    """Keep fake Kubernetes API calls deterministic in tests."""
+    await asyncio.sleep(0)
+    return function(*args, **kwargs)
+
+
 class CredentialReauthTests(unittest.TestCase):
+    def setUp(self):
+        self._to_thread_patch = patch.object(
+            asyncio, "to_thread", new=_run_sync_in_test
+        )
+        self._to_thread_patch.start()
+
+    def tearDown(self):
+        self._to_thread_patch.stop()
+
     def test_fake_runner_keeps_callback_token_private_and_completes(self):
         async def exercise():
             runner = FakeCredentialReauthRunner()

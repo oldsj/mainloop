@@ -26,6 +26,7 @@ _JWT_EXPIRY_MARGIN_SECONDS = 5 * 60
 _MAX_CODEX_AUTH_BYTES = 256 * 1024
 _MAX_CLAUDE_TOKEN_BYTES = 16 * 1024
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
+_SEED_LOCKS: dict[tuple[int, str, str], asyncio.Lock] = {}
 
 
 class CredentialBrokerError(RuntimeError):
@@ -42,12 +43,17 @@ class CredentialNeedsSignin(CredentialBrokerError):
         super().__init__(f"{provider.title()} needs sign-in")
 
 
+class CredentialSecretMissing(CredentialBrokerError):
+    """The Secret must be created through GitOps before it can be seeded."""
+
+
 @dataclass(frozen=True, slots=True)
 class CredentialStatus:
     provider: str
     available: bool
     needs_signin: bool
     expires_at: datetime | None = None
+    state: str = "needs_signin"
 
 
 class CredentialSecretStore(Protocol):
@@ -173,6 +179,22 @@ class CredentialBroker:
             raise CredentialBrokerError("credential Secret update failed") from exc
 
     async def seed_configured(self, provider: str) -> CredentialStatus:
+        lock_key = (
+            id(asyncio.get_running_loop()),
+            self.namespace,
+            self.secret_name(provider),
+        )
+        lock = _SEED_LOCKS.setdefault(lock_key, asyncio.Lock())
+        async with lock:
+            return await self._seed_configured_once(provider)
+
+    async def _seed_configured_once(self, provider: str) -> CredentialStatus:
+        existing = await self._read(provider)
+        if existing is None:
+            raise CredentialSecretMissing("credential Secret is not pre-created")
+        if existing:
+            # Never replace an existing rejected, expired or valid credential from a file.
+            return self._status_from_values(provider, existing)
         if provider == "codex":
             path = self.codex_auth_path
             if not path:
@@ -191,6 +213,8 @@ class CredentialBroker:
         else:
             raise ValueError("unsupported credential provider")
 
+        # An empty data map is the sole uninitialized state. A second sequential call sees
+        # the published values above and leaves them untouched.
         await self._publish(provider, values)
         return self._status_from_values(provider, values)
 
@@ -277,15 +301,19 @@ class CredentialBroker:
     def _status_from_values(
         provider: str, values: Mapping[str, str]
     ) -> CredentialStatus:
+        if not values:
+            return CredentialStatus(provider, False, True, state="uninitialized")
         available = bool(values.get("injection-value"))
         needs_signin = values.get("needs-signin") == "true" or not available
         expires_at = None
+        state = "available" if available else "needs_signin"
         raw_expiry = values.get("expires-at")
         if raw_expiry:
             try:
                 expires_at = datetime.fromtimestamp(int(raw_expiry), UTC)
             except (ValueError, OverflowError, OSError):
                 needs_signin = True
+                state = "rejected"
         if (
             provider == "codex"
             and expires_at is not None
@@ -293,18 +321,27 @@ class CredentialBroker:
             <= datetime.now(UTC).timestamp() + _JWT_EXPIRY_MARGIN_SECONDS
         ):
             needs_signin = True
+            state = "expired"
+        elif values.get("needs-signin") == "true":
+            state = "rejected"
         return CredentialStatus(
-            provider, available and not needs_signin, needs_signin, expires_at
+            provider,
+            available and not needs_signin,
+            needs_signin,
+            expires_at,
+            state,
         )
 
     async def status(self, provider: str) -> CredentialStatus:
         values = await self._read(provider)
         if values is None:
+            return CredentialStatus(provider, False, True, state="missing")
+        if not values:
             path = (
                 self.codex_auth_path if provider == "codex" else self.claude_token_path
             )
             if not path:
-                return CredentialStatus(provider, False, True)
+                return CredentialStatus(provider, False, True, state="uninitialized")
             return await self.seed_configured(provider)
         status = self._status_from_values(provider, values)
         if provider == "codex" and status.needs_signin:
@@ -314,9 +351,11 @@ class CredentialBroker:
     async def codex_placeholder_auth(self) -> str:
         values = await self._read("codex")
         if values is None:
+            raise CredentialNeedsSignin("codex")
+        if not values:
             await self.seed_configured("codex")
             values = await self._read("codex")
-        if values is None:
+        if not values:
             raise CredentialNeedsSignin("codex")
         status = self._status_from_values("codex", values)
         if not status.available or status.needs_signin:

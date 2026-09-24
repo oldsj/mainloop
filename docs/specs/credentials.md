@@ -3,8 +3,12 @@
 Mainloop owns one credential set per account and provider. Real Codex `auth.json` and Claude
 tokens are stored in pre-created Kubernetes Secrets. The backend may seed those Secrets from
 configured file paths (`SUBSTRATE_CODEX_AUTH_PATH` and `SUBSTRATE_CLAUDE_TOKEN_PATH`); file
-contents are never exposed through the API or logs. The egress credential provider consumes
-the Secret's `injection-value` key.
+contents are never exposed through the API or logs. Seeding applies only to an existing Secret
+whose data map is empty, the uninitialized state, and subsequent reads leave the seeded value
+alone. A missing Secret is a deployment error; a non-empty rejected or expired credential is
+reported as such and is never silently replaced from a file. The owner must complete sign-in to
+replace rejected or expired data. The egress credential provider consumes the Secret's
+`injection-value` key.
 
 ## Actor boundary
 

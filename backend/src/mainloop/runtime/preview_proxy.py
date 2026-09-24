@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import http.client
 import io
 import json
+import logging
 import os
 import re
 import socket
@@ -29,7 +31,11 @@ _PORT_LABEL = re.compile(
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024 * 1024
+_PREVIEW_TOUCH_INTERVAL_SECONDS = 20.0
+_RESPONSE_READ_BLOCK_BYTES = 64 * 1024
 _SHIM_PORT = 8090
+_LOGGER = logging.getLogger(__name__)
+_ACTIVE_PREVIEW_LEASES: dict[str, tuple[asyncio.Task[None], int]] = {}
 _HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -65,6 +71,14 @@ class PreviewTarget:
     shim_secret_name: str
     manifest: dict
     observed_state: str = "unknown"
+
+
+class _PreviewPreForwardFailure(ConnectionError):
+    """The actor request was not sent, so retrying cannot duplicate application work."""
+
+
+class _PreviewForwardedFailure(ConnectionError):
+    """The actor request may have been applied, so its outcome is uncertain."""
 
 
 @dataclass(slots=True)
@@ -242,6 +256,59 @@ async def _touch_preview(workspace_id: str) -> None:
     await workspace_adapter.touch_workspace(workspace_id, reason="preview")
 
 
+def _preview_user_id(headers) -> str | None:
+    """Use only an explicitly trusted ingress identity or the Kind-only local identity."""
+    if os.environ.get("SUBSTRATE_PREVIEW_LOCAL_DEV_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return "local-dev-user"
+    if os.environ.get("SUBSTRATE_PREVIEW_TRUSTED_INGRESS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return None
+    value = headers.get("cf-access-authenticated-user-email", "").strip()
+    return value or None
+
+
+async def _keep_preview_awake(workspace_id: str) -> None:
+    while True:
+        await asyncio.sleep(_PREVIEW_TOUCH_INTERVAL_SECONDS)
+        try:
+            await _touch_preview(workspace_id)
+        except Exception as exc:
+            # Activity accounting must not terminate an otherwise healthy preview stream.
+            _LOGGER.warning(
+                "preview activity touch failed for workspace %s (%s)",
+                workspace_id,
+                type(exc).__name__,
+            )
+
+
+@contextlib.asynccontextmanager
+async def _preview_activity_lease(workspace_id: str):
+    lease = _ACTIVE_PREVIEW_LEASES.get(workspace_id)
+    if lease is None:
+        task = asyncio.create_task(_keep_preview_awake(workspace_id))
+        _ACTIVE_PREVIEW_LEASES[workspace_id] = (task, 1)
+    else:
+        task, count = lease
+        _ACTIVE_PREVIEW_LEASES[workspace_id] = (task, count + 1)
+    try:
+        yield
+    finally:
+        current_task, count = _ACTIVE_PREVIEW_LEASES[workspace_id]
+        if count == 1:
+            del _ACTIVE_PREVIEW_LEASES[workspace_id]
+            current_task.cancel()
+            await asyncio.gather(current_task, return_exceptions=True)
+        else:
+            _ACTIVE_PREVIEW_LEASES[workspace_id] = (current_task, count - 1)
+
+
 def _read_head(reader) -> tuple[int, http.client.HTTPMessage]:
     status_line = reader.readline(8192)
     if not status_line.endswith(b"\r\n"):
@@ -269,12 +336,15 @@ def _connect_router(
     router = urlsplit(settings.substrate_router_address)
     if router.scheme != "http" or not router.hostname:
         raise ValueError("preview router address must be an HTTP origin")
-    sock = socket.create_connection(
-        (router.hostname, router.port or 80), timeout=timeout
-    )
-    sock.settimeout(timeout)
-    reader = sock.makefile("rb")
+    sock = None
+    reader = None
+    forwarding_started = False
     try:
+        sock = socket.create_connection(
+            (router.hostname, router.port or 80), timeout=timeout
+        )
+        sock.settimeout(timeout)
+        reader = sock.makefile("rb")
         upstream_host = f"actor-upstream:{port}"
         connect_request = (
             f"CONNECT {upstream_host} HTTP/1.1\r\n"
@@ -285,7 +355,9 @@ def _connect_router(
         sock.sendall(connect_request)
         connect_status, _ = _read_head(reader)
         if connect_status != 200:
-            raise ConnectionError(f"router CONNECT returned HTTP {connect_status}")
+            raise _PreviewPreForwardFailure(
+                f"router CONNECT returned HTTP {connect_status}"
+            )
         request_headers = [
             (name, value)
             for name, value in headers
@@ -303,14 +375,26 @@ def _connect_router(
             + "".join(f"{name}: {value}\r\n" for name, value in request_headers)
             + "\r\n"
         )
+        # A failing sendall may still have transmitted a prefix of a mutating request.
+        forwarding_started = True
         sock.sendall(wire.encode("latin1") + body)
         status, response_headers = _read_head(reader)
-        sock.settimeout(None)
         return _UpstreamHTTP(sock, reader, status, response_headers)
-    except Exception:
-        reader.close()
-        sock.close()
-        raise
+    except Exception as exc:
+        if reader is not None:
+            with contextlib.suppress(Exception):
+                reader.close()
+        if sock is not None:
+            with contextlib.suppress(Exception):
+                sock.close()
+        if isinstance(exc, (_PreviewPreForwardFailure, _PreviewForwardedFailure)):
+            raise
+        failure = (
+            _PreviewForwardedFailure
+            if forwarding_started
+            else _PreviewPreForwardFailure
+        )
+        raise failure("preview router connection failed") from exc
 
 
 def _response_headers(headers: http.client.HTTPMessage) -> list[tuple[str, str]]:
@@ -334,32 +418,74 @@ def _response_body(reader, headers: http.client.HTTPMessage, no_body: bool):
     if "chunked" in transfer:
         while True:
             line = reader.readline(8192)
-            if not line:
-                return
-            size = int(line.split(b";", 1)[0].strip(), 16)
+            if not line or len(line) >= 8192 or not line.endswith(b"\r\n"):
+                raise ValueError("invalid upstream chunk header")
+            raw_size = line.split(b";", 1)[0].strip()
+            if not re.fullmatch(rb"[0-9a-fA-F]+", raw_size):
+                raise ValueError("invalid upstream chunk size")
+            size = int(raw_size, 16)
             if size == 0:
-                while reader.readline(8192) not in (b"\r\n", b"\n", b""):
-                    pass
+                trailer_bytes = 0
+                while True:
+                    trailer = reader.readline(8192)
+                    trailer_bytes += len(trailer)
+                    if not trailer or trailer_bytes > _MAX_HEADER_BYTES:
+                        raise ValueError("invalid upstream chunk trailers")
+                    if trailer in (b"\r\n", b"\n"):
+                        break
                 return
-            chunk = reader.read(size)
-            if len(chunk) != size or reader.read(2) != b"\r\n":
+            remaining = size
+            while remaining:
+                chunk = reader.read(min(_RESPONSE_READ_BLOCK_BYTES, remaining))
+                if not chunk:
+                    raise ValueError("truncated upstream response")
+                remaining -= len(chunk)
+                yield chunk
+            if reader.read(2) != b"\r\n":
                 raise ValueError("truncated upstream response")
-            yield chunk
     length = headers.get("content-length")
     if length is not None:
+        if not re.fullmatch(r"[0-9]+", length.strip()):
+            raise ValueError("invalid upstream content length")
         remaining = int(length)
         while remaining:
-            chunk = reader.read(min(64 * 1024, remaining))
+            chunk = reader.read(min(_RESPONSE_READ_BLOCK_BYTES, remaining))
             if not chunk:
                 raise ValueError("truncated upstream response")
             remaining -= len(chunk)
             yield chunk
         return
     while True:
-        chunk = reader.read(64 * 1024)
+        chunk = reader.read(_RESPONSE_READ_BLOCK_BYTES)
         if not chunk:
             return
         yield chunk
+
+
+def _next_response_chunk(iterator) -> tuple[bool, bytes]:
+    try:
+        return True, next(iterator)
+    except StopIteration:
+        return False, b""
+
+
+async def _stream_response_body(
+    upstream: _UpstreamHTTP,
+    workspace_id: str,
+    no_body: bool,
+):
+    iterator = iter(_response_body(upstream.reader, upstream.headers, no_body))
+    try:
+        async with _preview_activity_lease(workspace_id):
+            while True:
+                available, chunk = await asyncio.to_thread(
+                    _next_response_chunk, iterator
+                )
+                if not available:
+                    return
+                yield chunk
+    finally:
+        upstream.close()
 
 
 def _waking_page() -> HTMLResponse:
@@ -373,11 +499,9 @@ def _waking_page() -> HTMLResponse:
 
 
 async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
-    user_id = (
-        request.headers.get("x-user-id")
-        or request.headers.get("cf-access-authenticated-user-email")
-        or "local-dev-user"
-    )
+    user_id = _preview_user_id(request.headers)
+    if user_id is None:
+        return Response("Authentication required", status_code=401)
     target = await _resolve_target(parsed.workspace_id, user_id)
     if target is None:
         return Response("Workspace not found", status_code=404)
@@ -416,28 +540,24 @@ async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
                 headers=headers,
                 body=body,
             )
-            if upstream.status not in (502, 503) or attempt == 1:
-                break
-            upstream.close()
-            upstream = None
-        except Exception:
+            break
+        except _PreviewPreForwardFailure:
             if attempt == 1:
                 return _waking_page()
+        except _PreviewForwardedFailure:
+            return Response(
+                "Preview request was forwarded but its outcome is unknown",
+                status_code=502,
+                headers={"cache-control": "no-store"},
+            )
+        except Exception:
+            return Response("Preview router is unavailable", status_code=502)
     if upstream is None:
-        return _waking_page()
-    if upstream.status in (502, 503):
-        upstream.close()
         return _waking_page()
     no_body = request.method == "HEAD" or upstream.status in (204, 304)
 
-    def stream_body():
-        try:
-            yield from _response_body(upstream.reader, upstream.headers, no_body)
-        finally:
-            upstream.close()
-
     response = StreamingResponse(
-        stream_body(),
+        _stream_response_body(upstream, parsed.workspace_id, no_body),
         status_code=upstream.status,
         media_type=None,
     )
@@ -584,11 +704,10 @@ async def _relay_websocket(
 
 
 async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
-    user_id = (
-        websocket.headers.get("x-user-id")
-        or websocket.headers.get("cf-access-authenticated-user-email")
-        or "local-dev-user"
-    )
+    user_id = _preview_user_id(websocket.headers)
+    if user_id is None:
+        await websocket.close(code=4401, reason="Authentication required")
+        return
     target = await _resolve_target(parsed.workspace_id, user_id)
     if target is None:
         await websocket.close(code=4404, reason="Workspace not found")
@@ -623,6 +742,7 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
 
     for attempt in range(2):
         writer = None
+        forwarding_started = False
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(router.hostname, router.port or 80), timeout
@@ -681,14 +801,13 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
                 + "".join(f"{name}: {value}\r\n" for name, value in handshake_headers)
                 + "\r\n"
             )
+            forwarding_started = True
             writer.write(wire.encode("latin1"))
             await writer.drain()
             status, headers = await asyncio.wait_for(_read_async_head(reader), timeout)
             if status != 101:
                 writer.close()
                 await writer.wait_closed()
-                if attempt == 0 and status in (502, 503):
-                    continue
                 break
             expected = base64.b64encode(
                 hashlib.sha1(
@@ -702,7 +821,8 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
             if protocol and protocol not in offered_protocols:
                 raise ValueError("upstream selected an unoffered websocket protocol")
             await websocket.accept(subprotocol=protocol)
-            await _relay_websocket(websocket, reader, writer)
+            async with _preview_activity_lease(parsed.workspace_id):
+                await _relay_websocket(websocket, reader, writer)
             return
         except Exception:
             if writer is not None:
@@ -711,7 +831,7 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
                     await writer.wait_closed()
                 except OSError:
                     pass
-            if attempt == 1:
+            if forwarding_started or attempt == 1:
                 break
     await websocket.close(code=1013, reason="Workspace waking up; retry shortly")
 
