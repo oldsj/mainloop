@@ -31,6 +31,61 @@ def completed(argv, returncode=0, stdout="", stderr=""):
 
 
 class Gate5SourceAndBuildTests(unittest.TestCase):
+    def parse_cli_args(self, manifest: Path, *extra: str):
+        argv = [
+            "gate5_setup.py",
+            "--context",
+            "kind-substrate-preview",
+            "--kubeconfig",
+            FIXTURE_KUBECONFIG,
+            "--substrate-src",
+            "/fixture/substrate",
+            "--atespace",
+            "nonroot-check",
+            "--template-version",
+            "v3",
+            "--image",
+            "localhost:5001/live-agent-gate@sha256:" + "a" * 64,
+            "--manifest",
+            str(manifest),
+            "--state-file",
+            "gate5-test-state.json",
+            "--egress-deny-all",
+            *extra,
+        ]
+        with patch("sys.argv", argv):
+            return gate5_setup.parse_args()
+
+    def test_worker_pool_option_drives_product_template_selector_and_labels(self):
+        manifest = (
+            Path(__file__).resolve().parents[3]
+            / "spikes/substrate-workspace-adapter/k8s/actor-template.yaml.tmpl"
+        )
+        args = self.parse_cli_args(manifest, "--worker-pool", "isolated-pool")
+        worker_pool, actor_template = gate5_setup.render_gate_manifest(args)
+
+        self.assertEqual(args.atespace, "nonroot-check")
+        self.assertEqual(args.worker_pool, "isolated-pool")
+        self.assertIn("name: isolated-pool", worker_pool)
+        self.assertIn("workload: isolated-pool", worker_pool)
+        self.assertIn("name: live-agent-gate-v3", actor_template)
+        self.assertIn("workload: isolated-pool", actor_template)
+        self.assertIn("mountPath: /work", actor_template)
+        self.assertIn("value: /work/repo", actor_template)
+        self.assertIn("durableDir: {}", actor_template)
+        self.assertIn("path: /healthz, port: 8090", actor_template)
+        self.assertNotIn("/workspace", actor_template)
+
+    def test_worker_pool_defaults_to_the_atespace_name(self):
+        manifest = (
+            Path(__file__).resolve().parents[3]
+            / "spikes/substrate-workspace-adapter/k8s/actor-template.yaml.tmpl"
+        )
+
+        args = self.parse_cli_args(manifest)
+
+        self.assertEqual(args.worker_pool, "nonroot-check")
+
     def test_image_manifest_preflight_checks_registry_endpoint_and_accept_types(self):
         calls = []
 
@@ -401,6 +456,7 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
             "context": "kind-substrate-preview",
             "kubeconfig": FIXTURE_KUBECONFIG,
             "atespace": "live-agent-gate",
+            "worker_pool": "live-agent-gate",
             "template_version": "v1",
             "image": "localhost:5001/live-agent-gate@sha256:" + "a" * 64,
             "actor_name": "claude-gate5",
@@ -423,6 +479,7 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
             stored = json.loads(Path(path).read_text())
             self.assertEqual(stored["run_id"], state["run_id"])
             self.assertEqual(stored["template_name"], "live-agent-gate-v1")
+            self.assertEqual(stored["worker_pool"], "live-agent-gate")
             self.assertEqual(stored["actor_name"], "claude-gate5")
             self.assertIsNone(stored["template_uid"])
             self.assertIsNone(stored["actor_uid"])
@@ -443,6 +500,15 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "template_name"):
                 gate5_setup.prepare_run_state(
                     self.args(path, template_version="v2"), self.cluster()
+                )
+
+    def test_rerun_refuses_changed_worker_pool(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = str(Path(temp_dir) / "state.json")
+            gate5_setup.prepare_run_state(self.args(path), self.cluster())
+            with self.assertRaisesRegex(RuntimeError, "worker_pool"):
+                gate5_setup.prepare_run_state(
+                    self.args(path, worker_pool="isolated-pool"), self.cluster()
                 )
 
 
@@ -580,6 +646,7 @@ class Gate5ActorIdentityTests(unittest.TestCase):
         return SimpleNamespace(
             state_file=path,
             atespace="live-agent-gate",
+            worker_pool="live-agent-gate",
             actor_name="claude-gate5",
             actor_timeout=5,
             worker_timeout=5,
@@ -689,11 +756,15 @@ class Gate5ActorIdentityTests(unittest.TestCase):
             path = str(Path(temp_dir) / "state.json")
             args = self.args(path)
             args.atespace = "native-codex"
+            args.worker_pool = "native-codex"
             control = SetupControl(None)
             observed = {}
 
-            async def wait_for_worker(_control, namespace, *_args, **_kwargs):
+            async def wait_for_worker(
+                _control, namespace, worker_selector, *_args, **_kwargs
+            ):
                 observed["namespace"] = namespace
+                observed["worker_selector"] = worker_selector
 
             with patch.object(gate5_setup, "wait_for_eligible_worker", wait_for_worker):
                 asyncio_run(
@@ -709,6 +780,7 @@ class Gate5ActorIdentityTests(unittest.TestCase):
                 )
 
             self.assertEqual(observed["namespace"], "native-codex")
+            self.assertEqual(observed["worker_selector"], "workload=native-codex")
 
     def test_owned_rerun_skips_worker_wait_when_its_actor_occupies_only_worker(self):
         with tempfile.TemporaryDirectory() as temp_dir:

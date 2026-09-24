@@ -2,44 +2,24 @@
 # Start only the actor-local shim. Native CLIs run headlessly once per delivered turn.
 set -eu
 
-AGENT_UID=10001
-AGENT_GID=10001
 CURRENT_UID="$(id -u)"
-export HOME=/home/agent
+export HOME="${HOME:-/work/.home}"
 WORKSPACE_PATH="${WORKSPACE_PATH:-/work/repo}"
 EXEC_SHIM_STATE_DIR="${EXEC_SHIM_STATE_DIR:-${WORKSPACE_PATH}/.mainloop/exec-shim}"
 export WORKSPACE_PATH EXEC_SHIM_STATE_DIR
 
-if [[ ${CURRENT_UID} -eq 0 && ${1-} != "--runtime-user" ]]; then
-  if ! command -v setpriv >/dev/null 2>&1; then
-    echo 'setpriv is required to run the actor shim without root' >&2
-    exit 1
-  fi
-  EXEC_SHIM_STATE_DIR="$(realpath -m "${EXEC_SHIM_STATE_DIR}")"
-  case "${EXEC_SHIM_STATE_DIR}" in
-  /work/*) ;;
-  *)
-    echo 'EXEC_SHIM_STATE_DIR must be under /work' >&2
-    exit 1
-    ;;
-  esac
-  export EXEC_SHIM_STATE_DIR
-  mkdir -p "${HOME}" /work "${EXEC_SHIM_STATE_DIR}"
-  chown -R "${AGENT_UID}:${AGENT_GID}" "${HOME}" /work
-  exec setpriv --reuid "${AGENT_UID}" --regid "${AGENT_GID}" --init-groups \
-    --bounding-set=-all --no-new-privs -- "$0" --runtime-user
-fi
-
-if [[ ${1-} == "--runtime-user" ]]; then
-  shift
-fi
 if [[ ${CURRENT_UID} -eq 0 ]]; then
   echo 'entrypoint refused to continue as UID 0' >&2
   exit 1
 fi
 
+if ! mkdir -p "${WORKSPACE_PATH}" || [[ ! -w ${WORKSPACE_PATH} ]]; then
+  printf 'entrypoint requires a writable workspace directory for UID %s: %s\n' \
+    "${CURRENT_UID}" "${WORKSPACE_PATH}" >&2
+  exit 1
+fi
+
 node /usr/local/bin/prepare-native-agent-config.cjs
-mkdir -p "${WORKSPACE_PATH}"
 [[ -d "${WORKSPACE_PATH}/.git" ]] || git -C "${WORKSPACE_PATH}" init -q
 
 # Credential-free marker retained for the bounded Gate 5 restore/suspend-resume probe.

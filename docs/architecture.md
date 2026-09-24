@@ -171,10 +171,9 @@ Kubernetes sign-in job and the external egress credential-provider contract are 
 - Actor egress is restricted by host allowlists and passes through the egress proxy.
 - Workspace lifecycle and credential paths have fake-backed coverage; their combined behavior
   has not been verified end to end on a live cluster.
-- Substrate starts actor containers as UID 0 without `SETUID`/`SETGID`, so the image's drop to
-  UID `10001` fails. The entrypoint and shim refuse to continue as root, so agent actors do not
-  start on the current version. They need a Substrate runtime that honors a non-root user; this
-  is an upstream gap.
+- Mainloop pins a Substrate fork whose actor runtime runs containers as the image's `USER` in
+  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. A fresh `durableDir`
+  must be writable by that user for the workspace to start, which still needs a live check.
 - The actor's observed `RLIMIT_NOFILE` is 1024.
 - Restoring Postgres from an actor snapshot is unverified.
 - Live wake-on-preview is unverified.

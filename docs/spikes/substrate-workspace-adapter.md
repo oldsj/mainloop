@@ -123,9 +123,9 @@ Bash tool.
 ## Substrate source
 
 Mainloop runs Substrate from a fork, [`oldsj/substrate`](https://github.com/oldsj/substrate),
-branch `patched`, pinned at `ab1995089e1804df8f62fc1144cfe2f92b18fe20`. That branch is upstream
+branch `patched`, pinned at `ce265c1dbd3775faf10c95f71f2c16ff3d47c332`. That branch is upstream
 `cdac9baef81dd319b46086d695266e6161e9e592` plus a short patch stack listed in the fork's
-`FORK.md`: notably, actor containers run as the image's `USER` in its `WORKDIR`, and
+`FORK.md`: notably, actor containers run as the image's `USER` in its `WORKDIR` with the image's file owners kept, fresh durable volumes are owned by that user, and
 `kubectl ate` gains `get`, `create` and `update egress-policy`. The fork carries no
 Mainloop-specific code. `backend/scripts/gate5_setup.py` refuses any other commit. The
 evidence below records the commit each result was measured on; results before the fork were
@@ -147,7 +147,7 @@ KIND_CLUSTER_NAME=substrate-preview KUBECTL_CONTEXT=kind-substrate-preview \
   KUBECONFIG=/tmp/substrate-preview-kubeconfig \
   "$SUBSTRATE_SRC"/hack/install-ate-kind.sh --deploy-atenet --atenet-dataplane=agentgateway
 # build kubectl-ate, build+push an actor image, apply one of:
-#   k8s/actor-template.yaml.tmpl            -- mainloop-workspace: Herdr + agentctl
+#   k8s/actor-template.yaml.tmpl            -- mainloop-workspace: headless native-agent shim
 #   k8s/preview-gate-template.yaml.tmpl      -- preview-gate: real Vite dev server + exec shim
 #     + k8s/preview-proxy.yaml.tmpl          -- the NGINX ate-target-actor header-proxy in front
 #   k8s/dev-service-gate-template.yaml.tmpl -- dev-service-gate: real psql + exec shim
@@ -290,9 +290,9 @@ Phase 1 (recovery plan step 2) repairs the harness findings and removes the boot
 - `entrypoint.sh` no longer fetches a credential or needs network access to reach a running
   state. There is no credential-fetch helper or relay path in the image. Credential delivery
   remains a separate, gated step and is never performed during golden-actor warmup.
-- `k8s/live-agent-gate-template.yaml.tmpl` no longer sets `CRED_SERVER` in the (shared,
-  immutable) container env, and its ActorTemplate name is now versioned
-  (`live-agent-gate-${TEMPLATE_VERSION}`) so a failed golden snapshot is never reused.
+- The product `k8s/actor-template.yaml.tmpl` is also the Gate 5 manifest. The harness versions
+  its ActorTemplate name (`live-agent-gate-${TEMPLATE_VERSION}`) so a failed golden snapshot is
+  never reused; the template starts without credentials or external network access.
 - `backend/src/mainloop/runtime/substrate.py` gained `ensure_atespace`/`get_actor_template`/
   `create_actor_template`/`get_eligible_workers`, plus bounded, exception-raising waits for
   golden snapshots, eligible workers, actor state, and the live actor health route. Rerun

@@ -90,29 +90,26 @@ test('exec shim refuses UID 0 unless its explicit test-only override is set', ()
   assert.match(result.stderr, /exec-shim refuses to start as UID 0/);
 });
 
-test('actor image prepares its writable paths before dropping root privileges', () => {
+test('actor image runs as its non-root user and checks the mounted workspace', () => {
   const imageDockerfile = fs.readFileSync(dockerfile, 'utf8');
   const imageEntrypoint = fs.readFileSync(entrypoint, 'utf8');
-  assert.ok(imageDockerfile.includes('util-linux'));
-  assert.match(imageDockerfile, /^USER 0:0$/m);
-  const statePreparation = imageEntrypoint.indexOf(
-    'mkdir -p "${HOME}" /work "${EXEC_SHIM_STATE_DIR}"'
+  assert.match(imageDockerfile, /^USER 10001:10001$/m);
+  assert.match(imageDockerfile, /^WORKDIR \/work$/m);
+  assert.doesNotMatch(imageDockerfile, /util-linux|USER 0:0/);
+  assert.doesNotMatch(imageEntrypoint, /setpriv|--runtime-user|chown/);
+  const rootRefusal = imageEntrypoint.indexOf('entrypoint refused to continue as UID 0');
+  const workspaceCheck = imageEntrypoint.search(/\[\[ ! -w "?\$\{WORKSPACE_PATH\}"? \]\]/);
+  const workspaceError = imageEntrypoint.indexOf(
+    'entrypoint requires a writable workspace directory'
   );
-  const ownership = imageEntrypoint.indexOf('chown -R "${AGENT_UID}:${AGENT_GID}" "${HOME}" /work');
-  const privilegeDrop = imageEntrypoint.indexOf('exec setpriv');
+  const configPreparation = imageEntrypoint.indexOf(
+    'node /usr/local/bin/prepare-native-agent-config.cjs'
+  );
   const shimStart = imageEntrypoint.indexOf('node "${EXEC_SHIM}"');
-  assert.ok(statePreparation >= 0 && statePreparation < ownership);
-  assert.ok(ownership >= 0 && ownership < privilegeDrop);
-  assert.ok(privilegeDrop >= 0 && privilegeDrop < shimStart);
-  for (const option of [
-    '--reuid "${AGENT_UID}"',
-    '--regid "${AGENT_GID}"',
-    '--init-groups',
-    '--bounding-set=-all',
-    '--no-new-privs'
-  ]) {
-    assert.ok(imageEntrypoint.includes(option), `entrypoint is missing ${option}`);
-  }
+  assert.ok(rootRefusal >= 0 && rootRefusal < workspaceCheck);
+  assert.ok(workspaceCheck >= 0 && workspaceCheck < configPreparation);
+  assert.ok(workspaceError >= 0 && workspaceError < configPreparation);
+  assert.ok(configPreparation >= 0 && configPreparation < shimStart);
   assert.equal(imageEntrypoint.includes('IS_SANDBOX'), false);
   assert.equal(imageDockerfile.includes('EXEC_SHIM_TEST_ALLOW_ROOT'), false);
 });

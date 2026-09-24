@@ -6,7 +6,7 @@
 FROM node:22-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      jq ca-certificates git curl procps ripgrep util-linux \
+      jq ca-certificates git curl procps ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 agent
 # The run-specific Substrate MITM CA is a public trust anchor. BuildKit mounts
@@ -30,15 +30,16 @@ COPY exec-shim.js /usr/local/bin/exec-shim.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-native-agent /usr/local/bin/mainloop-reauth \
     && mkdir -p /work && chown 10001:10001 /work
+WORKDIR /work
 ENV EXEC_SHIM=/usr/local/bin/exec-shim.js
 ENV NATIVE_AGENT_LAUNCHER=/usr/local/bin/start-native-agent
-ENV HOME=/home/agent
+ENV HOME=/work/.home
 ENV WORKSPACE_PATH=/work/repo
-ENV CODEX_HOME=/home/agent/.codex
+ENV CODEX_HOME=/work/.codex
 ENV EXEC_SHIM_STATE_DIR=/work/repo/.mainloop/exec-shim
 ENV AGENT_SYSTEM_PROMPT_FILE=/etc/agent-config/mainloop-system.txt
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-# Substrate currently starts actors as root regardless of this image's USER setting.
-USER 0:0
+# The pinned Substrate fork honors the image's runtime user and working directory.
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

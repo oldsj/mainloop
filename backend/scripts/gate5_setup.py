@@ -34,11 +34,14 @@ Usage:
         --ate-cli "$SUBSTRATE_SRC/bin/kubectl-ate" \\
         --ko "$SUBSTRATE_SRC/bin/ko" \\
         --substrate-src "$SUBSTRATE_SRC" \\
-        --atespace live-agent-gate --template-version v1 \\
+        --atespace nonroot-check --worker-pool nonroot-check --template-version v1 \\
         --image localhost:5001/live-agent-gate@sha256:... \\
-        --manifest ../spikes/substrate-workspace-adapter/k8s/live-agent-gate-template.yaml.tmpl \\
+        --manifest ../spikes/substrate-workspace-adapter/k8s/actor-template.yaml.tmpl \\
         --state-file /tmp/gate5-run-state.json \\
         --egress-deny-all
+
+    Use a fresh atespace for this check: the applied product WorkerPool requests two replicas.
+    --worker-pool defaults to the atespace name so its label is distinct from other namespaces.
 
     Re-running with the same --state-file reconciles the persisted actor uid against the
 cluster's current state rather than blindly creating or resuming; a name collision with a
@@ -83,8 +86,7 @@ from mainloop.runtime.substrate import (  # noqa: E402
 
 # The `patched` branch of https://github.com/oldsj/substrate: upstream Substrate at
 # cdac9baef81dd319b46086d695266e6161e9e592 plus the patches listed in its FORK.md.
-SUBSTRATE_FORK_COMMIT = "ab1995089e1804df8f62fc1144cfe2f92b18fe20"
-WORKER_SELECTOR = "workload=live-agent-gate"
+SUBSTRATE_FORK_COMMIT = "ce265c1dbd3775faf10c95f71f2c16ff3d47c332"
 WORKER_SANDBOX_CLASS = "gvisor"
 ACTOR_SHIM_PORT = 8090
 
@@ -99,6 +101,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--router-port", type=int, default=18091)
     p.add_argument("--atespace", required=True)
     p.add_argument(
+        "--worker-pool",
+        help="WorkerPool name and workload label (defaults to the atespace name)",
+    )
+    p.add_argument(
         "--template-version",
         required=True,
         help='e.g. "v2" -- never reuse one whose golden snapshot failed',
@@ -109,7 +115,9 @@ def parse_args() -> argparse.Namespace:
         help="already-built and pushed image digest, e.g. localhost:5001/live-agent-gate@sha256:...",
     )
     p.add_argument(
-        "--manifest", required=True, help="path to live-agent-gate-template.yaml.tmpl"
+        "--manifest",
+        required=True,
+        help="path to the three-document product actor template",
     )
     p.add_argument("--bucket-name", default="ate-snapshots")
     p.add_argument("--actor-name", default="claude-gate5")
@@ -129,7 +137,10 @@ def parse_args() -> argparse.Namespace:
     )
     egress.add_argument("--egress-allow-all", action="store_true")
     egress.add_argument("--egress-deny-all", action="store_true")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.worker_pool is None:
+        args.worker_pool = args.atespace
+    return args
 
 
 def load_state(path: str) -> dict:
@@ -150,17 +161,26 @@ def save_state(path: str, state: dict) -> None:
 
 
 def render_manifest(
-    path: str, *, atespace: str, template_name: str, bucket_name: str, image: str
+    path: str,
+    *,
+    atespace: str,
+    worker_pool_name: str,
+    template_name: str,
+    bucket_name: str,
+    image: str,
 ) -> list[str]:
-    """Substitutes the template's ${ATESPACE}/${TEMPLATE_NAME}/${BUCKET_NAME} placeholders
-    and the __IMAGE__ marker, then splits the multi-document YAML on its own '---'
-    separators. Returns [namespace_and_workerpool_doc, actor_template_doc]."""
+    """Substitutes the template placeholders and image marker, then splits the multi-document
+    YAML on its own '---' separators. Returns [namespace_and_workerpool_doc,
+    actor_template_doc]."""
     with open(path) as f:
         raw = f.read()
     rendered = (
         string.Template(raw)
         .safe_substitute(
-            ATESPACE=atespace, TEMPLATE_NAME=template_name, BUCKET_NAME=bucket_name
+            ATESPACE=atespace,
+            WORKER_POOL_NAME=worker_pool_name,
+            TEMPLATE_NAME=template_name,
+            BUCKET_NAME=bucket_name,
         )
         .replace("__IMAGE__", image)
     )
@@ -171,6 +191,19 @@ def render_manifest(
         )
     namespace_and_workerpool = f"{docs[0]}\n---\n{docs[1]}\n"
     return [namespace_and_workerpool, docs[2] + "\n"]
+
+
+def render_gate_manifest(args: argparse.Namespace) -> list[str]:
+    """Render the product template with this run's atespace, pool, and versioned template."""
+    template_name = f"live-agent-gate-{args.template_version}"
+    return render_manifest(
+        args.manifest,
+        atespace=args.atespace,
+        worker_pool_name=args.worker_pool,
+        template_name=template_name,
+        bucket_name=args.bucket_name,
+        image=args.image,
+    )
 
 
 def verify_substrate_source(source: str, *, runner=subprocess.run) -> str:
@@ -289,6 +322,7 @@ def prepare_run_state(args: argparse.Namespace, cluster: dict[str, str]) -> dict
         "context": args.context,
         "cluster_identity": cluster,
         "atespace": args.atespace,
+        "worker_pool": args.worker_pool,
         "template_name": template_name,
         "image_digest": args.image,
         "actor_name": args.actor_name,
@@ -725,14 +759,15 @@ async def wait_for_worker_if_actor_is_absent(
             )
         return
 
+    worker_selector = f"workload={args.worker_pool}"
     print(
         f"-- waiting for an eligible worker in namespace={args.atespace}, "
-        f"selector={WORKER_SELECTOR}, sandbox={WORKER_SANDBOX_CLASS}"
+        f"selector={worker_selector}, sandbox={WORKER_SANDBOX_CLASS}"
     )
     await wait_for_eligible_worker(
         control,
         args.atespace,
-        WORKER_SELECTOR,
+        worker_selector,
         WORKER_SANDBOX_CLASS,
         timeout_s=args.worker_timeout,
     )
@@ -818,13 +853,7 @@ async def async_main(args: argparse.Namespace) -> None:
     print(f"-- registering atespace {args.atespace}")
     await control.ensure_atespace(args.atespace)
 
-    namespace_and_workerpool_doc, actor_template_doc = render_manifest(
-        args.manifest,
-        atespace=args.atespace,
-        template_name=template_name,
-        bucket_name=args.bucket_name,
-        image=args.image,
-    )
+    namespace_and_workerpool_doc, actor_template_doc = render_gate_manifest(args)
     print("-- resolving and applying the Namespace + WorkerPool")
     apply_worker_pool(
         namespace_and_workerpool_doc,
