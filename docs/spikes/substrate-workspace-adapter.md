@@ -1,5 +1,7 @@
 # Spike: Substrate as Mainloop's Kubernetes workspace runtime
 
+> Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
+
 Status: local spike, not a product feature. Adapter code lives in
 `backend/src/mainloop/runtime/substrate.py` and `workspace_adapter.py`; the actor manifest
 lives in `spikes/substrate-workspace-adapter/`. The earlier live proof used a Herdr-backed

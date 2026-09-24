@@ -1,5 +1,7 @@
 # Mainloop Substrate preview
 
+> Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
+
 This local Kind preview runs Mainloop's backend, frontend, and PostgreSQL in `mainloop-control`. The backend uses the headless Claude and Codex actors already provisioned in the preview cluster. This overlay does not create actors or include shim-token values.
 
 ## Prerequisites

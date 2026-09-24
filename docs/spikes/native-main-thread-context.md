@@ -1,5 +1,7 @@
 # Native main thread and cross-session context (plan r7)
 
+> Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
+
 Status labels: **Implemented** = built and exercised on the local kind cluster; **Measured** = observed with real
 agents (Claude Code 2.1.278, codex-cli 0.155.1); **Proposed** = design intent not yet built. Nothing here is
 production-tested. Fixtures and fakes cover the default tests; live evidence is outside the repository.

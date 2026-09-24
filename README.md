@@ -118,7 +118,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 
 **Guides**:
 
-- [Architecture](docs/architecture.md) - System design and data flow
+- [Architecture](docs/architecture.md) - Substrate workspaces, delivery, previews, and credentials
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
 ## License
