@@ -29,6 +29,7 @@ from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime import workspace_adapter
 from mainloop.runtime.agent_api import hash_token, token_for
+from mainloop.runtime.credential_broker import CredentialNeedsSignin
 from mainloop.runtime.journal import completed_turns, parse_journal
 from mainloop.runtime.standing import content_hash
 from mainloop.runtime.substrate import TransportError
@@ -36,8 +37,14 @@ from mainloop.runtime.substrate_workspace import (
     SubstrateWorkspace,
     WorkspaceUnavailable,
 )
+from mainloop.sse import notify_session_needs_input
 
-from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
+from models import (
+    NativeDeliveryInfo,
+    NativeSessionInfo,
+    SessionNotification,
+    SessionStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +360,7 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
     """Check native session readiness in its Substrate actor."""
     ws = workspace_for(binding)
     await ws.require_ready()
+    await ws.prepare_credentials()
     name = binding["agent_name"]
     status = await ws.agent_status(name)
     fields: dict = {}
@@ -390,6 +398,12 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     )
                 ).total_lines
             await _set_delivery(message_id, "sending", cursor_before=cursor_before)
+        except CredentialNeedsSignin as exc:
+            await _set_delivery(
+                message_id, "failed", detail=f"not sent: {exc.provider} needs sign-in"
+            )
+            await _notify_credential_signin(session_id, exc.provider)
+            return
         except Exception as exc:
             logger.exception("delivery not attempted for %s", message_id)
             await _set_delivery(
@@ -415,6 +429,43 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
             )
             return
     await sync(session_id)
+
+
+async def _notify_credential_signin(
+    session_id: str, provider: str, *, prompt_sent: bool = False
+) -> None:
+    session = await db.get_session(session_id)
+    if session is None:
+        return
+    title = f"{provider.title()} needs sign-in"
+    preview = (
+        "The agent rejected a provider request. Sign in before sending again."
+        if prompt_sent
+        else "No prompt was sent. Open the workspace page to start sign-in."
+    )
+    notification = SessionNotification(
+        id=f"credential-signin-{provider}-{session_id}",
+        session_id=session_id,
+        user_id=session.user_id,
+        title=title,
+        preview=preview,
+    )
+    async with db.connection() as conn:
+        await conn.execute(
+            """INSERT INTO session_notifications
+               (id, session_id, user_id, title, preview, read, created_at)
+               VALUES ($1,$2,$3,$4,$5,FALSE,$6)
+               ON CONFLICT (id) DO UPDATE SET
+                   title=EXCLUDED.title, preview=EXCLUDED.preview, read=FALSE,
+                   created_at=EXCLUDED.created_at""",
+            notification.id,
+            notification.session_id,
+            notification.user_id,
+            notification.title,
+            notification.preview,
+            notification.created_at,
+        )
+    await notify_session_needs_input(notification.user_id, session_id, title, preview)
 
 
 async def sync(session_id: str) -> None:
@@ -484,6 +535,10 @@ async def _sync_locked(session_id: str) -> dict | None:
                 binding["native_session_id"],
                 binding["journal_cursor"],
             )
+            if await ws.credential_rejected():
+                await _notify_credential_signin(
+                    session_id, binding["kind"], prompt_sent=True
+                )
         except (TransportError, WorkspaceUnavailable) as exc:
             logger.info("sync skipped for %s: %s", session_id, exc)
             return None

@@ -116,9 +116,9 @@ function installToken(token) {
   return true;
 }
 
-function installCredential(name, contents) {
+function installCredential(name, contents, replace = false) {
   const destination = credentialPaths.get(name);
-  if (!destination) return false;
+  if (!destination || (replace && !['codex-auth', 'claude-token'].includes(name))) return false;
   if (
     typeof contents !== 'string' ||
     !contents ||
@@ -133,6 +133,22 @@ function installCredential(name, contents) {
       return null;
     }
     if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return null;
+    if (
+      replace &&
+      (!auth.tokens ||
+        auth.tokens.refresh_token !== '' ||
+        typeof auth.tokens.account_id !== 'string' ||
+        !isJwt(auth.tokens.access_token) ||
+        !isJwt(auth.tokens.id_token))
+    ) {
+      return null;
+    }
+  } else if (
+    replace &&
+    name === 'claude-token' &&
+    !contents.startsWith('sk-ant-oat01-mainloop-egress-')
+  ) {
+    return null;
   }
 
   const directory = path.dirname(destination);
@@ -144,7 +160,25 @@ function installCredential(name, contents) {
   try {
     fd = fs.openSync(destination, 'wx', 0o600);
   } catch (err) {
-    if (err.code === 'EEXIST') return 'exists';
+    if (err.code === 'EEXIST' && !replace) return 'exists';
+    if (err.code === 'EEXIST' && replace) {
+      const temporary = destination + '.' + crypto.randomUUID() + '.tmp';
+      try {
+        fd = fs.openSync(temporary, 'wx', 0o600);
+        fs.writeFileSync(fd, contents, 'utf8');
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fs.renameSync(temporary, destination);
+        fs.chmodSync(destination, 0o600);
+        return true;
+      } catch (writeError) {
+        try {
+          if (fd !== undefined) fs.closeSync(fd);
+        } catch {}
+        fs.rmSync(temporary, { force: true });
+        throw writeError;
+      }
+    }
     throw err;
   }
   try {
@@ -160,6 +194,10 @@ function installCredential(name, contents) {
     throw err;
   }
   return true;
+}
+
+function isJwt(value) {
+  return typeof value === 'string' && value.split('.').length === 3;
 }
 
 function atomicJsonWrite(file, document) {
@@ -394,6 +432,12 @@ function turnResponse(job) {
     saveJob(job);
   }
   const stderr = readBounded(turnStderrPath(job));
+  const authDiagnostic = `${stderr.text}\n${JSON.stringify(parsed.events)}`;
+  const credentialRejected =
+    job.status === 'failed' &&
+    /(?:HTTP\s+)?401\b|unauthori[sz]ed|invalid[_ ]api[_ ]key|authentication_failed/i.test(
+      authDiagnostic
+    );
   return {
     id: job.id,
     agent: job.agent,
@@ -403,6 +447,7 @@ function turnResponse(job) {
     final_message: parsed.final_message,
     events: parsed.events,
     stderr: stderr.text,
+    credential_rejected: credentialRejected,
     truncated: job.truncated || stderr.truncated
   };
 }
@@ -782,14 +827,15 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (req.method === 'POST' && req.url === '/credential') {
+  if ((req.method === 'POST' || req.method === 'PUT') && req.url === '/credential') {
     if (!authorized(req)) return unauthorized(res);
+    const replace = req.method === 'PUT';
     handleBody(
       req,
       res,
       (document) => {
         try {
-          const installed = installCredential(document.name, document.contents);
+          const installed = installCredential(document.name, document.contents, replace);
           if (installed === null) {
             res.writeHead(400).end('invalid credential');
             return;
@@ -802,7 +848,7 @@ const server = http.createServer((req, res) => {
             res.writeHead(409).end('credential file already exists');
             return;
           }
-          res.writeHead(201).end('credential stored');
+          res.writeHead(replace ? 200 : 201).end('credential stored');
         } catch {
           res.writeHead(500).end('credential could not be stored');
         }

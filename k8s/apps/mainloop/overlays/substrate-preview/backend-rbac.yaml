@@ -17,6 +17,21 @@ rules:
       - mainloop-shim-live-agent-gate-headless-claude-reproof
       - mainloop-shim-native-codex-headless-codex-reproof
     verbs: [get]
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames:
+      - mainloop-credential-owner-codex
+      - mainloop-credential-owner-claude
+    verbs: [get, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: ['']
+    resources: [pods/log]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

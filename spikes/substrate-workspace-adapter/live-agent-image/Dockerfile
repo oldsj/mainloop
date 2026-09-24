@@ -24,10 +24,11 @@ COPY codex /usr/local/bin/codex
 COPY codex-code-mode-host /usr/local/bin/codex-code-mode-host
 COPY bin/start-native-agent /usr/local/bin/start-native-agent
 COPY bin/prepare-native-agent-config.cjs /usr/local/bin/prepare-native-agent-config.cjs
+COPY bin/mainloop-reauth /usr/local/bin/mainloop-reauth
 COPY agent-config/mainloop-system.txt /etc/agent-config/mainloop-system.txt
 COPY exec-shim.js /usr/local/bin/exec-shim.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-native-agent \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-native-agent /usr/local/bin/mainloop-reauth \
     && mkdir -p /work && chown 10001:10001 /work
 ENV EXEC_SHIM=/usr/local/bin/exec-shim.js
 ENV NATIVE_AGENT_LAUNCHER=/usr/local/bin/start-native-agent

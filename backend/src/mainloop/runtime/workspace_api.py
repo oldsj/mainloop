@@ -12,6 +12,11 @@ from mainloop.db import db
 from mainloop.runtime import workspace_adapter
 from mainloop.runtime.actor_provisioner import get_actor_provisioner
 from mainloop.runtime.contracts import ContractError
+from mainloop.runtime.credential_broker import CredentialBroker, CredentialBrokerError
+from mainloop.runtime.credential_reauth import (
+    CredentialReauthRunner,
+    KubernetesCredentialReauthRunner,
+)
 from mainloop.sse import notify_workspace_updated
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
@@ -23,6 +28,8 @@ from models import (
 )
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
+_reauth_runner: CredentialReauthRunner = KubernetesCredentialReauthRunner()
+_reauth_owners: dict[str, tuple[str, str]] = {}
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -348,3 +355,92 @@ async def delete_workspace(
                     row["conversation_id"],
                 )
     return Response(status_code=204)
+
+
+@router.get("/{workspace_id}/credentials")
+async def list_workspace_credentials(
+    workspace_id: str,
+    user_id: str | None = Header(default=None, alias="X-User-ID"),
+):
+    owner = _user_id(user_id)
+    await _require_owned_workspace(workspace_id, owner)
+    _require_credential_owner(owner)
+    broker = CredentialBroker()
+    states = []
+    for provider in ("codex", "claude"):
+        try:
+            status = await broker.status(provider)
+        except CredentialBrokerError as exc:
+            raise HTTPException(
+                status_code=503, detail="Credential status is unavailable"
+            ) from exc
+        states.append(
+            {
+                "provider": provider,
+                "available": status.available if status else False,
+                "needs_signin": status.needs_signin if status else True,
+                "expires_at": (
+                    status.expires_at.isoformat()
+                    if status and status.expires_at
+                    else None
+                ),
+            }
+        )
+    return {"credentials": states}
+
+
+@router.post("/{workspace_id}/credentials/{provider}/reauth")
+async def start_workspace_credential_reauth(
+    workspace_id: str,
+    provider: str,
+    user_id: str | None = Header(default=None, alias="X-User-ID"),
+):
+    owner = _user_id(user_id)
+    await _require_owned_workspace(workspace_id, owner)
+    _require_credential_owner(owner)
+    if provider not in {"codex", "claude"}:
+        raise HTTPException(status_code=404, detail="Credential provider not found")
+    try:
+        job = await _reauth_runner.start(provider, owner=owner)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Sign-in could not be started"
+        ) from exc
+    _reauth_owners[job.id] = (workspace_id, owner)
+    return _reauth_status_payload(job)
+
+
+@router.get("/{workspace_id}/credentials/reauth/{job_id}")
+async def workspace_credential_reauth_status(
+    workspace_id: str,
+    job_id: str,
+    user_id: str | None = Header(default=None, alias="X-User-ID"),
+):
+    owner = _user_id(user_id)
+    await _require_owned_workspace(workspace_id, owner)
+    if _reauth_owners.get(job_id) != (workspace_id, owner):
+        raise HTTPException(status_code=404, detail="Sign-in job not found")
+    job = await _reauth_runner.status(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Sign-in job not found")
+    if job.state in {"completed", "failed"}:
+        _reauth_owners.pop(job_id, None)
+    return _reauth_status_payload(job)
+
+
+def _reauth_status_payload(job) -> dict:
+    return {
+        "id": job.id,
+        "provider": job.provider,
+        "state": job.state,
+        "challenge": (
+            {"url": job.challenge.url, "code": job.challenge.code}
+            if job.challenge
+            else None
+        ),
+    }
+
+
+def _require_credential_owner(user_id: str) -> None:
+    if user_id != settings.substrate_credential_owner_user_id:
+        raise HTTPException(status_code=404, detail="Workspace not found")

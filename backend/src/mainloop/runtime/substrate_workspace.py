@@ -19,6 +19,7 @@ from urllib.parse import urlencode, urlsplit
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from mainloop.config import settings
+from mainloop.runtime.credential_broker import CredentialBroker
 from mainloop.runtime.substrate import TransportError
 
 logger = logging.getLogger(__name__)
@@ -207,6 +208,7 @@ class SubstrateWorkspace:
         native_session_id: str | None = None,
         router_address: str | None = None,
         timeout: float | None = None,
+        credential_broker: CredentialBroker | None = None,
     ):
         if not _DNS_LABEL.fullmatch(atespace) or not _DNS_LABEL.fullmatch(actor):
             raise ValueError("Substrate atespace and actor must be DNS labels")
@@ -237,6 +239,7 @@ class SubstrateWorkspace:
         if not _DNS_LABEL.fullmatch(self.secret_name):
             raise ValueError("Substrate shim Secret name must be a DNS label")
         self._token_value: str | None = None
+        self.credential_broker = credential_broker or CredentialBroker()
 
     def set_native_session_id(self, native_session_id: str | None) -> None:
         self.native_session_id = native_session_id
@@ -335,6 +338,24 @@ class SubstrateWorkspace:
             )
         return state
 
+    async def prepare_credentials(self) -> None:
+        """Install provider-shaped placeholders; the real credential stays in its Secret."""
+        if self.agent == "codex":
+            name = "codex-auth"
+            placeholder = await self.credential_broker.codex_placeholder_auth()
+        else:
+            name = "claude-token"
+            placeholder = await self.credential_broker.claude_placeholder_token()
+        response = await self._request(
+            "PUT",
+            "/credential",
+            body={"name": name, "contents": placeholder},
+        )
+        if response.status not in (200, 201):
+            raise RuntimeError(
+                f"Substrate {self.agent.title()} placeholder delivery failed (HTTP {response.status})"
+            )
+
     async def agent_status(self, name: str) -> dict | None:
         if not name:
             raise ValueError("native agent name is required")
@@ -356,11 +377,12 @@ class SubstrateWorkspace:
         del binding, name, resume, extra
         self.native_session_id = native_id
         await self.require_ready()
+        await self.prepare_credentials()
         query = urlencode({"agent": self.agent})
         response = await self._request("GET", f"/agent/ready?{query}")
         self._json(response, method="GET /agent/ready")
-        # The actor image and its provider credentials are provisioned before binding. A start
-        # verifies them without spawning another CLI process or creating/resuming an actor.
+        # The actor-local file is synthetic; the egress provider injects the current token.
+        # Starting the native CLI remains the shim's turn API's responsibility.
         return {"actor": self.actor}
 
     async def send(self, name: str, text: str) -> None:
@@ -384,6 +406,11 @@ class SubstrateWorkspace:
         if response.status == 404:
             return None
         return self._json(response, method="GET /turn/status")
+
+    async def credential_rejected(self) -> bool:
+        """Return only the shim's sanitized provider-auth rejection signal."""
+        turn = await self._latest_turn()
+        return bool(turn and turn.get("credential_rejected") is True)
 
     async def native_id(self, name: str) -> str | None:
         if not name:

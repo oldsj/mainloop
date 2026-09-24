@@ -289,6 +289,26 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
     ).status,
     409
   );
+  const claudePlaceholder = 'sk-ant-oat01-mainloop-egress-placeholder';
+  assert.equal(
+    (
+      await request(running.port, 'PUT', '/credential', {
+        bearer: token,
+        body: { name: 'claude-token', contents: claudePlaceholder }
+      })
+    ).status,
+    200
+  );
+  assert.equal(fs.readFileSync(claudePath, 'utf8'), claudePlaceholder);
+  assert.equal(
+    (
+      await request(running.port, 'PUT', '/credential', {
+        bearer: token,
+        body: { name: 'claude-token', contents: claudeContents }
+      })
+    ).status,
+    400
+  );
   assert.equal(
     (
       await request(running.port, 'POST', '/credential', {
@@ -301,6 +321,27 @@ test('credential delivery remains token-gated, allowlisted, private, and one-tim
   const authPath = path.join(running.home, '.codex', 'auth.json');
   assert.equal(fs.readFileSync(authPath, 'utf8'), authContents);
   assert.equal(fs.statSync(authPath).mode & 0o777, 0o600);
+
+  const placeholder = JSON.stringify({
+    tokens: {
+      id_token: 'fixture.header.synthetic',
+      access_token: 'fixture.header.synthetic',
+      refresh_token: '',
+      account_id: 'fixture-account'
+    },
+    last_refresh: '2026-09-24T00:00:00Z'
+  });
+  const replaced = await request(running.port, 'PUT', '/credential', {
+    bearer: token,
+    body: { name: 'codex-auth', contents: placeholder }
+  });
+  assert.equal(replaced.status, 200, replaced.body);
+  assert.equal(fs.readFileSync(authPath, 'utf8'), placeholder);
+  const rejectedReplacement = await request(running.port, 'PUT', '/credential', {
+    bearer: token,
+    body: { name: 'codex-auth', contents: authContents }
+  });
+  assert.equal(rejectedReplacement.status, 400);
   assert.equal(running.output().includes(claudeContents), false);
   assert.equal(running.output().includes(authContents), false);
 });
@@ -398,6 +439,32 @@ test('turn status locates the latest turn after it completes', async (t) => {
   assert.equal(JSON.parse(status.body).id, id);
   assert.equal(JSON.parse(status.body).status, 'completed');
   assert.equal(JSON.parse(status.body).native_session_id, current.native_session_id);
+});
+
+test('turn status exposes only a boolean provider-auth rejection signal', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-auth-rejected-'));
+  const running = await startShim(root);
+  fakeCli(
+    path.join(running.fakeBin, 'claude'),
+    "#!/bin/sh\ncat >/dev/null\nprintf 'provider request failed with HTTP 401 Unauthorized\\n' >&2\nexit 1\n"
+  );
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+  await installCredential(running, 'claude-token', 'synthetic-claude-token');
+
+  const submitted = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: { agent: 'claude', prompt: 'synthetic rejected turn' }
+  });
+  assert.equal(submitted.status, 202, submitted.body);
+  const { id } = JSON.parse(submitted.body);
+  const result = await waitForJob(running, 'turn', id);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.credential_rejected, true);
+  assert.equal(running.output().includes('synthetic-claude-token'), false);
 });
 
 test('agent readiness requires its credential and rejects unauthenticated checks', async (t) => {

@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+// Isolated control-side sign-in helper. Provider output is captured in memory and never logged.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const [provider, jobId] = process.argv.slice(2);
+const callbackUrl = process.env.MAINLOOP_REAUTH_CALLBACK_URL;
+const callbackToken = process.env.MAINLOOP_REAUTH_CALLBACK_TOKEN;
+const timeoutMs = Math.max(60, Number(process.env.MAINLOOP_REAUTH_TIMEOUT_SECONDS || 1800)) * 1000;
+const allowedHosts = new Set(['auth.openai.com', 'claude.ai', 'console.anthropic.com']);
+let captured = '';
+let sentChallenge = '';
+
+function addOutput(chunk) {
+  if (captured.length < 256 * 1024) captured += chunk.toString('utf8').slice(0, 256 * 1024 - captured.length);
+  const clean = captured.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+  const urlMatch = clean.match(/https:\/\/[A-Za-z0-9.-]+(?:\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?/g) || [];
+  const url = urlMatch.map((candidate) => {
+    try {
+      const parsed = new URL(candidate);
+      return allowedHosts.has(parsed.hostname) ? parsed.href : null;
+    } catch {
+      return null;
+    }
+  }).find(Boolean);
+  const codeMatch = clean.match(/(?:code|enter|device)\s*[:=]?\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})/i);
+  if (!url || !codeMatch) return;
+  const code = codeMatch[1].toUpperCase();
+  const challenge = JSON.stringify({ url, code });
+  if (challenge !== sentChallenge) {
+    sentChallenge = challenge;
+    process.stdout.write(`MAINLOOP_REAUTH_CHALLENGE ${challenge}\n`);
+  }
+}
+
+function fail() {
+  process.stderr.write('credential re-auth failed\n');
+  process.exit(1);
+}
+
+async function postCredential(body) {
+  const response = await fetch(`${callbackUrl}/${encodeURIComponent(jobId)}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-mainloop-reauth-token': callbackToken
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) throw new Error('callback rejected');
+}
+
+async function main() {
+  if (!['codex', 'claude'].includes(provider) || !/^reauth-(codex|claude)-[a-f0-9]{12}$/.test(jobId) || !callbackUrl || !callbackToken) fail();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainloop-reauth-'));
+  const home = path.join(root, 'home');
+  const codexHome = path.join(home, '.codex');
+  const claudeHome = path.join(home, '.claude');
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(claudeHome, { recursive: true, mode: 0o700 });
+  const command = provider === 'codex' ? '/usr/local/bin/codex' : '/usr/local/bin/claude';
+  const args = provider === 'codex' ? ['login', '--device-auth'] : ['setup-token'];
+  const child = spawn(command, args, {
+    cwd: root,
+    env: { ...process.env, HOME: home, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: claudeHome },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  child.stdout.on('data', addOutput);
+  child.stderr.on('data', addOutput);
+  const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => resolve(code));
+  }).finally(() => clearTimeout(timer));
+  if (exitCode !== 0) fail();
+
+  if (provider === 'codex') {
+    const auth = JSON.parse(fs.readFileSync(path.join(codexHome, 'auth.json'), 'utf8'));
+    await postCredential({ provider, auth });
+  } else {
+    const match = captured.match(/\bsk-ant-oat[0-9A-Za-z_-]{16,}\b/);
+    if (!match) fail();
+    await postCredential({ provider, token: match[0] });
+  }
+  process.stdout.write('credential re-auth completed\n');
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+main().catch(fail);

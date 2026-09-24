@@ -39,6 +39,13 @@ class Settings(BaseSettings):
         "http://atenet-router.ate-system.svc.cluster.local:8081"
     )
     substrate_shim_secret_namespace: str = "mainloop-control"
+    substrate_credential_secret_namespace: str = "mainloop-control"
+    substrate_credential_secret_prefix: str = "mainloop-credential"
+    substrate_credential_account: str = "owner"
+    substrate_credential_owner_user_id: str = "local-dev-user"
+    substrate_codex_auth_path: str = ""
+    substrate_claude_token_path: str = ""
+    substrate_shim_secret_prefix: str = "mainloop-shim"
     substrate_actor_bindings: dict[
         Literal["claude", "codex"], SubstrateActorBinding
     ] = Field(default_factory=dict)
@@ -50,7 +57,10 @@ class Settings(BaseSettings):
     substrate_atespace: str = "mainloop-workspaces"
     substrate_actor_template: str = "mainloop-workspace"
     substrate_cli: str = "kubectl-ate"
-    substrate_preview_base_url: str = ""
+    substrate_reauth_job_image: str = ""
+    substrate_reauth_job_namespace: str = "mainloop-control"
+    substrate_reauth_callback_url: str = "http://mainloop-backend:8000/internal/reauth"
+    substrate_reauth_timeout_seconds: int = 1800
 
     # Native main thread (context model).
     main_thread_model: str = "sonnet"
