@@ -79,8 +79,8 @@ async def create_workspace(
     owner = _user_id(user_id)
     workspace_id = str(uuid.uuid4())
     actor_name = f"ml-{workspace_id[:16]}"
-    shim_token_secret_name = f"{actor_name}-shim"
     atespace = settings.substrate_atespace
+    shim_token_secret_name = settings.shim_token_secret_name(atespace, actor_name)
     template = request.dev.actor_template or settings.substrate_actor_template
 
     async with db.connection() as conn:

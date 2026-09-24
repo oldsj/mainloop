@@ -137,7 +137,10 @@ class WorkspaceProvisioningApiTests(unittest.IsolatedAsyncioTestCase):
         kwargs = fake_create.await_args.kwargs
         self.assertEqual(kwargs["template"], "project-template")
         self.assertEqual(
-            kwargs["shim_token_secret_name"], f"{kwargs['actor_name']}-shim"
+            kwargs["shim_token_secret_name"],
+            workspace_api.settings.shim_token_secret_name(
+                workspace_api.settings.substrate_atespace, kwargs["actor_name"]
+            ),
         )
 
     async def test_create_hides_projects_owned_by_another_user(self):

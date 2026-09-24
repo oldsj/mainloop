@@ -1,5 +1,6 @@
 """Configuration management."""
 
+import hashlib
 from typing import Literal
 from urllib.parse import quote_plus
 
@@ -45,11 +46,21 @@ class Settings(BaseSettings):
     substrate_credential_owner_user_id: str = "local-dev-user"
     substrate_codex_auth_path: str = ""
     substrate_claude_token_path: str = ""
-    substrate_shim_secret_prefix: str = "mainloop-shim"
+    substrate_shim_secret_prefix: str = Field(
+        default="mainloop-shim",
+        min_length=1,
+        max_length=40,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+    )
     substrate_actor_bindings: dict[
         Literal["claude", "codex"], SubstrateActorBinding
     ] = Field(default_factory=dict)
     substrate_resume_timeout_seconds: float = 120.0
+
+    def shim_token_secret_name(self, atespace: str, actor: str) -> str:
+        """Return the configured, stable Kubernetes Secret name for an actor shim token."""
+        suffix = hashlib.sha256(f"{atespace}/{actor}".encode()).hexdigest()[:16]
+        return f"{self.substrate_shim_secret_prefix}-{suffix}"
 
     # Substrate actor lifecycle control. Empty kubeconfig/context falls back to ambient config.
     substrate_kubeconfig: str = ""

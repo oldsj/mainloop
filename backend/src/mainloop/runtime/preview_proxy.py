@@ -118,9 +118,7 @@ def _secret_name_for_workspace(atespace: str, actor: str) -> str:
     for binding in settings.substrate_actor_bindings.values():
         if binding.atespace == atespace and binding.actor == actor:
             return binding.shim_token_secret_name
-    suffix = hashlib.sha256(f"{atespace}/{actor}".encode()).hexdigest()[:16]
-    prefix = settings.substrate_shim_secret_prefix
-    return f"{prefix[:40]}-{suffix}"
+    return settings.shim_token_secret_name(atespace, actor)
 
 
 async def _resolve_target(workspace_id: str, user_id: str) -> PreviewTarget | None:
@@ -241,12 +239,7 @@ def preview_url(workspace_id: str, port: int) -> str:
 
 
 async def _touch_preview(workspace_id: str) -> None:
-    # The dev-lifecycle lane defines this hook; it is absent on the current cutover tip.
-    touch = getattr(workspace_adapter, "touch", None)
-    if touch is not None:
-        result = touch(workspace_id, "preview")
-        if asyncio.iscoroutine(result):
-            await result
+    await workspace_adapter.touch_workspace(workspace_id, reason="preview")
 
 
 def _read_head(reader) -> tuple[int, http.client.HTTPMessage]:

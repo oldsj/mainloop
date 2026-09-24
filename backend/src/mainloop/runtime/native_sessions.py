@@ -360,7 +360,6 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
     """Check native session readiness in its Substrate actor."""
     ws = workspace_for(binding)
     await ws.require_ready()
-    await ws.prepare_credentials()
     name = binding["agent_name"]
     status = await ws.agent_status(name)
     fields: dict = {}
@@ -378,6 +377,9 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
         fields.update(generation=binding["generation"] + (1 if resume else 0))
         if standing_hash:
             fields["standing_hash"] = standing_hash
+    else:
+        # An already running agent may have resumed from a parked actor snapshot.
+        await ws.prepare_credentials()
     await _update_binding(session_id, **fields)
     return await get_binding(session_id)  # type: ignore[return-value]
 

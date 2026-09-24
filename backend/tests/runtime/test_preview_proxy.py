@@ -52,6 +52,25 @@ class PreviewProxyTests(unittest.TestCase):
                 "http://5173--workspace-1.preview.localhost:8001",
             )
 
+    def test_dynamic_shim_secret_uses_configured_prefix_convention(self):
+        with patch.object(settings, "substrate_shim_secret_prefix", "test-shim"):
+            self.assertEqual(
+                preview_proxy._secret_name_for_workspace("fixture-space", "actor-1"),
+                settings.shim_token_secret_name("fixture-space", "actor-1"),
+            )
+
+    def test_preview_touch_calls_lifecycle_service(self):
+        async def exercise():
+            with patch.object(
+                preview_proxy.workspace_adapter,
+                "touch_workspace",
+                new=AsyncMock(),
+            ) as touch:
+                await preview_proxy._touch_preview("workspace-1")
+            touch.assert_awaited_once_with("workspace-1", reason="preview")
+
+        asyncio.run(exercise())
+
     def test_chunked_response_body_is_decoded_for_streaming_response(self):
         import http.client
 

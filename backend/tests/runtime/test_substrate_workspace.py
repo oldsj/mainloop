@@ -197,7 +197,12 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 installed["tokens"]["access_token"], "fixture.header.synthetic"
             )
 
-            await workspace.prepare_credentials()
+            await workspace.start(
+                "codex",
+                "agent-fixture",
+                native_id="native-fixture-id",
+                resume=True,
+            )
             writes = [
                 request
                 for request in router.requests
