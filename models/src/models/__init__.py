@@ -38,6 +38,16 @@ from models.workflow import (
     QueueItemType,
     WorkflowEvent,
 )
+from models.workspace import (
+    WorkspaceAgentKind,
+    WorkspaceCondition,
+    WorkspaceConditionStatus,
+    WorkspaceDesiredState,
+    WorkspaceLifecycle,
+    WorkspaceManifest,
+    WorkspaceObservedState,
+    WorkspaceTransition,
+)
 
 __all__ = [
     # Existing
@@ -80,4 +90,12 @@ __all__ += [
     "ProviderExtension",
     "ReconciliationEvidence",
     "WorkspaceBinding",
+    "WorkspaceAgentKind",
+    "WorkspaceCondition",
+    "WorkspaceConditionStatus",
+    "WorkspaceDesiredState",
+    "WorkspaceLifecycle",
+    "WorkspaceManifest",
+    "WorkspaceObservedState",
+    "WorkspaceTransition",
 ]

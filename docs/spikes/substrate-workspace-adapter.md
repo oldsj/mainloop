@@ -498,3 +498,23 @@ sources match the pinned Substrate checkout. The Codex file-write route now requ
 shim token even on a tokenless golden and validates a JSON object. That source hardening is
 fixture-tested, but the retained actor image digest predates the change; rebuild before using
 that route in another run.
+
+## Design only: owner-audited operator execution
+
+The shim's `POST /run` endpoint can execute a command and retains bounded output and timeout
+status. It is not exposed to clients in this slice. A future operator path should authorize the
+workspace owner in Mainloop, keep the per-actor shim token server-side, and persist an audit
+record before dispatch with the operator, workspace, command string, working directory,
+timeout, and a result reference. The owner action should be explicitly scoped and bounded; the
+shim's bearer token alone is not Mainloop owner authorization. This is a design proposal only:
+there is no operator-exec API, UI, audit record, or runtime change here.
+
+## Follow-up for the transport lane: serialize delivery with suspend
+
+Suspend reservation takes a `FOR UPDATE` lock on the workspace binding and checks the delivery
+ledger in the same transaction, then checks the ledger again immediately before calling
+Substrate. The delivery-recording path does not take that row lock yet, so a delivery can still
+race after the last check and before Substrate applies suspension, including across backend
+replicas. The transport lane should make delivery recording take the same lock (or an agreed
+workspace advisory lock) and prove the handoff with a concurrency test. Until then, the second
+check narrows this race but does not eliminate it.

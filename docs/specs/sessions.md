@@ -16,6 +16,11 @@ When sessions exist:
 - Each session shows title and status badge
 - Active count shown in header (e.g., "2 active")
 - Clicking a session opens its detail view
+- Sessions with a workspace show a separate lifecycle badge; it does not change the session status
+- Workspace details and controls are available from the session detail view
+
+Workspace states are specified in [Workspaces](workspaces.md). A parked workspace can still have
+an active, completed, or waiting session status; these are separate records.
 
 ## Status Badges
 

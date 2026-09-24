@@ -199,6 +199,54 @@ export interface NativeDelivery {
   detail: string | null;
 }
 
+export type WorkspaceDesiredState = 'running' | 'suspended';
+export type WorkspaceObservedState =
+  | 'running'
+  | 'suspending'
+  | 'suspended'
+  | 'resuming'
+  | 'failed'
+  | 'unknown';
+
+export interface WorkspaceManifest {
+  repo_url: string | null;
+  branch: string;
+  agent_kinds: ('claude' | 'codex')[];
+  skills: string[];
+  mcp_servers: string[];
+  egress_allowlist: string[];
+  resource_class: string;
+}
+
+export interface WorkspaceCondition {
+  type: string;
+  status: 'True' | 'False' | 'Unknown';
+  reason: string;
+  message: string;
+  last_transition_time: string;
+}
+
+export interface WorkspaceTransition {
+  from_state: WorkspaceObservedState | null;
+  to_state: WorkspaceObservedState;
+  reason: string;
+  occurred_at: string;
+}
+
+export interface WorkspaceLifecycle {
+  workspace_id: string;
+  session_id: string;
+  desired_state: WorkspaceDesiredState;
+  observed_state: WorkspaceObservedState;
+  manifest: WorkspaceManifest;
+  conditions: WorkspaceCondition[];
+  last_transition: WorkspaceTransition | null;
+  operation_id: string | null;
+  snapshot_ref: string | null;
+  ownership_generation: number;
+  updated_at: string;
+}
+
 export interface TopicLine {
   name: string;
   status_line: string;
@@ -411,6 +459,42 @@ export const api = {
   },
 
   // Session endpoints
+  async listWorkspaces(): Promise<WorkspaceLifecycle[]> {
+    const response = await apiFetch(`${API_URL}/workspaces`);
+    if (!response.ok) throw new Error('Failed to list workspaces');
+    return response.json();
+  },
+
+  async getWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}`);
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to get workspace'));
+    return response.json();
+  },
+
+  async suspendWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/suspend`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to suspend workspace'));
+    return response.json();
+  },
+
+  async resumeWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/resume`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to resume workspace'));
+    return response.json();
+  },
+
+  async refreshWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/refresh`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to refresh workspace'));
+    return response.json();
+  },
+
   async listSessions(options?: { status?: string }): Promise<Session[]> {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);

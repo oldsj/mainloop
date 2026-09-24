@@ -250,6 +250,21 @@ CREATE TABLE IF NOT EXISTS workspace_bindings (
     UNIQUE (atespace, actor_name)
 );
 
+-- Workspace lifecycle belongs to the workspace, separate from task/session, agent and delivery
+-- state. The manifest is declarative intent; only actor observations establish runtime state.
+CREATE TABLE IF NOT EXISTS workspace_lifecycles (
+    workspace_id TEXT PRIMARY KEY REFERENCES workspace_bindings(workspace_id) ON DELETE CASCADE,
+    desired_state TEXT NOT NULL DEFAULT 'running',
+    observed_state TEXT NOT NULL DEFAULT 'unknown',
+    manifest JSONB NOT NULL,
+    conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    last_transition JSONB,
+    operation_id TEXT,
+    snapshot_ref TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY,
@@ -933,7 +948,7 @@ class Database:
 
         query = f"""
             SELECT * FROM queue_items
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY
                 CASE priority
                     WHEN 'urgent' THEN 1

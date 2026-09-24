@@ -1,9 +1,11 @@
 <script lang="ts">
   import '../app.css';
   import type { LayoutData } from './$types';
+  import type { WorkspaceLifecycle } from '$lib/api';
   import { onMount } from 'svelte';
   import { inbox } from '$lib/stores/inbox';
   import { sessions } from '$lib/stores/sessions';
+  import { workspaces } from '$lib/stores/workspaces';
   import { notifications } from '$lib/stores/notifications';
   import { themeStore } from '$lib/stores/theme';
   import { mobileTab } from '$lib/stores/mobileTab';
@@ -78,6 +80,7 @@
     if (recoveries === seenRecoveries) return;
     seenRecoveries = recoveries;
     sessions.fetchSessions();
+    workspaces.fetchWorkspaces();
     notifications.fetchNotifications();
     inbox.fetchItems();
   });
@@ -98,6 +101,10 @@
       const { session_id, status } = event.data as { session_id: string; status: string };
       sessions.updateSession(session_id, { status: status as any });
     });
+    const unsubWorkspaceUpdated = client.on('workspace:updated', (event) => {
+      const { workspace } = event.data as { workspace: WorkspaceLifecycle };
+      workspaces.upsert(workspace);
+    });
     const unsubSessionNeedsInput = client.on('session:needs_input', (event) => {
       const { session_id, title, preview } = event.data as {
         session_id: string;
@@ -117,6 +124,7 @@
 
     // Fetch initial data
     sessions.fetchSessions();
+    workspaces.fetchWorkspaces();
     notifications.fetchNotifications();
     inbox.fetchItems();
 
@@ -124,6 +132,7 @@
       stopConnectionMonitor();
       inbox.stopListening();
       unsubSessionUpdated();
+      unsubWorkspaceUpdated();
       unsubSessionNeedsInput();
       disconnectSSE();
     };

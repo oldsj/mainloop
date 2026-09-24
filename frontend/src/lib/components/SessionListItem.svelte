@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
   import { statusLabel } from '$lib/sessionStatus';
+  import { workspaces } from '$lib/stores/workspaces';
+  import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
 
   let {
     session,
@@ -29,6 +31,9 @@
 
   // Check if session is actively running
   const isActive = $derived(['active', 'implementing'].includes(session.status));
+  const workspace = $derived(
+    $workspaces.workspaces.find((item) => item.session_id === session.id)
+  );
 
   // Extract repo name from URL
   function getRepoName(repoUrl: string): string {
@@ -92,6 +97,9 @@
       >
         {statusLabel(session.status)}
       </span>
+      {#if workspace}
+        <WorkspaceLifecycleBadge {workspace} />
+      {/if}
       {#if session.issue_number}
         <a
           href={session.issue_url}
