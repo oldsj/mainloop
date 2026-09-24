@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-db-pooler
+  namespace: mainloop-control
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-backend
+  namespace: mainloop-control
+spec:
+  selector:
+    app: mainloop-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop-control
+spec:
+  selector:
+    app: mainloop-frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
