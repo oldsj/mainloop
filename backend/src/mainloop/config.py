@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     substrate_atespace: str = "mainloop-workspaces"
     substrate_actor_template: str = "mainloop-workspace"
     substrate_cli: str = "kubectl-ate"
+    substrate_preview_base_url: str = "http://preview.localhost:8001"
+    substrate_preview_connect_timeout_seconds: float = 5.0
     substrate_reauth_job_image: str = ""
     substrate_reauth_job_namespace: str = "mainloop-control"
     substrate_reauth_callback_url: str = "http://mainloop-backend:8000/internal/reauth"

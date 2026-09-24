@@ -400,6 +400,21 @@ class SubstrateWorkspace:
         response = await self._request("POST", "/turn/stop", body={"agent": self.agent})
         self._json(response, method="POST /turn/stop")
 
+    async def listening_ports(self) -> tuple[int, ...]:
+        """Return ports reported by the authenticated actor shim."""
+        response = await self._request("GET", "/ports")
+        document = self._json(response, method="GET /ports")
+        ports = document.get("ports")
+        if not isinstance(ports, list) or any(
+            isinstance(port, bool)
+            or not isinstance(port, int)
+            or port < 1
+            or port > 65535
+            for port in ports
+        ):
+            raise TransportError("Substrate shim returned invalid listening ports")
+        return tuple(sorted(set(ports)))
+
     async def _latest_turn(self) -> dict | None:
         query = urlencode({"agent": self.agent})
         response = await self._request("GET", f"/turn/status?{query}")

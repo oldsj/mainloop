@@ -226,15 +226,17 @@ open_preview() {
   local forward_dir
   local frontend_pid
   local backend_pid
+  local preview_pid
   local frontend_ready=0
   local backend_ready=0
+  local preview_ready=0
   local attempt
 
   forward_dir="$(mktemp -d)"
   cleanup_forwards() {
     local result=$?
     trap - EXIT
-    for child_pid in "${frontend_pid-}" "${backend_pid-}"; do
+    for child_pid in "${frontend_pid-}" "${backend_pid-}" "${preview_pid-}"; do
       if [[ -n ${child_pid} ]]; then
         kill "${child_pid}" 2>/dev/null || true
         wait "${child_pid}" 2>/dev/null || true
@@ -258,12 +260,15 @@ open_preview() {
   kube port-forward --address 127.0.0.1 -n "${NAMESPACE}" service/mainloop-backend 8000:8000 \
     >"${forward_dir}/backend.log" 2>&1 &
   backend_pid=$!
+  kube port-forward --address 127.0.0.1 -n "${NAMESPACE}" service/mainloop-preview 8001:8001 \
+    >"${forward_dir}/preview.log" 2>&1 &
+  preview_pid=$!
 
   attempt=0
   while ((attempt < 60)); do
     attempt=$((attempt + 1))
-    if ! kill -0 "${frontend_pid}" 2>/dev/null || ! kill -0 "${backend_pid}" 2>/dev/null; then
-      fail 'a port-forward exited before both local ports became ready'
+    if ! kill -0 "${frontend_pid}" 2>/dev/null || ! kill -0 "${backend_pid}" 2>/dev/null || ! kill -0 "${preview_pid}" 2>/dev/null; then
+      fail 'a port-forward exited before all local ports became ready'
     fi
     if (echo >/dev/tcp/127.0.0.1/3000) >/dev/null 2>&1; then
       frontend_ready=1
@@ -271,16 +276,20 @@ open_preview() {
     if (echo >/dev/tcp/127.0.0.1/8000) >/dev/null 2>&1; then
       backend_ready=1
     fi
-    [[ ${frontend_ready} -eq 1 && ${backend_ready} -eq 1 ]] && break
+    if (echo >/dev/tcp/127.0.0.1/8001) >/dev/null 2>&1; then
+      preview_ready=1
+    fi
+    [[ ${frontend_ready} -eq 1 && ${backend_ready} -eq 1 && ${preview_ready} -eq 1 ]] && break
     sleep 0.5
   done
-  [[ ${frontend_ready} -eq 1 && ${backend_ready} -eq 1 ]] ||
-    fail 'timed out waiting for frontend and backend port-forwards'
+  [[ ${frontend_ready} -eq 1 && ${backend_ready} -eq 1 && ${preview_ready} -eq 1 ]] ||
+    fail 'timed out waiting for preview, frontend, and backend port-forwards'
 
   printf 'Mainloop: http://127.0.0.1:3000\n'
   printf 'Backend API: http://127.0.0.1:8000/docs\n'
-  printf 'Press Ctrl+C to stop both port-forwards.\n'
-  wait -n "${frontend_pid}" "${backend_pid}"
+  printf 'Preview proxy: http://<port>--<workspace>.preview.localhost:8001\n'
+  printf 'Press Ctrl+C to stop the port-forwards.\n'
+  wait -n "${frontend_pid}" "${backend_pid}" "${preview_pid}"
 }
 
 main() {

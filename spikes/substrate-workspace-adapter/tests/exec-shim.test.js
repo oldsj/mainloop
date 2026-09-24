@@ -491,6 +491,71 @@ test('agent readiness requires its credential and rejects unauthenticated checks
   assert.deepEqual(JSON.parse(configured.body), { agent: 'codex', configured: true });
 });
 
+test('process registry starts and stops long-lived commands and reports bounded tails and ports', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-processes-'));
+  const procNet = path.join(root, 'proc-net');
+  fs.mkdirSync(procNet, { recursive: true });
+  fs.writeFileSync(
+    path.join(procNet, 'tcp'),
+    'sl local_address rem_address st\n' +
+      '0: 0100007F:1F90 00000000:0000 0A\n' +
+      '1: 0100007F:1F91 00000000:0000 01\n'
+  );
+  fs.writeFileSync(
+    path.join(procNet, 'tcp6'),
+    'sl local_address rem_address st\n' +
+      '0: 00000000000000000000000000000000:1FBB 00000000000000000000000000000000:0000 0A\n'
+  );
+  const running = await startShim(root, { EXEC_SHIM_PROC_NET_DIR: procNet });
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+
+  assert.equal((await request(running.port, 'GET', '/processes')).status, 401);
+  assert.equal((await request(running.port, 'GET', '/ports')).status, 401);
+  const invalid = await request(running.port, 'POST', '/processes', {
+    bearer: token,
+    body: { command: '   ' }
+  });
+  assert.equal(invalid.status, 400);
+
+  const started = await request(running.port, 'POST', '/processes', {
+    bearer: token,
+    body: {
+      label: 'vite',
+      command:
+        "node -e \"process.stdout.write('x'.repeat(100000) + '\\\\npreview-ready\\\\n')\"; while :; do sleep 1; done"
+    }
+  });
+  assert.equal(started.status, 201, started.body);
+  const { id } = JSON.parse(started.body);
+
+  let listed;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const result = await request(running.port, 'GET', '/processes', { bearer: token });
+    assert.equal(result.status, 200, result.body);
+    listed = JSON.parse(result.body).processes.find((entry) => entry.id === id);
+    if (listed?.log_tail.includes('preview-ready')) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(listed.status, 'running');
+  assert.equal(listed.label, 'vite');
+  assert.match(listed.log_tail, /preview-ready/);
+  assert.ok(Buffer.byteLength(listed.log_tail) <= 64 * 1024);
+  assert.equal(Object.hasOwn(listed, 'command'), false);
+  assert.equal(running.output().includes('preview-ready'), false);
+
+  const ports = await request(running.port, 'GET', '/ports', { bearer: token });
+  assert.equal(ports.status, 200, ports.body);
+  assert.deepEqual(JSON.parse(ports.body).ports, [8080, 8123]);
+
+  const stopped = await request(running.port, 'DELETE', `/processes/${id}`, { bearer: token });
+  assert.equal(stopped.status, 200, stopped.body);
+  assert.equal(JSON.parse(stopped.body).status, 'stopped');
+});
+
 test('journal returns bounded numbered pages for Claude and Codex and rejects a bad token', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-journal-'));
   const running = await startShim(root);

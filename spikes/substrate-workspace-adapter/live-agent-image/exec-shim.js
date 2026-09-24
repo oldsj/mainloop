@@ -17,6 +17,9 @@ const MAX_JOURNAL_LINES = 200;
 const MAX_JOURNAL_LINE_BYTES = 1024 * 1024;
 const MAX_JOURNAL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_JOURNAL_SEARCH_ENTRIES = 100_000;
+const MAX_LONG_PROCESSES = 32;
+const MAX_LONG_PROCESS_LOG_BYTES = 64 * 1024;
+const MAX_LONG_PROCESS_RECORDS = 256;
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
@@ -26,6 +29,7 @@ const CODEX_HOME_PATH = path.resolve(process.env.CODEX_HOME || path.join(HOME_PA
 const STATE_DIR = path.resolve(
   process.env.EXEC_SHIM_STATE_DIR || path.join(WORKSPACE_PATH, '.mainloop')
 );
+const PROC_NET_DIR = path.resolve(process.env.EXEC_SHIM_PROC_NET_DIR || '/proc/net');
 const RUN_DIR = path.join(STATE_DIR, 'runs');
 const TURN_DIR = path.join(STATE_DIR, 'turns');
 const LAUNCHER = process.env.NATIVE_AGENT_LAUNCHER || '/usr/local/bin/start-native-agent';
@@ -57,6 +61,7 @@ try {
 }
 
 const jobs = new Map();
+const longProcesses = new Map();
 const activeTurns = new Map();
 const latestTurns = new Map();
 const turnProcesses = new Map();
@@ -795,6 +800,132 @@ function getJob(kind, id, res) {
   });
 }
 
+function processSummary(entry) {
+  return {
+    id: entry.id,
+    label: entry.label,
+    status: entry.status,
+    started_at: entry.started_at,
+    exit_code: entry.exit_code,
+    log_tail: entry.log.toString('utf8')
+  };
+}
+
+function listProcesses(res) {
+  json(res, 200, { processes: [...longProcesses.values()].map(processSummary) });
+}
+
+function startLongProcess(document, res) {
+  const command = document.command;
+  const label = document.label === undefined ? 'process' : document.label;
+  const running = [...longProcesses.values()].filter((entry) => entry.status === 'running');
+  if (
+    typeof command !== 'string' ||
+    !command.trim() ||
+    Buffer.byteLength(command, 'utf8') > 8192 ||
+    typeof label !== 'string' ||
+    !label.trim() ||
+    label.length > 100
+  ) {
+    res.writeHead(400).end('invalid process');
+    return;
+  }
+  if (running.length >= MAX_LONG_PROCESSES) {
+    res.writeHead(409).end('process limit reached');
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  let child;
+  try {
+    child = spawn('/bin/sh', ['-lc', command], {
+      cwd: WORKSPACE_PATH,
+      env: process.env,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  } catch {
+    res.writeHead(500).end('process could not start');
+    return;
+  }
+  const entry = {
+    id,
+    label: label.trim(),
+    status: 'running',
+    started_at: new Date().toISOString(),
+    exit_code: null,
+    log: Buffer.alloc(0),
+    child,
+    completion: null
+  };
+  const appendLog = (chunk) => {
+    const combined = Buffer.concat([entry.log, chunk]);
+    entry.log = combined.subarray(Math.max(0, combined.length - MAX_LONG_PROCESS_LOG_BYTES));
+  };
+  child.stdout.on('data', appendLog);
+  child.stderr.on('data', appendLog);
+  entry.completion = new Promise((resolve) => {
+    child.once('error', () => {
+      entry.status = 'failed';
+      entry.exit_code = null;
+      resolve();
+    });
+    child.once('exit', (code, signal) => {
+      entry.status = signal ? 'stopped' : code === 0 ? 'completed' : 'failed';
+      entry.exit_code = Number.isInteger(code) ? code : null;
+      resolve();
+    });
+  });
+  longProcesses.set(id, entry);
+  while (longProcesses.size > MAX_LONG_PROCESS_RECORDS) {
+    const oldest = longProcesses.values().next().value;
+    if (oldest.status === 'running') break;
+    longProcesses.delete(oldest.id);
+  }
+  json(res, 201, { id, status: entry.status });
+}
+
+async function stopLongProcess(id, res) {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    res.writeHead(404).end('not found');
+    return;
+  }
+  const entry = longProcesses.get(id);
+  if (!entry) {
+    res.writeHead(404).end('not found');
+    return;
+  }
+  if (entry.status === 'running') {
+    killProcessGroup(entry.child, 'SIGTERM');
+    const killTimer = setTimeout(() => killProcessGroup(entry.child, 'SIGKILL'), 500);
+    killTimer.unref();
+    await entry.completion;
+    clearTimeout(killTimer);
+  }
+  json(res, 200, { id, status: entry.status });
+}
+
+function listeningPorts() {
+  const ports = new Set();
+  for (const name of ['tcp', 'tcp6']) {
+    let contents;
+    try {
+      contents = fs.readFileSync(path.join(PROC_NET_DIR, name), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of contents.split('\n').slice(1)) {
+      const columns = line.trim().split(/\s+/);
+      if (columns.length < 4 || columns[3] !== '0A') continue;
+      const local = columns[1].split(':');
+      if (local.length !== 2) continue;
+      const port = Number.parseInt(local[1], 16);
+      if (Number.isInteger(port) && port > 0 && port <= 65535) ports.add(port);
+    }
+  }
+  return [...ports].sort((left, right) => left - right);
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/readyz')) {
     if (!workspaceReady()) {
@@ -860,6 +991,27 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/run') {
     if (!authorized(req)) return unauthorized(res);
     handleBody(req, res, (document) => startRun(document, res));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/processes') {
+    if (!authorized(req)) return unauthorized(res);
+    handleBody(req, res, (document) => startLongProcess(document, res));
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/processes') {
+    if (!authorized(req)) return unauthorized(res);
+    listProcesses(res);
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/ports') {
+    if (!authorized(req)) return unauthorized(res);
+    json(res, 200, { ports: listeningPorts() });
+    return;
+  }
+  const processMatch = req.url.match(/^\/processes\/([^/?]+)$/);
+  if (req.method === 'DELETE' && processMatch) {
+    if (!authorized(req)) return unauthorized(res);
+    void stopLongProcess(processMatch[1], res);
     return;
   }
   if (req.method === 'POST' && req.url === '/turn') {

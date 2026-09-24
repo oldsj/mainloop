@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from mainloop.config import SubstrateActorBinding, settings
 from mainloop.runtime import native_sessions
+from mainloop.runtime import substrate_workspace as substrate_workspace_module
 from mainloop.runtime.substrate_workspace import (
     SubstrateWorkspace,
     WorkspaceUnavailable,
@@ -38,6 +39,7 @@ class FakeRouterAndShim:
         ]
         self.connects: list[tuple[str, str]] = []
         self.requests: list[tuple[str, str, dict]] = []
+        self.credentials: dict[str, str] = {}
 
     def request(
         self,
@@ -63,10 +65,15 @@ class FakeRouterAndShim:
             return _Response(200, "ok")
         parsed = urlsplit(path)
         query = parse_qs(parsed.query)
+        if method == "PUT" and parsed.path == "/credential":
+            self.credentials[body["name"]] = body["contents"]
+            return _Response(200, "credential stored")
         if method == "GET" and parsed.path == "/agent/ready":
             return _Response(
                 200, json.dumps({"agent": query["agent"][0], "configured": True})
             )
+        if method == "GET" and parsed.path == "/ports":
+            return _Response(200, json.dumps({"ports": [3000, 5173, 3000]}))
         if method == "GET" and parsed.path == "/turn/status":
             turn = self.turns.get(query.get("agent", [""])[0])
             return (
@@ -144,10 +151,62 @@ def fake_workspace(router: FakeRouterAndShim, *, shim_name=FAKE_SHIM_NAME):
         shim_token_secret_name=shim_name,
         router_address="http://router-fixture:8081",
         timeout=2,
+        credential_broker=FakeCredentialBroker(),
     )
 
 
+class FakeCredentialBroker:
+    async def codex_placeholder_auth(self) -> str:
+        return json.dumps(
+            {
+                "tokens": {
+                    "id_token": "fixture.header.synthetic",
+                    "access_token": "fixture.header.synthetic",
+                    "refresh_token": "",
+                    "account_id": "fixture-account",
+                },
+                "last_refresh": "2026-09-24T00:00:00Z",
+            }
+        )
+
+    async def claude_placeholder_token(self) -> str:
+        return "synthetic-claude-egress-placeholder"
+
+
 class SubstrateWorkspaceTests(unittest.TestCase):
+    def test_codex_start_and_resume_install_only_synthetic_auth(self):
+        async def exercise():
+            router = FakeRouterAndShim()
+            workspace = FakeSubstrateWorkspace(
+                router,
+                atespace="atespace-fixture",
+                actor="actor-fixture",
+                agent="codex",
+                shim_token_secret_name=FAKE_SHIM_NAME,
+                router_address="http://router-fixture:8081",
+                timeout=2,
+                credential_broker=FakeCredentialBroker(),
+            )
+            await workspace.start(
+                "codex", "agent-fixture", native_id=None, resume=False
+            )
+            installed = json.loads(router.credentials["codex-auth"])
+            self.assertEqual(installed["tokens"]["account_id"], "fixture-account")
+            self.assertEqual(installed["tokens"]["refresh_token"], "")
+            self.assertEqual(
+                installed["tokens"]["access_token"], "fixture.header.synthetic"
+            )
+
+            await workspace.prepare_credentials()
+            writes = [
+                request
+                for request in router.requests
+                if request[0] == "PUT" and request[1] == "/credential"
+            ]
+            self.assertEqual(len(writes), 2)
+
+        asyncio.run(exercise())
+
     def test_start_send_status_native_id_and_journal_pages(self):
         async def exercise():
             router = FakeRouterAndShim()
@@ -158,6 +217,10 @@ class SubstrateWorkspaceTests(unittest.TestCase):
             )
             self.assertEqual(ident["actor"], "actor-fixture")
             self.assertFalse(router.suspended)
+            self.assertEqual(
+                router.credentials["claude-token"],
+                "synthetic-claude-egress-placeholder",
+            )
 
             await workspace.send("agent-fixture", "fixture prompt")
             status = await workspace.agent_status("agent-fixture")
@@ -171,6 +234,7 @@ class SubstrateWorkspaceTests(unittest.TestCase):
             self.assertEqual(first.total_lines, 3)
             self.assertEqual(first.lines[0], (1, '{"type":"user"}'))
             self.assertEqual(next_page.lines[0], (2, '{"type":"assistant"}'))
+            self.assertEqual(await workspace.listening_ports(), (3000, 5173))
             self.assertIn(
                 ("CONNECT", "atespace-fixture/actor-fixture"), router.connects
             )
@@ -311,6 +375,11 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 ),
                 patch.object(SubstrateWorkspace, "_exchange", fake_exchange),
                 patch.object(SubstrateWorkspace, "_token", fake_token),
+                patch.object(
+                    substrate_workspace_module,
+                    "CredentialBroker",
+                    FakeCredentialBroker,
+                ),
                 patch.object(
                     native_sessions,
                     "get_binding",

@@ -27,6 +27,19 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: mainloop-preview
+  namespace: mainloop-control
+spec:
+  selector:
+    app: mainloop-backend
+  ports:
+    - name: preview
+      port: 8001
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: mainloop-frontend
   namespace: mainloop-control
 spec:

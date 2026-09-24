@@ -17,6 +17,7 @@ from mainloop.runtime.credential_reauth import (
     CredentialReauthRunner,
     KubernetesCredentialReauthRunner,
 )
+from mainloop.runtime.preview_proxy import workspace_preview_ports
 from mainloop.sse import notify_workspace_updated
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
@@ -355,6 +356,17 @@ async def delete_workspace(
                     row["conversation_id"],
                 )
     return Response(status_code=204)
+
+
+@router.get("/{workspace_id}/ports")
+async def list_workspace_preview_ports(
+    workspace_id: str,
+    user_id: str | None = Header(default=None, alias="X-User-ID"),
+):
+    ports = await workspace_preview_ports(workspace_id, _user_id(user_id))
+    if ports is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return {"ports": ports}
 
 
 @router.get("/{workspace_id}/credentials")

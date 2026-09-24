@@ -271,6 +271,26 @@ export interface WorkspaceLifecycle {
   updated_at: string;
 }
 
+export interface WorkspacePreviewPort {
+  port: number;
+  name: string;
+  url: string;
+}
+
+export interface WorkspaceCredentialStatus {
+  provider: 'codex' | 'claude';
+  available: boolean;
+  needs_signin: boolean;
+  expires_at: string | null;
+}
+
+export interface CredentialReauthStatus {
+  id: string;
+  provider: 'codex' | 'claude';
+  state: 'running' | 'completed' | 'failed';
+  challenge: { url: string; code: string } | null;
+}
+
 export interface TopicLine {
   name: string;
   status_line: string;
@@ -531,6 +551,46 @@ export const api = {
       method: 'POST'
     });
     if (!response.ok) throw new Error(await errorDetail(response, 'Failed to refresh workspace'));
+    return response.json();
+  },
+
+  async listWorkspacePreviewPorts(workspaceId: string): Promise<WorkspacePreviewPort[]> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/ports`);
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to list preview ports'));
+    const result = await response.json();
+    if (!Array.isArray(result?.ports)) throw new Error('Invalid preview port response');
+    return result.ports;
+  },
+
+  async getWorkspaceCredentials(workspaceId: string): Promise<WorkspaceCredentialStatus[]> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/credentials`);
+    if (!response.ok)
+      throw new Error(await errorDetail(response, 'Failed to get credential status'));
+    const result = await response.json();
+    if (!Array.isArray(result?.credentials)) throw new Error('Invalid credential status response');
+    return result.credentials;
+  },
+
+  async startWorkspaceCredentialReauth(
+    workspaceId: string,
+    provider: 'codex' | 'claude'
+  ): Promise<CredentialReauthStatus> {
+    const response = await apiFetch(
+      `${API_URL}/workspaces/${workspaceId}/credentials/${provider}/reauth`,
+      { method: 'POST' }
+    );
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to start sign-in'));
+    return response.json();
+  },
+
+  async getWorkspaceCredentialReauth(
+    workspaceId: string,
+    jobId: string
+  ): Promise<CredentialReauthStatus> {
+    const response = await apiFetch(
+      `${API_URL}/workspaces/${workspaceId}/credentials/reauth/${encodeURIComponent(jobId)}`
+    );
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to check sign-in'));
     return response.json();
   },
 

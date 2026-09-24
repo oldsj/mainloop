@@ -25,6 +25,13 @@ The UI shows workspace state wherever sessions are listed and links from the ses
 reference, idle timeout, and last activity, with suspend, resume, refresh, and delete controls.
 Session badges and session status are not changed by workspace operations.
 
+The page also lists allowed preview ports with **Open preview** links and shows Codex and Claude
+credential status with a sign-in action. Sign-in challenges are displayed on this page; the
+session attention item links the owner here when an agent needs authentication.
+
+Opening the workspace page does not wake a parked actor to discover live ports; it lists ports
+from the manifest until the workspace is running. A preview request itself may wake the actor.
+
 ## API
 
 - `GET /workspaces` lists the current user's workspace lifecycle records.
@@ -38,7 +45,17 @@ Session badges and session status are not changed by workspace operations.
   The preview proxy can call the same `touch_workspace(workspace_id, reason)` service API.
 - `DELETE /workspaces/{id}` deletes the actor and its shim token Secret. Open deliveries return
   `409`; an unconfirmed Substrate deletion keeps the durable workspace binding for reconciliation.
+- `GET /workspaces/{id}/ports` lists declared or shim-reported preview ports and their URLs.
+- `GET /workspaces/{id}/credentials` reports provider availability and expiry metadata only.
+- `POST /workspaces/{id}/credentials/{provider}/reauth` starts a bounded control-side sign-in Job.
+- `GET /workspaces/{id}/credentials/reauth/{job_id}` returns job state and a filtered device challenge.
 - Lifecycle changes are published through the existing event stream as `workspace:updated`.
+
+Preview hosts have the form `<port>--<workspace>.preview.<domain>`. Mainloop checks workspace
+ownership and permits only ports declared by the manifest or reported by the authenticated
+actor shim. It strips browser cookies and authorization headers before using the router's
+CONNECT stream, including WebSocket upgrades. A single bounded retry is used after a wake/connect
+failure, followed by a clear waking response.
 
 Suspend is refused while the native delivery ledger contains a recorded, queued, sending,
 delivered-but-incomplete, or uncertain delivery. The API reports `409` with the reason. A
@@ -64,6 +81,14 @@ are declared by the project manifest and must match its configured actor templat
 
 ## Scope and evidence
 
-Runtime behavior is covered by fake-backed tests; this specification does not claim a live
-cluster integration proof. The sample under `examples/devenv-sample/` documents the intended
-Node plus Postgres project manifest shape.
+`POST /workspaces` provisions an actor from its declared template. Other lifecycle, preview, and
+credential endpoints operate on an existing Substrate workspace binding. Runtime behavior is
+covered by fake-backed tests; this specification does not claim a live cluster integration proof.
+
+The sample under `examples/devenv-sample/` documents the intended Node plus Postgres project
+manifest shape.
+
+The wildcard preview proxy and WebSocket tunnel are not live cluster verified. Kind uses the
+preview Service and a local port-forward; the browser-visible `*.preview.localhost` hostname
+depends on that tunnel. The credential Job also requires a configured CLI image as described in
+`credentials.md`.

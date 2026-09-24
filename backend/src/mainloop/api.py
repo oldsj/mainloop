@@ -19,6 +19,7 @@ from mainloop.runtime.agent_api import router as agent_api_router
 from mainloop.runtime.credential_reauth_api import (
     router as credential_reauth_api_router,
 )
+from mainloop.runtime.preview_proxy import register_preview_proxy
 from mainloop.runtime.workspace_api import router as workspace_api_router
 from mainloop.services.github_pr import (
     CommitSummary,
@@ -323,6 +324,7 @@ async def list_topics(user_id: str = Header(alias="X-User-ID", default=None)):
 app.include_router(agent_api_router)
 app.include_router(workspace_api_router)
 app.include_router(credential_reauth_api_router)
+register_preview_proxy(app)
 
 
 # ============= Conversation Endpoints =============

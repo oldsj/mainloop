@@ -2,7 +2,13 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { get } from 'svelte/store';
-  import { api, type WorkspaceLifecycle } from '$lib/api';
+  import {
+    api,
+    type CredentialReauthStatus,
+    type WorkspaceCredentialStatus,
+    type WorkspaceLifecycle,
+    type WorkspacePreviewPort
+  } from '$lib/api';
   import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
   import { connection } from '$lib/stores/connection';
   import { workspaces } from '$lib/stores/workspaces';
@@ -14,6 +20,13 @@
   let unreachable = $state(false);
   let pageError = $state<string | null>(null);
   let actionError = $state<string | null>(null);
+  let previewPortsError = $state<string | null>(null);
+  let previewPorts = $state<WorkspacePreviewPort[]>([]);
+  let credentialsError = $state<string | null>(null);
+  let credentialStatuses = $state<WorkspaceCredentialStatus[]>([]);
+  let reauthJobs = $state<Record<string, CredentialReauthStatus>>({});
+  let reauthErrors = $state<Record<string, string>>({});
+  let pendingReauth = $state<string | null>(null);
   let pendingAction = $state<WorkspaceAction | null>(null);
 
   const workspace = $derived(
@@ -37,6 +50,12 @@
     pageError = null;
     unreachable = false;
     actionError = null;
+    previewPortsError = null;
+    previewPorts = [];
+    credentialsError = null;
+    credentialStatuses = [];
+    reauthJobs = {};
+    reauthErrors = {};
     void loadWorkspace(id);
   });
 
@@ -57,12 +76,58 @@
     try {
       const result = await api.getWorkspace(id);
       if (id === workspaceId) workspaces.upsert(result);
+      void loadPreviewPorts(id);
+      void loadCredentialStatuses(id);
     } catch (error) {
       if (id !== workspaceId) return;
       unreachable = error instanceof TypeError || get(connection).status === 'offline';
       pageError = unreachable ? "Can't reach the Mainloop backend." : 'Workspace not found';
     } finally {
       if (id === workspaceId) loading = false;
+    }
+  }
+
+  async function loadPreviewPorts(id: string) {
+    try {
+      const ports = await api.listWorkspacePreviewPorts(id);
+      if (id === workspaceId) previewPorts = ports;
+    } catch {
+      if (id === workspaceId) previewPortsError = 'Preview ports could not be loaded.';
+    }
+  }
+
+  async function loadCredentialStatuses(id: string) {
+    try {
+      const statuses = await api.getWorkspaceCredentials(id);
+      if (id === workspaceId) credentialStatuses = statuses;
+    } catch {
+      if (id === workspaceId) credentialsError = 'Credential status could not be loaded.';
+    }
+  }
+
+  async function startSignIn(provider: 'codex' | 'claude') {
+    if (!workspaceId || pendingReauth) return;
+    const id = workspaceId;
+    pendingReauth = provider;
+    reauthErrors = { ...reauthErrors, [provider]: '' };
+    try {
+      let job = await api.startWorkspaceCredentialReauth(id, provider);
+      reauthJobs = { ...reauthJobs, [provider]: job };
+      for (let attempt = 0; attempt < 900 && job.state === 'running'; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (id !== $page.params.id) break;
+        job = await api.getWorkspaceCredentialReauth(id, job.id);
+        reauthJobs = { ...reauthJobs, [provider]: job };
+      }
+      if (job.state === 'completed') await loadCredentialStatuses(id);
+      else if (job.state === 'failed') reauthErrors = { ...reauthErrors, [provider]: 'Sign-in failed. You can try again.' };
+    } catch (error) {
+      reauthErrors = {
+        ...reauthErrors,
+        [provider]: error instanceof Error ? error.message : 'Sign-in could not be started.'
+      };
+    } finally {
+      pendingReauth = null;
     }
   }
 
@@ -270,6 +335,62 @@
         {/if}
       </section>
 
+      <section class="border-b border-term-border py-5" aria-labelledby="credentials-heading">
+        <h2 id="credentials-heading" class="text-base font-medium">Agent sign-in</h2>
+        <p class="mt-1 text-sm text-term-fg-muted">
+          Sign-in credentials stay in the Mainloop control plane; workspaces receive synthetic local auth files.
+        </p>
+        {#if credentialsError}
+          <p class="mt-3 text-sm text-term-yellow" role="status">{credentialsError}</p>
+        {:else}
+          <ul class="mt-3 divide-y divide-term-border">
+            {#each ['codex', 'claude'] as provider}
+              {@const status = credentialStatuses.find((item) => item.provider === provider)}
+              {@const job = reauthJobs[provider]}
+              <li class="flex flex-wrap items-start justify-between gap-3 py-3">
+                <div>
+                  <p class="text-sm font-medium capitalize">{provider}</p>
+                  <p class="mt-1 text-xs text-term-fg-muted">
+                    {status?.available ? 'Signed in' : 'Needs sign-in'}
+                    {#if status?.expires_at}
+                      <span> · expires {formatTime(status.expires_at)}</span>
+                    {/if}
+                  </p>
+                  {#if job?.challenge}
+                    <p class="mt-2 text-sm">
+                      <a
+                        href={job.challenge.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-term-accent underline underline-offset-4"
+                      >Open sign-in page</a>
+                      <span class="ml-2">Code: <code class="font-mono">{job.challenge.code}</code></span>
+                    </p>
+                  {:else if job?.state === 'running'}
+                    <p class="mt-2 text-xs text-term-fg-muted" role="status">Waiting for sign-in instructions…</p>
+                  {/if}
+                  {#if reauthErrors[provider]}
+                    <p class="mt-2 text-xs text-term-yellow" role="alert">{reauthErrors[provider]}</p>
+                  {/if}
+                  {#if job?.state === 'completed'}
+                    <p class="mt-2 text-xs text-term-green" role="status">Sign-in completed.</p>
+                  {/if}
+                </div>
+                <button
+                  type="button"
+                  class="border border-term-border px-3 py-2 text-sm hover:border-term-accent hover:text-term-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={pendingReauth !== null}
+                  onclick={() => startSignIn(provider as 'codex' | 'claude')}
+                  aria-busy={pendingReauth === provider}
+                >
+                  {pendingReauth === provider ? 'Waiting for sign-in…' : 'Sign in'}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
       <section class="py-5" aria-labelledby="manifest-heading">
         <div class="border-term-border border-b pb-3">
           <h2 id="manifest-heading" class="text-base font-medium">Workspace manifest</h2>
@@ -368,6 +489,37 @@
             </dd>
           </div>
         </dl>
+      </section>
+
+      <section class="border-t border-term-border py-5" aria-labelledby="previews-heading">
+        <h2 id="previews-heading" class="text-base font-medium">Previews</h2>
+        <p class="mt-1 text-sm text-term-fg-muted">
+          Open a declared or currently listening HTTP port in a new tab.
+        </p>
+        {#if previewPortsError}
+          <p class="mt-3 text-sm text-term-yellow" role="status">{previewPortsError}</p>
+        {:else if previewPorts.length}
+          <ul class="mt-3 divide-y divide-term-border">
+            {#each previewPorts as previewPort (previewPort.port)}
+              <li class="flex flex-wrap items-center justify-between gap-3 py-3">
+                <span class="text-sm">
+                  {previewPort.name}
+                  <span class="ml-2 font-mono text-xs text-term-fg-muted">:{previewPort.port}</span>
+                </span>
+                <a
+                  href={previewPort.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="border border-term-accent px-3 py-2 text-sm text-term-accent hover:bg-term-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent"
+                >
+                  Open preview
+                </a>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="mt-3 text-sm text-term-fg-muted">No declared or listening HTTP ports are available.</p>
+        {/if}
       </section>
     </div>
   </main>
