@@ -6,7 +6,9 @@ native-agent activity, message delivery, user attention, and publication state.
 
 Workspace actors currently use Substrate's gVisor sandbox; microVM isolation is deferred. The
 Mainloop agent image runs as UID `10001`, and the pinned Substrate fork honors that image user.
-Non-root actor startup was live checked on Kind with fork commit `ce265c1d`.
+Non-root actor startup, a headless Claude turn, and a durable workspace volume surviving
+suspend and resume were live checked on Kind with fork commit `0f9635ae`, using the spike's proof
+scripts rather than the Mainloop API.
 
 ## Lifecycle
 

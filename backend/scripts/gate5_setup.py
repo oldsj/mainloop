@@ -20,10 +20,11 @@ fetch provider credentials or submit a native turn. The image's authenticated /t
 runs one headless native CLI process per request; Mainloop owns delivery and retry decisions.
 
 Prerequisites:
-    kubectl, plus kubectl-ate and ko built from a checkout of the oldsj/substrate fork at
+    kubectl and kubectl-ate. Either pass an existing digest-pinned WorkerPool image with
+    --worker-image, or pass ko and a checkout of the oldsj/substrate fork at
     SUBSTRATE_FORK_COMMIT (see docs/spikes/substrate-workspace-adapter.md).
-    A running kind-substrate-preview cluster with the ate-system + agentgateway dataplane
-    installed (this script accepts only the exact kind-substrate-preview context).
+    A running kind-substrate-preview cluster with ate-system and Envoy plus sdsmint installed
+    (this script accepts only the exact kind-substrate-preview context).
     The live-agent-gate image already built and pushed (see live-agent-image/), its digest
     passed with --image.
 
@@ -33,7 +34,7 @@ Usage:
         --context kind-substrate-preview --kubeconfig /tmp/substrate-preview-kubeconfig \\
         --ate-cli "$SUBSTRATE_SRC/bin/kubectl-ate" \\
         --ko "$SUBSTRATE_SRC/bin/ko" \\
-        --substrate-src "$SUBSTRATE_SRC" \\
+        --worker-image localhost:5001/ateom-gvisor@sha256:<digest> \\
         --atespace nonroot-check --worker-pool nonroot-check --template-version v1 \\
         --image localhost:5001/live-agent-gate@sha256:... \\
         --manifest ../spikes/substrate-workspace-adapter/k8s/actor-template.yaml.tmpl \\
@@ -42,6 +43,8 @@ Usage:
 
     Use a fresh atespace for this check: the applied product WorkerPool requests two replicas.
     --worker-pool defaults to the atespace name so its label is distinct from other namespaces.
+    --worker-image applies an existing digest-pinned WorkerPool image directly and does not
+    invoke ko; without it, --substrate-src is required and ko resolves the WorkerPool image.
 
     Re-running with the same --state-file reconciles the persisted actor uid against the
 cluster's current state rather than blindly creating or resuming; a name collision with a
@@ -84,9 +87,8 @@ from mainloop.runtime.substrate import (  # noqa: E402
     wait_for_golden_snapshot,
 )
 
-# The `patched` branch of https://github.com/oldsj/substrate: upstream Substrate at
-# cdac9baef81dd319b46086d695266e6161e9e592 plus the patches listed in its FORK.md.
-SUBSTRATE_FORK_COMMIT = "ce265c1dbd3775faf10c95f71f2c16ff3d47c332"
+# The `patched-next` branch of https://github.com/oldsj/substrate.
+SUBSTRATE_FORK_COMMIT = "0f9635aed37bd5dde604a9bca1975421cd07181a"
 WORKER_SANDBOX_CLASS = "gvisor"
 ACTOR_SHIM_PORT = 8090
 
@@ -97,7 +99,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--kubeconfig", required=True)
     p.add_argument("--ate-cli", default="kubectl-ate")
     p.add_argument("--ko", default="ko")
-    p.add_argument("--substrate-src", required=True)
+    p.add_argument(
+        "--substrate-src",
+        help="pinned oldsj/substrate checkout used to resolve a ko:// WorkerPool image",
+    )
+    p.add_argument(
+        "--worker-image",
+        help=(
+            "existing WorkerPool image pinned by digest; skips ko resolution/build/push "
+            "and applies the WorkerPool manifest directly"
+        ),
+    )
     p.add_argument("--router-port", type=int, default=18091)
     p.add_argument("--atespace", required=True)
     p.add_argument(
@@ -168,6 +180,7 @@ def render_manifest(
     template_name: str,
     bucket_name: str,
     image: str,
+    worker_image: str | None = None,
 ) -> list[str]:
     """Substitutes the template placeholders and image marker, then splits the multi-document
     YAML on its own '---' separators. Returns [namespace_and_workerpool_doc,
@@ -184,6 +197,15 @@ def render_manifest(
         )
         .replace("__IMAGE__", image)
     )
+    if worker_image is not None:
+        if not re.fullmatch(r"\S+@sha256:[0-9a-fA-F]{64}", worker_image):
+            raise RuntimeError("--worker-image must be pinned by a full sha256 digest")
+        worker_image_uri = "ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor"
+        if worker_image_uri not in rendered:
+            raise RuntimeError(
+                f"expected the WorkerPool template to contain {worker_image_uri}"
+            )
+        rendered = rendered.replace(worker_image_uri, worker_image)
     docs = [d for d in rendered.split("\n---\n") if d.strip()]
     if len(docs) != 3:
         raise RuntimeError(
@@ -203,6 +225,7 @@ def render_gate_manifest(args: argparse.Namespace) -> list[str]:
         template_name=template_name,
         bucket_name=args.bucket_name,
         image=args.image,
+        worker_image=args.worker_image,
     )
 
 
@@ -329,16 +352,29 @@ def prepare_run_state(args: argparse.Namespace, cluster: dict[str, str]) -> dict
     }
     state = load_state(args.state_file)
     if state:
-        missing = {"run_id", "template_uid", "actor_uid"} - state.keys()
+        missing = {
+            "run_id",
+            "namespace_uid",
+            "template_uid",
+            "actor_uid",
+        } - state.keys()
+        invalid = set()
+        if (
+            not isinstance(state.get("namespace_uid"), str)
+            or not state["namespace_uid"]
+        ):
+            invalid.add("namespace_uid")
         mismatch = {
             key: (state.get(key), value)
             for key, value in identity.items()
             if state.get(key) != value
         }
-        if missing or mismatch:
+        if missing or invalid or mismatch:
             details = []
             if missing:
                 details.append(f"missing identity fields {sorted(missing)}")
+            if invalid:
+                details.append(f"empty identity fields {sorted(invalid)}")
             if mismatch:
                 details.append(f"requested identity differs: {mismatch}")
             raise RuntimeError(
@@ -349,11 +385,89 @@ def prepare_run_state(args: argparse.Namespace, cluster: dict[str, str]) -> dict
     state = {
         **identity,
         "run_id": str(uuid.uuid4()),
+        "namespace_uid": None,
         "template_uid": None,
         "actor_uid": None,
     }
     save_state(args.state_file, state)
     return state
+
+
+def create_namespace_and_record_uid(
+    args: argparse.Namespace,
+    state: dict,
+    namespace_doc: str,
+    *,
+    runner=subprocess.run,
+) -> str:
+    """Create this run's Namespace and persist the UID returned by the API server."""
+    if state.get("namespace_uid"):
+        raise RuntimeError("run state already has a Namespace UID")
+    result = runner(
+        [
+            "kubectl",
+            "--context",
+            args.context,
+            "--kubeconfig",
+            args.kubeconfig,
+            "create",
+            "-f",
+            "-",
+            "-o",
+            "json",
+        ],
+        input=namespace_doc,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    uid = (json.loads(result.stdout).get("metadata") or {}).get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise RuntimeError("created lane Namespace response is missing metadata.uid")
+    state["namespace_uid"] = uid
+    save_state(args.state_file, state)
+    return uid
+
+
+def verify_namespace_uid(
+    args: argparse.Namespace, state: dict, *, runner=subprocess.run
+) -> str:
+    """Refuse to resume into a missing or replacement lane Namespace."""
+    recorded_uid = state.get("namespace_uid")
+    if not isinstance(recorded_uid, str) or not recorded_uid:
+        raise RuntimeError("run state has no Namespace UID; refusing to resume")
+    try:
+        result = runner(
+            [
+                "kubectl",
+                "--context",
+                args.context,
+                "--kubeconfig",
+                args.kubeconfig,
+                "get",
+                "namespace",
+                args.atespace,
+                "-o",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"could not verify lane Namespace UID for {args.atespace}; refusing to resume"
+        ) from error
+    uid = (json.loads(result.stdout).get("metadata") or {}).get("uid")
+    if not isinstance(uid, str) or not uid:
+        raise RuntimeError("lane Namespace response is missing metadata.uid")
+    if recorded_uid != uid:
+        raise RuntimeError(
+            f"lane Namespace UID changed from {recorded_uid} to {uid}; refusing to adopt it"
+        )
+    return uid
 
 
 def apply_worker_pool(
@@ -362,13 +476,36 @@ def apply_worker_pool(
     kubeconfig: str,
     context: str,
     ko: str,
-    substrate_src: str,
+    substrate_src: str | None,
     runner=subprocess.run,
 ) -> None:
     """Resolve the WorkerPool's `ko://...` workerImage and apply it (and the Namespace doc
     it's paired with) via `ko resolve | kubectl apply`. An unresolved ko:// reference
     reaches the pod as an InvalidImageName, not a manifest-time error, so this step must not
     be skipped even though `kubectl apply` alone would exit 0."""
+    if "ko://" not in doc:
+        runner(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "--kubeconfig",
+                kubeconfig,
+                "apply",
+                "-f",
+                "-",
+            ],
+            input=doc,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+        return
+    if not substrate_src:
+        raise RuntimeError(
+            "--substrate-src is required when the WorkerPool manifest contains ko://"
+        )
     substrate_src = verify_substrate_source(substrate_src, runner=runner)
     ko_docker_repo = os.environ.get("KO_DOCKER_REPO")
     if not ko_docker_repo:
@@ -430,10 +567,60 @@ def egress_policy_manifest(args: argparse.Namespace) -> str:
     return json.dumps({"rules": rules})
 
 
+def existing_egress_policy_preconditions(args: argparse.Namespace) -> dict[str, str]:
+    """Read the UID and version required for an update of an existing policy."""
+    result = (
+        subprocess.run(  # nosec B603 - argv list, CLI path is an operator-supplied flag
+            [
+                args.ate_cli,
+                "--kubeconfig",
+                args.kubeconfig,
+                "--context",
+                args.context,
+                "get",
+                "egress-policy",
+                args.actor_name,
+                "--atespace",
+                args.atespace,
+                "-o",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "get egress-policy failed while preparing an update "
+            f"(exit {result.returncode}): {result.stderr.strip()[-300:]}"
+        )
+    try:
+        policy = json.loads(result.stdout)
+        metadata = policy["metadata"]
+        uid = metadata["uid"]
+        version = str(metadata["version"])
+        if (
+            not isinstance(uid, str)
+            or not uid
+            or not version.isdecimal()
+            or int(version) <= 0
+        ):
+            raise ValueError("metadata.uid and positive metadata.version are required")
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "get egress-policy returned JSON without valid metadata.uid and "
+            "metadata.version preconditions"
+        ) from exc
+    return {"uid": uid, "version": version}
+
+
 def apply_egress_policy(args: argparse.Namespace) -> None:
     """Create the actor's EgressPolicy, or replace it when one already exists."""
-    manifest = egress_policy_manifest(args)
+    manifest = json.loads(egress_policy_manifest(args))
     for verb in ("create", "update"):
+        if verb == "update":
+            manifest["metadata"] = existing_egress_policy_preconditions(args)
         result = subprocess.run(  # nosec B603 - argv list, CLI path is an operator-supplied flag
             [
                 args.ate_cli,
@@ -449,7 +636,7 @@ def apply_egress_policy(args: argparse.Namespace) -> None:
                 "--filename",
                 "-",
             ],
-            input=manifest,
+            input=json.dumps(manifest),
             capture_output=True,
             text=True,
             timeout=60,
@@ -841,10 +1028,24 @@ async def ensure_actor(
 
 
 async def async_main(args: argparse.Namespace) -> None:
+    if args.worker_image is not None and not re.fullmatch(
+        r"\S+@sha256:[0-9a-fA-F]{64}", args.worker_image
+    ):
+        raise RuntimeError("--worker-image must be pinned by a full sha256 digest")
     verify_image_manifest(args.image)
-    substrate_src = verify_substrate_source(args.substrate_src)
+    substrate_src = None
+    if args.worker_image is None:
+        if not args.substrate_src:
+            raise RuntimeError(
+                "pass --worker-image to reuse an existing image, or --substrate-src "
+                "to resolve the ko:// WorkerPool image"
+            )
+        substrate_src = verify_substrate_source(args.substrate_src)
     cluster = get_cluster_identity(context=args.context, kubeconfig=args.kubeconfig)
     state = prepare_run_state(args, cluster)
+    resuming = state.get("namespace_uid") is not None
+    if resuming:
+        verify_namespace_uid(args, state)
     control = SubstrateControl(
         kubeconfig=args.kubeconfig, context=args.context, cli=args.ate_cli
     )
@@ -854,9 +1055,15 @@ async def async_main(args: argparse.Namespace) -> None:
     await control.ensure_atespace(args.atespace)
 
     namespace_and_workerpool_doc, actor_template_doc = render_gate_manifest(args)
-    print("-- resolving and applying the Namespace + WorkerPool")
+    namespace_doc, worker_pool_doc = namespace_and_workerpool_doc.split("\n---\n", 1)
+    if args.worker_image is None:
+        print("-- resolving and applying the WorkerPool")
+    else:
+        print("-- applying the WorkerPool with the existing worker image")
+    if not resuming:
+        create_namespace_and_record_uid(args, state, namespace_doc + "\n")
     apply_worker_pool(
-        namespace_and_workerpool_doc,
+        worker_pool_doc,
         kubeconfig=args.kubeconfig,
         context=args.context,
         ko=args.ko,

@@ -59,10 +59,10 @@ containers:
     limits:
     - { name: cpu, quantity: "2" }
     - { name: memory, quantity: 2Gi }
-  readyz:
+  wakeupProbe:
     httpGet: { path: /healthz, port: 8090 }
     timeoutSeconds: 60
-snapshotsConfig:
+snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/mainloop-workspaces/

@@ -1,7 +1,7 @@
 FROM golang:1.27.0-bookworm AS substrate-cli
 
 ARG SUBSTRATE_REPOSITORY=https://github.com/oldsj/substrate.git
-ARG SUBSTRATE_COMMIT=ce265c1dbd3775faf10c95f71f2c16ff3d47c332
+ARG SUBSTRATE_COMMIT=0f9635aed37bd5dde604a9bca1975421cd07181a
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \

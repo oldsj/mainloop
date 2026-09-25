@@ -97,7 +97,7 @@ def _actor_from_json(doc: dict) -> ActorRecord:
         uid=metadata.get("uid"),
         state=ActorState.parse(status.get("state")),
         external_snapshot_uri=snapshot.get("snapshotUri"),
-        current_actor_template_uid=status.get("currentActorTemplateUid"),
+        current_actor_template_uid=snapshot.get("actorTemplateUid"),
         raw=doc,
     )
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,7 +19,6 @@ import (
 
 const (
 	expectedURI       = "ate-secret://kubernetes.io/mainloop-control/claude-oauth/oauth-token"
-	expectedActorID   = "spiffe://substrate-actor.local/atespace/live-agent-gate/actor/egress-actor-a"
 	credentialPath    = "/run/claude/oauth-token"
 	servingBundlePath = "/run/servicedns/credential-bundle.pem"
 	clientCAPath      = "/run/podidentity-ca/trust-bundle.pem"
@@ -26,10 +26,11 @@ const (
 
 type provider struct {
 	credproviderpb.UnimplementedCredentialProviderServer
+	expectedActorSPIFFEID string
 }
 
-func (provider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
-	if req.GetUri() != expectedURI || req.GetActorSpiffeId() != expectedActorID {
+func (p provider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
+	if req.GetUri() != expectedURI || req.GetActorSpiffeId() != p.expectedActorSPIFFEID {
 		return nil, status.Error(codes.PermissionDenied, "credential request rejected")
 	}
 	value, err := os.ReadFile(credentialPath)
@@ -45,6 +46,11 @@ func (provider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRe
 }
 
 func main() {
+	expectedActorSPIFFEID := strings.TrimSpace(os.Getenv("EXPECTED_ACTOR_SPIFFE_ID"))
+	if expectedActorSPIFFEID == "" {
+		log.Fatal("EXPECTED_ACTOR_SPIFFE_ID is required")
+	}
+
 	servingCert, err := tls.LoadX509KeyPair(servingBundlePath, servingBundlePath)
 	if err != nil {
 		log.Fatal("serving certificate unavailable")
@@ -64,7 +70,7 @@ func main() {
 		ClientCAs:    clientCAs,
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
-	credproviderpb.RegisterCredentialProviderServer(grpcServer, provider{})
+	credproviderpb.RegisterCredentialProviderServer(grpcServer, provider{expectedActorSPIFFEID: expectedActorSPIFFEID})
 	listener, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatal("gRPC listener unavailable")

@@ -83,13 +83,24 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def actor_json(state: str, *, snapshot_uri: str | None = None, uid: str = "u-1") -> str:
+def actor_json(
+    state: str,
+    *,
+    snapshot_uri: str | None = None,
+    template_uid: str | None = None,
+    uid: str = "u-1",
+) -> str:
     doc = {
         "metadata": {"atespace": "mainloop-workspaces", "name": "ml-abc", "uid": uid},
         "status": {"state": state},
     }
-    if snapshot_uri:
-        doc["status"]["externalSnapshot"] = {"snapshotUri": snapshot_uri}
+    if snapshot_uri or template_uid:
+        snapshot = {"contentScope": "SNAPSHOT_CONTENT_SCOPE_FULL"}
+        if snapshot_uri:
+            snapshot["snapshotUri"] = snapshot_uri
+        if template_uid:
+            snapshot["actorTemplateUid"] = template_uid
+        doc["status"]["externalSnapshot"] = snapshot
     return json.dumps(doc)
 
 
@@ -137,12 +148,37 @@ class ActorJsonParsingTests(unittest.TestCase):
     def test_parses_running_actor_with_snapshot(self):
         import json
 
-        doc = json.loads(actor_json("ACTOR_STATE_RUNNING", snapshot_uri="gs://b/p"))
+        doc = json.loads(
+            actor_json(
+                "ACTOR_STATE_RUNNING",
+                snapshot_uri="gs://b/p",
+                template_uid="template-snapshot-1",
+            )
+        )
         record = _actor_from_json(doc)
         self.assertEqual(record.atespace, "mainloop-workspaces")
         self.assertEqual(record.name, "ml-abc")
         self.assertEqual(record.state, ActorState.RUNNING)
         self.assertEqual(record.external_snapshot_uri, "gs://b/p")
+        self.assertEqual(record.current_actor_template_uid, "template-snapshot-1")
+
+    def test_template_uid_is_read_from_external_snapshot(self):
+        doc = {
+            "metadata": {"atespace": "mainloop-workspaces", "name": "ml-abc"},
+            "status": {
+                "state": "ACTOR_STATE_SUSPENDED",
+                "externalSnapshot": {
+                    "snapshotUri": "gs://b/p",
+                    "contentScope": "SNAPSHOT_CONTENT_SCOPE_FULL",
+                    "actorTemplateUid": "template-snapshot-only",
+                },
+            },
+        }
+
+        record = _actor_from_json(doc)
+
+        self.assertNotIn("currentActorTemplateUid", doc["status"])
+        self.assertEqual(record.current_actor_template_uid, "template-snapshot-only")
 
     def test_unrecognized_state_string_is_unspecified_not_a_crash(self):
         record = _actor_from_json(

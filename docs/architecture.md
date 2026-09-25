@@ -178,9 +178,9 @@ Kubernetes sign-in job and the external egress credential-provider contract are 
   model yet, so the token effectively grants full Substrate access. This is a known authorization
   gap; the ClusterTrustBundle permission is limited to `list`.
 - Mainloop pins a Substrate fork whose actor runtime runs containers as the image's `USER` in
-  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. Non-root actor startup was
-  live checked on Kind with fork commit `ce265c1d`. The durable workspace directory must be
-  writable by that user.
+  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. The fork gives a fresh
+  durable volume to that user. Non-root startup and a durable volume surviving suspend and resume
+  were live checked on Kind with fork commit `0f9635ae` using the spike's proof scripts.
 - The actor's observed `RLIMIT_NOFILE` is 1024.
 - Restoring Postgres from an actor snapshot is unverified.
 - Live wake-on-preview is unverified.
