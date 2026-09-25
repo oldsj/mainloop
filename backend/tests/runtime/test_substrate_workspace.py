@@ -26,10 +26,11 @@ FAKE_SHIM_NAME = "shim-fixture"
 class FakeRouterAndShim:
     """In-process CONNECT/router and authenticated shim model for transport contracts."""
 
-    def __init__(self):
+    def __init__(self, *, token_installed=True):
         self.suspended = False
         self.capacity = False
-        self.expected_token = FIXTURE_VALUE
+        self.expected_token = FIXTURE_VALUE if token_installed else None
+        self.token_installed = token_installed
         self.inflight: set[tuple[str, str]] = set()
         self.turns: dict[tuple[str, str], dict] = {}
         self.journal_lines = [
@@ -57,8 +58,17 @@ class FakeRouterAndShim:
             return _Response(503, "capacity unavailable")
         body = body or {}
         self.requests.append((method, path, body))
-        if (method, path) != ("GET", "/healthz") and token != self.expected_token:
+        if (method, path) not in (
+            ("GET", "/healthz"),
+            ("POST", "/token"),
+        ) and token != self.expected_token:
             return _Response(401, "unauthorized")
+        if method == "POST" and path == "/token":
+            if self.token_installed:
+                return _Response(409, "token already set")
+            self.token_installed = True
+            self.expected_token = body.get("token")
+            return _Response(201, "token set")
         if method == "GET" and path == "/healthz":
             if self.suspended:
                 self.suspended = False
@@ -224,6 +234,66 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                 for key in keys:
                     native_sessions._workspaces.pop(key, None)
 
+    def test_branch_binding_uses_its_workspace_actor(self):
+        binding = {
+            "session_id": "workspace-session-fixture",
+            "kind": "claude",
+            "workspace_atespace": "workspace-space",
+            "workspace_actor_name": "workspace-actor",
+            "workspace_shim_token_secret_name": "workspace-shim",
+        }
+        key = (
+            binding["session_id"],
+            binding["workspace_atespace"],
+            binding["workspace_actor_name"],
+            binding["workspace_shim_token_secret_name"],
+            binding["kind"],
+        )
+        with patch.object(settings, "substrate_actor_bindings", {}):
+            try:
+                workspace = native_sessions.workspace_for(binding)
+                self.assertEqual(workspace.atespace, "workspace-space")
+                self.assertEqual(workspace.actor, "workspace-actor")
+                self.assertEqual(workspace.secret_name, "workspace-shim")
+            finally:
+                native_sessions._workspaces.pop(key, None)
+
+    def test_incomplete_workspace_binding_does_not_fall_back_to_shared_actor(self):
+        binding = {
+            "session_id": "workspace-session-fixture",
+            "kind": "claude",
+            "workspace_atespace": "workspace-space",
+            "workspace_actor_name": None,
+            "workspace_shim_token_secret_name": "workspace-shim",
+        }
+        with patch.object(settings, "substrate_actor_bindings", {}):
+            with self.assertRaisesRegex(RuntimeError, "incomplete actor route"):
+                native_sessions.workspace_for(binding)
+
+    def test_dynamic_shim_token_is_bootstrapped_before_authenticated_calls(self):
+        async def exercise():
+            router = FakeRouterAndShim(token_installed=False)
+            workspace = fake_workspace(router)
+
+            await workspace.send("agent-fixture", "fixture prompt")
+
+            token_requests = [
+                (index, body)
+                for index, (method, path, body) in enumerate(router.requests)
+                if method == "POST" and path == "/token"
+            ]
+            turn_requests = [
+                index
+                for index, (method, path, _body) in enumerate(router.requests)
+                if method == "POST" and path == "/turn"
+            ]
+            self.assertEqual(token_requests, [(0, {"token": FIXTURE_VALUE})])
+            self.assertTrue(turn_requests)
+            self.assertLess(token_requests[0][0], turn_requests[0])
+            self.assertEqual(router.expected_token, FIXTURE_VALUE)
+
+        asyncio.run(exercise())
+
     def test_codex_start_and_resume_install_only_synthetic_auth(self):
         async def exercise():
             router = FakeRouterAndShim()
@@ -278,6 +348,12 @@ class SubstrateWorkspaceTests(unittest.TestCase):
             )
 
             await workspace.send("agent-fixture", "fixture prompt")
+            turn = next(
+                body
+                for method, path, body in router.requests
+                if method == "POST" and path == "/turn"
+            )
+            self.assertNotIn("startup_options", turn)
             status = await workspace.agent_status("agent-fixture")
             self.assertEqual(status["status"], "running")
             self.assertEqual(
@@ -312,6 +388,43 @@ class SubstrateWorkspaceTests(unittest.TestCase):
                         "resume": False,
                     }
                 ],
+            )
+
+        asyncio.run(exercise())
+
+    def test_startup_options_are_forwarded_with_each_native_turn(self):
+        async def exercise():
+            router = FakeRouterAndShim()
+            workspace = fake_workspace(router)
+            extra = {
+                "--cwd-rel": "main",
+                "--token": "ml_" + "a" * 64,
+                "--standing-b64": "c3RhbmRpbmcgY29udGV4dA==",
+                "--approval-policy": "restricted: Bash(mainloop:*) only",
+                "--model": "sonnet",
+                "--effort": "medium",
+            }
+
+            await workspace.start(
+                "claude", "ml-main", native_id=None, resume=False, extra=extra
+            )
+            await workspace.send("ml-main", "fixture prompt")
+
+            turn = next(
+                body
+                for method, path, body in router.requests
+                if method == "POST" and path == "/turn"
+            )
+            self.assertEqual(
+                turn["startup_options"],
+                {
+                    "cwd_rel": "main",
+                    "token": "ml_" + "a" * 64,
+                    "standing_b64": "c3RhbmRpbmcgY29udGV4dA==",
+                    "approval_policy": "restricted: Bash(mainloop:*) only",
+                    "model": "sonnet",
+                    "effort": "medium",
+                },
             )
 
         asyncio.run(exercise())

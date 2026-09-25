@@ -24,6 +24,7 @@ COPY codex /usr/local/bin/codex
 COPY codex-code-mode-host /usr/local/bin/codex-code-mode-host
 COPY bin/start-native-agent /usr/local/bin/start-native-agent
 COPY bin/prepare-native-agent-config.cjs /usr/local/bin/prepare-native-agent-config.cjs
+COPY bin/mainloop /usr/local/bin/mainloop
 COPY bin/mainloop-reauth /usr/local/bin/mainloop-reauth
 COPY agent-config/mainloop-system.txt /etc/agent-config/mainloop-system.txt
 COPY exec-shim.js /usr/local/bin/exec-shim.js

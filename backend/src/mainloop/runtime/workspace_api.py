@@ -3,7 +3,7 @@
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -22,6 +22,7 @@ from mainloop.sse import notify_workspace_updated
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from models import (
+    WorkspaceAgentKind,
     WorkspaceDev,
     WorkspaceLifecycle,
     WorkspaceManifest,
@@ -37,6 +38,7 @@ class CreateWorkspaceRequest(BaseModel):
     project_id: Annotated[StrictStr, Field(min_length=1)]
     branch: Annotated[StrictStr, Field(min_length=1)]
     dev: WorkspaceDev
+    agent_kind: Literal["claude", "codex"] = "claude"
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -95,6 +97,7 @@ async def create_workspace(
         manifest = WorkspaceManifest(
             repo_url=project["html_url"],
             branch=request.branch,
+            agent_kinds=(WorkspaceAgentKind(request.agent_kind),),
             resource_class="default",
             dev=request.dev,
         )
@@ -156,6 +159,11 @@ async def create_workspace(
                 workspace_id,
                 json.dumps(manifest.model_dump(mode="json")),
                 now,
+            )
+            from mainloop.runtime import native_sessions
+
+            await native_sessions.create_binding(
+                workspace_id, request.agent_kind, conn=conn
             )
 
     try:

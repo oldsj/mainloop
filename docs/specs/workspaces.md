@@ -4,6 +4,10 @@ Workspaces are runtime resources attached to sessions. A project branch workspac
 Substrate actor and lifecycle. Workspace lifecycle is separate from the session's task status,
 native-agent activity, message delivery, user attention, and publication state.
 
+Workspace actors currently use Substrate's gVisor sandbox; microVM isolation is deferred. The
+Mainloop agent image runs as UID `10001`, and the pinned Substrate fork honors that image user.
+Non-root actor startup was live checked on Kind with fork commit `ce265c1d`.
+
 ## Lifecycle
 
 Mainloop records desired state (`running` or `suspended`), observed state, conditions, the last
@@ -37,7 +41,9 @@ from the manifest until the workspace is running. A preview request itself may w
 - `GET /workspaces` lists the current user's workspace lifecycle records.
 - `GET /workspaces/{id}` returns one workspace lifecycle and manifest.
 - `POST /workspaces` accepts a project ID, branch, and strict dev manifest, then provisions one
-  actor from its declared actor template or the configured default template.
+  actor from its declared actor template or the configured default template. It also creates a
+  native-agent binding that routes the workspace session to that actor. An optional top-level
+  `agent_kind` (`claude` or `codex`, default `claude`) selects the binding's native agent.
 - `POST /workspaces/{id}/suspend` records the desired state and requests suspension.
 - `POST /workspaces/{id}/resume` records the desired state and requests resumption.
 - `POST /workspaces/{id}/refresh` reads Substrate status without changing desired state.
@@ -45,6 +51,8 @@ from the manifest until the workspace is running. A preview request itself may w
   The preview proxy can call the same `touch_workspace(workspace_id, reason)` service API.
 - `DELETE /workspaces/{id}` deletes the actor and its shim token Secret. Open deliveries return
   `409`; an unconfirmed Substrate deletion keeps the durable workspace binding for reconciliation.
+- The control plane generates one shim bearer token per actor, stores it in the configured shim
+  Secret namespace, and installs it through the actor shim's one-time bootstrap endpoint.
 - `GET /workspaces/{id}/ports` lists declared or shim-reported preview ports and their URLs.
 - `GET /workspaces/{id}/credentials` reports provider availability and expiry metadata only.
 - `POST /workspaces/{id}/credentials/{provider}/reauth` starts a bounded control-side sign-in Job.

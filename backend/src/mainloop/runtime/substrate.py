@@ -200,16 +200,28 @@ class SubstrateControl:
         *,
         kubeconfig: str | None = None,
         context: str | None = None,
+        endpoint: str | None = None,
+        token_file: str | None = None,
         cli: str | None = None,
     ):
         self.kubeconfig = (
             kubeconfig if kubeconfig is not None else settings.substrate_kubeconfig
         )
         self.context = context if context is not None else settings.substrate_context
+        self.endpoint = (
+            endpoint if endpoint is not None else settings.substrate_endpoint
+        )
+        self.token_file = (
+            token_file if token_file is not None else settings.substrate_token_file
+        )
         self.cli = cli or settings.substrate_cli
 
     def _base_args(self) -> list[str]:
         args = [self.cli]
+        if self.endpoint:
+            args += ["--endpoint", self.endpoint]
+        if self.token_file:
+            args += ["--token-file", self.token_file]
         if self.kubeconfig:
             args += ["--kubeconfig", self.kubeconfig]
         if self.context:

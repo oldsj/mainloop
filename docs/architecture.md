@@ -166,14 +166,21 @@ Kubernetes sign-in job and the external egress credential-provider contract are 
 
 ## Isolation and known gaps
 
-- Substrate actors use gVisor isolation. The router admits actor control traffic from the
-  Mainloop control namespace; actor shim requests use a distinct token for each actor.
+- Substrate actors use gVisor isolation; microVM isolation is deferred. The router admits actor
+  control traffic from the Mainloop control namespace, and each actor has a distinct shim token.
+  By default, shim token Secrets live in a namespace separate from provider credentials.
 - Actor egress is restricted by host allowlists and passes through the egress proxy.
 - Workspace lifecycle and credential paths have fake-backed coverage; their combined behavior
   has not been verified end to end on a live cluster.
+- The backend authenticates to the pinned Substrate API (`0f9635aed37bd5dde604a9bca1975421cd07181a`)
+  with a projected ServiceAccount token whose audience is `api.ate-system.svc`. That API verifies
+  trusted tokens with this audience but does not check caller authorization through its OpenFGA
+  model yet, so the token effectively grants full Substrate access. This is a known authorization
+  gap; the ClusterTrustBundle permission is limited to `list`.
 - Mainloop pins a Substrate fork whose actor runtime runs containers as the image's `USER` in
-  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. A fresh `durableDir`
-  must be writable by that user for the workspace to start, which still needs a live check.
+  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. Non-root actor startup was
+  live checked on Kind with fork commit `ce265c1d`. The durable workspace directory must be
+  writable by that user.
 - The actor's observed `RLIMIT_NOFILE` is 1024.
 - Restoring Postgres from an actor snapshot is unverified.
 - Live wake-on-preview is unverified.

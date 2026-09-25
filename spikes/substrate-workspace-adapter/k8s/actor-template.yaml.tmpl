@@ -48,6 +48,7 @@ containers:
   - /usr/local/bin/entrypoint.sh
   env:
   - { name: HOME, value: /work/.home }
+  - { name: MAINLOOP_API, value: http://mainloop-backend.mainloop-control.svc.cluster.local:8000 }
   - { name: WORKSPACE_PATH, value: /work/repo }
   - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
   - { name: CODEX_HOME, value: /work/.codex }

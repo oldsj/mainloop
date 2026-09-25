@@ -488,6 +488,12 @@ durable backend integration and snapshot access controls are not proved.
 
 Production requirements:
 
+- The backend's projected ServiceAccount token for Substrate API commit
+  `0f9635aed37bd5dde604a9bca1975421cd07181a` has audience `api.ate-system.svc`. The API accepts
+  any valid cluster ServiceAccount token with that audience and does not yet enforce per-caller
+  authorization through the OpenFGA model. The backend token therefore grants effectively full
+  Substrate access. This is a known authorization gap; enforce caller-level authorization before
+  production adoption.
 - Isolate worker selection by tenant. Substrate does not scope selection by atespace or
   namespace; require unique per-tenant WorkerPool names/selectors and enforce uniqueness with
   admission policy.

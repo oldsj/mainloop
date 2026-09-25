@@ -1,3 +1,21 @@
+FROM golang:1.27.0-bookworm AS substrate-cli
+
+ARG SUBSTRATE_REPOSITORY=https://github.com/oldsj/substrate.git
+ARG SUBSTRATE_COMMIT=ce265c1dbd3775faf10c95f71f2c16ff3d47c332
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+RUN git init \
+    && git remote add origin "${SUBSTRATE_REPOSITORY}" \
+    && git fetch --depth=1 origin "${SUBSTRATE_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && mkdir -p /out \
+    && CGO_ENABLED=0 go build -trimpath -o /out/kubectl-ate ./cmd/kubectl-ate
+
 # Build stage - use uv image with Python pre-installed
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
@@ -40,6 +58,7 @@ WORKDIR /app
 
 # Copy dependency files (owned by claude for live updates)
 COPY --from=builder --chown=mainloop:mainloop /app/.venv /app/.venv
+COPY --from=substrate-cli /out/kubectl-ate /usr/local/bin/kubectl-ate
 COPY --chown=mainloop:mainloop backend/pyproject.toml backend/uv.lock backend/README.md ./
 
 # Copy source code (owned by claude)
@@ -74,6 +93,7 @@ WORKDIR /app
 
 # Copy the virtual environment from builder (owned by claude)
 COPY --from=builder --chown=mainloop:mainloop /app/.venv /app/.venv
+COPY --from=substrate-cli /out/kubectl-ate /usr/local/bin/kubectl-ate
 
 # Copy source code (owned by claude)
 COPY --chown=mainloop:mainloop backend/src ./src

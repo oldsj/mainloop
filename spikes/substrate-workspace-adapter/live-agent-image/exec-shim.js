@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+const MAX_TURN_REQUEST_BODY_BYTES = 128 * 1024;
 const MAX_CREDENTIAL_REQUEST_BODY_BYTES = 512 * 1024;
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
 const MAX_JOB_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -230,6 +231,56 @@ function turnKey(agent, sessionKey) {
 
 function validSessionKey(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value);
+}
+
+function validStartupOptions(value, agent) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const allowedKeys = new Set([
+    'cwd_rel',
+    'token',
+    'standing_b64',
+    'approval_policy',
+    'model',
+    'effort'
+  ]);
+  if (keys.some((key) => !allowedKeys.has(key))) return false;
+  if (
+    typeof value.cwd_rel !== 'string' ||
+    typeof value.token !== 'string' ||
+    !/^ml_[a-f0-9]{64}$/.test(value.token) ||
+    typeof value.standing_b64 !== 'string' ||
+    value.standing_b64.length === 0 ||
+    value.standing_b64.length > 44 * 1024 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.standing_b64)
+  ) {
+    return false;
+  }
+  const standing = Buffer.from(value.standing_b64, 'base64');
+  if (
+    standing.length === 0 ||
+    standing.length > 32 * 1024 ||
+    standing.toString('base64') !== value.standing_b64
+  ) {
+    return false;
+  }
+  if (value.cwd_rel === 'main') {
+    return (
+      agent === 'claude' &&
+      value.approval_policy === 'restricted: Bash(mainloop:*) only' &&
+      typeof value.model === 'string' &&
+      /^[A-Za-z0-9._:-]{1,128}$/.test(value.model) &&
+      typeof value.effort === 'string' &&
+      /^(low|medium|high|max|xhigh)$/.test(value.effort)
+    );
+  }
+  return (
+    typeof value.cwd_rel === 'string' &&
+    new RegExp(`^children/ml-${agent}-[0-9a-f]{8}$`).test(value.cwd_rel) &&
+    value.approval_policy === 'bypass-permissions' &&
+    value.model === undefined &&
+    value.effort === undefined
+  );
 }
 
 function loadJobs(directory, kind) {
@@ -671,6 +722,8 @@ function startTurn(document, res) {
   const sessionId = document.session_id;
   const sessionKey = document.session_key;
   const resume = document.resume;
+  const hasStartupOptions = Object.hasOwn(document, 'startup_options');
+  const startupOptions = document.startup_options;
   const timeoutMs = validateTimeout(document.timeout_ms, DEFAULT_TURN_TIMEOUT_MS);
   if (agent !== 'claude' && agent !== 'codex') {
     res.writeHead(400).end('unsupported agent');
@@ -686,6 +739,10 @@ function startTurn(document, res) {
   }
   if (typeof resume !== 'boolean') {
     res.writeHead(400).end('invalid resume intent');
+    return;
+  }
+  if (hasStartupOptions && !validStartupOptions(startupOptions, agent)) {
+    res.writeHead(400).end('invalid startup_options');
     return;
   }
   if (
@@ -730,12 +787,35 @@ function startTurn(document, res) {
   activeTurns.set(key, job.id);
   latestTurns.set(key, job);
   try {
+    const launcherEnv = { ...process.env };
+    for (const name of [
+      'MAINLOOP_STARTUP_PRESENT',
+      'MAINLOOP_STARTUP_CWD_REL',
+      'MAINLOOP_STARTUP_TOKEN',
+      'MAINLOOP_STARTUP_STANDING_B64',
+      'MAINLOOP_STARTUP_APPROVAL_POLICY',
+      'MAINLOOP_STARTUP_MODEL',
+      'MAINLOOP_STARTUP_EFFORT'
+    ]) {
+      delete launcherEnv[name];
+    }
+    if (hasStartupOptions) {
+      launcherEnv.MAINLOOP_STARTUP_PRESENT = '1';
+      launcherEnv.MAINLOOP_STARTUP_CWD_REL = startupOptions.cwd_rel;
+      launcherEnv.MAINLOOP_STARTUP_TOKEN = startupOptions.token;
+      launcherEnv.MAINLOOP_STARTUP_STANDING_B64 = startupOptions.standing_b64;
+      launcherEnv.MAINLOOP_STARTUP_APPROVAL_POLICY = startupOptions.approval_policy;
+      if (startupOptions.model !== undefined) {
+        launcherEnv.MAINLOOP_STARTUP_MODEL = startupOptions.model;
+        launcherEnv.MAINLOOP_STARTUP_EFFORT = startupOptions.effort;
+      }
+    }
     const child = spawn(
       LAUNCHER,
       [agent, resume ? 'resume' : 'create', ...(sessionId ? [sessionId] : [])],
       {
         cwd: WORKSPACE_PATH,
-        env: process.env,
+        env: launcherEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true
       }
@@ -1072,7 +1152,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/turn') {
     if (!authorized(req)) return unauthorized(res);
-    handleBody(req, res, (document) => startTurn(document, res));
+    handleBody(req, res, (document) => startTurn(document, res), MAX_TURN_REQUEST_BODY_BYTES);
     return;
   }
   if (req.method === 'POST' && req.url === '/turn/stop') {

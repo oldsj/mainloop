@@ -246,6 +246,8 @@ class SubstrateWorkspace:
         if not _DNS_LABEL.fullmatch(self.secret_name):
             raise ValueError("Substrate shim Secret name must be a DNS label")
         self._token_value: str | None = None
+        self._token_installed = False
+        self._startup_options: dict[str, str] | None = None
         self.credential_broker = credential_broker or CredentialBroker()
 
     def set_native_session_id(self, native_session_id: str | None) -> None:
@@ -262,6 +264,19 @@ class SubstrateWorkspace:
             )
         return self._token_value
 
+    async def _install_token(self) -> None:
+        """Bootstrap a newly provisioned shim from its control-plane Secret."""
+        if self._token_installed:
+            return
+        response = await self._request(
+            "POST", "/token", body={"token": await self._token()}, authenticated=False
+        )
+        if response.status not in (201, 409):
+            raise RuntimeError(
+                f"Substrate shim token bootstrap failed (HTTP {response.status})"
+            )
+        self._token_installed = True
+
     async def _request(
         self,
         method: str,
@@ -270,6 +285,8 @@ class SubstrateWorkspace:
         body: dict | None = None,
         authenticated: bool = True,
     ) -> _Response:
+        if authenticated:
+            await self._install_token()
         token = await self._token() if authenticated else None
         response = await self._exchange(method, path, token=token, body=body)
         if response.status == 401 and authenticated:
@@ -387,9 +404,10 @@ class SubstrateWorkspace:
         resume: bool,
         extra: dict[str, str] | None = None,
     ) -> dict:
-        del binding, name, extra
+        del binding, name
         self.native_session_id = native_id
         self._resume_history = resume
+        self.set_startup_options(extra)
         await self.require_ready()
         await self.prepare_credentials()
         query = urlencode({"agent": self.agent})
@@ -398,6 +416,23 @@ class SubstrateWorkspace:
         # The actor-local file is synthetic; the egress provider injects the current token.
         # Starting the native CLI remains the shim's turn API's responsibility.
         return {"actor": self.actor}
+
+    def set_startup_options(self, extra: dict[str, str] | None) -> None:
+        """Keep the role-specific options for each shim-launched native turn."""
+        if not extra:
+            self._startup_options = None
+            return
+        self._startup_options = {
+            "cwd_rel": extra["--cwd-rel"],
+            "token": extra["--token"],
+            "standing_b64": extra["--standing-b64"],
+            "approval_policy": extra["--approval-policy"],
+            **(
+                {"model": extra["--model"], "effort": extra["--effort"]}
+                if "--model" in extra and "--effort" in extra
+                else {}
+            ),
+        }
 
     async def send(self, name: str, text: str) -> None:
         if not name:
@@ -408,6 +443,8 @@ class SubstrateWorkspace:
             "session_key": self._require_session_key(),
             "resume": self._resume_history,
         }
+        if self._startup_options is not None:
+            payload["startup_options"] = self._startup_options
         if self.native_session_id:
             payload["session_id"] = self.native_session_id
         response = await self._request("POST", "/turn", body=payload)

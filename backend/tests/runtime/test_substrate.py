@@ -157,6 +157,51 @@ class ActorJsonParsingTests(unittest.TestCase):
 
 
 class SubstrateControlTests(unittest.TestCase):
+    def test_base_args_use_direct_endpoint_and_projected_token_file_in_cluster(self):
+        projected_token_path = "/var/run/secrets/tokens/substrate-api/token"  # nosec B105 - path only; the projected token contents are not arguments
+        ctl = SubstrateControl(
+            cli="kubectl-ate",
+            endpoint="api.ate-system.svc:443",
+            token_file=projected_token_path,
+            kubeconfig="",
+            context="",
+        )
+
+        args = ctl._base_args()
+
+        self.assertEqual(
+            args,
+            [
+                "kubectl-ate",
+                "--endpoint",
+                "api.ate-system.svc:443",
+                "--token-file",
+                projected_token_path,
+            ],
+        )
+        self.assertNotIn("fixture-bearer-token", args)
+
+    def test_base_args_keep_configured_local_kubeconfig_and_context(self):
+        empty = ""
+        ctl = SubstrateControl(
+            cli="kubectl-ate",
+            kubeconfig="/fixture/kubeconfig",
+            context="kind-substrate-preview",
+            endpoint=empty,
+            token_file=empty,
+        )
+
+        self.assertEqual(
+            ctl._base_args(),
+            [
+                "kubectl-ate",
+                "--kubeconfig",
+                "/fixture/kubeconfig",
+                "--context",
+                "kind-substrate-preview",
+            ],
+        )
+
     def test_get_actor_parses_json_and_uses_argv_not_shell(self):
         ctl = FakeControl([ExecResult(0, actor_json("ACTOR_STATE_RUNNING"), "")])
         actor = run(ctl.get_actor("mainloop-workspaces", "ml-abc"))

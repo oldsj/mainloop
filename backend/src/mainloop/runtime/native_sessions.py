@@ -94,26 +94,36 @@ def is_rotating(session_id: str) -> bool:
 
 
 def workspace_for(binding: dict) -> SubstrateWorkspace:
-    """Map a native binding to the Substrate actor configured for its agent kind."""
+    """Map a native binding to its branch actor or configured shared actor."""
     agent = binding["kind"]
-    actor_binding = settings.substrate_actor_bindings.get(agent)
-    if actor_binding is None:
-        raise RuntimeError(
-            f"no Substrate actor binding is configured for native agent {agent}"
-        )
+    atespace = binding.get("workspace_atespace")
+    actor = binding.get("workspace_actor_name")
+    secret_name = binding.get("workspace_shim_token_secret_name")
+    workspace_route = (atespace, actor, secret_name)
+    if any(workspace_route) and not all(workspace_route):
+        raise RuntimeError("native workspace binding has an incomplete actor route")
+    if not all(workspace_route):
+        actor_binding = settings.substrate_actor_bindings.get(agent)
+        if actor_binding is None:
+            raise RuntimeError(
+                f"no Substrate actor binding is configured for native agent {agent}"
+            )
+        atespace = actor_binding.atespace
+        actor = actor_binding.actor
+        secret_name = actor_binding.shim_token_secret_name
     key = (
         binding["session_id"],
-        actor_binding.atespace,
-        actor_binding.actor,
-        actor_binding.shim_token_secret_name,
+        atespace,
+        actor,
+        secret_name,
         agent,
     )
     if key not in _workspaces:
         _workspaces[key] = SubstrateWorkspace(
-            atespace=actor_binding.atespace,
-            actor=actor_binding.actor,
+            atespace=atespace,
+            actor=actor,
             agent=agent,
-            shim_token_secret_name=actor_binding.shim_token_secret_name,
+            shim_token_secret_name=secret_name,
             logical_session_id=binding["session_id"],
             native_session_id=binding.get("native_session_id"),
         )
@@ -150,19 +160,28 @@ def agent_name(session_id: str, kind: str) -> str:
     return f"ml-{kind}-{session_id[:8]}"
 
 
-async def get_binding(session_id: str) -> dict | None:
-    async with db.connection() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM native_bindings WHERE session_id=$1", session_id
-        )
+async def get_binding(session_id: str, *, conn=None) -> dict | None:
+    query = """SELECT b.*,
+                      w.atespace AS workspace_atespace,
+                      w.actor_name AS workspace_actor_name,
+                      w.shim_token_secret_name AS workspace_shim_token_secret_name
+               FROM native_bindings b
+               LEFT JOIN workspace_bindings w ON w.workspace_id=b.session_id
+               WHERE b.session_id=$1"""
+    if conn is None:
+        async with db.connection() as connection:
+            row = await connection.fetchrow(query, session_id)
+    else:
+        row = await conn.fetchrow(query, session_id)
     return dict(row) if row else None
 
 
 async def _update_binding(session_id: str, **fields) -> None:
-    sets = ", ".join(f"{k}=${i + 2}" for i, k in enumerate(fields))
+    sets = [f"{k}=${i + 2}" for i, k in enumerate(fields)]
+    sets.append("updated_at=NOW()")
     async with db.connection() as conn:
         await conn.execute(
-            f"UPDATE native_bindings SET {sets}, updated_at=NOW() WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
+            f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
             session_id,
             *fields.values(),
         )
@@ -196,6 +215,7 @@ async def create_binding(
     role: str = "agent",
     parent_session_id: str | None = None,
     topic_id: str | None = None,
+    conn=None,
 ) -> dict:
     # Claude takes the native session id up front (--session-id); Codex reports it in its journal.
     native_id = str(uuid.uuid4()) if kind == "claude" else None
@@ -203,8 +223,9 @@ async def create_binding(
     token_hash = (
         hash_token(token_for(session_id)) if role in ("main", "child") else None
     )
-    async with db.connection() as conn:
-        await conn.execute(
+
+    async def insert_binding(connection) -> None:
+        await connection.execute(
             """INSERT INTO native_bindings (session_id, kind, agent_name, native_session_id, approval_policy,
                    role, parent_session_id, topic_id, token_hash, model)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
@@ -220,12 +241,18 @@ async def create_binding(
             settings.main_thread_model if role == "main" else None,
         )
         if role == "main" and native_id:
-            await conn.execute(
+            await connection.execute(
                 "INSERT INTO native_lineage (session_id, seq, native_session_id, started_reason) VALUES ($1,1,$2,'create')",
                 session_id,
                 native_id,
             )
-    return await get_binding(session_id)  # type: ignore[return-value]
+
+    if conn is None:
+        async with db.connection() as connection:
+            await insert_binding(connection)
+        return await get_binding(session_id)  # type: ignore[return-value]
+    await insert_binding(conn)
+    return await get_binding(session_id, conn=conn)  # type: ignore[return-value]
 
 
 async def _open_count(session_id: str) -> int:
@@ -352,6 +379,7 @@ async def _start_extra(binding: dict) -> tuple[dict[str, str], str | None]:
         ),
         "--token": token_for(binding["session_id"]),
         "--standing-b64": base64.b64encode(standing.encode()).decode(),
+        "--approval-policy": binding["approval_policy"],
     }
     if binding["role"] == "main":
         extra["--model"] = settings.main_thread_model
@@ -366,10 +394,10 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
     name = binding["agent_name"]
     resume = binding["journal_ref"] is not None
     status = await ws.agent_status(name)
+    extra, standing_hash = await _start_extra(binding)
     fields: dict = {}
     if status is None:
         # A journal already seen for this native session id means an earlier run: resume it.
-        extra, standing_hash = await _start_extra(binding)
         await ws.start(
             binding["kind"],
             name,
@@ -382,8 +410,11 @@ async def _ensure_agent(session_id: str, binding: dict) -> dict:
             fields["standing_hash"] = standing_hash
     else:
         ws.set_resume_history(resume)
+        ws.set_startup_options(extra)
         # An already running agent may have resumed from a parked actor snapshot.
         await ws.prepare_credentials()
+        if standing_hash and standing_hash != binding.get("standing_hash"):
+            fields["standing_hash"] = standing_hash
     await _update_binding(session_id, **fields)
     return await get_binding(session_id)  # type: ignore[return-value]
 

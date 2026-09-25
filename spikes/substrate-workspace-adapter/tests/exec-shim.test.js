@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const image = path.resolve(__dirname, '../live-agent-image');
 const shim = path.join(image, 'exec-shim.js');
 const launcher = path.join(image, 'bin/start-native-agent');
+const mainloop = path.join(image, 'bin/mainloop');
 const dockerfile = path.join(image, 'Dockerfile');
 const entrypoint = path.join(image, 'entrypoint.sh');
 const fixtures = path.join(__dirname, 'fixtures/native');
@@ -33,6 +34,76 @@ function codexPlaceholder(accountId = 'fixture-account') {
     last_refresh: '2026-09-24T00:00:00Z'
   });
 }
+
+test('mainloop sends its bearer header through a protected curl config file', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainloop-helper-'));
+  const fakeBin = path.join(root, 'bin');
+  fs.mkdirSync(fakeBin, { recursive: true });
+  const fakeCurl = path.join(fakeBin, 'curl');
+  fs.writeFileSync(
+    fakeCurl,
+    '#!/usr/bin/env bash\n' +
+      'set -euo pipefail\n' +
+      'args=("$@")\n' +
+      'printf \'%s\\0\' "${args[@]}" >"$CURL_ARGS_CAPTURE"\n' +
+      'printf \'%s|%s\' "${MAINLOOP_TOKEN-}" "${TOKEN-}" >"$CURL_TOKEN_ENV_CAPTURE"\n' +
+      'for ((i = 0; i < ${#args[@]}; i++)); do\n' +
+      '  if [[ ${args[i]} == -H && ${args[i + 1]-} == @* ]]; then\n' +
+      '    header_file="${args[i + 1]#@}"\n' +
+      '    cat "$header_file" >"$CURL_HEADER_CAPTURE"\n' +
+      '    stat -c \'%a\' "$header_file" >"$CURL_HEADER_MODE_CAPTURE"\n' +
+      '  fi\n' +
+      'done\n' +
+      'printf \'{"text":"fixture response"}\\n200\'\n',
+    { mode: 0o700 }
+  );
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const helperToken = `ml_${'b'.repeat(64)}`;
+  for (const [name, helperArgs] of [
+    ['get', ['whoami']],
+    ['post', ['note', 'fixture note']]
+  ]) {
+    const capture = (suffix) => path.join(root, `${name}-${suffix}`);
+    const env = {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      MAINLOOP_TOKEN: helperToken,
+      TOKEN: 'inherited-fixture-value',
+      CURL_ARGS_CAPTURE: capture('args'),
+      CURL_HEADER_CAPTURE: capture('header'),
+      CURL_HEADER_MODE_CAPTURE: capture('header-mode'),
+      CURL_TOKEN_ENV_CAPTURE: capture('token-env')
+    };
+    const result = spawnSync('bash', [mainloop, ...helperArgs], {
+      encoding: 'utf8',
+      env
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'fixture response');
+    assert.equal(result.stdout.includes(helperToken), false);
+    assert.equal(result.stderr.includes(helperToken), false);
+    const args = fs.readFileSync(capture('args'), 'utf8').split('\0');
+    const joinedArgs = args.join('\0');
+    assert.equal(joinedArgs.includes(helperToken), false);
+    assert.ok(
+      args.includes(
+        'http://mainloop-backend.mainloop-control.svc.cluster.local:8000/agent-api/' +
+          (name === 'get' ? 'whoami' : 'records')
+      )
+    );
+    const headerArgument = args.find((arg) => arg.startsWith('@'));
+    assert.ok(headerArgument);
+    assert.equal(fs.existsSync(headerArgument.slice(1)), false);
+    assert.equal(
+      fs.readFileSync(capture('header'), 'utf8'),
+      `Authorization: Bearer ${helperToken}\n`
+    );
+    assert.equal(fs.readFileSync(capture('header-mode'), 'utf8').trim(), '600');
+    assert.equal(fs.readFileSync(capture('token-env'), 'utf8'), '|');
+  }
+});
 
 async function startShim(root, extraEnv = {}) {
   const home = path.join(root, 'home');
@@ -413,13 +484,81 @@ test('turn prompt is piped on stdin and never appears in argv or shim logs', asy
   const argv = fs.readFileSync(path.join(root, 'claude-args'), 'utf8');
   assert.match(argv, /-p/);
   assert.match(argv, /--session-id\s+native-stdin-session/);
-  assert.match(argv, /--output-format/);
+  // Claude Code rejects --print with stream-json output unless --verbose is set.
+  assert.match(argv, /--output-format\nstream-json\n--verbose\n/);
   assert.equal(argv.includes(prompt), false);
   assert.equal(running.output().includes(prompt), false);
   assert.equal(
     fs
       .readFileSync(path.join(running.state, 'turns', id + '.events.jsonl'), 'utf8')
       .includes(prompt),
+    false
+  );
+});
+
+test('startup options reach the main Claude launch with scoped tools and standing context', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-shim-startup-'));
+  const basePrompt = path.join(root, 'base-prompt.txt');
+  fs.writeFileSync(basePrompt, 'base system instructions\n');
+  const running = await startShim(root, {
+    AGENT_SYSTEM_PROMPT_FILE: basePrompt,
+    CLAUDE_ARGS_CAPTURE: path.join(root, 'claude-args'),
+    CLAUDE_CWD_CAPTURE: path.join(root, 'claude-cwd'),
+    CLAUDE_TOKEN_CAPTURE: path.join(root, 'claude-token'),
+    CLAUDE_CONTEXT_CAPTURE: path.join(root, 'claude-context')
+  });
+  fakeCli(
+    path.join(running.fakeBin, 'claude'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" >"$CLAUDE_ARGS_CAPTURE"\npwd >"$CLAUDE_CWD_CAPTURE"\nprintf "%s" "$MAINLOOP_TOKEN" >"$CLAUDE_TOKEN_CAPTURE"\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = --append-system-prompt-file ]; then cat "$2" >"$CLAUDE_CONTEXT_CAPTURE"; shift 2; else shift; fi\ndone\ncat >/dev/null\nprintf \'%s\\n\' \'{"type":"system","subtype":"init","session_id":"main-startup-session"}\' \'{"type":"result","result":"startup fixture answer","session_id":"main-startup-session"}\'\n'
+  );
+  t.after(async () => {
+    await stop(running.child);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await installToken(running);
+  await installCredential(running, 'claude-token', claudePlaceholder);
+
+  const startupContext = 'Mainloop scoped standing context\nOnly use mainloop commands.';
+  const started = await request(running.port, 'POST', '/turn', {
+    bearer: token,
+    body: {
+      agent: 'claude',
+      prompt: 'startup fixture prompt',
+      session_key: 'main-startup-session',
+      session_id: 'native-main-startup-session',
+      resume: false,
+      startup_options: {
+        cwd_rel: 'main',
+        token: `ml_${'a'.repeat(64)}`,
+        standing_b64: Buffer.from(startupContext).toString('base64'),
+        approval_policy: 'restricted: Bash(mainloop:*) only',
+        model: 'sonnet',
+        effort: 'medium'
+      }
+    }
+  });
+  assert.equal(started.status, 202, started.body);
+  await waitForJob(running, 'turn', JSON.parse(started.body).id);
+
+  const args = fs.readFileSync(path.join(root, 'claude-args'), 'utf8');
+  assert.match(args, /--tools\nBash\n/);
+  assert.match(args, /--allowedTools\nBash\(mainloop:\*\)\n/);
+  assert.match(args, /--permission-mode\ndontAsk\n/);
+  assert.match(args, /--model\nsonnet\n/);
+  assert.match(args, /--effort\nmedium\n/);
+  assert.doesNotMatch(args, /--dangerously-skip-permissions/);
+  assert.equal(
+    fs.readFileSync(path.join(root, 'claude-cwd'), 'utf8').trim(),
+    path.join(running.workspace, 'main')
+  );
+  assert.equal(fs.readFileSync(path.join(root, 'claude-token'), 'utf8'), `ml_${'a'.repeat(64)}`);
+  const context = fs.readFileSync(path.join(root, 'claude-context'), 'utf8');
+  assert.ok(context.startsWith('base system instructions\n'));
+  assert.ok(context.includes(startupContext));
+  assert.equal(
+    fs
+      .readdirSync(path.join(running.home, '.mainloop'))
+      .some((name) => name.startsWith('standing.')),
     false
   );
 });

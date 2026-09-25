@@ -70,6 +70,11 @@ class Gate5SourceAndBuildTests(unittest.TestCase):
         self.assertIn("workload: isolated-pool", worker_pool)
         self.assertIn("name: live-agent-gate-v3", actor_template)
         self.assertIn("workload: isolated-pool", actor_template)
+        self.assertIn(
+            "name: MAINLOOP_API, value: "
+            "http://mainloop-backend.mainloop-control.svc.cluster.local:8000",
+            actor_template,
+        )
         self.assertIn("mountPath: /work", actor_template)
         self.assertIn("value: /work/repo", actor_template)
         self.assertIn("durableDir: {}", actor_template)

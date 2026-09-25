@@ -37,6 +37,8 @@ You (phone/laptop)
 - **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
 - **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in Substrate
+- **Runtime isolation**: Substrate workspaces use gVisor actors. The pinned fork honors the
+  agent image's non-root UID `10001`; microVM isolation is deferred.
 
 ## Quick Start
 

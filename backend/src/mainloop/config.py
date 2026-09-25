@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     substrate_router_address: str = (
         "http://atenet-router.ate-system.svc.cluster.local:8081"
     )
-    substrate_shim_secret_namespace: str = "mainloop-control"
+    substrate_shim_secret_namespace: str = "mainloop-shim-secrets"
     substrate_credential_secret_namespace: str = "mainloop-control"
     substrate_credential_secret_prefix: str = "mainloop-credential"
     substrate_credential_account: str = "owner"
@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     # Substrate actor lifecycle control. Empty kubeconfig/context falls back to ambient config.
     substrate_kubeconfig: str = ""
     substrate_context: str = ""
+    substrate_endpoint: str = ""
+    substrate_token_file: str = ""
     substrate_atespace: str = "mainloop-workspaces"
     substrate_actor_template: str = "mainloop-workspace"
     substrate_cli: str = "kubectl-ate"

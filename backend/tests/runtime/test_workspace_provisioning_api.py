@@ -1,5 +1,6 @@
 """Project ownership and actor provisioning orchestration use fakes."""
 
+import json
 import unittest
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ class FakeConnection:
     def __init__(self, *, project=True):
         self.project = project
         self.statements = []
+        self.native_binding = None
         self.workspace_row = {
             "atespace": "mainloop-workspaces",
             "actor_name": "ml-workspace",
@@ -45,10 +47,35 @@ class FakeConnection:
             return None
         if "FROM workspace_bindings" in query:
             return self.workspace_row
+        if "FROM native_bindings b" in query:
+            if self.native_binding is None:
+                return None
+            return {
+                **self.native_binding,
+                "workspace_atespace": self.workspace_row["atespace"],
+                "workspace_actor_name": self.workspace_row["actor_name"],
+                "workspace_shim_token_secret_name": self.workspace_row[
+                    "shim_token_secret_name"
+                ],
+            }
         raise AssertionError(f"unexpected query: {query}")
 
     async def execute(self, query, *args):
         self.statements.append((query, args))
+        if "INSERT INTO workspace_bindings" in query:
+            self.workspace_row = {
+                "atespace": args[1],
+                "actor_name": args[2],
+                "shim_token_secret_name": args[4],
+            }
+        if "INSERT INTO native_bindings" in query:
+            self.native_binding = {
+                "session_id": args[0],
+                "kind": args[1],
+                "agent_name": args[2],
+                "native_session_id": args[3],
+                "approval_policy": args[4],
+            }
 
 
 def fake_connection(connection):
@@ -134,6 +161,15 @@ class WorkspaceProvisioningApiTests(unittest.IsolatedAsyncioTestCase):
                 for query, _ in connection.statements
             )
         )
+        self.assertEqual(connection.native_binding["session_id"], result.workspace_id)
+        self.assertEqual(connection.native_binding["kind"], "claude")
+        self.assertTrue(connection.native_binding["native_session_id"])
+        lifecycle_insert = next(
+            args
+            for query, args in connection.statements
+            if "INSERT INTO workspace_lifecycles" in query
+        )
+        self.assertEqual(json.loads(lifecycle_insert[1])["agent_kinds"], ["claude"])
         kwargs = fake_create.await_args.kwargs
         self.assertEqual(kwargs["template"], "project-template")
         self.assertEqual(

@@ -4,6 +4,7 @@ import base64
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from mainloop.config import settings
 from mainloop.runtime.actor_provisioner import (
     FakeActorProvisioner,
     SubstrateActorProvisioner,
@@ -135,6 +136,10 @@ class FakeProvisionerTests(unittest.IsolatedAsyncioTestCase):
 
         secret = core_api.create_namespaced_secret.call_args.args[1]
         self.assertEqual(base64.b64decode(secret.data["token"]), b"private-token")
+        self.assertEqual(
+            core_api.create_namespaced_secret.call_args.args[0],
+            settings.substrate_shim_secret_namespace,
+        )
         self.assertEqual(result.actor, actor)
         self.assertEqual(result.shim_token_secret_name, "ml-branch-1-shim")
         control.create_actor.assert_not_awaited()

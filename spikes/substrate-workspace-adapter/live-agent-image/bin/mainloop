@@ -4,7 +4,7 @@
 # Identity is the per-binding token in .mainloop/token; the server decides what this token may
 # do and answers in plain text.
 set -u
-API="${MAINLOOP_API:-http://mainloop-backend.mainloop.svc.cluster.local:8000}"
+API="${MAINLOOP_API:-http://mainloop-backend.mainloop-control.svc.cluster.local:8000}"
 
 find_token() {
 	local d="${PWD}"
@@ -21,10 +21,18 @@ TOKEN="${MAINLOOP_TOKEN:-$(find_token)}" || {
 	echo "mainloop: no agent token found from ${PWD}" >&2
 	exit 2
 }
+export -n TOKEN
+unset MAINLOOP_TOKEN
+
+umask 077
+AUTH_HEADER_FILE="$(mktemp)"
+trap 'rm -f -- "${AUTH_HEADER_FILE}"' EXIT
+printf 'Authorization: Bearer %s\n' "${TOKEN}" >"${AUTH_HEADER_FILE}"
+unset TOKEN
 
 call() { # <METHOD> <path> [json body] ; query params via Q=(--data-urlencode k=v ...)
 	local out code body
-	out="$(curl -sS -m 30 -w '\n%{http_code}' -X "$1" -H "Authorization: Bearer ${TOKEN}" \
+	out="$(curl -sS -m 30 -w '\n%{http_code}' -X "$1" -H "@${AUTH_HEADER_FILE}" \
 		-H 'Content-Type: application/json' ${Q[@]+"${Q[@]}"} ${3:+-d "$3"} -G "${API}$2" 2>&1)" ||
 		{
 			echo "mainloop: control plane unreachable" >&2
@@ -44,7 +52,7 @@ Q=()
 # are sent with --json-style separately:
 post() { # <path> <json>
 	local out code body
-	out="$(curl -sS -m 30 -w '\n%{http_code}' -X POST -H "Authorization: Bearer ${TOKEN}" \
+	out="$(curl -sS -m 30 -w '\n%{http_code}' -X POST -H "@${AUTH_HEADER_FILE}" \
 		-H 'Content-Type: application/json' --data-binary "$2" "${API}$1" 2>&1)" ||
 		{
 			echo "mainloop: control plane unreachable" >&2
