@@ -3,7 +3,6 @@
 import logging
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any
 
 from dbos import DBOS
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -17,7 +16,11 @@ from mainloop.models import (
     ConversationResponse,
 )
 from mainloop.runtime.agent_api import router as agent_api_router
-from mainloop.services.chat_handler import process_message
+from mainloop.runtime.credential_reauth_api import (
+    router as credential_reauth_api_router,
+)
+from mainloop.runtime.preview_proxy import register_preview_proxy
+from mainloop.runtime.workspace_api import router as workspace_api_router
 from mainloop.services.github_pr import (
     CommitSummary,
     ProjectPRSummary,
@@ -116,19 +119,22 @@ async def startup_event():
     # Launch DBOS
     DBOS.launch()
 
-    if settings.main_thread_mode == "native":
-        import asyncio
+    import asyncio
 
-        from mainloop.runtime import native_sessions
+    from mainloop.runtime import native_sessions
 
-        app.state.native_reconcile = asyncio.create_task(
-            native_sessions.reconcile_loop()
-        )
+    app.state.native_reconcile = asyncio.create_task(native_sessions.reconcile_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up on shutdown."""
+    import asyncio
+
+    task = getattr(app.state, "native_reconcile", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     await db.disconnect()
 
 
@@ -221,91 +227,14 @@ async def chat(
     request: ChatRequest,
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
-    """Send a message and get an immediate response."""
-    from mainloop.services.compaction import trigger_compaction
-
+    """Record and deliver a message to the user's native main session."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
-
-    if settings.main_thread_mode == "native":
-        return await _chat_native(request, user_id)
-
-    # Ensure main thread is running (for background coordination)
-    main_thread_id = get_or_start_main_thread(user_id)
-
-    # Get or create conversation
-    if request.conversation_id:
-        conversation = await db.get_conversation(request.conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-    else:
-        conversation = await db.create_conversation(user_id)
-
-    # Load context: summary + recent messages after last summarized point
-    recent_messages = await db.get_messages_after(
-        conversation.id,
-        conversation.summarized_through_id,
-        limit=20,
-    )
-
-    # Save user message and increment count
-    await db.create_message(
-        conversation_id=conversation.id,
-        role="user",
-        content=request.message,
-    )
-    await db.increment_message_count(conversation.id)
-
-    # Get or create main thread record
-    main_thread = await db.get_main_thread_by_user(user_id)
-    if not main_thread:
-        # Create main thread record if it doesn't exist (e.g., after DB reset)
-        from models import MainThread
-
-        main_thread = MainThread(user_id=user_id, workflow_run_id=main_thread_id)
-        main_thread = await db.create_main_thread(main_thread)
-    thread_id = main_thread.id
-
-    # Process message with summary + recent messages for context
-    result = await process_message(
-        user_id=user_id,
-        message=request.message,
-        conversation_id=conversation.id,
-        main_thread_id=thread_id,
-        summary=conversation.summary,
-        recent_messages=recent_messages,
-    )
-
-    # If a session was spawned, don't save a main thread response
-    # The user interacts with the session directly
-    if result.suppress_response and result.spawned_session_ids:
-        # Return the first spawned session info instead of a message
-        # Frontend will auto-switch to this session
-        return ChatResponse(
-            conversation_id=conversation.id,
-            message=None,
-            spawned_session_id=result.spawned_session_ids[0],
-        )
-
-    # Save assistant response and increment count
-    assistant_message = await db.create_message(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=result.response,
-    )
-    new_count = await db.increment_message_count(conversation.id)
-
-    # Trigger async compaction if needed (fire-and-forget)
-    trigger_compaction(conversation.id, new_count)
-
-    return ChatResponse(
-        conversation_id=conversation.id,
-        message=assistant_message,
-    )
+    return await _chat_native(request, user_id)
 
 
 async def _chat_native(request: ChatRequest, user_id: str) -> ChatResponse:
-    """Native main thread: record + deliver to the Claude session under Herdr (ledgered). The
+    """Record and deliver to the native main session through the Substrate workspace. The
     reply is mirrored from the native journal, so the client polls the conversation."""
     from mainloop.runtime import delegation, native_sessions
 
@@ -337,8 +266,6 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
     """Main-thread mode, native identity strip, and the topic index."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
-    if settings.main_thread_mode != "native":
-        return MainThreadInfo(mode=settings.main_thread_mode)
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
@@ -395,6 +322,9 @@ async def list_topics(user_id: str = Header(alias="X-User-ID", default=None)):
 
 
 app.include_router(agent_api_router)
+app.include_router(workspace_api_router)
+app.include_router(credential_reauth_api_router)
+register_preview_proxy(app)
 
 
 # ============= Conversation Endpoints =============
@@ -422,19 +352,16 @@ async def get_conversation(conversation_id: str):
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if settings.main_thread_mode == "native":
-        from mainloop.runtime import native_sessions
+    from mainloop.runtime import native_sessions
 
-        async with db.connection() as conn:
-            main_sid = await conn.fetchval(
-                """SELECT b.session_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-                   WHERE b.role='main' AND s.conversation_id=$1""",
-                conversation_id,
-            )
-        if main_sid and not native_sessions.is_rotating(main_sid):
-            await native_sessions.sync(
-                main_sid
-            )  # mirror new native-journal evidence first
+    async with db.connection() as conn:
+        main_sid = await conn.fetchval(
+            """SELECT b.session_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE b.role='main' AND s.conversation_id=$1""",
+            conversation_id,
+        )
+    if main_sid and not native_sessions.is_rotating(main_sid):
+        await native_sessions.sync(main_sid)
 
     messages = await db.get_messages(conversation_id)
     return ConversationResponse(
@@ -725,10 +652,6 @@ async def create_session(
     """Create a new session with its own conversation."""
     import uuid
 
-    from dbos import SetWorkflowID
-    from mainloop.workflows.dbos_config import worker_queue
-    from mainloop.workflows.session_worker import session_worker_workflow
-
     if not user_id:
         user_id = get_user_id_from_cf_header()
 
@@ -760,20 +683,12 @@ async def create_session(
     )
     session = await db.create_session(session)
 
-    if request.agent_kind:
-        # Real native agent under Herdr in the workspace pod (no DBOS worker / K8s Job).
-        from mainloop.runtime import native_sessions
+    from mainloop.runtime import native_sessions
 
-        await native_sessions.create_binding(session.id, request.agent_kind)
-        await db.update_session(session.id, status=SessionStatus.ACTIVE)
-        await native_sessions.submit_message(session.id, request.prompt)
-        return await db.get_session(session.id)
-
-    # Start session worker workflow
-    with SetWorkflowID(session.id):
-        worker_queue.enqueue(session_worker_workflow, session.id)
-
-    return session
+    await native_sessions.create_binding(session.id, request.agent_kind or "claude")
+    await db.update_session(session.id, status=SessionStatus.ACTIVE)
+    await native_sessions.submit_message(session.id, request.prompt)
+    return await db.get_session(session.id)
 
 
 @app.get("/sessions/{session_id}", response_model=Session)
@@ -817,7 +732,7 @@ async def get_session_conversation(session_id: str):
 async def get_session_native(
     session_id: str, user_id: str = Header(alias="X-User-ID", default=None)
 ):
-    """Identity strip for a session bound to a native agent under Herdr."""
+    """Identity strip for a session bound to a native agent in Substrate."""
     if not user_id:
         user_id = get_user_id_from_cf_header()
     owner = await db.get_session(session_id)
@@ -846,7 +761,6 @@ async def send_session_message(
     user_id: str = Header(alias="X-User-ID", default=None),
 ):
     """Send a message to a session's conversation."""
-    from mainloop.workflows.session_worker import TOPIC_USER_MESSAGE
 
     if not user_id:
         user_id = get_user_id_from_cf_header()
@@ -860,32 +774,15 @@ async def send_session_message(
 
     from mainloop.runtime import native_sessions
 
-    if await native_sessions.get_binding(session_id):
-        try:
-            message_id = await native_sessions.submit_message(
-                session_id, request.message
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"status": "ok", "message_id": message_id}
-
-    # Save message directly to database (don't rely on workflow)
-    message = await db.create_message(
-        conversation_id=session.conversation_id,
-        role="user",
-        content=request.message,
-    )
-
-    # If session is waiting on user, notify workflow to process response
-    if session.status == SessionStatus.WAITING_ON_USER:
-        # Notify the workflow that a new message is ready
-        DBOS.send(
-            session_id,  # workflow_id is the session_id
-            {"message_id": message.id},  # Just notify, message already saved
-            topic=TOPIC_USER_MESSAGE,
+    if not await native_sessions.get_binding(session_id):
+        raise HTTPException(
+            status_code=409, detail="Session has no native agent binding"
         )
-
-    return {"status": "ok", "message_id": message.id}
+    try:
+        message_id = await native_sessions.submit_message(session_id, request.message)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "ok", "message_id": message_id}
 
 
 # Done: nothing more will run, so the session can be cleared from the list.
@@ -915,15 +812,14 @@ async def cancel_session(
 
     from mainloop.runtime import native_sessions
 
-    if await native_sessions.get_binding(session_id):
-        try:
-            agent = await native_sessions.cancel(session_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    else:
-        # TODO: Cancel the legacy session worker workflow
-        await db.update_session(session_id, status=SessionStatus.CANCELLED)
-        agent = "not_running"
+    if not await native_sessions.get_binding(session_id):
+        raise HTTPException(
+            status_code=409, detail="Session has no native agent binding"
+        )
+    try:
+        agent = await native_sessions.cancel(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return {"status": "cancelled", "agent": agent}
 
@@ -995,51 +891,6 @@ async def dismiss_notification(
 
     await db.dismiss_session_notification(notification_id)
     return {"status": "ok"}
-
-
-# ============= Internal Endpoints (for K8s Jobs) =============
-
-
-class SessionResult(BaseModel):
-    """Result from a session Job."""
-
-    session_id: str
-    status: str  # "completed" or "failed"
-    result: dict[str, Any] | None = None
-    error: str | None = None
-    completed_at: str | None = None
-
-
-@app.post("/internal/sessions/{session_id}/complete")
-async def session_complete(session_id: str, result: SessionResult):
-    """Handle K8s Job completion callbacks for sessions.
-
-    This is called by the job_runner when a session Job finishes.
-    It notifies the session workflow to add the response and continue.
-    """
-    # Verify session exists
-    session = await db.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Send result to the session workflow via DBOS.send()
-    # The session workflow is waiting on TOPIC_JOB_RESULT
-    from mainloop.workflows.session_worker import TOPIC_JOB_RESULT
-
-    # The session workflow uses session_id as workflow ID
-    workflow_id = session_id
-
-    DBOS.send(
-        workflow_id,
-        {
-            "status": result.status,
-            "result": result.result,
-            "error": result.error,
-        },
-        topic=TOPIC_JOB_RESULT,
-    )
-
-    return {"status": "ok", "session_id": session_id}
 
 
 # ============= Test Helpers (E2E only) =============
@@ -1153,8 +1004,6 @@ async def reset_test_data(all: bool = False):
             status_code=403, detail="Only available in test environment"
         )
 
-    deleted_namespaces = []
-
     if all:
         # Full reset - truncate everything
         async with db.connection() as conn:
@@ -1170,25 +1019,6 @@ async def reset_test_data(all: bool = False):
                 "TRUNCATE TABLE dbos.workflow_events, dbos.operation_outputs, dbos.workflow_status CASCADE"
             )
 
-        # Delete ALL task namespaces
-        try:
-            from kubernetes.client.rest import ApiException
-            from mainloop.services.k8s_namespace import get_k8s_client
-
-            core_v1, _ = get_k8s_client()
-            namespaces = core_v1.list_namespace(
-                label_selector="app.kubernetes.io/managed-by=mainloop"
-            )
-            for ns in namespaces.items:
-                try:
-                    core_v1.delete_namespace(name=ns.metadata.name)
-                    deleted_namespaces.append(ns.metadata.name)
-                except ApiException as e:
-                    if e.status != 404:
-                        logger.warning(f"Failed to delete namespace: {e}")
-        except Exception as e:
-            logger.debug(f"K8s namespace cleanup skipped: {e}")
-
         if settings.use_mock_github:
             from mainloop.services.github_mock import mock_state
 
@@ -1197,17 +1027,11 @@ async def reset_test_data(all: bool = False):
         return {
             "status": "reset",
             "scope": "all",
-            "deleted_namespaces": deleted_namespaces,
         }
 
     # Test-only reset
     async with db.connection() as conn:
-        # Get session IDs and workflow IDs for test users before deleting
-        test_sessions = await conn.fetch(
-            "SELECT id FROM sessions WHERE user_id LIKE 'test-%'"
-        )
-        test_session_ids = [row["id"] for row in test_sessions]
-
+        # Get workflow IDs for test users before deleting.
         test_workflow_ids = await conn.fetch(
             """
             SELECT workflow_run_id FROM main_threads
@@ -1254,31 +1078,6 @@ async def reset_test_data(all: bool = False):
                 workflow_ids,
             )
 
-    # Delete K8s namespaces for test sessions
-    if test_session_ids:
-        try:
-            from kubernetes.client.rest import ApiException
-            from mainloop.services.k8s_namespace import get_k8s_client
-
-            core_v1, _ = get_k8s_client()
-
-            # Get all mainloop-managed namespaces
-            namespaces = core_v1.list_namespace(
-                label_selector="app.kubernetes.io/managed-by=mainloop"
-            )
-
-            for ns in namespaces.items:
-                session_id = ns.metadata.labels.get("mainloop.dev/session-id", "")
-                if session_id in test_session_ids:
-                    try:
-                        core_v1.delete_namespace(name=ns.metadata.name)
-                        deleted_namespaces.append(ns.metadata.name)
-                    except ApiException as e:
-                        if e.status != 404:  # Ignore not found
-                            logger.warning(f"Failed to delete namespace: {e}")
-        except Exception as e:
-            logger.debug(f"K8s namespace cleanup skipped: {e}")
-
     # Reset mock state if mocking is enabled
     if settings.use_mock_github:
         from mainloop.services.github_mock import mock_state
@@ -1288,7 +1087,6 @@ async def reset_test_data(all: bool = False):
     return {
         "status": "reset",
         "preserved": "non-test users",
-        "deleted_namespaces": deleted_namespaces,
     }
 
 

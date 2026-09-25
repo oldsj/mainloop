@@ -1,6 +1,10 @@
 # Spike: Herdr-owned arbitrary agents in a Kubernetes workspace
 
-Status: local spike, not a product feature. Implementation lives in `spikes/k8s-herdr-agents/`.
+> Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
+
+Historical local spike, not a current product feature. Its implementation under
+`spikes/k8s-herdr-agents/` was removed during the 2026-09-24 Substrate cutover; this document keeps
+the original proof evidence and limitations.
 
 ## What it shows
 

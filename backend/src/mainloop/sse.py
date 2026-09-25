@@ -23,6 +23,7 @@ class EventType(str, Enum):
     SESSION_UPDATED = "session:updated"
     SESSION_NEEDS_INPUT = "session:needs_input"
     SESSION_MESSAGE = "session:message"
+    WORKSPACE_UPDATED = "workspace:updated"
     HEARTBEAT = "heartbeat"
 
 
@@ -210,5 +211,16 @@ async def notify_session_message(
                 "message_id": message_id,
                 "role": role,
             },
+        ),
+    )
+
+
+async def notify_workspace_updated(user_id: str, lifecycle: dict[str, Any]) -> None:
+    """Publish the current durable workspace lifecycle projection."""
+    await event_bus.publish_to_user(
+        user_id,
+        SSEEvent(
+            event=EventType.WORKSPACE_UPDATED,
+            data={"workspace": lifecycle},
         ),
     )

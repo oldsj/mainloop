@@ -63,8 +63,6 @@ class NativeBinding(ContractModel):
     provider: Identifier
     runtime_type: Identifier
     native_session_id: Identifier
-    herdr_session_id: Identifier
-    herdr_agent_id: Identifier
     creation_mode: Literal["created", "attached", "discovered"]
     ownership_generation: Generation
     observed: ProviderExtension | None = None

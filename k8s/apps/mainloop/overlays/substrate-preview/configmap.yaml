@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop-control
+data:
+  HOST: 0.0.0.0
+  PORT: '8000'
+  DB_HOST: mainloop-db-pooler
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: localhost:3000
+  # Kind-only fixed identity for local port-forwarded previews; do not copy to shared overlays.
+  SUBSTRATE_PREVIEW_LOCAL_DEV_MODE: 'true'
+  SUBSTRATE_ENDPOINT: api.ate-system.svc:443
+  SUBSTRATE_TOKEN_FILE: /var/run/secrets/tokens/substrate-api/token
+  SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
+  SUBSTRATE_SHIM_SECRET_NAMESPACE: mainloop-shim-secrets
+  SUBSTRATE_ACTOR_BINDINGS: '{"claude":{"atespace":"live-agent-gate","actor":"headless-claude-reproof","shim_token_secret_name":"mainloop-shim-live-agent-gate-headless-claude-reproof"},"codex":{"atespace":"native-codex","actor":"headless-codex-reproof","shim_token_secret_name":"mainloop-shim-native-codex-headless-codex-reproof"}}'

@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
   import { navigationContext } from '$lib/stores/navigationContext';
+  import { workspaces } from '$lib/stores/workspaces';
+  import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
 
   let {
     session,
@@ -32,6 +34,9 @@
   );
 
   const needsAttention = $derived(session.status === 'waiting_on_user');
+  const workspace = $derived(
+    $workspaces.workspaces.find((item) => item.session_id === session.id)
+  );
 
   function handleClick() {
     if (onSelect) {
@@ -81,6 +86,9 @@
       >
         {statusLabels[session.status] || session.status.toUpperCase()}
       </span>
+      {#if workspace}
+        <WorkspaceLifecycleBadge {workspace} />
+      {/if}
     </button>
 
     <!-- Zoom button -->

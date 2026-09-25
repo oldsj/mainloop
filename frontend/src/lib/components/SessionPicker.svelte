@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
   import { navigationContext, sessionsByUrgency, getUrgencyScore } from '$lib/stores/navigationContext';
+  import { workspaces } from '$lib/stores/workspaces';
+  import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
 
   let {
     onClose,
@@ -143,6 +145,7 @@
       {@const itemIndex = i + 1}
       {@const isSelected = selectedIndex === itemIndex}
       {@const needsAttention = session.status === 'waiting_on_user'}
+      {@const workspace = $workspaces.workspaces.find((item) => item.session_id === session.id)}
       <button
         type="button"
         class="flex w-full items-center gap-2 px-3 py-2 text-left {isSelected
@@ -172,8 +175,11 @@
                   : 'bg-term-fg-muted/20 text-term-fg-muted'}"
           style="border-radius: 9999px;"
         >
-          {statusLabels[session.status] || session.status.toUpperCase()}
+        {statusLabels[session.status] || session.status.toUpperCase()}
         </span>
+        {#if workspace}
+          <WorkspaceLifecycleBadge {workspace} />
+        {/if}
         {#if needsAttention}
           <span class="animate-pulse text-term-magenta">*</span>
         {/if}

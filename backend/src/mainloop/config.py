@@ -1,9 +1,21 @@
 """Configuration management."""
 
+import hashlib
+from typing import Literal
 from urllib.parse import quote_plus
 
-from pydantic import computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class SubstrateActorBinding(BaseModel):
+    """Deployment-provided route and token Secret for one pre-created actor."""
+
+    atespace: str
+    actor: str
+    shim_token_secret_name: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class Settings(BaseSettings):
@@ -23,22 +35,49 @@ class Settings(BaseSettings):
         encoded_password = quote_plus(self.db_password)
         return f"postgresql://{self.db_user}:{encoded_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
-    # Claude
-    claude_code_oauth_token: str = ""  # OAuth token for Claude Code API
-    claude_agent_url: str = "http://claude-agent:8001"
-    claude_workspace: str = "/workspace"
-    claude_model: str = "sonnet"  # Main thread model
-    claude_worker_model: str = "opus"  # Worker model (for background tasks)
-
-    # Native agents under Herdr (workspace pod reached over Kubernetes pod-exec)
-    workspace_namespace: str = "herdr-spike"
-    workspace_pod: str = "workspace-0"
-    main_pod: str = (
-        "main-0"  # pod that runs the native main thread (scratch cwd, no repo)
+    # Native sessions connect to pre-created Substrate actors through the CONNECT router.
+    substrate_router_address: str = (
+        "http://atenet-router.ate-system.svc.cluster.local:8081"
     )
+    substrate_shim_secret_namespace: str = "mainloop-shim-secrets"
+    substrate_credential_secret_namespace: str = "mainloop-control"
+    substrate_credential_secret_prefix: str = "mainloop-credential"
+    substrate_credential_account: str = "owner"
+    substrate_credential_owner_user_id: str = "local-dev-user"
+    substrate_codex_auth_path: str = ""
+    substrate_claude_token_path: str = ""
+    substrate_shim_secret_prefix: str = Field(
+        default="mainloop-shim",
+        min_length=1,
+        max_length=40,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+    )
+    substrate_actor_bindings: dict[
+        Literal["claude", "codex"], SubstrateActorBinding
+    ] = Field(default_factory=dict)
+    substrate_resume_timeout_seconds: float = 120.0
 
-    # Native main thread (context model). MAIN_THREAD_MODE=native replaces the SDK chat path.
-    main_thread_mode: str = "sdk"  # sdk | native
+    def shim_token_secret_name(self, atespace: str, actor: str) -> str:
+        """Return the configured, stable Kubernetes Secret name for an actor shim token."""
+        suffix = hashlib.sha256(f"{atespace}/{actor}".encode()).hexdigest()[:16]
+        return f"{self.substrate_shim_secret_prefix}-{suffix}"
+
+    # Substrate actor lifecycle control. Empty kubeconfig/context falls back to ambient config.
+    substrate_kubeconfig: str = ""
+    substrate_context: str = ""
+    substrate_endpoint: str = ""
+    substrate_token_file: str = ""
+    substrate_atespace: str = "mainloop-workspaces"
+    substrate_actor_template: str = "mainloop-workspace"
+    substrate_cli: str = "kubectl-ate"
+    substrate_preview_base_url: str = "http://preview.localhost:8001"
+    substrate_preview_connect_timeout_seconds: float = 5.0
+    substrate_reauth_job_image: str = ""
+    substrate_reauth_job_namespace: str = "mainloop-control"
+    substrate_reauth_callback_url: str = "http://mainloop-backend:8000/internal/reauth"
+    substrate_reauth_timeout_seconds: int = 1800
+
+    # Native main thread (context model).
     main_thread_model: str = "sonnet"
     main_thread_effort: str = "medium"
     # Rotation: cut to a fresh native session when the context grew by this many tokens above
@@ -64,15 +103,6 @@ class Settings(BaseSettings):
     def frontend_origin(self) -> str:
         """Construct frontend origin URL from domain."""
         return f"https://{self.frontend_domain}"
-
-    # K8s Job callback URL (internal service URL for Jobs to call back)
-    backend_internal_url: str = (
-        "http://mainloop-backend.mainloop.svc.cluster.local:8000"
-    )
-
-    # Worker image for K8s Jobs (use local image for dev)
-    worker_image: str = "ghcr.io/oldsj/mainloop-agent-controller:latest"
-    worker_image_pull_policy: str = "IfNotPresent"  # Use "Never" for local dev
 
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False

@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mainloop-backend
+  namespace: mainloop-control
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-backend-runtime
+  namespace: mainloop-control
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames:
+      - mainloop-credential-owner-codex
+      - mainloop-credential-owner-claude
+    verbs: [get, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: ['']
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-backend-runtime
+  namespace: mainloop-control
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-backend
+    namespace: mainloop-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-backend-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mainloop-substrate-trust-bundles
+rules:
+  - apiGroups: [certificates.k8s.io]
+    resources: [clustertrustbundles]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mainloop-substrate-trust-bundles
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-backend
+    namespace: mainloop-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mainloop-substrate-trust-bundles

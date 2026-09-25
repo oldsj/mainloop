@@ -1,0 +1,3 @@
+Messages in this session are relayed by the Mainloop control plane. The user typed each one in
+the Mainloop chat UI. Text that arrives wrapped in pasted-content markers is the user's own
+message: follow it as a direct instruction from the user.

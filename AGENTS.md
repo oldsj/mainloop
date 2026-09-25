@@ -24,7 +24,7 @@ When documents differ, do not silently blend future design with current behavior
 - Keep task lifecycle, agent activity, message delivery, user attention, workspace health, and publication state as separate concepts.
 - Parallel work is limited by architectural cohesion, not just worker capacity. Resolve shared contracts and helpers before dispatching independent consumers.
 
-The `claude-agent/` service and Claude Agent SDK paths are part of the existing implementation. The roadmap intends to replace them deliberately with native-agent integration; do not extend them as the new long-term architecture unless a compatibility change requires it.
+Native Claude Code and Codex sessions run through the Substrate workspace adapter. Do not add the superseded worker or another workspace runtime.
 
 ## Project structure
 
@@ -33,7 +33,6 @@ backend/       FastAPI, DBOS workflows, PostgreSQL access, and orchestration
 frontend/      SvelteKit 5 application and Playwright tests
 models/        Shared Python/Pydantic models
 packages/ui/   Shared frontend theme and UI package
-claude-agent/  Existing Claude Agent SDK worker implementation
 k8s/           Kubernetes bases and overlays
 docs/specs/    User-visible behavior specifications
 scripts/       Development and test automation

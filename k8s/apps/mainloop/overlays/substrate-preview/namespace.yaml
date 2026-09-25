@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mainloop-control
+  labels:
+    mainloop.dev/role: control
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mainloop-shim-secrets
+  labels:
+    mainloop.dev/role: shim-secrets

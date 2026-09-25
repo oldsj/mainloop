@@ -199,6 +199,98 @@ export interface NativeDelivery {
   detail: string | null;
 }
 
+export type WorkspaceDesiredState = 'running' | 'suspended';
+export type WorkspaceObservedState =
+  | 'running'
+  | 'suspending'
+  | 'suspended'
+  | 'resuming'
+  | 'failed'
+  | 'unknown';
+
+export interface WorkspaceManifest {
+  repo_url: string | null;
+  branch: string;
+  agent_kinds: ('claude' | 'codex')[];
+  skills: string[];
+  mcp_servers: string[];
+  egress_allowlist: string[];
+  resource_class: string;
+  dev: WorkspaceDev | null;
+}
+
+export interface WorkspacePort {
+  name: string;
+  number: number;
+  protocol: 'http';
+}
+
+export interface WorkspaceService {
+  name: string;
+  image: string;
+  env: Record<string, string>;
+  ports: number[];
+}
+
+export interface WorkspaceDev {
+  image: string | null;
+  devcontainer_ref: string | null;
+  actor_template: string | null;
+  services: WorkspaceService[];
+  ports: WorkspacePort[];
+  idle_timeout_minutes: number;
+}
+
+export interface WorkspaceCondition {
+  type: string;
+  status: 'True' | 'False' | 'Unknown';
+  reason: string;
+  message: string;
+  last_transition_time: string;
+}
+
+export interface WorkspaceTransition {
+  from_state: WorkspaceObservedState | null;
+  to_state: WorkspaceObservedState;
+  reason: string;
+  occurred_at: string;
+}
+
+export interface WorkspaceLifecycle {
+  workspace_id: string;
+  session_id: string;
+  desired_state: WorkspaceDesiredState;
+  observed_state: WorkspaceObservedState;
+  manifest: WorkspaceManifest;
+  conditions: WorkspaceCondition[];
+  last_transition: WorkspaceTransition | null;
+  operation_id: string | null;
+  snapshot_ref: string | null;
+  last_activity_at: string | null;
+  ownership_generation: number;
+  updated_at: string;
+}
+
+export interface WorkspacePreviewPort {
+  port: number;
+  name: string;
+  url: string;
+}
+
+export interface WorkspaceCredentialStatus {
+  provider: 'codex' | 'claude';
+  available: boolean;
+  needs_signin: boolean;
+  expires_at: string | null;
+}
+
+export interface CredentialReauthStatus {
+  id: string;
+  provider: 'codex' | 'claude';
+  state: 'running' | 'completed' | 'failed';
+  challenge: { url: string; code: string } | null;
+}
+
 export interface TopicLine {
   name: string;
   status_line: string;
@@ -206,7 +298,7 @@ export interface TopicLine {
 }
 
 export interface MainThreadInfo {
-  mode: 'sdk' | 'native';
+  mode: 'native';
   session_id: string | null;
   conversation_id: string | null;
   native: NativeSessionInfo | null;
@@ -245,11 +337,7 @@ export interface NativeSessionInfo {
   native_session_id: string | null;
   model: string | null;
   approval_policy: string;
-  herdr_pane_id: string | null;
-  herdr_terminal_id: string | null;
-  herdr_workspace_id: string | null;
-  workspace_pod: string | null;
-  workspace_pod_uid: string | null;
+  workspace_name: string | null;
   workspace_ready: boolean;
   agent_live: boolean | null;
   generation: number;
@@ -403,6 +491,25 @@ export const api = {
     if (!response.ok) throw new Error('Failed to refresh project');
   },
 
+  async createWorkspace(
+    projectId: string,
+    branch: string,
+    dev: WorkspaceDev
+  ): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, branch, dev })
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to create workspace'));
+    return response.json();
+  },
+
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to delete workspace'));
+  },
+
   /**
    * Get the SSE endpoint URL for the global event stream.
    */
@@ -411,6 +518,82 @@ export const api = {
   },
 
   // Session endpoints
+  async listWorkspaces(): Promise<WorkspaceLifecycle[]> {
+    const response = await apiFetch(`${API_URL}/workspaces`);
+    if (!response.ok) throw new Error('Failed to list workspaces');
+    return response.json();
+  },
+
+  async getWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}`);
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to get workspace'));
+    return response.json();
+  },
+
+  async suspendWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/suspend`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to suspend workspace'));
+    return response.json();
+  },
+
+  async resumeWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/resume`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to resume workspace'));
+    return response.json();
+  },
+
+  async refreshWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/refresh`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to refresh workspace'));
+    return response.json();
+  },
+
+  async listWorkspacePreviewPorts(workspaceId: string): Promise<WorkspacePreviewPort[]> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/ports`);
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to list preview ports'));
+    const result = await response.json();
+    if (!Array.isArray(result?.ports)) throw new Error('Invalid preview port response');
+    return result.ports;
+  },
+
+  async getWorkspaceCredentials(workspaceId: string): Promise<WorkspaceCredentialStatus[]> {
+    const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}/credentials`);
+    if (!response.ok)
+      throw new Error(await errorDetail(response, 'Failed to get credential status'));
+    const result = await response.json();
+    if (!Array.isArray(result?.credentials)) throw new Error('Invalid credential status response');
+    return result.credentials;
+  },
+
+  async startWorkspaceCredentialReauth(
+    workspaceId: string,
+    provider: 'codex' | 'claude'
+  ): Promise<CredentialReauthStatus> {
+    const response = await apiFetch(
+      `${API_URL}/workspaces/${workspaceId}/credentials/${provider}/reauth`,
+      { method: 'POST' }
+    );
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to start sign-in'));
+    return response.json();
+  },
+
+  async getWorkspaceCredentialReauth(
+    workspaceId: string,
+    jobId: string
+  ): Promise<CredentialReauthStatus> {
+    const response = await apiFetch(
+      `${API_URL}/workspaces/${workspaceId}/credentials/reauth/${encodeURIComponent(jobId)}`
+    );
+    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to check sign-in'));
+    return response.json();
+  },
+
   async listSessions(options?: { status?: string }): Promise<Session[]> {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);

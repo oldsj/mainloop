@@ -1,0 +1,74 @@
+# WorkerPool (a real K8s CRD, `kubectl apply`) plus the Mainloop workspace ActorTemplate
+# (protojson-shaped ateapipb.ActorTemplate, applied with `kubectl ate create actor-template -f -`
+# after the __IMAGE__ placeholder is substituted with a digest-pinned reference -- Substrate
+# requires containers.image to be pinned by digest). Mirrors the shape of the pinned checkout's
+# demos/counter/{counter,counter-template}.yaml.tmpl.
+#
+# Substitute ${ATESPACE}, ${WORKER_POOL_NAME}, ${TEMPLATE_NAME}, ${BUCKET_NAME}, and __IMAGE__.
+# The atespace ("mainloop-workspaces" by default; see backend/src/mainloop/config.py
+# substrate_atespace) is both this WorkerPool's k8s namespace and a control-plane atespace
+# resource created separately with `kubectl ate create atespace`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${ATESPACE}
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: ${WORKER_POOL_NAME}
+  namespace: ${ATESPACE}
+  labels:
+    workload: ${WORKER_POOL_NAME}
+spec:
+  replicas: 2
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    resources:
+      limits:
+        cpu: '2'
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 2Gi
+---
+# ActorTemplate: one headless per-turn native-agent container per actor, running under Substrate.
+# Substrate owns lifecycle and snapshots; the actor retains workspace files between turns and
+# has no Herdr server or terminal manager. Gate 5 uses this product template for its live check.
+metadata:
+  atespace: ${ATESPACE}
+  name: ${TEMPLATE_NAME}
+workerSelector:
+  matchLabels:
+    workload: ${WORKER_POOL_NAME}
+containers:
+- name: workspace
+  image: __IMAGE__
+  command:
+  - /usr/local/bin/entrypoint.sh
+  env:
+  - { name: HOME, value: /work/.home }
+  - { name: MAINLOOP_API, value: http://mainloop-backend.mainloop-control.svc.cluster.local:8000 }
+  - { name: WORKSPACE_PATH, value: /work/repo }
+  - { name: AGENT_CONFIG_DIR, value: /etc/agent-config }
+  - { name: CODEX_HOME, value: /work/.codex }
+  - { name: EXEC_SHIM_STATE_DIR, value: /work/repo/.mainloop/exec-shim }
+  volumeMounts:
+  - { name: workspace, mountPath: /work }
+  resources:
+    limits:
+    - { name: cpu, quantity: "2" }
+    - { name: memory, quantity: 2Gi }
+  wakeupProbe:
+    httpGet: { path: /healthz, port: 8090 }
+    timeoutSeconds: 60
+snapshotConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/mainloop-workspaces/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+volumes:
+- name: workspace
+  durableDir: {}

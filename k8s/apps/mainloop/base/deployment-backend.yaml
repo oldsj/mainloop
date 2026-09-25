@@ -47,11 +47,6 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
-            - name: CLAUDE_CODE_OAUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: mainloop-secrets
-                  key: claude-secret-token
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

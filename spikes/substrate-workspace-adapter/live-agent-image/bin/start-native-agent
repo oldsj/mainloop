@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# Run one headless native CLI turn. The prompt is inherited on stdin, never passed in argv.
+set -euo pipefail
+
+kind="${1:?usage: start-native-agent claude|codex create|resume [native-session-id]}"
+mode="${2:?usage: start-native-agent claude|codex create|resume [native-session-id]}"
+if [[ $# -gt 3 ]]; then
+	echo 'usage: start-native-agent claude|codex create|resume [native-session-id]' >&2
+	exit 2
+fi
+if [[ ${mode} != create && ${mode} != resume ]]; then
+	echo 'invalid session mode' >&2
+	exit 2
+fi
+session_id="${3-}"
+if [[ -n ${session_id} && ! ${session_id} =~ ^[A-Za-z0-9._:-]{1,256}$ ]]; then
+	echo 'invalid native session id' >&2
+	exit 2
+fi
+if [[ ${mode} == resume && -z ${session_id} ]]; then
+	echo 'resume requires an established native session id' >&2
+	exit 2
+fi
+
+workspace="${WORKSPACE_PATH:-/work/repo}"
+cd "${workspace}"
+workspace_root="$(pwd -P)"
+
+# Keep telemetry and automatic network chatter disabled for every native invocation.
+export DISABLE_TELEMETRY=1
+export DISABLE_ERROR_REPORTING=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export DISABLE_AUTOUPDATER=1
+
+startup_context_file=""
+startup_standing_file=""
+startup_standing_text=""
+if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 ]]; then
+	startup_cwd="${MAINLOOP_STARTUP_CWD_REL-}"
+	startup_token="${MAINLOOP_STARTUP_TOKEN-}"
+	startup_standing_b64="${MAINLOOP_STARTUP_STANDING_B64-}"
+	startup_policy="${MAINLOOP_STARTUP_APPROVAL_POLICY-}"
+	startup_model="${MAINLOOP_STARTUP_MODEL-}"
+	startup_effort="${MAINLOOP_STARTUP_EFFORT-}"
+	if [[ ! ${startup_token} =~ ^ml_[a-f0-9]{64}$ ]] ||
+		[[ ! ${startup_standing_b64} =~ ^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$ ]]; then
+		echo 'invalid native startup credentials or context' >&2
+		exit 2
+	fi
+	if [[ ${kind} == claude && ${startup_cwd} == main ]]; then
+		[[ ${startup_policy} == 'restricted: Bash(mainloop:*) only' ]] || {
+			echo 'invalid main-thread approval policy' >&2
+			exit 2
+		}
+		[[ ${startup_model} =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || {
+			echo 'invalid main-thread model' >&2
+			exit 2
+		}
+		[[ ${startup_effort} == low || ${startup_effort} == medium || ${startup_effort} == high || ${startup_effort} == max || ${startup_effort} == xhigh ]] || {
+			echo 'invalid main-thread effort' >&2
+			exit 2
+		}
+	elif [[ ${startup_cwd} =~ ^children/ml-${kind}-[0-9a-f]{8}$ ]]; then
+		[[ ${startup_policy} == bypass-permissions && -z ${startup_model} && -z ${startup_effort} ]] || {
+			echo 'invalid child startup policy' >&2
+			exit 2
+		}
+	else
+		echo 'invalid native startup working directory' >&2
+		exit 2
+	fi
+
+	startup_target="${workspace_root}/${startup_cwd}"
+	mkdir -p -- "${startup_target}"
+	startup_target="$(realpath -e -- "${startup_target}")"
+	case "${startup_target}" in
+	"${workspace_root}"/*) ;;
+	*)
+		echo 'native startup working directory escapes the workspace' >&2
+		exit 2
+		;;
+	esac
+	cd -- "${startup_target}"
+	export MAINLOOP_TOKEN="${startup_token}"
+
+	mkdir -p -- "${HOME}/.mainloop"
+	chmod 700 "${HOME}/.mainloop"
+	startup_standing_file="$(mktemp "${HOME}/.mainloop/standing.XXXXXX")"
+	chmod 600 "${startup_standing_file}"
+	if ! printf '%s' "${startup_standing_b64}" | base64 --decode >"${startup_standing_file}"; then
+		echo 'invalid native startup context encoding' >&2
+		exit 2
+	fi
+	startup_standing_size="$(wc -c <"${startup_standing_file}")"
+	if [[ ! -s ${startup_standing_file} ]] || [[ ${startup_standing_size} -gt 32768 ]]; then
+		echo 'invalid native startup context size' >&2
+		exit 2
+	fi
+	startup_standing_text="$(cat "${startup_standing_file}")"
+	trap 'rm -f -- "${startup_standing_file}" "${startup_context_file}"' EXIT
+fi
+
+run_cli() {
+	local status=0
+	if "$@"; then
+		status=0
+	else
+		status=$?
+	fi
+	if [[ -n ${startup_standing_file} ]]; then
+		rm -f -- "${startup_standing_file}" "${startup_context_file}"
+	fi
+	exit "${status}"
+}
+
+case "${kind}" in
+claude)
+	token_file="${HOME}/.mainloop/claude-token"
+	if [[ ! -s ${token_file} ]]; then
+		echo 'Claude credential is not installed' >&2
+		exit 1
+	fi
+	CLAUDE_CODE_OAUTH_TOKEN="$(tr -d ' \r\n' <"${token_file}")"
+	if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN} ]]; then
+		echo 'Claude credential is empty' >&2
+		exit 1
+	fi
+	export CLAUDE_CODE_OAUTH_TOKEN
+	args=(-p)
+	if [[ ${mode} == resume ]]; then
+		args+=(--resume "${session_id}")
+	else
+		if [[ -z ${session_id} ]]; then
+			echo 'new Claude sessions require a native session id' >&2
+			exit 2
+		fi
+		args+=(--session-id "${session_id}")
+	fi
+	args+=(--output-format stream-json --verbose)
+	if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 && ${startup_cwd} == main ]]; then
+		args+=(--tools Bash --allowedTools 'Bash(mainloop:*)' --permission-mode dontAsk
+			--model "${startup_model}" --effort "${startup_effort}")
+	else
+		args+=(--dangerously-skip-permissions)
+	fi
+	if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 ]]; then
+		startup_context_file="$(mktemp "${HOME}/.mainloop/system-prompt.XXXXXX")"
+		chmod 600 "${startup_context_file}"
+		cat "${AGENT_SYSTEM_PROMPT_FILE:-/etc/agent-config/mainloop-system.txt}" >"${startup_context_file}"
+		printf '\n' >>"${startup_context_file}"
+		cat "${startup_standing_file}" >>"${startup_context_file}"
+		args+=(--append-system-prompt-file "${startup_context_file}")
+	else
+		args+=(--append-system-prompt-file "${AGENT_SYSTEM_PROMPT_FILE:-/etc/agent-config/mainloop-system.txt}")
+	fi
+	if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 ]]; then
+		run_cli claude "${args[@]}"
+	fi
+	exec claude "${args[@]}"
+	;;
+codex)
+	auth_file="${CODEX_HOME:-${HOME}/.codex}/auth.json"
+	if [[ ! -s ${auth_file} ]]; then
+		echo 'Codex credential is not installed' >&2
+		exit 1
+	fi
+	if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 ]]; then
+		instructions_json="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "${startup_standing_text}")"
+		codex_args=(--config "developer_instructions=${instructions_json}")
+	else
+		codex_args=()
+	fi
+	if [[ ${mode} == resume ]]; then
+		codex_args+=(exec resume --json "${session_id}" --dangerously-bypass-approvals-and-sandbox)
+	else
+		codex_args+=(exec --json --dangerously-bypass-approvals-and-sandbox)
+	fi
+	if [[ ${MAINLOOP_STARTUP_PRESENT-} == 1 ]]; then
+		run_cli codex "${codex_args[@]}"
+	fi
+	exec codex "${codex_args[@]}"
+	;;
+*)
+	echo 'unsupported native CLI' >&2
+	exit 2
+	;;
+esac

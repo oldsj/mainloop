@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"fixture-codex-thread"}
+{"type":"turn.started","thread_id":"fixture-codex-thread"}
+{"type":"item.completed","item":{"id":"fixture-message-id","type":"agent_message","text":"fixture Codex final"}}
+{"type":"turn.completed","thread_id":"fixture-codex-thread"}

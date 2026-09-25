@@ -8,6 +8,8 @@
   import { statusLabel } from '$lib/sessionStatus';
   import SessionChat from '$lib/components/SessionChat.svelte';
   import NativeIdentityStrip from '$lib/components/NativeIdentityStrip.svelte';
+  import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
+  import { workspaces } from '$lib/stores/workspaces';
 
   let sessionId = $derived($page.params.id);
   let loaded = $state<Session | null>(null);
@@ -18,6 +20,9 @@
   // The sessions store is kept current by SSE; the page's own fetch only gets it started.
   const live = $derived($sessions.sessions.find((s) => s.id === sessionId));
   const session = $derived(loaded ? { ...loaded, ...live } : null);
+  const workspace = $derived(
+    $workspaces.workspaces.find((item) => item.session_id === session?.id)
+  );
 
   // SvelteKit reuses this component when only [id] changes, so load per id rather than on mount.
   // Clearing `loaded` first unmounts the chat and identity strip, which read their id once.
@@ -180,6 +185,19 @@
     {/if}
 
     <NativeIdentityStrip sessionId={session.id} />
+
+    {#if workspace}
+      <div class="flex items-center gap-3 border-b border-term-border px-4 py-2 text-sm">
+        <span class="text-term-fg-muted">Workspace</span>
+        <WorkspaceLifecycleBadge {workspace} />
+        <a
+          href={`/workspaces/${workspace.workspace_id}`}
+          class="ml-auto text-term-accent underline underline-offset-4 hover:text-term-fg"
+        >
+          Manage workspace
+        </a>
+      </div>
+    {/if}
 
     <div class="min-h-0 flex-1">
       <SessionChat sessionId={session.id} />

@@ -1,9 +1,9 @@
 # Native-agent boundary inventory
 
-Status: contract implementation and synthetic test cases only. No native-provider
-proof, production wiring, database migration, or workspace lifecycle change is
-included. `ROADMAP.md` describes the intended architecture; the existing specs
-continue to describe user-visible behavior.
+Historical inventory from before the 2026-09-24 Substrate cutover. Its rows describe the former
+implementation and proposed replacement points; removed SDK and Job paths are retained here only
+as migration history. Current behavior is documented in `docs/specs/` and implemented through the
+native Substrate workspace transport. This inventory is not live-cluster proof.
 
 ## Existing implementation and replacement points
 

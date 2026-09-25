@@ -28,8 +28,6 @@ def adapter(records: list[dict], *, suffix: str = "stream") -> ClaudeSessionNorm
         records[0],
         binding_id=f"claude-binding-{suffix}",
         workspace_id=f"workspace-{suffix}",
-        herdr_session_id=f"herdr-session-{suffix}",
-        herdr_agent_id=f"herdr-agent-{suffix}",
     )
 
 
@@ -40,8 +38,6 @@ class ClaudeFixtureAdapterTests(unittest.TestCase):
             records[0],
             binding_id="binding",
             workspace_id="workspace",
-            herdr_session_id="herdr-session",
-            herdr_agent_id="herdr-agent",
         )
 
         self.assertEqual(binding.provider, "claude")

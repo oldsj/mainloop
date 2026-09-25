@@ -29,7 +29,7 @@ async def main_thread_workflow(user_id: str) -> None:
     """Run the main thread workflow for a user.
 
     This workflow runs as long as needed, processing queue responses.
-    Chat messages are handled directly by chat_handler with Claude Agent SDK.
+    Chat messages are ledgered and delivered to the user's native Substrate session.
 
     The workflow is started per-user and identified by user_id.
     """

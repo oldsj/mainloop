@@ -28,7 +28,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
-      - CLAUDE_AGENT_URL=http://claude-agent:8001
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=mainloop
@@ -38,8 +37,6 @@ services:
       - ${GCP_CREDENTIALS_PATH:-./secrets/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
     depends_on:
       postgres:
-        condition: service_healthy
-      claude-agent:
         condition: service_healthy
     develop:
       watch:
@@ -78,24 +75,5 @@ services:
           ignore:
             - node_modules
 
-  claude-agent:
-    build:
-      context: ./claude-agent
-      dockerfile: Dockerfile
-    container_name: mainloop-claude-agent
-    ports:
-      - 8001:8001 # Expose for debugging
-    env_file:
-      - .env
-    volumes:
-      - claude-workdir:/workspace
-    healthcheck:
-      test: [CMD, curl, -f, http://localhost:8001/health]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
 volumes:
-  claude-workdir: {}
   postgres-data: {}

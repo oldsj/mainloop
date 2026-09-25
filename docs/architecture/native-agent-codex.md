@@ -1,5 +1,9 @@
 # Codex native-agent fixture boundary
 
+Historical scope: this document describes the fixture parser boundary, not transport ownership.
+The Substrate cutover removed the former SDK-based main chat path. The current workspace transport
+is implemented separately and this fixture note is not live proof.
+
 Status: implemented normalizer and sanitized fixture evidence only. This
 document does not claim a live Codex proof, production wiring, transport
 ownership, or subscription-backed capability.
@@ -157,5 +161,5 @@ The declarations are separate from provider metadata on `NativeEvent`.
 
 The fixture tests therefore establish deterministic normalization and recovery
 inputs, not that Codex emits these records in every mode or that a native
-session accepts a message. Existing production paths and the Claude Agent SDK
+session accepts a message. Existing production paths and the former SDK-based main chat
 worker are unchanged.

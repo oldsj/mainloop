@@ -99,7 +99,6 @@ class JournalTests(unittest.TestCase):
             numbered(CLAUDE_TURN),
             file_ref="s.jsonl",
             native_id=CLAUDE_ID,
-            agent="a",
         )
         kinds = [e.kind for e in events]
         self.assertEqual(
@@ -123,7 +122,6 @@ class JournalTests(unittest.TestCase):
             numbered(CLAUDE_TURN[:4]),
             file_ref="s.jsonl",
             native_id=CLAUDE_ID,
-            agent="a",
         )
         turns, safe = completed_turns(events)
         self.assertEqual(turns, [])
@@ -135,7 +133,6 @@ class JournalTests(unittest.TestCase):
             numbered(CODEX_TURN),
             file_ref="r.jsonl",
             native_id=CODEX_ID,
-            agent="a",
         )
         self.assertEqual(events[3].kind, "prompt")
         self.assertEqual(events[5].normalized_type, "completed")
@@ -151,17 +148,13 @@ class JournalTests(unittest.TestCase):
             (3, "[]"),
         ]
         self.assertEqual(
-            len(
-                parse_journal(
-                    "claude", lines, file_ref="s", native_id=CLAUDE_ID, agent="a"
-                )
-            ),
+            len(parse_journal("claude", lines, file_ref="s", native_id=CLAUDE_ID)),
             1,
         )
 
     def test_unknown_kind_is_rejected(self):
         with self.assertRaises(ValueError):
-            parse_journal("pi", [], file_ref="s", native_id="x", agent="a")
+            parse_journal("pi", [], file_ref="s", native_id="x")
 
 
 if __name__ == "__main__":

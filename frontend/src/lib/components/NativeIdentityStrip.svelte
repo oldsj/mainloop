@@ -80,13 +80,8 @@
           >{info.native_session_id ?? 'pending'}</b
         ></span
       >
-      <span
-        >herdr pane <b class="text-term-fg">{info.herdr_pane_id ?? '-'}</b>
-        ({info.agent_name})</span
-      >
       <span>
-        pod <b class="text-term-fg" data-testid="id-pod">{info.workspace_pod}</b>
-        {info.workspace_pod_uid ? info.workspace_pod_uid.slice(0, 8) : '-'}
+        workspace actor <b class="text-term-fg" data-testid="id-workspace">{info.workspace_name}</b>
         {info.workspace_ready ? 'ready' : 'not ready'}
       </span>
       <span

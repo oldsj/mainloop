@@ -1,6 +1,5 @@
 """Shared Pydantic models for mainloop."""
 
-from models.agent import AgentResponse, AgentTask
 from models.conversation import Conversation, Message
 from models.native_agent import (
     AttentionItem,
@@ -38,13 +37,24 @@ from models.workflow import (
     QueueItemType,
     WorkflowEvent,
 )
+from models.workspace import (
+    WorkspaceAgentKind,
+    WorkspaceCondition,
+    WorkspaceConditionStatus,
+    WorkspaceDesiredState,
+    WorkspaceDev,
+    WorkspaceLifecycle,
+    WorkspaceManifest,
+    WorkspaceObservedState,
+    WorkspacePort,
+    WorkspaceService,
+    WorkspaceTransition,
+)
 
 __all__ = [
     # Existing
     "Conversation",
     "Message",
-    "AgentTask",
-    "AgentResponse",
     # Session models
     "Session",
     "SessionCreate",
@@ -80,4 +90,15 @@ __all__ += [
     "ProviderExtension",
     "ReconciliationEvidence",
     "WorkspaceBinding",
+    "WorkspaceAgentKind",
+    "WorkspaceCondition",
+    "WorkspaceConditionStatus",
+    "WorkspaceDesiredState",
+    "WorkspaceDev",
+    "WorkspaceLifecycle",
+    "WorkspaceManifest",
+    "WorkspaceObservedState",
+    "WorkspacePort",
+    "WorkspaceService",
+    "WorkspaceTransition",
 ]
