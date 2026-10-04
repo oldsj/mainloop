@@ -18,7 +18,7 @@ You (phone/laptop)
     ▼
 ┌─────────────────────────────────────────────────────┐
 │                   Main Thread                        │
-│       Native Claude Code session in Substrate        │
+│       Native Claude Code session via kagent          │
 │                                                      │
 │   user@mainloop$ research X      ← inline sessions  │
 │   ├── [research X] thinking...   ← threaded reply   │
@@ -36,7 +36,7 @@ You (phone/laptop)
 - **Main thread**: One continuous native conversation; delegated sessions surface results back
 - **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
-- **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in Substrate
+- **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in its kagent Session
 - **Runtime isolation**: Substrate workspaces use gVisor actors. The pinned fork honors the
   agent image's non-root UID `10001`; microVM isolation is deferred.
 
@@ -91,12 +91,12 @@ mainloop/
 
 ## Agent Workflow
 
-Agents are native sessions spawned for development tasks. Mainloop records the session and its deliveries; the native CLI runs in the Substrate actor selected by the configured provider binding.
+Agents are native sessions spawned for development tasks. Mainloop records the session and its deliveries; the native CLI session runs in a kagent Agent (A2A) selected by agent kind.
 
 ```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │   Spawn     │────►│    Work     │────►│     PR      │────►│    Close    │
-│   (main)    │     │(Substrate) │     │  (GitHub)   │     │  (summary)  │
+│   (main)    │     │  (kagent)  │     │  (GitHub)   │     │  (summary)  │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
        ▲                   │
        └───────────────────┘
@@ -104,7 +104,7 @@ Agents are native sessions spawned for development tasks. Mainloop records the s
 ```
 
 1. **Spawn** - Main thread creates agent for a task
-2. **Work** - A native Claude Code or Codex session runs in its configured Substrate actor
+2. **Work** - A native Claude Code or Codex session runs in its kagent Agent
 3. **PR** - Agent creates and merges GitHub PR when ready
 4. **Close** - Agent posts summary back to main thread
 

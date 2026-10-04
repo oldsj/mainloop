@@ -14,13 +14,11 @@
   const status = $derived(
     $connection.status === 'offline'
       ? 'unreachable'
-      : native?.rotating
-        ? 'rotating'
-        : native?.turn_in_flight
-          ? 'working'
-          : native?.agent_live === false
-            ? 'idle'
-            : 'ready'
+      : native?.turn_in_flight
+        ? 'working'
+        : native?.session_state === 'suspended'
+          ? 'idle'
+          : 'ready'
   );
   const dot = $derived(
     status === 'ready'

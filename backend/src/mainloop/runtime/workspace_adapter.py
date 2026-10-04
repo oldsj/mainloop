@@ -5,7 +5,7 @@ Mainloop owns creation intent, desired state, retry policy and audit; Substrate 
 actor compute and snapshots. Produces ``models.native_agent.WorkspaceBinding`` -- the existing
 contract type -- rather than a parallel workspace model.
 
-Rules carried over from ``native_sessions.py`` / ``contracts.py`` rather than reinvented:
+Rules carried over from ``native_sessions.py`` rather than reinvented:
 - Identity is persisted before an uncertain external call, and a retry re-inspects the actor and
   this row before creating or mutating anything (no blind replay, no second writer).
 - Every mutation is fenced by ``ownership_generation``: a stale caller's write is rejected, not
@@ -24,7 +24,6 @@ from datetime import UTC, datetime, timedelta
 
 from mainloop.config import settings
 from mainloop.db import db
-from mainloop.runtime.contracts import ContractError, StaleOwnership
 from mainloop.runtime.substrate import (
     OBSERVED_STATE,
     ActorRecord,
@@ -46,6 +45,15 @@ from models import (
     WorkspaceObservedState,
     WorkspaceTransition,
 )
+
+
+class ContractError(ValueError):
+    """Rejected operation; the store remains unchanged."""
+
+
+class StaleOwnership(ContractError):
+    """Caller does not own the current binding generation."""
+
 
 logger = logging.getLogger(__name__)
 

@@ -8,21 +8,19 @@
   import { api, SendError, type MainThreadInfo } from '$lib/api';
   import { draftMessage } from '$lib/stores/draftMessage';
   import { connection } from '$lib/stores/connection';
-  import { visibleMessages } from '$lib/messages';
   import ConversationView from './ConversationView.svelte';
   import MainThreadHeader from './MainThreadHeader.svelte';
 
-  // Mainloop mirrors the native Substrate session journal, so we poll for its reply.
+  // Mainloop mirrors the kagent A2A task into the conversation, so we poll for the reply.
   let mainThread = $state<MainThreadInfo | null>(null);
   let sendError = $state<string | null>(null);
 
   let { messages: allMessages, isLoading } = $derived($conversationStore);
   const native = $derived(mainThread?.mode === 'native');
-  // Protocol traffic (the pre-cut turn) is not a conversation the user had.
-  const messages = $derived(native ? visibleMessages(allMessages) : allMessages);
+  const messages = $derived(allMessages);
   // The main thread takes one message at a time; say so instead of letting a send fail.
   const busy = $derived(
-    native && !!(mainThread?.native?.turn_in_flight || mainThread?.native?.rotating)
+    native && !!mainThread?.native?.turn_in_flight
   );
   const offline = $derived($connection.status === 'offline');
   const placeholder = $derived(
@@ -30,14 +28,12 @@
       ? 'Backend unreachable…'
       : $currentSession
         ? `Reply to ${$currentSession.title}...`
-        : mainThread?.native?.rotating
-          ? 'Resetting the context window…'
-          : busy
-            ? 'Working…'
-            : 'Enter command...'
+        : busy
+          ? 'Working…'
+          : 'Enter command...'
   );
 
-  // Keep the main thread live without a send: child reports and rotations arrive on their own.
+  // Keep the main thread live without a send: child reports arrive on their own.
   $effect(() => {
     if (!native) return;
     let stopped = false;

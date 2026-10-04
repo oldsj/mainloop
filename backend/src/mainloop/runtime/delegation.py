@@ -29,36 +29,47 @@ async def ensure_main_session(user_id: str) -> dict:
     """Return the user's single native main-thread binding, creating it on first use.
 
     Its conversation is the user's most recent main-thread conversation, so existing history
-    carries over.
+    carries over. The session row and its binding are written in one transaction, under a
+    per-user lock, so a failure leaves neither and concurrent first requests share one.
     """
+    query = """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE b.role='main' AND s.user_id=$1 ORDER BY b.created_at LIMIT 1"""
     async with db.connection() as conn:
-        row = await conn.fetchrow(
-            """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-               WHERE b.role='main' AND s.user_id=$1 ORDER BY b.created_at LIMIT 1""",
-            user_id,
-        )
+        row = await conn.fetchrow(query, user_id)
     if row:
         return dict(row)
-    thread = await db.get_main_thread_by_user(user_id)
-    if not thread:
-        thread = await db.create_main_thread(
-            MainThread(user_id=user_id, workflow_run_id="native")
-        )
-    convs = await db.list_conversations(user_id, limit=1)
-    conversation = convs[0] if convs else await db.create_conversation(user_id)
-    session = await db.create_session(
-        Session(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            main_thread_id=thread.id,
-            title="Main thread",
-            description="Native Claude main thread (window owned by Mainloop)",
-            prompt="",
-            conversation_id=conversation.id,
-            status=SessionStatus.WAITING_ON_USER,
-        )
-    )
-    return await native_sessions.create_binding(session.id, "claude", role="main")
+    async with db.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))", f"main-thread:{user_id}"
+            )
+            row = await conn.fetchrow(query, user_id)
+            if row:
+                return dict(row)
+            # Reused on the next attempt if the transaction below rolls back.
+            thread = await db.get_main_thread_by_user(user_id)
+            if not thread:
+                thread = await db.create_main_thread(
+                    MainThread(user_id=user_id, workflow_run_id="native")
+                )
+            convs = await db.list_conversations(user_id, limit=1)
+            conversation = convs[0] if convs else await db.create_conversation(user_id)
+            session = await db.create_session(
+                Session(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    main_thread_id=thread.id,
+                    title="Main thread",
+                    description="Native Claude main thread",
+                    prompt="",
+                    conversation_id=conversation.id,
+                    status=SessionStatus.WAITING_ON_USER,
+                ),
+                conn=conn,
+            )
+            return await native_sessions.create_binding(
+                session.id, "claude", role="main", conn=conn
+            )
 
 
 async def _topic_lines(user_id: str) -> list[TopicLine]:
@@ -101,22 +112,16 @@ async def render_for_binding(binding: dict) -> str:
             user_id,
         )
         # Last K visible messages; undelivered/in-flight ones are excluded (they are about to be
-        # delivered as the next prompt) and so is the protocol traffic of the pre-cut turn.
+        # delivered as the next prompt).
         recent = await conn.fetch(
             """SELECT m.role, m.content FROM messages m
                WHERE m.conversation_id=$1
                  AND NOT EXISTS (SELECT 1 FROM native_deliveries d WHERE d.message_id=m.id
-                                 AND (d.state = ANY($3) OR d.state='queued' OR d.source='writeout'))
+                                 AND (d.state = ANY($3) OR d.state='queued'))
                ORDER BY m.created_at DESC LIMIT $2""",
             session.conversation_id,
             settings.main_carry_over_messages,
             list(native_sessions.OPEN_STATES),
-        )
-    lineage = ""
-    if binding["lineage_seq"] > 1:
-        lineage = (
-            f"This is native session #{binding['lineage_seq']} of the main thread; earlier ones were "
-            "rotated by Mainloop. Records above are authoritative; the recent messages are only a carry-over."
         )
     return render_standing(
         StandingInputs(
@@ -126,7 +131,6 @@ async def render_for_binding(binding: dict) -> str:
             checkpoint=checkpoint,
             pending=[f"[{p['name']}] {p['text']}" for p in pend],
             recent=[RecentMessage(r["role"], r["content"]) for r in reversed(recent)],
-            lineage_note=lineage,
         )
     )
 
@@ -241,7 +245,7 @@ class PgStore:
     async def children_state(self, parent_session_id: str) -> list[dict]:
         async with db.connection() as conn:
             rows = await conn.fetch(
-                """SELECT b.session_id, b.kind, b.turns_in_lineage, b.reported_at, b.updated_at,
+                """SELECT b.session_id, b.kind, b.turns, b.reported_at, b.updated_at,
                           s.title, s.status, t.name AS topic,
                           (SELECT d.state FROM native_deliveries d WHERE d.session_id=b.session_id
                              ORDER BY d.created_at DESC LIMIT 1) AS last_delivery,
@@ -275,7 +279,7 @@ class PgStore:
                     "topic": r["topic"] or INBOX,
                     "status": r["status"],
                     "state": state,
-                    "turns": r["turns_in_lineage"],
+                    "turns": r["turns"],
                     "last_activity": r["updated_at"].strftime("%H:%M:%SZ"),
                     "last_reply": " ".join(reply.split())[:300] or None,
                 }
@@ -312,25 +316,29 @@ class PgStore:
             f"Task brief from Mainloop (topic: {topic['name']})\n\n{brief}\n\n"
             'When finished, run: mainloop report --summary "<what you did and concluded, under 1500 characters>"'
         )
-        session = await db.create_session(
-            Session(
-                id=str(uuid.uuid4()),
-                user_id=parent["user_id"],
-                main_thread_id=parent_session.main_thread_id,
-                title=title[:80],
-                description=f"Child of the main thread, topic {topic['name']}",
-                prompt=text,
-                conversation_id=conversation.id,
-                status=SessionStatus.ACTIVE,
-            )
-        )
-        await native_sessions.create_binding(
-            session.id,
-            kind,
-            role="child",
-            parent_session_id=parent["session_id"],
-            topic_id=topic["id"],
-        )
+        async with db.connection() as conn:
+            async with conn.transaction():
+                session = await db.create_session(
+                    Session(
+                        id=str(uuid.uuid4()),
+                        user_id=parent["user_id"],
+                        main_thread_id=parent_session.main_thread_id,
+                        title=title[:80],
+                        description=f"Child of the main thread, topic {topic['name']}",
+                        prompt=text,
+                        conversation_id=conversation.id,
+                        status=SessionStatus.ACTIVE,
+                    ),
+                    conn=conn,
+                )
+                await native_sessions.create_binding(
+                    session.id,
+                    kind,
+                    role="child",
+                    parent_session_id=parent["session_id"],
+                    topic_id=topic["id"],
+                    conn=conn,
+                )
         await native_sessions.submit_message(session.id, text, source="brief")
         return session.id
 
@@ -346,6 +354,11 @@ class PgStore:
             if claimed is None:
                 return ""
             session = await db.get_session(child["session_id"])
+            evidence_ref = await conn.fetchval(
+                """SELECT evidence_ref FROM native_deliveries
+                   WHERE session_id=$1 AND evidence_ref IS NOT NULL ORDER BY updated_at DESC LIMIT 1""",
+                child["session_id"],
+            )
             if topic and topic.get("id"):
                 await conn.execute(
                     "INSERT INTO topic_records (id, topic_id, kind, text, session_id, evidence_ref) VALUES ($1,$2,'report',$3,$4,$5)",
@@ -353,7 +366,7 @@ class PgStore:
                     topic["id"],
                     summary,
                     child["session_id"],
-                    child.get("journal_ref"),
+                    evidence_ref,
                 )
                 await conn.execute(
                     "UPDATE topics SET updated_at=NOW() WHERE id=$1", topic["id"]

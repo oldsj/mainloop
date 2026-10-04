@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-fixture",
+  "error": {
+    "code": -32602,
+    "message": "invalid params",
+    "data": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "INVALID_PARAMS",
+        "domain": "example.test"
+      }
+    ]
+  }
+}

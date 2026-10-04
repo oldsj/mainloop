@@ -32,7 +32,7 @@
     context?: string;
     /** A send that was rejected; shown above the input, not lost in the console. */
     error?: string | null;
-    /** Disable sending without implying a running turn (e.g. the window is rotating). */
+    /** Disable sending without implying a running turn (e.g. while the connection is offline). */
     inputDisabled?: boolean;
     onDismissError?: () => void;
   } = $props();

@@ -64,7 +64,7 @@ export interface ChatResponse {
   conversation_id: string;
   message: Message | null; // null when session spawned
   spawned_session_id?: string; // Session ID if one was spawned
-  pending?: boolean; // native main thread: the reply is mirrored from the journal; poll the conversation
+  pending?: boolean; // native main thread: the reply is mirrored from the kagent task; poll the conversation
   delivery_message_id?: string | null;
 }
 
@@ -195,6 +195,8 @@ export interface Session {
 export interface NativeDelivery {
   message_id: string;
   state: string;
+  task_id?: string | null;
+  source?: string;
   evidence_ref: string | null;
   detail: string | null;
 }
@@ -327,22 +329,11 @@ export interface NativeSessionInfo {
   role?: 'agent' | 'main' | 'child';
   parent_session_id?: string | null;
   topic?: string | null;
-  lineage_seq?: number;
-  context_tokens?: number | null;
-  baseline_tokens?: number | null;
-  turns_in_lineage?: number;
-  continuations?: number;
-  rotating?: boolean;
   agent_name: string;
-  native_session_id: string | null;
+  kagent_session_id: string | null;
+  session_state: string | null;
   model: string | null;
-  approval_policy: string;
-  workspace_name: string | null;
-  workspace_ready: boolean;
-  agent_live: boolean | null;
-  generation: number;
-  journal_cursor: number;
-  journal_ref: string | null;
+  turns: number;
   turn_in_flight: boolean;
   deliveries: NativeDelivery[];
   note: string | null;
@@ -396,7 +387,7 @@ export const api = {
       throw new SendError("Can't reach the Mainloop backend.", 0);
     }
     if (!response.ok) {
-      // The native main thread answers 409 with a reason (rotating, or a turn still in flight).
+      // The native main thread answers 409 with a reason (a turn still in flight).
       let detail = 'Failed to send message';
       try {
         const body = await response.json();
@@ -618,12 +609,6 @@ export const api = {
   async getMainThread(): Promise<MainThreadInfo> {
     const response = await apiFetch(`${API_URL}/main-thread`);
     if (!response.ok) throw new Error('Failed to get main thread');
-    return response.json();
-  },
-
-  async rotateMainThread(): Promise<Record<string, unknown>> {
-    const response = await apiFetch(`${API_URL}/main-thread/rotate`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to rotate main thread');
     return response.json();
   },
 

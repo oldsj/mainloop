@@ -15,7 +15,8 @@ flowchart LR
   person["Browser or phone"] --> app["SvelteKit app"]
   app <--> api["FastAPI + DBOS"]
   api --> data[("PostgreSQL<br/>messages, deliveries, workspace state")]
-  api -->|turn and lifecycle control| router["Substrate router"]
+  api -->|workspace lifecycle| router["Substrate router"]
+  api -->|"agent turns (A2A) and Sessions"| kagent["kagent gateway"]
   person -->|authenticated preview URL| preview["Mainloop preview proxy"]
   preview --> router
 
@@ -30,8 +31,8 @@ flowchart LR
 ```
 
 Mainloop owns conversations, message delivery, workspace policy, and the mapping from native
-sessions to workspaces. Substrate runs and snapshots the workspace actors. Agent CLIs keep their
-native session identity, history, and tools inside the workspace. The preview proxy checks the
+sessions to workspaces. Substrate runs and snapshots the workspace actors. Native agent turns go to kagent over A2A; agent sessions keep their
+native session identity, history, and tools. The preview proxy checks the
 owner and allowed ports before sending traffic through the router.
 
 ## Attention and parking
@@ -72,30 +73,37 @@ sequenceDiagram
   participant UI as SvelteKit
   participant Mainloop as FastAPI + DBOS
   participant DB as PostgreSQL
-  participant Router as Substrate router
-  participant Shim as Workspace shim
-  participant CLI as Native agent CLI
+  participant Kagent as kagent gateway
+  participant Agent as Native agent session
 
   Owner->>UI: Send a message
   UI->>Mainloop: Submit message
   Mainloop->>DB: Record message and delivery under workspace lock
-  Mainloop->>Router: CONNECT to the workspace shim
-  Note over Router: Wake the actor if it is parked
-  Router->>Shim: POST /turn
-  Shim->>CLI: Run the native CLI for this session
-  CLI-->>Shim: Output, events, and completion
-  Shim-->>Mainloop: Journal and turn status
-  Mainloop->>DB: Save journal and delivery outcome
-  Mainloop-->>UI: Publish the update
+  Mainloop->>Kagent: Create or resume the Session
+  Mainloop->>Kagent: A2A SendStreamingMessage (messageId = delivery id)
+  Kagent->>Agent: Run the turn in the native session
+  Agent-->>Kagent: Task status and artifacts
+  Kagent-->>Mainloop: Stream of task events
+  Mainloop->>DB: Save delivery outcome and the mirrored reply
+  UI->>Mainloop: Poll the conversation for the reply
 ```
 
 Recording the delivery before connecting gives Mainloop a stable delivery to reconcile if a
-connection times out. Mainloop does not blindly send an uncertain turn again.
+connection drops. kagent keeps no event cursor, so after a drop or restart Mainloop reads the
+current task (`GetTask`, or the first event of `SubscribeToTask`) and replaces its projection
+with it. `KAGENT_SEND_NOT_ACCEPTED` is retried with the same `messageId`; any other uncertain
+outcome is resolved by finding the task that holds that `messageId`, never by sending again.
+
+Mainloop calls kagent as one fixed service identity, `KAGENT_USER_ID`, and kagent scopes Sessions
+to the identity that created them. A Session kagent reports as not found is treated as deleted and
+replaced by a new one on the next message. Changing `KAGENT_USER_ID` is therefore a migration:
+every existing kagent Session becomes not found and is replaced, losing its native context.
 
 ## Development workspaces and previews
 
 A project manifest has a `dev` section for the app image or devcontainer, sibling services,
-preview ports, and idle timeout. Mainloop creates a separate workspace actor for each branch.
+preview ports, and idle timeout. Each existing branch workspace has its own actor; new workspaces
+are refused (`409`) until they are created as kagent Sessions.
 Each actor has an app container with its toolchain, agent CLIs, shim, and app process; declared
 services such as Postgres run alongside it in the same actor. Branches have separate app and
 service state.

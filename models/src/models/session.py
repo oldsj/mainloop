@@ -170,42 +170,32 @@ class SessionNotification(BaseModel):
 
 
 class NativeDeliveryInfo(BaseModel):
-    """Delivery ledger row for one user message sent to a native agent."""
+    """Delivery ledger row for one message sent to a native agent."""
 
     message_id: str
     state: str = Field(
         ...,
         description="queued|recorded|sending|delivered|completed|uncertain|failed",
     )
+    task_id: str | None = None
     evidence_ref: str | None = None
     detail: str | None = None
-    source: str = "user"  # user | report | writeout | brief
+    source: str = "user"  # user | report | brief
 
 
 class NativeSessionInfo(BaseModel):
-    """Identity strip for a session bound to a native agent in Substrate."""
+    """Identity strip for a session bound to a native agent session in kagent."""
 
     session_id: str
     kind: Literal["claude", "codex"]
     role: str = "agent"  # agent | main | child
     parent_session_id: str | None = None
     topic: str | None = None
-    agent_name: str
-    native_session_id: str | None = None
+    agent_name: str  # the kagent Agent that runs the session
+    kagent_session_id: str | None = None
+    session_state: str | None = None  # kagent runtime state, when reachable
     model: str | None = None
-    approval_policy: str
-    workspace_name: str | None = None
-    workspace_ready: bool = False
-    agent_live: bool | None = None
-    generation: int = 1
-    lineage_seq: int = 1
-    context_tokens: int | None = None
-    baseline_tokens: int | None = None
-    turns_in_lineage: int = 0
-    continuations: int = 0
-    rotating: bool = False
-    journal_cursor: int = 0
-    journal_ref: str | None = None
+    turns: int = 0
     turn_in_flight: bool = False
     deliveries: list[NativeDeliveryInfo] = Field(default_factory=list)
     note: str | None = None

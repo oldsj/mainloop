@@ -40,8 +40,7 @@
   <a href="/" class="text-sm text-term-fg-muted hover:text-term-accent">&larr; Back</a>
   <h1 class="text-lg font-medium">New agent session</h1>
   <p class="text-sm text-term-fg-muted">
-    Starts a real agent in a Substrate workspace, in bypass-permissions mode. Replies are read from the
-    agent's native journal.
+    Starts a real agent session through kagent. Replies are read from the agent's A2A task.
   </p>
 
   <fieldset class="flex gap-4" disabled={submitting}>

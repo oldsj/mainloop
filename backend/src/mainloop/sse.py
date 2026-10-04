@@ -37,9 +37,11 @@ class SSEEvent:
 
     def encode(self) -> str:
         """Encode as SSE format."""
+        # A str-mixin Enum formats as "EventType.X", not its value, since Python 3.12.
+        name = self.event.value if isinstance(self.event, Enum) else self.event
         lines = [
             f"id: {self.id}",
-            f"event: {self.event}",
+            f"event: {name}",
             f"data: {json.dumps(self.data)}",
             "",  # Empty line to end the event
         ]

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from mainloop.runtime import workspace_api
-from mainloop.runtime.contracts import ContractError
+from mainloop.runtime.workspace_adapter import ContractError
 
 from models import (
     WorkspaceAgentKind,

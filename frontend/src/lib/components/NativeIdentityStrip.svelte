@@ -15,11 +15,7 @@
 
   const expanded = $derived(!collapsible || open);
   const live = $derived(
-    info?.agent_live === null || info?.agent_live === undefined
-      ? 'unknown'
-      : info.agent_live
-        ? 'live'
-        : 'idle'
+    !info?.session_state ? 'unknown' : info.session_state === 'ready' ? 'live' : info.session_state
   );
 
   async function refresh() {
@@ -74,24 +70,16 @@
         >model <b class="text-term-fg" data-testid="id-model">{info.model ?? 'unknown yet'}</b
         ></span
       >
-      <span>policy <b class="text-term-fg" data-testid="id-policy">{info.approval_policy}</b></span>
       <span
-        >native session <b class="text-term-fg" data-testid="id-native"
-          >{info.native_session_id ?? 'pending'}</b
-        ></span
+        >kagent agent <b class="text-term-fg" data-testid="id-agent">{info.agent_name}</b></span
       >
-      <span>
-        workspace actor <b class="text-term-fg" data-testid="id-workspace">{info.workspace_name}</b>
-        {info.workspace_ready ? 'ready' : 'not ready'}
-      </span>
       <span
-        >agent {info.agent_live === null
-          ? 'unknown'
-          : info.agent_live
-            ? 'live'
-            : 'not running (resumes on next message)'}</span
+        >session <b class="text-term-fg" data-testid="id-session"
+          >{info.kagent_session_id?.slice(0, 8) ?? 'pending'}</b
+        >
+        {info.session_state ?? 'unknown'}</span
       >
-      <span>gen <b class="text-term-fg" data-testid="id-gen">{info.generation}</b></span>
+      <span>turns <b class="text-term-fg" data-testid="id-turns">{info.turns}</b></span>
       {#if info.role && info.role !== 'agent'}
         <span>role <b class="text-term-accent" data-testid="id-role">{info.role}</b></span>
       {/if}
@@ -105,20 +93,6 @@
       {#if info.topic}
         <span>topic <b class="text-term-fg" data-testid="id-topic">{info.topic}</b></span>
       {/if}
-      {#if info.role === 'main'}
-        <span>
-          window <b class="text-term-fg" data-testid="id-lineage">#{info.lineage_seq}</b>
-          {info.turns_in_lineage} turns, context {info.context_tokens ?? '-'} (baseline {info.baseline_tokens ??
-            '-'})
-          {info.rotating ? 'ROTATING' : ''}
-        </span>
-        <span
-          >native compactions <b class="text-term-fg" data-testid="id-compactions"
-            >{info.continuations ?? 0}</b
-          ></span
-        >
-      {/if}
-      <span>journal {info.journal_ref ?? '-'} @ {info.journal_cursor}</span>
     </div>
     {#if info.note}
       <div class="text-term-yellow mt-1" data-testid="id-note">{info.note}</div>

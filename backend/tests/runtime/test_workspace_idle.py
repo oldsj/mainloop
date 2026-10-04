@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from mainloop.runtime import native_sessions
 from mainloop.runtime import workspace_adapter as adapter
-from mainloop.runtime.contracts import ContractError
+from mainloop.runtime.workspace_adapter import ContractError
 
 from models import (
     WorkspaceDesiredState,
@@ -92,10 +92,12 @@ class WorkspaceIdleTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(adapter, "touch_workspace", new=AsyncMock()) as touch,
             patch.object(native_sessions, "_lock", return_value=asyncio.Lock()),
-            patch.object(native_sessions, "_open_count", new=AsyncMock(return_value=1)),
             patch.object(
-                native_sessions,
-                "_record_delivery_message",
+                native_sessions.ledger, "open_count", new=AsyncMock(return_value=1)
+            ),
+            patch.object(
+                native_sessions.ledger,
+                "record_message",
                 new=AsyncMock(return_value="message-1"),
             ),
         ):

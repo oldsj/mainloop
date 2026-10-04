@@ -135,6 +135,9 @@ async def shutdown_event():
     if task is not None:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+    from mainloop.runtime import native_sessions
+
+    await native_sessions.close_client()
     await db.disconnect()
 
 
@@ -170,7 +173,6 @@ async def sse_events(
     """SSE endpoint for real-time updates.
 
     Streams events for:
-    - task:updated - when a task status changes
     - inbox:updated - when inbox items change
     - heartbeat - periodic keepalive (every 30s)
 
@@ -234,8 +236,9 @@ async def chat(
 
 
 async def _chat_native(request: ChatRequest, user_id: str) -> ChatResponse:
-    """Record and deliver to the native main session through the Substrate workspace. The
-    reply is mirrored from the native journal, so the client polls the conversation."""
+    """Record and deliver to the native main session through kagent. The reply is mirrored from
+    the A2A task, so the client polls the conversation.
+    """
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
@@ -269,10 +272,7 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
-    # A rotation holds the session lock for the cut; do not queue behind it, so the UI can
-    # show "rotating" while it happens (the reconcile loop mirrors journal evidence anyway).
-    if not native_sessions.is_rotating(binding["session_id"]):
-        await native_sessions.sync(binding["session_id"])
+    await native_sessions.sync(binding["session_id"])
     session = await db.get_session(binding["session_id"])
     topics = await delegation._topic_lines(user_id)
     return MainThreadInfo(
@@ -282,17 +282,6 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
         native=await native_sessions.identity(binding["session_id"]),
         topics=[asdict(t) for t in topics],
     )
-
-
-@app.post("/main-thread/rotate")
-async def rotate_main_thread(user_id: str = Header(alias="X-User-ID", default=None)):
-    """Force a rotation now (same path as the automatic trigger); used to prove the cut."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-    from mainloop.runtime import delegation, native_sessions
-
-    binding = await delegation.ensure_main_session(user_id)
-    return await native_sessions.rotate(binding["session_id"], "manual")
 
 
 @app.get("/topics")
@@ -360,7 +349,7 @@ async def get_conversation(conversation_id: str):
                WHERE b.role='main' AND s.conversation_id=$1""",
             conversation_id,
         )
-    if main_sid and not native_sessions.is_rotating(main_sid):
+    if main_sid:
         await native_sessions.sync(main_sid)
 
     messages = await db.get_messages(conversation_id)
@@ -719,9 +708,7 @@ async def get_session_conversation(session_id: str):
     from mainloop.runtime import native_sessions
 
     if await native_sessions.get_binding(session_id):
-        await native_sessions.sync(
-            session_id
-        )  # mirror new native-journal evidence first
+        await native_sessions.sync(session_id)  # observe the A2A task first
         session = await db.get_session(session_id)
 
     messages = await db.get_messages(session.conversation_id)

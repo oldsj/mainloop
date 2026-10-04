@@ -1,52 +1,24 @@
 """Workspace lifecycle endpoints for branch workspace actors."""
 
-import json
-import uuid
-from datetime import UTC, datetime
-from typing import Annotated, Literal
-
 from fastapi import APIRouter, Header, HTTPException, Response
-from fastapi.responses import JSONResponse
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime import workspace_adapter
 from mainloop.runtime.actor_provisioner import get_actor_provisioner
-from mainloop.runtime.contracts import ContractError
 from mainloop.runtime.credential_broker import CredentialBroker, CredentialBrokerError
 from mainloop.runtime.credential_reauth import (
     CredentialReauthRunner,
     KubernetesCredentialReauthRunner,
 )
 from mainloop.runtime.preview_proxy import workspace_preview_ports
+from mainloop.runtime.workspace_adapter import ContractError
 from mainloop.sse import notify_workspace_updated
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
-from models import (
-    WorkspaceAgentKind,
-    WorkspaceDev,
-    WorkspaceLifecycle,
-    WorkspaceManifest,
-    WorkspaceObservedState,
-)
+from models import WorkspaceLifecycle
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 _reauth_runner: CredentialReauthRunner = KubernetesCredentialReauthRunner()
 _reauth_owners: dict[str, tuple[str, str]] = {}
-
-
-class CreateWorkspaceRequest(BaseModel):
-    project_id: Annotated[StrictStr, Field(min_length=1)]
-    branch: Annotated[StrictStr, Field(min_length=1)]
-    dev: WorkspaceDev
-    agent_kind: Literal["claude", "codex"] = "claude"
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    @field_validator("branch")
-    @classmethod
-    def validate_branch_name(cls, value: str) -> str:
-        WorkspaceManifest(branch=value, resource_class="default")
-        return value
 
 
 def _user_id(value: str | None) -> str:
@@ -72,126 +44,18 @@ async def _publish(user_id: str, lifecycle: WorkspaceLifecycle) -> None:
     await notify_workspace_updated(user_id, lifecycle.model_dump(mode="json"))
 
 
-@router.post("", response_model=WorkspaceLifecycle)
-async def create_workspace(
-    request: CreateWorkspaceRequest,
-    user_id: str | None = Header(default=None, alias="X-User-ID"),
-):
-    """Create a branch workspace and its independent Substrate actor."""
-    owner = _user_id(user_id)
-    workspace_id = str(uuid.uuid4())
-    actor_name = f"ml-{workspace_id[:16]}"
-    atespace = settings.substrate_atespace
-    shim_token_secret_name = settings.shim_token_secret_name(atespace, actor_name)
-    template = request.dev.actor_template or settings.substrate_actor_template
+WORKSPACES_MOVING = "workspaces move to kagent in a later slice"
 
-    async with db.connection() as conn:
-        project = await conn.fetchrow(
-            "SELECT id, html_url FROM projects WHERE id=$1 AND user_id=$2",
-            request.project_id,
-            owner,
-        )
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
 
-        manifest = WorkspaceManifest(
-            repo_url=project["html_url"],
-            branch=request.branch,
-            agent_kinds=(WorkspaceAgentKind(request.agent_kind),),
-            resource_class="default",
-            dev=request.dev,
-        )
-        conversation_id = str(uuid.uuid4())
-        now = datetime.now(UTC)
-        async with conn.transaction():
-            thread = await conn.fetchrow(
-                "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
-                owner,
-            )
-            thread_id = thread["id"] if thread else str(uuid.uuid4())
-            if thread is None:
-                await conn.execute(
-                    "INSERT INTO main_threads (id,user_id) VALUES ($1,$2)",
-                    thread_id,
-                    owner,
-                )
-            await conn.execute(
-                "INSERT INTO conversations (id,user_id,title) VALUES ($1,$2,$3)",
-                conversation_id,
-                owner,
-                f"{project['id']} · {request.branch}",
-            )
-            await conn.execute(
-                """INSERT INTO sessions
-                   (id,user_id,main_thread_id,title,description,prompt,conversation_id,
-                    status,created_at,repo_url,project_id,branch_name,base_branch)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,$11,$12)""",
-                workspace_id,
-                owner,
-                thread_id,
-                f"{project['id']} · {request.branch}",
-                "Branch development workspace",
-                "Development workspace",
-                conversation_id,
-                now,
-                project["html_url"],
-                request.project_id,
-                request.branch,
-                request.branch,
-            )
-            await conn.execute(
-                """INSERT INTO workspace_bindings
-                   (workspace_id,atespace,actor_name,actor_template,
-                    shim_token_secret_name,observed_state,desired_state,created_at,updated_at)
-                   VALUES ($1,$2,$3,$4,$5,'unknown','active',$6,$6)""",
-                workspace_id,
-                atespace,
-                actor_name,
-                template,
-                shim_token_secret_name,
-                now,
-            )
-            await conn.execute(
-                """INSERT INTO workspace_lifecycles
-                   (workspace_id,desired_state,observed_state,manifest,conditions,
-                    last_activity_at,updated_at)
-                   VALUES ($1,'running','unknown',$2::jsonb,'[]'::jsonb,$3,$3)""",
-                workspace_id,
-                json.dumps(manifest.model_dump(mode="json")),
-                now,
-            )
-            from mainloop.runtime import native_sessions
+@router.post("", status_code=409)
+async def create_workspace() -> None:
+    """Refuse new branch workspaces until they are created as kagent Sessions.
 
-            await native_sessions.create_binding(
-                workspace_id, request.agent_kind, conn=conn
-            )
-
-    try:
-        provisioner = get_actor_provisioner()
-        provisioned = await provisioner.create(
-            atespace=atespace,
-            actor_name=actor_name,
-            template=template,
-            shim_token_secret_name=shim_token_secret_name,
-        )
-        lifecycle = await workspace_adapter._record_observation(
-            workspace_id, actor=provisioned.actor
-        )
-    except Exception:
-        # The row and actor identity are durable before the external call. Keep them so a
-        # refresh can reconcile an outcome that timed out instead of creating a second actor.
-        lifecycle = await workspace_adapter._record_observation(
-            workspace_id,
-            failure=(
-                WorkspaceObservedState.UNKNOWN,
-                "ProvisioningUncertain",
-                "Actor provisioning did not return a confirmed result. Refresh status before retrying.",
-            ),
-        )
-        await _publish(owner, lifecycle)
-        return JSONResponse(status_code=202, content=lifecycle.model_dump(mode="json"))
-    await _publish(owner, lifecycle)
-    return lifecycle
+    Agent turns already run in kagent; a workspace created here would put its repository and
+    preview in a separate Substrate actor that the agent never sees. Existing workspaces keep
+    their other routes.
+    """
+    raise HTTPException(status_code=409, detail=WORKSPACES_MOVING)
 
 
 @router.get("", response_model=list[WorkspaceLifecycle])
@@ -330,12 +194,6 @@ async def delete_workspace(
             async with conn.transaction():
                 await conn.execute(
                     "DELETE FROM native_deliveries WHERE session_id=$1", workspace_id
-                )
-                await conn.execute(
-                    "DELETE FROM native_events WHERE session_id=$1", workspace_id
-                )
-                await conn.execute(
-                    "DELETE FROM native_lineage WHERE session_id=$1", workspace_id
                 )
                 await conn.execute(
                     "DELETE FROM native_bindings WHERE session_id=$1", workspace_id

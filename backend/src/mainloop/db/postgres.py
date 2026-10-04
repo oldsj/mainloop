@@ -163,29 +163,24 @@ CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 
--- Native agent bindings (one per session bound to a real agent in a Substrate workspace)
+-- Native agent bindings: one per session bound to a kagent Session (Claude or Codex Agent)
 CREATE TABLE IF NOT EXISTS native_bindings (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id),
     kind TEXT NOT NULL,
-    agent_name TEXT NOT NULL,
-    native_session_id TEXT,
-    approval_policy TEXT NOT NULL,
+    kagent_session_id TEXT,      -- kagent Session id, equal to the A2A contextId; NULL until created
+    kagent_request_id TEXT,      -- CreateSession request id of a replacement Session; NULL = derived
     model TEXT,
-    generation INTEGER NOT NULL DEFAULT 1,
-    journal_cursor INTEGER NOT NULL DEFAULT 0,
-    journal_ref TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Delivery ledger: one row per user message; the journal is the receipt
+-- Delivery ledger: one row per message; the A2A task is the receipt
 CREATE TABLE IF NOT EXISTS native_deliveries (
     message_id TEXT PRIMARY KEY REFERENCES messages(id),
     session_id TEXT NOT NULL REFERENCES sessions(id),
     state TEXT NOT NULL,
-    cursor_before INTEGER,
+    task_id TEXT,
     evidence_ref TEXT,
     detail TEXT,
-    generation INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -197,12 +192,41 @@ ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS topic_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS token_hash TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS standing_hash TEXT;
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS lineage_seq INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS context_tokens INTEGER;
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS baseline_tokens INTEGER;
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS turns_in_lineage INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS reported_at TIMESTAMPTZ;
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS continuations INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_session_id TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_request_id TEXT;
+ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS task_id TEXT;
+-- The Substrate journal transport is gone: its cursors, lineage and events have no meaning on kagent.
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS agent_name;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS native_session_id;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS approval_policy;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS generation;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS journal_cursor;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS journal_ref;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS lineage_seq;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS context_tokens;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS baseline_tokens;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS turns_in_lineage;
+ALTER TABLE native_bindings DROP COLUMN IF EXISTS continuations;
+-- A delivery still open at the cutover has no kagent task and its binding has no kagent Session
+-- yet, so nothing could resolve it and it would block the session for good. Settle it as unknown
+-- (never replayed). The legacy cursor column marks the one run that sees Substrate-era rows.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name='native_deliveries' AND column_name='cursor_before') THEN
+        UPDATE native_deliveries
+           SET state='uncertain',
+               detail='open at the kagent cutover, outcome unknown; not replayed',
+               updated_at=NOW()
+         WHERE state IN ('recorded','sending','delivered');
+    END IF;
+END $$;
+ALTER TABLE native_deliveries DROP COLUMN IF EXISTS cursor_before;
+ALTER TABLE native_deliveries DROP COLUMN IF EXISTS generation;
+DROP TABLE IF EXISTS native_lineage;
+DROP TABLE IF EXISTS native_events;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 -- Cancelling used to record status failed + this error text (and agent sync could then revive
 -- it). Cancelled is its own status now; correct the old rows. Idempotent.
@@ -287,31 +311,6 @@ CREATE TABLE IF NOT EXISTS topic_records (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_topic_records_topic ON topic_records(topic_id, created_at);
-
--- Lineage of native sessions behind one main-thread binding (rotation, never compaction).
-CREATE TABLE IF NOT EXISTS native_lineage (
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    seq INTEGER NOT NULL,
-    native_session_id TEXT NOT NULL,
-    started_reason TEXT NOT NULL,
-    carry_over_hash TEXT,
-    ended_reason TEXT,
-    writeout TEXT,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    ended_at TIMESTAMPTZ,
-    PRIMARY KEY (session_id, seq)
-);
-
--- Control-plane events observed in native journals (idempotent per evidence ref).
-CREATE TABLE IF NOT EXISTS native_events (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    kind TEXT NOT NULL,          -- continuation
-    detail TEXT,
-    evidence_ref TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (session_id, kind, evidence_ref)
-);
 
 -- Session notifications (ephemeral)
 CREATE TABLE IF NOT EXISTS session_notifications (
@@ -1371,61 +1370,65 @@ class Database:
 
     # ============= Session Operations =============
 
-    async def create_session(self, session: Session) -> Session:
-        """Create a new session."""
-        if not self._pool:
+    async def create_session(
+        self, session: Session, *, conn: Any | None = None
+    ) -> Session:
+        """Create a new session, optionally inside a caller-owned transaction."""
+        if not self._pool and conn is None:
             return session
-        async with self.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO sessions
-                (id, user_id, main_thread_id, title, description, prompt,
-                 conversation_id, status, worker_pod_name, created_at,
-                 started_at, completed_at, summary, error,
-                 repo_url, project_id, branch_name, base_branch, model,
-                 issue_url, issue_number, issue_etag, issue_last_modified,
-                 pr_url, pr_number, pr_etag, pr_last_modified, commit_sha,
-                 anchor_message_id, color, result)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                        $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
-                        $29, $30, $31)
-                """,
-                session.id,
-                session.user_id,
-                session.main_thread_id,
-                session.title,
-                session.description,
-                session.prompt,
-                session.conversation_id,
-                session.status.value,
-                session.worker_pod_name,
-                session.created_at,
-                session.started_at,
-                session.completed_at,
-                session.summary,
-                session.error,
-                # Code work fields
-                session.repo_url,
-                session.project_id,
-                session.branch_name,
-                session.base_branch,
-                session.model,
-                # GitHub issue fields
-                session.issue_url,
-                session.issue_number,
-                session.issue_etag,
-                session.issue_last_modified,
-                # GitHub PR fields
-                session.pr_url,
-                session.pr_number,
-                session.pr_etag,
-                session.pr_last_modified,
-                session.commit_sha,
-                # Inline thread anchoring
-                session.anchor_message_id,
-                session.color,
-                json.dumps(session.result) if session.result else None,
-            )
+        if conn is None:
+            async with self.connection() as connection:
+                return await self.create_session(session, conn=connection)
+        await conn.execute(
+            """
+            INSERT INTO sessions
+            (id, user_id, main_thread_id, title, description, prompt,
+             conversation_id, status, worker_pod_name, created_at,
+             started_at, completed_at, summary, error,
+             repo_url, project_id, branch_name, base_branch, model,
+             issue_url, issue_number, issue_etag, issue_last_modified,
+             pr_url, pr_number, pr_etag, pr_last_modified, commit_sha,
+             anchor_message_id, color, result)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
+                    $29, $30, $31)
+            """,
+            session.id,
+            session.user_id,
+            session.main_thread_id,
+            session.title,
+            session.description,
+            session.prompt,
+            session.conversation_id,
+            session.status.value,
+            session.worker_pod_name,
+            session.created_at,
+            session.started_at,
+            session.completed_at,
+            session.summary,
+            session.error,
+            # Code work fields
+            session.repo_url,
+            session.project_id,
+            session.branch_name,
+            session.base_branch,
+            session.model,
+            # GitHub issue fields
+            session.issue_url,
+            session.issue_number,
+            session.issue_etag,
+            session.issue_last_modified,
+            # GitHub PR fields
+            session.pr_url,
+            session.pr_number,
+            session.pr_etag,
+            session.pr_last_modified,
+            session.commit_sha,
+            # Inline thread anchoring
+            session.anchor_message_id,
+            session.color,
+            json.dumps(session.result) if session.result else None,
+        )
         return session
 
     async def get_session(self, session_id: str) -> Session | None:
