@@ -25,3 +25,5 @@ spec:
             # Mock GitHub API (no real GitHub calls in tests)
             - name: USE_MOCK_GITHUB
               value: 'true'
+        - name: mcp
+          imagePullPolicy: Never

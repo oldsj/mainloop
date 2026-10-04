@@ -32,7 +32,7 @@ from typing import Any
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime import workspace_adapter
-from mainloop.runtime.agent_api import hash_token, token_for
+from mainloop.runtime.agent_identity import hash_token, token_for
 from mainloop.runtime.kagent_client import (
     A2AError,
     AgentRef,
@@ -40,6 +40,7 @@ from mainloop.runtime.kagent_client import (
     KagentError,
     KagentSession,
     OutcomeUnknown,
+    RuntimeOperation,
     RuntimeState,
     SendNotAccepted,
     SessionError,
@@ -126,8 +127,10 @@ async def close_client() -> None:
         _client = None
 
 
-def agent_name(kind: str) -> str:
+def agent_name(kind: str, role: str = "agent") -> str:
     """Return the kagent Agent that runs a native agent kind."""
+    if role == "main":
+        return settings.kagent_main_agent
     if kind == "claude":
         return settings.kagent_claude_agent
     if kind == "codex":
@@ -135,8 +138,8 @@ def agent_name(kind: str) -> str:
     raise ValueError(f"no kagent Agent is configured for native agent {kind}")
 
 
-def agent_ref(kind: str) -> AgentRef:
-    return AgentRef(settings.kagent_namespace, agent_name(kind))
+def agent_ref(kind: str, role: str = "agent") -> AgentRef:
+    return AgentRef(settings.kagent_namespace, agent_name(kind, role))
 
 
 def create_request_id(session_id: str) -> str:
@@ -217,6 +220,7 @@ class Ledger:
                        SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
                            updated_at=NOW()
                        WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
+                         AND child_start_failure IS NULL
                        RETURNING session_id""",
                     session_id,
                     old_kagent_session_id,
@@ -358,7 +362,17 @@ class Ledger:
         detail: str | None = None,
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
-        async with db.connection() as conn:
+        async with db.connection() as conn, conn.transaction():
+            if state == "sending":
+                # Serialize the send claim with durable startup disposal intent.
+                binding = await conn.fetchrow(
+                    """SELECT b.child_start_failure FROM native_bindings b
+                       JOIN native_deliveries d ON d.session_id=b.session_id
+                       WHERE d.message_id=$1 FOR UPDATE OF b""",
+                    message_id,
+                )
+                if binding and binding["child_start_failure"]:
+                    return False
             row = await conn.fetchval(
                 """UPDATE native_deliveries SET state=$2, task_id=COALESCE($3, task_id),
                    evidence_ref=COALESCE($4, evidence_ref),
@@ -373,6 +387,30 @@ class Ledger:
                 list(from_states),
             )
         return row is not None
+
+    async def remember_child_start_failure(self, session_id: str, reason: str) -> bool:
+        """Disposal intent wins only before any process claims the initial brief."""
+        async with db.connection() as conn, conn.transaction():
+            binding = await conn.fetchrow(
+                "SELECT role, turns FROM native_bindings WHERE session_id=$1 FOR UPDATE",
+                session_id,
+            )
+            if not binding or binding["role"] != "child" or binding["turns"]:
+                return False
+            claimed = await conn.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM native_deliveries WHERE session_id=$1
+                   AND state IN ('sending','delivered','completed','uncertain'))""",
+                session_id,
+            )
+            if claimed:
+                return False
+            await conn.execute(
+                """UPDATE native_bindings SET child_start_failure=COALESCE(child_start_failure,$2),
+                   updated_at=NOW() WHERE session_id=$1""",
+                session_id,
+                reason,
+            )
+        return True
 
     async def deliveries(self, session_id: str) -> list[dict]:
         async with db.connection() as conn:
@@ -572,6 +610,105 @@ async def _replace_kagent_session(binding: dict) -> None:
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
 
 
+class ChildStartPending(Exception):
+    """The initial brief is unsent; reconcile the same Session before disposal."""
+
+
+class ChildStartRejected(SessionError):
+    """Create rejected the request before reservation; no actor needs disposal."""
+
+
+class ChildStartDisposed(SessionError):
+    """Startup failed after the reserved actor's absence/disposal was confirmed."""
+
+
+async def _fail_child_start(binding: dict, reason: str) -> None:
+    current = await db.get_session(binding["session_id"])
+    if current is not None and current.status not in ENDED_STATUSES:
+        await db.update_session(
+            binding["session_id"], status=SessionStatus.FAILED, error=reason
+        )
+    await ledger.fail_open(binding["session_id"], f"child startup failed: {reason}")
+
+
+async def _settle_child_start_failure(binding: dict) -> None:
+    """Resume admitted lifecycle work on the same actor before revoking its identity."""
+    reason = binding["child_start_failure"]
+    if binding["kagent_session_id"] is None:
+        # A response or the binding write may have been lost after reservation.
+        # Recover the same receipt; never allocate another request or replay the brief.
+        try:
+            session = await _create_bound_session(binding)
+        except SessionError as exc:
+            if _create_hit_deleted(exc):
+                await _fail_child_start(binding, reason)
+                raise ChildStartDisposed(f"child startup failed: {reason}") from exc
+            raise ChildStartPending(reason) from exc
+        except KagentError as exc:
+            raise ChildStartPending(reason) from exc
+        binding["kagent_session_id"] = session.id
+    # Also persist an identity held only in the failed creator's local binding.
+    await ledger.update_binding(
+        binding["session_id"], kagent_session_id=binding["kagent_session_id"]
+    )
+    try:
+        session = await get_client().get_session(binding["kagent_session_id"])
+    except SessionError as exc:
+        if exc.grpc_status != 5:
+            raise ChildStartPending(reason) from exc
+        session = None
+    except KagentError as exc:
+        raise ChildStartPending(reason) from exc
+    if session is not None:
+        try:
+            if not session.settled and session.operation == RuntimeOperation.CREATE:
+                recovered = await _create_bound_session(binding)
+                if recovered.id != session.id:
+                    raise ChildStartPending(
+                        "create reconciliation returned another actor"
+                    )
+                session = recovered
+            if not session.settled and session.operation != RuntimeOperation.DELETE:
+                raise ChildStartPending(reason)
+            if session.state != RuntimeState.DELETED or not session.settled:
+                session = await get_client().delete_session(session.id)
+        except KagentError as exc:
+            raise ChildStartPending(reason) from exc
+        if session.state != RuntimeState.DELETED or not session.settled:
+            raise ChildStartPending(reason)
+    await _fail_child_start(binding, reason)
+    raise ChildStartDisposed(f"child startup failed: {reason}")
+
+
+async def _remember_child_start_failure(binding: dict, reason: str) -> bool:
+    remembered = await ledger.remember_child_start_failure(
+        binding["session_id"], reason
+    )
+    if remembered:
+        binding["child_start_failure"] = reason
+    return remembered
+
+
+async def _create_bound_session(binding: dict) -> KagentSession:
+    from mainloop.runtime.agent_credentials import credentials
+
+    refs = ()
+    if binding["role"] in ("main", "child"):
+        if not binding.get("token_hash"):
+            raise RuntimeError("binding identity is revoked")
+        try:
+            refs = (await credentials.publish(binding["session_id"]),)
+        except Exception as exc:
+            if binding.get("child_start_failure"):
+                raise ChildStartPending(str(exc)) from exc
+            raise
+    return await get_client().create_session(
+        agent_ref(binding["kind"], binding["role"]),
+        request_id=_request_id(binding),
+        credentials=refs,
+    )
+
+
 async def _ensure_kagent_session(binding: dict) -> KagentSession:
     """Return the binding's kagent Session, ready for a turn.
 
@@ -580,22 +717,45 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
     the standing context again, because ``standing_hash`` belongs to the Session it went to.
     """
     client = get_client()
+    binding.update(await ledger.get_binding(binding["session_id"]) or {})
     for replaced in (False, True):
         if binding["kagent_session_id"] is None:
             try:
-                session = await client.create_session(
-                    agent_ref(binding["kind"]), request_id=_request_id(binding)
-                )
+                session = await _create_bound_session(binding)
+            except OutcomeUnknown as exc:
+                if binding["role"] == "child" and not binding["turns"]:
+                    await _remember_child_start_failure(
+                        binding, f"creation outcome unknown: {exc}"
+                    )
+                    raise ChildStartPending(str(exc)) from exc
+                raise
             except SessionError as exc:
+                if binding.get("child_start_failure"):
+                    if _create_hit_deleted(exc):
+                        await _fail_child_start(binding, binding["child_start_failure"])
+                        raise ChildStartDisposed(str(exc)) from exc
+                    raise ChildStartPending(str(exc)) from exc
                 if replaced or not _create_hit_deleted(exc):
+                    if (
+                        binding["role"] == "child"
+                        and not binding["turns"]
+                        and exc.grpc_status in (3, 7, 16)
+                    ):
+                        raise ChildStartRejected(
+                            str(exc), grpc_status=exc.grpc_status
+                        ) from exc
                     raise
                 await _replace_kagent_session(binding)
                 continue
+            # Keep the admitted identity locally even if its database write fails.
+            binding.update(kagent_session_id=session.id, standing_hash=None)
             await ledger.update_binding(
                 binding["session_id"], kagent_session_id=session.id, standing_hash=None
             )
-            binding.update(kagent_session_id=session.id, standing_hash=None)
+            binding.update(await ledger.get_binding(binding["session_id"]) or {})
         else:
+            if binding.get("child_start_failure"):
+                await _settle_child_start_failure(binding)
             live = await _live_session(binding["kagent_session_id"])
             if live is None:
                 if replaced:
@@ -603,9 +763,21 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
                 await _replace_kagent_session(binding)
                 continue
             session = live
-        return await client.ensure_ready(
-            session, timeout=settings.kagent_session_ready_timeout_seconds
-        )
+        if binding.get("child_start_failure"):
+            await _settle_child_start_failure(binding)
+        try:
+            return await client.ensure_ready(
+                session, timeout=settings.kagent_session_ready_timeout_seconds
+            )
+        except KagentError as exc:
+            if binding["role"] != "child" or binding["turns"]:
+                raise
+            if not await _remember_child_start_failure(
+                binding, f"readiness failed: {exc}"
+            ):
+                raise ChildStartPending(str(exc)) from exc
+            await _settle_child_start_failure(binding)
+            raise
     raise AssertionError("unreachable")
 
 
@@ -631,12 +803,52 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
             # cancelled or another pass already took it: there is nothing to send.
             if await ledger.delivery_state(message_id) != "recorded":
                 return
+            binding = None
             try:
                 binding = await get_binding(session_id)
                 await _ensure_kagent_session(binding)  # not attempted => nothing sent
                 prompt, standing_hash = await _with_standing(binding, text)
+            except ChildStartPending as exc:
+                await ledger.transition(
+                    message_id,
+                    "recorded",
+                    from_states=("recorded",),
+                    detail=f"startup reconciliation pending: {exc}",
+                )
+                return
             except Exception as exc:
                 logger.exception("delivery not attempted for %s", message_id)
+                if (
+                    binding is not None
+                    and binding["role"] == "child"
+                    and not binding["turns"]
+                ):
+                    if isinstance(exc, ChildStartDisposed):
+                        return
+                    had_intent = bool(binding.get("child_start_failure"))
+                    if not await _remember_child_start_failure(binding, str(exc)):
+                        return
+                    if (
+                        isinstance(exc, ChildStartRejected)
+                        and binding["kagent_session_id"] is None
+                        and not had_intent
+                    ):
+                        await _fail_child_start(binding, str(exc))
+                        return
+                    try:
+                        await _settle_child_start_failure(binding)
+                    except ChildStartDisposed:
+                        return
+                    except Exception as pending:
+                        # Observation, lifecycle or DB errors are not disposal evidence.
+                        # Durable intent and the recorded brief remain retryable.
+                        await ledger.transition(
+                            message_id,
+                            "recorded",
+                            from_states=("recorded",),
+                            detail=f"startup reconciliation pending: {pending}",
+                        )
+                        return
                 await ledger.transition(
                     message_id,
                     "failed",
@@ -651,7 +863,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                 return
         if prompt is not None:
             events = get_client().send_message(
-                agent_ref(binding["kind"]),
+                agent_ref(binding["kind"], binding["role"]),
                 text=prompt,
                 message_id=message_id,
                 context_id=binding["kagent_session_id"],
@@ -764,7 +976,7 @@ async def _resolve(
     With a task id the current task replaces the projection. Without one, ``ListTasks`` is
     searched for the message id; if nothing shows the message, the delivery is ``uncertain``.
     """
-    agent = agent_ref(binding["kind"])
+    agent = agent_ref(binding["kind"], binding["role"])
     try:
         client = get_client()
         if proj.task_id:
@@ -906,7 +1118,7 @@ async def sync(session_id: str) -> None:
 
 async def _observe(session_id: str, binding: dict, delivery: dict) -> str | None:
     message_id = delivery["message_id"]
-    agent = agent_ref(binding["kind"])
+    agent = agent_ref(binding["kind"], binding["role"])
     client = get_client()
     try:
         if delivery["task_id"]:
@@ -984,7 +1196,9 @@ async def _follow(
 ) -> None:
     """Reattach to a running task after a restart or a dropped stream (SubscribeToTask)."""
     try:
-        events = get_client().subscribe_to_task(agent_ref(binding["kind"]), task_id)
+        events = get_client().subscribe_to_task(
+            agent_ref(binding["kind"], binding["role"]), task_id
+        )
         reply = await _consume(session_id, message_id, binding, events, snapshot=True)
     finally:
         _streaming.discard(message_id)
@@ -1007,7 +1221,7 @@ async def cancel(session_id: str) -> str:
         opened = await ledger.fail_open(session_id, "cancelled by user")
         if binding is None or binding["kagent_session_id"] is None:
             return "not_running"
-        agent = agent_ref(binding["kind"])
+        agent = agent_ref(binding["kind"], binding["role"])
         client = get_client()
         outcome = "not_running"
         for delivery in opened:
@@ -1045,6 +1259,9 @@ async def reconcile_loop(interval: float = 3.0) -> None:
                 await sync(sid)
             loop = asyncio.get_running_loop()
             if loop.time() >= next_idle_check:
+                from mainloop.runtime.agent_credentials import reconcile_cleanup
+
+                await reconcile_cleanup()
                 await workspace_adapter.suspend_idle_workspaces()
                 next_idle_check = loop.time() + 60.0
         except Exception:
@@ -1089,7 +1306,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         role=binding["role"],
         parent_session_id=binding["parent_session_id"],
         topic=topic,
-        agent_name=agent_name(binding["kind"]),
+        agent_name=agent_name(binding["kind"], binding["role"]),
         kagent_session_id=binding["kagent_session_id"],
         session_state=state,
         model=binding["model"],

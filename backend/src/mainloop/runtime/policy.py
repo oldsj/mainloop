@@ -1,6 +1,6 @@
-"""Server-side spawn policy for the ``mainloop`` CLI (owner decision D7).
+"""Server-side spawn policy for the Mainloop MCP tools (owner decision D7).
 
-Agents cannot bypass these rules: the CLI only forwards requests, and every request is checked
+Agents cannot bypass these rules: the MCP transport forwards requests, and every request is checked
 here against control-plane state. Pure functions; callers pass in the counts they read.
 """
 
@@ -87,3 +87,33 @@ def may_report(actor: Actor) -> None:
 REPORT_MAX_CHARS = 4000
 READ_MAX_CHARS = 4000
 NOTE_MAX_CHARS = 2000
+
+
+# One role table controls discovery and invocation. Slice b extends these roles.
+_COMMON_TOOLS = frozenset({"whoami", "note", "decide"})
+ROLE_TOOLS = {
+    "main": _COMMON_TOOLS
+    | frozenset(
+        {
+            "topics",
+            "topic_open",
+            "pending_add",
+            "pending_done",
+            "delegate",
+            "status",
+            "read",
+            "cancel",
+            "clear",
+        }
+    ),
+    "child": _COMMON_TOOLS | frozenset({"report"}),
+}
+
+
+def tools_for(actor: Actor) -> frozenset[str]:
+    return ROLE_TOOLS.get(actor.role, frozenset())
+
+
+def may_call(actor: Actor, tool: str) -> None:
+    if tool not in tools_for(actor):
+        raise PolicyError("role", f"a {actor.role} agent may not call {tool}")

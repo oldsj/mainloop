@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mainloop-agent-tokens
+  namespace: kagent
+# Bootstrap only. GitOps must preserve runtime-managed data keys.
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-agent-tokens
+  namespace: kagent
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [mainloop-agent-tokens]
+    verbs: [get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-agent-tokens
+  namespace: kagent
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-backend
+    namespace: mainloop
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-agent-tokens

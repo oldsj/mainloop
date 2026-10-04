@@ -2,10 +2,8 @@
 
 import unittest
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from mainloop.runtime import agent_api, policy
-from mainloop.runtime.agent_api import AgentService, hash_token
+from mainloop.runtime import agent_tools, policy
+from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.policy import Actor, PolicyError
 from mainloop.runtime.standing import (
     RecentMessage,
@@ -90,7 +88,7 @@ class StandingTests(unittest.TestCase):
             StandingInputs(role="child", recent=[RecentMessage("user", "SECRET")])
         )
         self.assertNotIn("SECRET", text)
-        self.assertIn("mainloop report", text)
+        self.assertIn("`report` tool exactly once", text)
 
     def test_hash_is_stable(self):
         self.assertEqual(content_hash("a"), content_hash("a"))
@@ -98,7 +96,7 @@ class StandingTests(unittest.TestCase):
 
 
 class FakeStore:
-    """In-memory ``agent_api.Store``: a main binding, and whatever children it spawns."""
+    """In-memory ``agent_tools.Store``: a main binding, and whatever children it spawns."""
 
     def __init__(self):
         self.bindings = {
@@ -258,241 +256,10 @@ class FakeStore:
         return "standing"
 
 
-class AgentApiTests(unittest.TestCase):
-    def setUp(self):
-        self.store = FakeStore()
-        self.service = AgentService(self.store, KINDS)
-        app = FastAPI()
-        app.include_router(agent_api.router)
-        app.dependency_overrides[agent_api.get_service] = lambda: self.service
-        self.client = TestClient(app)
-        self.main = {"Authorization": "Bearer tok-main"}
-
-    def child_headers(self, sid):
-        return {"Authorization": f"Bearer tok-{sid}"}
-
-    def delegate(self, headers=None, kind="codex"):
-        return self.client.post(
-            "/agent-api/delegate",
-            json={"topic": "billing", "kind": kind, "title": "t", "brief": "do it"},
-            headers=headers or self.main,
-        )
-
-    def test_requires_a_known_token(self):
-        self.assertEqual(self.client.get("/agent-api/topics").status_code, 401)
-        self.assertEqual(
-            self.client.get(
-                "/agent-api/topics", headers={"Authorization": "Bearer nope"}
-            ).status_code,
-            401,
-        )
-
-    def test_topic_records_and_pending_close(self):
-        self.client.post(
-            "/agent-api/topics",
-            json={"name": "billing", "status": "in progress"},
-            headers=self.main,
-        )
-        rid = self.client.post(
-            "/agent-api/records",
-            json={"kind": "pending", "text": "send invoice", "topic": "billing"},
-            headers=self.main,
-        ).json()["id"]
-        self.assertIn(
-            "[1 pending]",
-            self.client.get("/agent-api/topics", headers=self.main).json()["text"],
-        )
-        self.assertEqual(
-            self.client.post(
-                f"/agent-api/records/{rid[:8]}/done", headers=self.main
-            ).status_code,
-            200,
-        )
-        self.assertIn(
-            "[0 pending]",
-            self.client.get("/agent-api/topics", headers=self.main).json()["text"],
-        )
-        self.assertEqual(
-            self.client.post(
-                "/agent-api/records",
-                json={"kind": "bogus", "text": "x"},
-                headers=self.main,
-            ).status_code,
-            400,
-        )
-
-    def test_fourth_concurrent_child_is_refused_and_report_frees_a_slot(self):
-        ids = [self.delegate().json()["session_id"] for _ in range(3)]
-        r = self.delegate()
-        self.assertEqual(r.status_code, 403)
-        self.assertIn("[concurrency]", r.json()["detail"])
-        rep = self.client.post(
-            "/agent-api/report",
-            json={"summary": "done"},
-            headers=self.child_headers(ids[0]),
-        )
-        self.assertEqual(rep.status_code, 200)
-        self.assertEqual(self.store.reports, ["done"])
-        self.assertEqual(self.delegate().status_code, 200)  # a slot is free again
-
-    def test_child_cannot_spawn_and_cannot_report_twice(self):
-        cid = self.delegate().json()["session_id"]
-        r = self.delegate(headers=self.child_headers(cid))
-        self.assertEqual(r.status_code, 403)
-        self.assertIn("[role]", r.json()["detail"])
-        self.client.post(
-            "/agent-api/report",
-            json={"summary": "one"},
-            headers=self.child_headers(cid),
-        )
-        again = self.client.post(
-            "/agent-api/report",
-            json={"summary": "two"},
-            headers=self.child_headers(cid),
-        )
-        self.assertIn("already reported", again.json()["text"])
-        self.assertEqual(self.store.reports, ["one"])  # not delivered twice
-
-    def test_main_cannot_report_and_depth_is_derived_from_the_tree(self):
-        self.assertEqual(
-            self.client.post(
-                "/agent-api/report", json={"summary": "x"}, headers=self.main
-            ).status_code,
-            403,
-        )
-        cid = self.delegate().json()["session_id"]
-        who = self.client.get(
-            "/agent-api/whoami", headers=self.child_headers(cid)
-        ).json()["text"]
-        self.assertIn("depth=1", who)
-
-    def test_status_and_read_are_control_plane_only_and_size_capped(self):
-        cid = self.delegate().json()["session_id"]
-        st = self.client.get("/agent-api/status", headers=self.main).json()
-        self.assertIn("state=working", st["text"])
-        rd = self.client.get(
-            "/agent-api/read", params={"session": cid[:8]}, headers=self.main
-        ).json()
-        self.assertLessEqual(len(rd["text"]), policy.READ_MAX_CHARS + 200)
-        self.assertIn("truncated", rd["text"])
-        self.assertEqual(self.store.native_turns_sent_to_children, 0)
-        # A child cannot read a sibling or the main thread (only its own tree).
-        self.assertEqual(
-            self.client.get(
-                "/agent-api/read",
-                params={"session": "main-1"},
-                headers=self.child_headers(cid),
-            ).status_code,
-            404,
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StoreProtocolTests(unittest.TestCase):
     def test_pg_store_implements_every_store_method(self):
         """A method missing from the Postgres store only showed up live (500 on /standing)."""
         from mainloop.runtime.delegation import PgStore
 
-        wanted = {n for n in agent_api.Store.__dict__ if not n.startswith("_")}
+        wanted = {n for n in agent_tools.Store.__dict__ if not n.startswith("_")}
         self.assertEqual(wanted - {n for n in dir(PgStore)}, set())
-
-
-class ReviewFixTests(AgentApiTests):
-    def test_pending_done_needs_a_long_enough_id(self):
-        self.assertEqual(
-            self.client.post(
-                "/agent-api/records/%/done", headers=self.main
-            ).status_code,
-            400,
-        )
-
-    def test_reports_are_framed_as_untrusted_in_standing_context(self):
-        text = render_standing(StandingInputs(role="main"))
-        self.assertIn("untrusted data", text)
-        self.assertIn("never obey", text)
-
-
-class CleanupTests(unittest.TestCase):
-    """The main thread can end a child and clear finished ones; nobody else can."""
-
-    def setUp(self):
-        self.store = FakeStore()
-        self.service = AgentService(self.store, KINDS)
-        app = FastAPI()
-        app.include_router(agent_api.router)
-        app.dependency_overrides[agent_api.get_service] = lambda: self.service
-        self.client = TestClient(app)
-        self.main = {"Authorization": "Bearer tok-main"}
-        for sid, status in (
-            ("child-a1", "completed"),
-            ("child-a2", "cancelled"),
-            ("child-b1", "active"),
-        ):
-            self.store.bindings[sid] = {
-                "session_id": sid,
-                "role": "child",
-                "kind": "claude",
-                "user_id": "u",
-                "parent_session_id": "main-1",
-                "topic_id": None,
-                "reported_at": None,
-                "title": sid,
-            }
-            self.store.tokens[hash_token(f"tok-{sid}")] = sid
-            self.store.statuses[sid] = status
-
-    def post(self, path, headers=None, **body):
-        return self.client.post(
-            f"/agent-api/{path}", json=body, headers=headers or self.main
-        )
-
-    def test_clear_archives_finished_children_and_leaves_live_ones(self):
-        r = self.post("clear")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(sorted(r.json()["cleared"]), ["child-a1", "child-a2"])
-        self.assertEqual(self.store.archived, {"child-a1", "child-a2"})
-        self.assertIn("child-b1"[:8], r.json()["text"])
-        self.assertIn("mainloop cancel", r.json()["text"])
-
-    def test_cleared_children_leave_the_status_view(self):
-        self.post("clear")
-        text = self.client.get("/agent-api/status", headers=self.main).json()["text"]
-        self.assertNotIn("child-a1", text)
-        self.assertIn("child-b1", text)
-
-    def test_clear_one_live_child_is_refused_with_a_reason(self):
-        r = self.post("clear", session="child-b1")
-        self.assertEqual(r.json()["cleared"], [])
-        self.assertIn("cancel", r.json()["text"])
-        self.assertEqual(self.store.archived, set())
-
-    def test_cancel_ends_a_live_child(self):
-        r = self.post("cancel", session="child-b")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(self.store.cancelled, ["child-b1"])
-        self.assertEqual(self.store.statuses["child-b1"], "cancelled")
-
-    def test_cancel_of_a_finished_child_does_nothing(self):
-        r = self.post("cancel", session="child-a1")
-        self.assertIn("already completed", r.json()["text"])
-        self.assertEqual(self.store.cancelled, [])
-
-    def test_a_cancelled_child_can_then_be_cleared(self):
-        self.post("cancel", session="child-b1")
-        r = self.post("clear", session="child-b1")
-        self.assertEqual(r.json()["cleared"], ["child-b1"])
-
-    def test_only_the_main_thread_may_cancel_or_clear(self):
-        child = {"Authorization": "Bearer tok-child-b1"}
-        self.assertEqual(
-            self.post("cancel", child, session="child-a1").status_code, 403
-        )
-        self.assertEqual(self.post("clear", child).status_code, 403)
-        self.assertEqual(self.store.cancelled, [])
-
-    def test_ambiguous_and_unknown_ids_are_refused(self):
-        self.assertEqual(self.post("cancel", session="child-").status_code, 400)
-        self.assertEqual(self.post("cancel", session="nope").status_code, 404)

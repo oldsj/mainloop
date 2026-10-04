@@ -1,46 +1,18 @@
-"""Control-plane API used by the ``mainloop`` CLI inside agent workspaces.
-
-Authentication is a per-binding token (HMAC of the session id, hash stored on the binding).
-The token identifies the acting binding; the CLI never names itself, and every verb is limited
-to that binding's own tree. Policy (depth, concurrency, allowed roles) is enforced here.
-LIMIT: this scopes the CLI, it is not a security boundary. The rest of the backend API is
-unauthenticated and reachable from the workspace pods, and tokens are readable by agents that
-share a pod; a hostile agent could bypass this policy (see docs/spikes/native-main-thread-context.md).
-Responses carry a rendered ``text`` so the CLI stays a thin, dumb client.
-"""
+"""Protocol-neutral Mainloop agent tool service."""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from dataclasses import asdict, dataclass
-from typing import Annotated, Any, Protocol
+from typing import Protocol
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import HTTPException
 from mainloop.config import settings
 from mainloop.runtime import policy
+from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.policy import Actor, PolicyError
 from mainloop.runtime.standing import TopicLine
-from pydantic import BaseModel, Field
 
 INBOX = "inbox"
-_LIVE = ("failed", "cancelled", "completed")
-
-
-def token_for(session_id: str) -> str:
-    key = settings.agent_token_key or settings.db_password
-    if not key:
-        raise RuntimeError(
-            "AGENT_TOKEN_KEY (or DB password) must be set to issue agent tokens"
-        )
-    return (
-        "ml_" + hmac.new(key.encode(), session_id.encode(), hashlib.sha256).hexdigest()
-    )
-
-
-def hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
 
 # A session in one of these is done: nothing more will run and it can be cleared from the list.
 FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -89,7 +61,11 @@ class AgentService:
 
     async def authenticate(self, token: str) -> Ctx:
         binding = await self.store.binding_by_token_hash(hash_token(token))
-        if binding is None:
+        if (
+            binding is None
+            or binding.get("archived_at")
+            or binding.get("status") in FINISHED_STATUSES
+        ):
             raise HTTPException(status_code=401, detail="unknown agent token")
         return Ctx(binding, Actor(binding["role"], await self._depth(binding)))
 
@@ -174,7 +150,7 @@ class AgentService:
         )
         return {
             "text": f"started {kind} child {child_id[:8]} for topic {t['name']}; its report will "
-            "arrive in this thread. Use `mainloop status` to check it.",
+            "arrive in this thread. Use the `status` tool to check it.",
             "session_id": child_id,
         }
 
@@ -252,7 +228,7 @@ class AgentService:
             names = ", ".join(r["session_id"][:8] for r in left)
             text += (
                 f"; not cleared because they are still running or waiting: {names} "
-                "(cancel one with `mainloop cancel <id>` first)"
+                "(call the `cancel` tool first)"
             )
         return {"text": text, "cleared": archived}
 
@@ -301,139 +277,3 @@ class AgentService:
 
     async def standing(self, ctx: Ctx) -> dict:
         return {"text": await self.store.standing_text(ctx.binding)}
-
-
-# -- FastAPI wiring ---------------------------------------------------------------------------
-router = APIRouter(prefix="/agent-api", tags=["agent-api"])
-_service: AgentService | None = None
-
-
-def get_service() -> AgentService:
-    global _service
-    if _service is None:
-        from mainloop.runtime.delegation import PgStore
-
-        _service = AgentService(PgStore())
-    return _service
-
-
-SvcDep = Annotated[AgentService, Depends(get_service)]
-
-
-async def get_ctx(
-    service: SvcDep,
-    authorization: Annotated[str, Header()] = "",
-) -> Ctx:
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="bearer token required")
-    return await service.authenticate(token)
-
-
-CtxDep = Annotated[Ctx, Depends(get_ctx)]
-
-
-class TopicOpen(BaseModel):
-    name: str
-    status: str | None = None
-
-
-class RecordIn(BaseModel):
-    kind: str
-    text: str
-    topic: str | None = None
-
-
-class DelegateIn(BaseModel):
-    topic: str = INBOX
-    kind: str
-    title: str = ""
-    brief: str
-
-
-class CancelIn(BaseModel):
-    session: str = Field(..., min_length=1)
-
-
-class ClearIn(BaseModel):
-    session: str | None = None
-
-
-class ReportIn(BaseModel):
-    summary: str = Field(..., min_length=1)
-
-
-@router.get("/whoami")
-async def whoami(ctx: CtxDep) -> dict[str, Any]:
-    b = ctx.binding
-    return {
-        "text": f"{b['role']} {b['kind']} session={b['session_id'][:8]} depth={ctx.actor.depth}"
-    }
-
-
-@router.get("/topics")
-async def topics(ctx: CtxDep, s: SvcDep):
-    return await s.topics(ctx)
-
-
-@router.post("/topics")
-async def topic_open(body: TopicOpen, ctx: CtxDep, s: SvcDep):
-    return await s.topic_open(ctx, body.name, body.status)
-
-
-@router.post("/records")
-async def record(body: RecordIn, ctx: CtxDep, s: SvcDep):
-    return await s.record(ctx, body.kind, body.text, body.topic)
-
-
-@router.post("/records/{record_id}/done")
-async def done(record_id: str, ctx: CtxDep, s: SvcDep):
-    return await s.done(ctx, record_id)
-
-
-@router.post("/delegate")
-async def delegate(
-    body: DelegateIn,
-    ctx: CtxDep,
-    s: SvcDep,
-):
-    return await s.delegate(ctx, body.topic, body.kind, body.title, body.brief)
-
-
-@router.post("/cancel")
-async def cancel(body: CancelIn, ctx: CtxDep, s: SvcDep):
-    return await s.cancel(ctx, body.session)
-
-
-@router.post("/clear")
-async def clear(body: ClearIn, ctx: CtxDep, s: SvcDep):
-    return await s.clear(ctx, body.session)
-
-
-@router.post("/report")
-async def report(body: ReportIn, ctx: CtxDep, s: SvcDep):
-    return await s.report(ctx, body.summary)
-
-
-@router.get("/status")
-async def status(
-    ctx: CtxDep,
-    s: SvcDep,
-    session: str | None = None,
-):
-    return await s.status(ctx, session)
-
-
-@router.get("/read")
-async def read(
-    session: str,
-    ctx: CtxDep,
-    s: SvcDep,
-    since: int = 0,
-):
-    return await s.read(ctx, session, since)
-
-
-@router.get("/standing")
-async def standing(ctx: CtxDep, s: SvcDep):
-    return await s.standing(ctx)

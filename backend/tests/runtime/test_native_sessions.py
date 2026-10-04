@@ -15,8 +15,12 @@ import httpx
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import (
     KagentClient,
+    OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
+    SessionCredential,
+    SessionError,
+    Unreachable,
     assistant_message_id,
 )
 from mainloop.sse import notify_session_message
@@ -54,9 +58,22 @@ class MemoryLedger:
     async def update_binding(self, session_id, **fields):
         self.binding.update(fields)
 
+    async def remember_child_start_failure(self, session_id, reason):
+        if self.binding["role"] != "child" or self.binding["turns"]:
+            return False
+        if any(
+            r["state"] in ("sending", "delivered", "completed", "uncertain")
+            for r in self.rows.values()
+        ):
+            return False
+        self.binding.setdefault("child_start_failure", reason)
+        return True
+
     async def replace_kagent_session(
         self, session_id, old_kagent_session_id, request_id
     ):
+        if self.binding.get("child_start_failure"):
+            return False
         if self.binding["kagent_session_id"] != old_kagent_session_id:
             return False
         self.binding.update(
@@ -116,6 +133,8 @@ class MemoryLedger:
             row["detail"] = detail
 
     async def transition(self, message_id, state, *, from_states, **kw):
+        if state == "sending" and self.binding.get("child_start_failure"):
+            return False
         if self.rows[message_id]["state"] not in from_states:
             return False
         await self.set_delivery(message_id, state, **kw)
@@ -173,6 +192,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fake = FakeKagent()
         self.ledger = MemoryLedger()
+        self.ledger.binding["token_hash"] = str(12345)
         self.session = SimpleNamespace(
             id=SESSION,
             user_id="user-1",
@@ -209,6 +229,17 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 self.updated.append(fields["status"])
 
         for patcher in (
+            patch(
+                "mainloop.runtime.agent_credentials.credentials.publish",
+                AsyncMock(
+                    return_value=SessionCredential(
+                        "http://mainloop-mcp.mainloop.svc.cluster.local",
+                        "Authorization",
+                        "mainloop-agent-tokens",
+                        SESSION,
+                    )
+                ),
+            ),
             patch.object(ns, "ledger", self.ledger),
             patch.object(ns.db, "get_session", AsyncMock(return_value=self.session)),
             patch.object(ns.db, "update_session", update_session),
@@ -232,6 +263,452 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         mid = await ns.submit_message(SESSION, text, **kw)
         await self.settle()
         return mid
+
+    async def test_credentials_precede_create_and_survive_replacement(self):
+        from mainloop.runtime.agent_credentials import credentials
+        from mainloop.runtime.kagent_client import decode_fields
+
+        self.ledger.binding["role"] = "main"
+        calls = []
+
+        async def publish(binding_id):
+            calls.append(binding_id)
+            self.assertEqual(
+                len([r for r in self.fake.requests if r[1].endswith("CreateSession")]),
+                len(calls) - 1,
+            )
+            return SessionCredential(
+                "http://mainloop-mcp.mainloop.svc.cluster.local",
+                "Authorization",
+                "mainloop-agent-tokens",
+                binding_id,
+            )
+
+        with patch.object(credentials, "publish", publish):
+            await ns._ensure_kagent_session(self.ledger.binding)
+            await ns.get_client().delete_session(CONTEXT_ID)
+            self.fake.next_session_ids = ["replacement-session"]
+            await ns._ensure_kagent_session(self.ledger.binding)
+        created = [r for r in self.fake.requests if r[1].endswith("CreateSession")]
+        self.assertEqual(len(created), 2)
+        first, second = (decode_fields(r[2]) for r in created)
+        self.assertEqual(first[7], second[7])
+        self.assertEqual(
+            decode_fields(first[5][0])[2], [ns.settings.kagent_main_agent.encode()]
+        )
+        self.assertEqual(calls, [SESSION, SESSION])
+
+    async def test_credential_failure_never_calls_create(self):
+        from mainloop.runtime.agent_credentials import credentials
+
+        self.ledger.binding["role"] = "child"
+        with patch.object(
+            credentials,
+            "publish",
+            AsyncMock(side_effect=RuntimeError("publication failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "publication failed"):
+                await ns._ensure_kagent_session(self.ledger.binding)
+        self.assertEqual(self.fake.requests, [])
+
+    async def test_rejected_initial_child_start_is_terminal_after_publication(self):
+        from mainloop.runtime.agent_credentials import credentials
+
+        self.ledger.binding["role"] = "child"
+        with patch.object(
+            ns.get_client(),
+            "create_session",
+            AsyncMock(side_effect=SessionError("invalid revision", grpc_status=3)),
+        ), patch.object(credentials, "publish", AsyncMock()) as publish:
+            mid = await self.send(source="brief")
+        publish.assert_awaited_once_with(SESSION)
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(self.session.status, SessionStatus.FAILED)
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_readiness_timeout_reconciles_and_deletes_before_terminal_failure(
+        self,
+    ):
+        self.ledger.binding["role"] = "child"
+        with patch.object(
+            ns.get_client(),
+            "ensure_ready",
+            AsyncMock(side_effect=SessionError("readiness timeout")),
+        ):
+            mid = await self.send(source="brief")
+        methods = [r[1].rsplit("/", 1)[1] for r in self.fake.requests]
+        self.assertEqual(methods, ["CreateSession", "GetSession", "DeleteSession"])
+        self.assertEqual(self.session.status, SessionStatus.FAILED)
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_post_readiness_context_failure_disposes_before_terminal_state(self):
+        self.ledger.binding["role"] = "child"
+        update = ns.db.update_session
+
+        async def after_disposal(session_id, **fields):
+            if fields.get("status") == SessionStatus.FAILED:
+                self.assertEqual(
+                    self.fake.sessions[CONTEXT_ID],
+                    (RuntimeState.DELETED, RuntimeOperation.NONE),
+                )
+            await update(session_id, **fields)
+
+        with patch(
+            "mainloop.runtime.delegation.render_for_binding",
+            AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
+        ), patch.object(ns.db, "update_session", after_disposal):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_context_failure_with_pending_lost_disposal_remains_retryable(self):
+        self.ledger.binding["role"] = "child"
+        client = ns.get_client()
+        delete = client.delete_session
+        deleted = []
+
+        async def lost(session_id):
+            deleted.append(session_id)
+            self.fake.sessions[session_id] = (
+                RuntimeState.DELETING,
+                RuntimeOperation.DELETE,
+            )
+            raise OutcomeUnknown("delete response lost")
+
+        with patch(
+            "mainloop.runtime.delegation.render_for_binding",
+            AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
+        ), patch.object(client, "delete_session", lost):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.updated, [])
+        self.assertEqual(self.ledger.rows[mid]["state"], "recorded")
+        self.assertTrue(self.ledger.binding["child_start_failure"])
+        self.assertTrue(self.ledger.binding["token_hash"])
+        self.assertEqual(deleted, [CONTEXT_ID])
+
+        async def finish(session_id):
+            deleted.append(session_id)
+            return await delete(session_id)
+
+        with patch.object(client, "delete_session", finish):
+            await ns.sync(SESSION)
+            await self.settle()
+        self.assertEqual(deleted, [CONTEXT_ID, CONTEXT_ID])
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_failed_binding_write_after_creation_keeps_actor_for_disposal(self):
+        self.ledger.binding["role"] = "child"
+
+        # Real reads return separate dictionaries, so the local admitted ID must survive
+        # independently of a failed persistence operation.
+        async def read(session_id, **kwargs):
+            return dict(self.ledger.binding)
+
+        update = self.ledger.update_binding
+        failed = False
+
+        async def write(session_id, **fields):
+            nonlocal failed
+            if fields.get("kagent_session_id") and not failed:
+                failed = True
+                raise RuntimeError("binding write failed after creation")
+            await update(session_id, **fields)
+
+        with patch.object(self.ledger, "get_binding", read), patch.object(
+            self.ledger, "update_binding", write
+        ):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_context_failure_pending_delete_response_defers_terminal_state(self):
+        self.ledger.binding["role"] = "child"
+        client = ns.get_client()
+
+        async def pending(session_id):
+            self.fake.sessions[session_id] = (
+                RuntimeState.DELETING,
+                RuntimeOperation.DELETE,
+            )
+            return await client.get_session(session_id)
+
+        with patch(
+            "mainloop.runtime.delegation.render_for_binding",
+            AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
+        ), patch.object(client, "delete_session", pending):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.updated, [])
+        self.assertEqual(self.ledger.rows[mid]["state"], "recorded")
+        await ns.sync(SESSION)
+        await self.settle()
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_non_protocol_readiness_error_also_disposes_actor(self):
+        self.ledger.binding["role"] = "child"
+        with patch.object(
+            ns.get_client(),
+            "ensure_ready",
+            AsyncMock(side_effect=RuntimeError("readiness projection failed")),
+        ):
+            await self.send(source="brief")
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_main_context_error_leaves_actor_and_main_recoverable(self):
+        self.ledger.binding["role"] = "main"
+        with patch(
+            "mainloop.runtime.delegation.render_for_binding",
+            AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
+        ):
+            mid = await self.send()
+        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertFalse(self.ledger.binding.get("child_start_failure"))
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
+
+    async def test_context_error_cannot_dispose_brief_claimed_by_another_process(self):
+        self.ledger.binding["role"] = "child"
+
+        async def competing_claim(binding):
+            mid = next(iter(self.ledger.rows))
+            self.assertTrue(
+                await self.ledger.transition(mid, "sending", from_states=("recorded",))
+            )
+            raise RuntimeError("context read failed after competing claim")
+
+        with patch("mainloop.runtime.delegation.render_for_binding", competing_claim):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.ledger.rows[mid]["state"], "sending")
+        self.assertEqual(self.updated, [])
+        self.assertFalse(self.ledger.binding.get("child_start_failure"))
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
+
+    async def test_unknown_readiness_disposal_defers_failure_and_never_replaces(self):
+        self.ledger.binding["role"] = "child"
+        client = ns.get_client()
+        with patch.object(
+            client,
+            "ensure_ready",
+            AsyncMock(side_effect=SessionError("readiness timeout")),
+        ), patch.object(
+            client,
+            "get_session",
+            AsyncMock(side_effect=Unreachable("lookup unavailable")),
+        ):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.ledger.rows[mid]["state"], "recorded")
+        self.assertNotEqual(self.session.status, SessionStatus.FAILED)
+        self.assertTrue(self.ledger.binding["child_start_failure"])
+        await ns.sync(SESSION)
+        await self.settle()
+        self.assertEqual(self.session.status, SessionStatus.FAILED)
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_lost_create_response_reconciles_same_request_then_cleans_up(self):
+        self.ledger.binding["role"] = "child"
+        client = ns.get_client()
+        create = client.create_session
+        calls = []
+
+        async def lost(*args, **kwargs):
+            calls.append(kwargs["request_id"])
+            await create(*args, **kwargs)
+            raise OutcomeUnknown("create response lost")
+
+        with patch.object(client, "create_session", lost):
+            mid = await self.send(source="brief")
+        self.assertEqual(self.ledger.rows[mid]["state"], "recorded")
+        self.assertNotEqual(self.session.status, SessionStatus.FAILED)
+        await ns.sync(SESSION)
+        await self.settle()
+        self.assertEqual(self.session.status, SessionStatus.FAILED)
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 2)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+        self.assertEqual(calls, [ns.create_request_id(SESSION)])
+
+    async def test_main_start_rejection_does_not_make_main_terminal(self):
+        self.ledger.binding["role"] = "main"
+        with patch.object(
+            ns.get_client(),
+            "create_session",
+            AsyncMock(side_effect=SessionError("invalid revision", grpc_status=3)),
+        ):
+            mid = await self.send()
+        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+
+    async def test_reserved_aborted_create_progresses_only_on_same_request_retry(self):
+        from tests.runtime.kagent_fake import grpc_response
+
+        self.ledger.binding.update(role="child", kagent_request_id="persisted-create")
+        client = ns.get_client()
+        create = client.create_session
+        calls = []
+
+        async def contended(*args, **kwargs):
+            calls.append(kwargs["request_id"])
+            session = await create(*args, **kwargs)
+            if len(calls) == 1:
+                self.fake.sessions[session.id] = (
+                    RuntimeState.CREATING,
+                    RuntimeOperation.CREATE,
+                )
+                with patch.object(
+                    client._client,
+                    "post",
+                    AsyncMock(return_value=grpc_response(None, status=10)),
+                ):
+                    return await create(*args, **kwargs)
+            self.fake.sessions[session.id] = (RuntimeState.READY, RuntimeOperation.NONE)
+            return await client.get_session(session.id)
+
+        with patch.object(client, "create_session", contended):
+            mid = await self.send(source="brief")
+            self.assertEqual(self.ledger.rows[mid]["state"], "recorded")
+            self.assertEqual(self.updated, [])
+            await ns.sync(SESSION)
+            await self.settle()
+        self.assertEqual(calls, ["persisted-create", "persisted-create"])
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_known_pending_create_and_lost_delete_require_operation_retries(self):
+        self.ledger.binding.update(
+            role="child", child_start_failure="timeout", kagent_request_id="original"
+        )
+        client = ns.get_client()
+        actor = await client.create_session(
+            ns.agent_ref("claude", "child"), request_id="original"
+        )
+        self.ledger.binding["kagent_session_id"] = actor.id
+        self.fake.sessions[actor.id] = (RuntimeState.CREATING, RuntimeOperation.CREATE)
+        create = client.create_session
+        delete = client.delete_session
+        creates, deletes = [], []
+
+        async def retry_create(*args, **kwargs):
+            creates.append(kwargs["request_id"])
+            self.fake.sessions[actor.id] = (RuntimeState.READY, RuntimeOperation.NONE)
+            return await create(*args, **kwargs)
+
+        async def retry_delete(session_id):
+            deletes.append(session_id)
+            if len(deletes) == 1:
+                self.fake.sessions[actor.id] = (
+                    RuntimeState.DELETED,
+                    RuntimeOperation.DELETE,
+                )
+                raise OutcomeUnknown("delete response lost after admission")
+            return await delete(session_id)
+
+        with patch.object(client, "create_session", retry_create), patch.object(
+            client, "delete_session", retry_delete
+        ):
+            with self.assertRaises(ns.ChildStartPending):
+                await ns._settle_child_start_failure(self.ledger.binding)
+            self.assertEqual(self.updated, [])
+            with self.assertRaises(SessionError):
+                await ns._settle_child_start_failure(self.ledger.binding)
+        self.assertEqual(creates, ["original"])
+        self.assertEqual(deletes, [actor.id, actor.id])
+        self.assertEqual(self.updated, [SessionStatus.FAILED])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_claimed_brief_blocks_disposal_and_pending_pass_cannot_reset_it(self):
+        self.ledger.binding["role"] = "child"
+        mid = await self.ledger.record_message(
+            session_id=SESSION,
+            conversation_id="c",
+            text="brief",
+            state="sending",
+            source="brief",
+        )
+        self.assertFalse(
+            await ns._remember_child_start_failure(
+                dict(self.ledger.binding), "contending create"
+            )
+        )
+        self.assertFalse(
+            await self.ledger.transition(mid, "recorded", from_states=("recorded",))
+        )
+        self.assertEqual(self.ledger.rows[mid]["state"], "sending")
+        self.assertEqual(self.updated, [])
+
+    async def test_main_unknown_start_is_nonterminal(self):
+        self.ledger.binding["role"] = "main"
+        with patch.object(
+            ns.get_client(),
+            "create_session",
+            AsyncMock(side_effect=OutcomeUnknown("Aborted after reservation")),
+        ):
+            await self.send()
+        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertFalse(self.ledger.binding.get("child_start_failure"))
+
+    async def test_concurrent_create_loser_cannot_abandon_reserved_actor(self):
+        self.ledger.binding.update(role="child", kagent_request_id="contended")
+        client = ns.get_client()
+        create = client.create_session
+        reserved, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def contend(*args, **kwargs):
+            calls.append(kwargs["request_id"])
+            if len(calls) == 1:
+                actor = await create(*args, **kwargs)
+                reserved.set()
+                await release.wait()
+                return actor
+            await reserved.wait()
+            raise OutcomeUnknown("Aborted after reservation")
+
+        with patch.object(client, "create_session", contend):
+            winner = asyncio.create_task(
+                ns._ensure_kagent_session(dict(self.ledger.binding))
+            )
+            await reserved.wait()
+            with self.assertRaises(ns.ChildStartPending):
+                await ns._ensure_kagent_session(dict(self.ledger.binding))
+            self.assertEqual(self.updated, [])
+            release.set()
+            with self.assertRaises(SessionError):
+                await winner
+        self.assertEqual(calls, ["contended", "contended"])
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+
+    async def test_unrelated_pending_operation_does_not_revoke_identity(self):
+        self.ledger.binding.update(
+            role="child", kagent_session_id=CONTEXT_ID, child_start_failure="timeout"
+        )
+        self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.SUSPEND)
+        with self.assertRaises(ns.ChildStartPending):
+            await ns._settle_child_start_failure(self.ledger.binding)
+        self.assertEqual(self.updated, [])
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 0)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
 
     # ---- happy path -----------------------------------------------------------------------
 

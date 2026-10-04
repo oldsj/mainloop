@@ -45,6 +45,7 @@ deployments:
 # Development mode configuration
 dev:
   backend:
+    container: backend
     labelSelector:
       app: mainloop-backend
     namespace: mainloop
@@ -91,6 +92,63 @@ dev:
       - 0.0.0.0
       - --port
       - '8000'
+      - --reload
+      - --reload-dir
+      - /app/src
+      - --reload-dir
+      - /models
+      - --timeout-graceful-shutdown
+      - '3'
+    logs: {}
+
+  mcp:
+    container: mcp
+    labelSelector:
+      app: mainloop-backend
+    namespace: mainloop
+    devImage: mainloop-backend:dev
+    # Sync source files for hot reload
+    sync:
+      - path: ./backend/src:/app/src
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .pytest_cache/
+          - .venv/
+        disableDownload: true
+      - path: ./models:/models
+        excludePaths:
+          - __pycache__/
+          - '*.pyc'
+          - .venv/
+        disableDownload: true
+      # Auto-install deps when pyproject.toml or uv.lock changes
+      - path: ./backend/pyproject.toml:/app/pyproject.toml
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && uv sync
+      - path: ./backend/uv.lock:/app/uv.lock
+        file: true
+        disableDownload: true
+        onUpload:
+          execRemote:
+            command: sh
+            args:
+              - -c
+              - cd /app && uv sync
+    # Override command for dev mode with hot reload
+    command:
+      - uvicorn
+      - mainloop.mcp_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8002'
       - --reload
       - --reload-dir
       - /app/src

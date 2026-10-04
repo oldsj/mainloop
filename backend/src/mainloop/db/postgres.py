@@ -171,6 +171,8 @@ CREATE TABLE IF NOT EXISTS native_bindings (
     kagent_request_id TEXT,      -- CreateSession request id of a replacement Session; NULL = derived
     model TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    credential_cleanup_pending BOOLEAN NOT NULL DEFAULT FALSE,
+    child_start_failure TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Delivery ledger: one row per message; the A2A task is the receipt
@@ -1506,6 +1508,10 @@ class Database:
                 session_ids,
                 parent_session_id,
             )
+        from mainloop.runtime.agent_credentials import revoke
+
+        for row in rows:
+            await revoke(row["id"])
         return [r["id"] for r in rows]
 
     async def update_session(
@@ -1641,6 +1647,14 @@ class Database:
                     f"UPDATE sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
                     *params,
                 )
+            if status in (
+                SessionStatus.COMPLETED,
+                SessionStatus.FAILED,
+                SessionStatus.CANCELLED,
+            ):
+                from mainloop.runtime.agent_credentials import revoke
+
+                await revoke(session_id)
 
     def _row_to_session(self, row: asyncpg.Record) -> Session:
         result = _parse_json_field(row.get("result"))

@@ -11,3 +11,5 @@ resources:
   - service-backend.yaml
   - service-frontend.yaml
   - configmap.yaml
+  - service-mcp.yaml
+  - networkpolicy.yaml

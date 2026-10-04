@@ -1,0 +1,14 @@
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: mainloop
+  namespace: kagent
+  labels:
+    kagent.dev/discovery: disabled
+spec:
+  description: Mainloop control-plane tools with per-session gateway identity.
+  protocol: STREAMABLE_HTTP
+  url: http://mainloop-mcp.mainloop.svc.cluster.local/mcp
+  headersFrom:
+    - name: Authorization
+      value: Bearer kagent-credential-injected

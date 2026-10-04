@@ -136,7 +136,7 @@ async def render_for_binding(binding: dict) -> str:
 
 
 async def auto_report(session_id: str, reply: str) -> None:
-    """Fallback signal: a child finished a turn without calling ``mainloop report``."""
+    """Fallback signal: a child finished a turn without calling the ``report`` MCP tool."""
     binding = await native_sessions.get_binding(session_id)
     if binding is None or binding["reported_at"] is not None:
         return
@@ -149,13 +149,14 @@ async def auto_report(session_id: str, reply: str) -> None:
 
 
 class PgStore:
-    """``agent_api.Store`` over Postgres and the native-session delivery path."""
+    """``agent_tools.Store`` over Postgres and the native-session delivery path."""
 
     async def binding_by_token_hash(self, token_hash: str) -> dict | None:
         async with db.connection() as conn:
             row = await conn.fetchrow(
                 """SELECT b.*, s.user_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-                   WHERE b.token_hash=$1""",
+                   WHERE b.token_hash=$1 AND s.archived_at IS NULL
+                     AND s.status NOT IN ('completed','failed','cancelled')""",
                 token_hash,
             )
         return dict(row) if row else None
@@ -314,7 +315,7 @@ class PgStore:
         conversation = await db.create_conversation(parent["user_id"], title=title)
         text = (
             f"Task brief from Mainloop (topic: {topic['name']})\n\n{brief}\n\n"
-            'When finished, run: mainloop report --summary "<what you did and concluded, under 1500 characters>"'
+            "When finished, call the `report` tool once with `summary` describing what you did and concluded, under 1500 characters."
         )
         async with db.connection() as conn:
             async with conn.transaction():

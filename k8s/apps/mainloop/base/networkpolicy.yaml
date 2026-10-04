@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-backend-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mainloop-frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: tailscale-gateway
+      ports:
+        - protocol: TCP
+          port: 8000

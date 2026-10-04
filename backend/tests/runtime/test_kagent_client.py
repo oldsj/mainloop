@@ -232,6 +232,26 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
             await client.get_session("00000000-0000-4000-8000-0000000000ff")
         self.assertEqual(ctx.exception.grpc_status, 5)
 
+    async def test_ambiguous_session_errors_are_not_definitive_rejections(self):
+        from tests.runtime.kagent_fake import grpc_response
+
+        for response in [
+            httpx.Response(500),
+            *(grpc_response(None, status=status) for status in (4, 10, 13, 14)),
+            grpc_response(None),
+        ]:
+            with self.subTest(status=response.status_code, body=response.content):
+                http = httpx.AsyncClient(
+                    transport=httpx.MockTransport(
+                        lambda request, response=response: response
+                    ),
+                    base_url="http://k.test",
+                )
+                client = KagentClient("http://k.test", user_id="fixture", client=http)
+                with self.assertRaises(OutcomeUnknown):
+                    await client.create_session(AGENT, request_id="fixture-request")
+                await http.aclose()
+
     async def test_grpc_web_frames_round_trip(self):
         from tests.runtime.kagent_fake import grpc_response, session_message
 
