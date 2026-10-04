@@ -8,7 +8,7 @@ the database afterwards, so nothing in the target server's existing databases is
         uv run python -m unittest tests.runtime.test_postgres_ledger
 
 The kagent gateway and the Substrate provisioner are faked; only the ledger, binding, delegation,
-workspace and reconcile SQL runs for real.
+workspace and reconcile SQL runs for real. Kubernetes credential deletion is faked.
 """
 
 from __future__ import annotations
@@ -95,6 +95,11 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
         patcher = patch.object(settings, "agent_token_key", "integration-test-key")
         patcher.start()
         self.addCleanup(patcher.stop)
+        credentials = patch(
+            "mainloop.runtime.agent_credentials.credentials.remove", new=AsyncMock()
+        )
+        credentials.start()
+        self.addCleanup(credentials.stop)
 
     async def asyncTearDown(self):
         db._pool = self._saved_pool

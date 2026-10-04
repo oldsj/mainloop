@@ -76,3 +76,57 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+
+        - name: mcp
+          image: ghcr.io/oldsj/mainloop-backend:latest
+          command: [uvicorn, mainloop.mcp_app:app, --host, 0.0.0.0, --port, '8002']
+          ports:
+            - containerPort: 8002
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: mainloop-config
+            - secretRef:
+                name: mainloop-secrets
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-password
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-token
+          resources:
+            requests:
+              memory: 1Gi
+              cpu: 250m
+            limits:
+              memory: 2Gi
+              cpu: 1000m
+          readinessProbe:
+            tcpSocket:
+              port: 8002
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8002
+            initialDelaySeconds: 90
+            periodSeconds: 10

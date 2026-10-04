@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     # Session becomes not found and is replaced, losing its native context.
     kagent_user_id: str = "mainloop"
     kagent_namespace: str = "kagent"
+    kagent_main_agent: str = "mainloop-main"
     kagent_claude_agent: str = "claude-subscription"
     kagent_codex_agent: str = "codex-subscription-https"
     kagent_request_timeout_seconds: float = 30.0

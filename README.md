@@ -126,3 +126,51 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 ## License
 
 This project is licensed under the [Sustainable Use License v1.0](LICENSE.md) - a source-available license that allows free use for internal business, non-commercial, and personal purposes.
+
+## Agent tools and network isolation
+
+Native agents use the `mainloop` MCP server, a dedicated stateless Streamable HTTP listener
+on port 8002. Service `mainloop-mcp` serves port 80 at
+`http://mainloop-mcp.mainloop.svc.cluster.local/mcp`; it exposes no REST API.
+The Substrate egress gateway replaces the agent's literal `Authorization: Bearer
+kagent-credential-injected` placeholder with its binding credential. Mainloop stores a token
+hash on the binding and publishes the gateway credential under that binding id in
+`kagent/mainloop-agent-tokens`. Terminal or archived bindings lose tool access.
+
+A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;
+its port 8000 must admit only the frontend and the Tailscale gateway. MCP port 8002 admits
+only `ate-system` egress pods labelled `app: atenet-egress`. Verify those gateway pod labels
+and the Tailscale gateway selector against the installation, and prove blocked connections
+fail before deployment. A default Kind CNI does not provide this enforcement. The cleartext
+gateway-to-Mainloop hop depends on this isolation and the pinned stock agentgateway path;
+never expose the MCP Service outside the cluster.
+
+The base includes the dedicated MCP container, Service and ingress policy. Cross-namespace
+bootstrap resources are separately rendered with `k8s/integrations/kagent`: the empty token
+Secret, name-scoped Role/RoleBinding, and RemoteMCPServer. Configure GitOps to preserve the
+Secret's runtime-managed data. Each native AgentTemplate must bind that RemoteMCPServer.
+Configure `KAGENT_MAIN_AGENT` (default `mainloop-main`) as a dedicated Claude Agent whose
+Harness has `sessionIdleTTL: 0s`; child agents retain their own TTLs. Agent templates and
+harnesses remain owned by the kagent installation. Gateway port 8083 must admit only Mainloop,
+and TaskStore must admit only actors, using installation-specific policies.
+
+The supported gateway is stock Substrate v0.3.0-alpha3 using agentgateway revision
+`50999825cb55904801f7fd6b18b865179d0d50c4`, image digest
+`sha256:f1907a50b2e74a071da53fcd2008d585b6a63d31b4e1ba3ee46cf22b342cf04b`.
+That dataplane injects complete header values on HTTP and HTTPS when a configured placeholder
+header is present. The credential provider must authorize the actor's atespace to read the
+`kagent` namespace containing `mainloop-agent-tokens`; Mainloop's name-scoped writer Role does
+not grant the provider that access. Keep this version pinned and repeat the gateway regression
+proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
+other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
+
+The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
+isolation on that pinned stock dataplane. Joint Mainloop/native-agent MCP proof and blocked
+connection/CNI verification remain pending. The Secret holds the complete `Bearer ml_…` header
+value; NetworkPolicy remains required even though the gateway proof passed.
+
+Slice a2 requires a **fresh database**. There is no supported upgrade from earlier slices or
+credential-less kagent bindings. Reset dev/spike data before using this channel. Main and child
+Sessions start with credential references; the main thread uses its dedicated main Agent.
+Earlier native session history is not carried into a2. Mainloop does not migrate or reuse
+pre-a2 sessions.

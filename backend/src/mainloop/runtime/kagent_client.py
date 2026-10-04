@@ -37,6 +37,23 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+
+@dataclass(frozen=True, slots=True)
+class SessionCredential:
+    origin: str
+    header: str
+    secret_name: str
+    secret_key: str
+
+    def encode(self) -> bytes:
+        secret = _field_str(1, self.secret_name) + _field_str(2, self.secret_key)
+        return (
+            _field_str(1, self.origin)
+            + _field_str(2, self.header)
+            + _field_bytes(3, secret)
+        )
+
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------------------------
@@ -575,6 +592,10 @@ class KagentClient:
             raise OutcomeUnknown(
                 f"SessionService {method} outcome unknown: {type(exc).__name__}"
             ) from exc
+        if response.status_code >= 500:
+            raise OutcomeUnknown(
+                f"SessionService {method} outcome unknown (HTTP {response.status_code})"
+            )
         if response.status_code != 200:
             raise SessionError(
                 f"SessionService {method} failed (HTTP {response.status_code})"
@@ -584,6 +605,12 @@ class KagentClient:
         except ValueError as exc:
             raise OutcomeUnknown(f"SessionService {method} sent a bad frame") from exc
         status = trailers.get("grpc-status", response.headers.get("grpc-status", "0"))
+        # The companion can return Aborted after reserving a Session, when its
+        # lifecycle workflow contends. It does not prove that nothing was admitted.
+        if status in ("4", "10", "13", "14"):
+            raise OutcomeUnknown(
+                f"SessionService {method} outcome unknown (grpc {status})"
+            )
         if status != "0":
             detail = trailers.get("grpc-message", response.headers.get("grpc-message"))
             raise SessionError(
@@ -591,17 +618,25 @@ class KagentClient:
                 grpc_status=int(status) if status.isdigit() else None,
             )
         if not messages:
-            raise SessionError(f"SessionService {method} returned no message")
+            raise OutcomeUnknown(f"SessionService {method} returned no message")
         return decode_session_response(messages[0])
 
     async def create_session(
-        self, agent: AgentRef, *, request_id: str, name: str = ""
+        self,
+        agent: AgentRef,
+        *,
+        request_id: str,
+        name: str = "",
+        credentials: tuple[SessionCredential, ...] = (),
     ) -> KagentSession:
         """Create a Session. Retrying with the same ``request_id`` returns the same Session."""
         message = (
             _field_bytes(5, agent.encode())
             + _field_str(3, request_id)
             + _field_str(4, name)
+        )
+        message += b"".join(
+            _field_bytes(7, credential.encode()) for credential in credentials
         )
         return await self._session_call("CreateSession", message)
 
