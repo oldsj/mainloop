@@ -77,13 +77,22 @@ class Settings(BaseSettings):
     substrate_reauth_callback_url: str = "http://mainloop-backend:8000/internal/reauth"
     substrate_reauth_timeout_seconds: int = 1800
 
+    # kagent: native Claude and Codex sessions run as kagent Agents behind one gateway
+    # (SessionService over grpc-web and A2A JSON-RPC). Mainloop acts as a fixed service identity.
+    kagent_gateway_url: str = "http://kagent-controller.kagent.svc.cluster.local:8083"
+    # kagent scopes Sessions to this identity. Changing it is a migration: every existing kagent
+    # Session becomes not found and is replaced, losing its native context.
+    kagent_user_id: str = "mainloop"
+    kagent_namespace: str = "kagent"
+    kagent_claude_agent: str = "claude-subscription"
+    kagent_codex_agent: str = "codex-subscription-https"
+    kagent_request_timeout_seconds: float = 30.0
+    kagent_turn_timeout_seconds: float = 1800.0
+    kagent_session_ready_timeout_seconds: float = 120.0
+    # "Send not accepted" is retried with the identical message for at most this long.
+    kagent_send_retry_budget_seconds: float = 30.0
+
     # Native main thread (context model).
-    main_thread_model: str = "sonnet"
-    main_thread_effort: str = "medium"
-    # Rotation: cut to a fresh native session when the context grew by this many tokens above
-    # the lineage's first-turn baseline, or after this many completed turns (whichever first).
-    main_rotate_tokens: int = 20000
-    main_rotate_turns: int = 12
     main_carry_over_messages: int = 6
     native_child_kinds: str = "claude,codex"
     agent_token_key: str = (

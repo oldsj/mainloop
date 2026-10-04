@@ -24,7 +24,7 @@ When documents differ, do not silently blend future design with current behavior
 - Keep task lifecycle, agent activity, message delivery, user attention, workspace health, and publication state as separate concepts.
 - Parallel work is limited by architectural cohesion, not just worker capacity. Resolve shared contracts and helpers before dispatching independent consumers.
 
-Native Claude Code and Codex sessions run through the Substrate workspace adapter. Do not add the superseded worker or another workspace runtime.
+Native Claude Code and Codex sessions run as kagent harness agents, from the `oldsj/kagent` fork, through the kagent A2A client in `backend/src/mainloop/runtime/`. The Substrate workspace adapter is being removed; do not extend it, and do not add the superseded worker or another workspace runtime.
 
 ## Project structure
 

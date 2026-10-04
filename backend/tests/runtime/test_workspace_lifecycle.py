@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from mainloop.runtime import workspace_adapter as adapter
-from mainloop.runtime.contracts import ContractError
 from mainloop.runtime.substrate import ActorRecord, ActorState, TransportError
+from mainloop.runtime.workspace_adapter import ContractError
 
 from models import (
     WorkspaceDesiredState,

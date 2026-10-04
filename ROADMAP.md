@@ -66,6 +66,8 @@ The control plane and worker workspaces have distinct responsibilities:
 
 The workspace runtime is not an inference proxy. It does not rebuild model prompts, interpret provider tool calls, or replace a native agent's conversation loop.
 
+The workspace runtime is kagent. Mainloop is an A2A client of the kagent gateway: each native session binding maps to one kagent Session, and Mainloop records every message in its delivery ledger before sending it. kagent owns agent pods, native harness processes, workspace bootstrap, snapshots and session expiry. Mainloop does not run a second scheduler or session owner alongside it.
+
 ## Context and continuity
 
 The visible conversation may remain continuous while working context follows the active topic.
@@ -123,7 +125,7 @@ Failure handling distinguishes provider availability, transport errors, source d
 
 ## Workspace platform
 
-The target execution platform provides one isolated writable workspace per concurrent writer, with persistent source and native-session state, bounded resources, scoped development services, preview endpoints, and observable lifecycle state. Reviewers may receive a read-only frozen candidate.
+The target execution platform provides one isolated writable workspace per concurrent writer, with persistent source and native-session state, bounded resources, scoped development services, preview endpoints, and observable lifecycle state. Reviewers may receive a read-only frozen candidate. On kagent, a workspace is a Session with a Git bootstrap and snapshot-on-quiesce; previews reach it through the kagent router and idle out by suspending the Session.
 
 Workspace identity does not depend on a process or pod name. Replacing workspace compute must preserve acknowledged product state and expose any gap in native or log recovery.
 
@@ -207,3 +209,4 @@ Exit criteria:
 - Which local runners meet tool-use, context, identity, completion, and recovery requirements?
 - What retention and restoration guarantees should apply to messages, logs, artifacts, and native state?
 - Which workspace isolation and credential models are appropriate for different deployment profiles?
+- How do agents call Mainloop tools (delegate, note, report, approvals) with per-session identity, without a credential inside the agent?

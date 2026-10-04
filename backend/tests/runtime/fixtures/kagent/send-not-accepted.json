@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-fixture",
+  "error": {
+    "code": -32004,
+    "message": "input was not accepted; retry after the session becomes available",
+    "data": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "UNSUPPORTED_OPERATION",
+        "domain": "a2a-protocol.org",
+        "metadata": {
+          "reason": "KAGENT_SEND_NOT_ACCEPTED",
+          "retryAfterMs": "100"
+        }
+      }
+    ]
+  }
+}

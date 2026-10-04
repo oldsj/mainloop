@@ -21,10 +21,7 @@ request payload and rotation behavior have not been verified.
 
 ## Attention and recovery
 
-If a configured credential is missing or expiring, Mainloop marks a delivery as not sent and
-creates a deduplicated session attention item such as “Codex needs sign-in.” A failed native
-turn whose shim status identifies an HTTP 401 or provider authentication failure also creates
-that attention item. The original turn is not replayed automatically.
+The native turn path no longer checks credentials or raises a sign-in attention item: turns go to kagent, and provider authentication failures surface as a failed task. Surfacing credential health from the kagent ModelConfig condition is a later change. A failed turn is not replayed automatically.
 
 From the workspace page, the owner can start a provider sign-in job. The control-side Job runs
 `codex login --device-auth` or `claude setup-token`, displays a filtered HTTPS device challenge

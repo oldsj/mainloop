@@ -42,10 +42,9 @@ from the manifest until the workspace is running. A preview request itself may w
 
 - `GET /workspaces` lists the current user's workspace lifecycle records.
 - `GET /workspaces/{id}` returns one workspace lifecycle and manifest.
-- `POST /workspaces` accepts a project ID, branch, and strict dev manifest, then provisions one
-  actor from its declared actor template or the configured default template. It also creates a
-  native-agent binding that routes the workspace session to that actor. An optional top-level
-  `agent_kind` (`claude` or `codex`, default `claude`) selects the binding's native agent.
+- `POST /workspaces` returns `409` with the detail "workspaces move to kagent in a later slice"
+  and creates nothing: no actor, session, or native-agent binding. The project page shows that
+  detail. Workspace creation returns once workspaces are created as kagent Sessions.
 - `POST /workspaces/{id}/suspend` records the desired state and requests suspension.
 - `POST /workspaces/{id}/resume` records the desired state and requests resumption.
 - `POST /workspaces/{id}/refresh` reads Substrate status without changing desired state.
@@ -92,7 +91,7 @@ template, sibling services (`name`, `image`, `env`, and numeric ports), HTTP pre
 duplicate service or port names, duplicate ports, and invalid timeouts are rejected by the
 shared strict model.
 
-The project page creates a workspace per branch and lists each workspace independently. Turn,
+The project page lists each existing workspace independently. Turn,
 delivery, and preview activity use the durable last-activity timestamp. Mainloop's existing
 reconcile loop checks idle workspaces once a minute and suspends expired workspaces through the
 fenced lifecycle operation; open deliveries still block suspension. Services and image values
@@ -100,8 +99,8 @@ are declared by the project manifest and must match its configured actor templat
 
 ## Scope and evidence
 
-`POST /workspaces` provisions an actor from its declared template. Other lifecycle, preview, and
-credential endpoints operate on an existing Substrate workspace binding. Runtime behavior is
+`POST /workspaces` refuses new workspaces with `409`. The lifecycle, preview, and credential
+endpoints operate on existing Substrate workspace bindings. Runtime behavior is
 covered by fake-backed tests; this specification does not claim a live cluster integration proof.
 
 The sample under `examples/devenv-sample/` documents the intended Node plus Postgres project

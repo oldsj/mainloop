@@ -1,0 +1,12 @@
+id: event-fixture-1
+data: {"jsonrpc":"2.0","id":"req-fixture","result":{"task":{"id":"task-fixture-1","contextId":"ctx-fixture-1","history":[{"messageId":"{message_id}","contextId":"ctx-fixture-1","parts":[{"text":"{text}"}],"role":"ROLE_USER"}],"status":{"state":"TASK_STATE_SUBMITTED"}}}}
+
+id: event-fixture-2
+data: {"jsonrpc":"2.0","id":"req-fixture","result":{"statusUpdate":{"contextId":"ctx-fixture-1","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-10-04T00:00:01Z"},"taskId":"task-fixture-1"}}}
+
+id: event-fixture-3
+data: {"jsonrpc":"2.0","id":"req-fixture","result":{"artifactUpdate":{"artifact":{"artifactId":"artifact-fixture-1","metadata":{"kagent.dev/a2a/timeline-position":"2026-10-04T00:00:10Z"},"parts":[{"text":"ok"}]},"contextId":"ctx-fixture-1","taskId":"task-fixture-1"}}}
+
+id: event-fixture-4
+data: {"jsonrpc":"2.0","id":"req-fixture","result":{"task":{"id":"task-fixture-1","artifacts":[{"artifactId":"artifact-fixture-1","metadata":{"kagent.dev/a2a/timeline-position":"2026-10-04T00:00:10Z"},"parts":[{"text":"ok"}]}],"contextId":"ctx-fixture-1","history":[{"messageId":"{message_id}","contextId":"ctx-fixture-1","parts":[{"text":"{text}"}],"role":"ROLE_USER","taskId":"task-fixture-1"}],"metadata":{"kagent.dev/a2a/task-created-at":"2026-10-04T00:00:00Z"},"status":{"state":"TASK_STATE_COMPLETED","timestamp":"2026-10-04T00:00:11Z"}}}}
+

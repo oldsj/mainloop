@@ -8,7 +8,6 @@ import { API_URL } from '$lib/config';
 
 export type SSEEventType =
   | 'connected'
-  | 'task:updated'
   | 'inbox:updated'
   | 'session:updated'
   | 'session:needs_input'
@@ -84,7 +83,6 @@ export class SSEClient {
     // Listen for all event types we care about
     const eventTypes: SSEEventType[] = [
       'connected',
-      'task:updated',
       'inbox:updated',
       'session:updated',
       'session:needs_input',

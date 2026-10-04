@@ -21,7 +21,7 @@
 
   onMount(() => {
     loadSession();
-    // Native agent replies arrive from the journal after the POST returns: keep reading.
+    // Native agent replies arrive from the kagent task after the POST returns: keep reading.
     const timer = setInterval(loadSession, 2500);
     return () => clearInterval(timer);
   });

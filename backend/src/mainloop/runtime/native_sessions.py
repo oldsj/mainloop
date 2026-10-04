@@ -1,67 +1,74 @@
-"""Sessions bound to a native Claude Code or Codex agent in a Substrate workspace.
+"""Sessions bound to a native Claude Code or Codex agent session in kagent.
 
 Control-plane rules implemented here:
-- A user message is recorded, then a delivery row is persisted as ``sending`` *before* the
-  transport is touched. Each prompt is sent once; a transport error leaves it ``uncertain``
-  ("delivery unknown") and it is never replayed automatically.
-- The native journal is the receipt: a prompt record after the recorded cursor proves delivery,
-  the turn-completion record proves completion, and the assistant text in between is mirrored
-  into the session conversation (deterministic ids, so repeated syncs are idempotent).
-- The actor-local shim owns native CLI process lifetime and journal access. Before sending, the
-  adapter checks the existing native session and never replays a prompt blindly.
+- A message is recorded, then a delivery row is persisted as ``sending`` *before* kagent is
+  touched. Each message is sent once under its Mainloop message id (the A2A ``messageId``).
+  kagent's documented "not accepted, retry the same message" is retried by the client with the
+  same id; any other ambiguous outcome leaves the delivery ``uncertain`` ("delivery unknown") and
+  is resolved by observing the A2A task (``GetTask``, ``ListTasks`` matching the message id),
+  never by re-sending.
+- The A2A task is the receipt: the task appearing proves delivery, its terminal state proves
+  completion, and its text artifacts are mirrored into the session conversation under
+  deterministic ids, so repeated syncs and reconnects are idempotent.
+- kagent has no event cursor. After a restart or a dropped stream the current task replaces the
+  projection (``GetTask`` or the first event of ``SubscribeToTask``).
+- A kagent Session runs one non-quiescent task at a time, so Mainloop queues messages itself.
 
-Context model (plan r7): a binding has a ``role``. ``main`` is the conversation agent whose window
-Mainloop owns by rotation (a lineage of disposable native sessions; ``rotate``); ``child`` is a
-delegated worker with a parent and a topic; ``agent`` is the r6 stand-alone session. Reports and
-the pre-cut write-out are ordinary ledgered deliveries; a delivery that arrives while another is
-open is ``queued`` by the control plane (E4: a mid-turn paste interleaves) and sent when idle.
+Context model: a binding has a ``role``. ``main`` is the conversation agent; ``child`` is a
+delegated worker with a parent and a topic; ``agent`` is a stand-alone session. Reports are
+ordinary ledgered deliveries; a delivery that arrives while another is open is ``queued`` by the
+control plane and sent when idle.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import uuid
+from collections.abc import AsyncIterator, Coroutine
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime import workspace_adapter
 from mainloop.runtime.agent_api import hash_token, token_for
-from mainloop.runtime.credential_broker import CredentialNeedsSignin
-from mainloop.runtime.journal import completed_turns, parse_journal
+from mainloop.runtime.kagent_client import (
+    A2AError,
+    AgentRef,
+    KagentClient,
+    KagentError,
+    KagentSession,
+    OutcomeUnknown,
+    RuntimeState,
+    SendNotAccepted,
+    SessionError,
+    StreamEvent,
+    TaskNotFound,
+    TaskProjection,
+    Unreachable,
+    assistant_message_id,
+)
 from mainloop.runtime.standing import content_hash
-from mainloop.runtime.substrate import TransportError
-from mainloop.runtime.substrate_workspace import (
-    JournalSlice,
-    SubstrateWorkspace,
-    WorkspaceUnavailable,
-)
-from mainloop.sse import notify_session_needs_input
+from mainloop.sse import notify_session_message
 
-from models import (
-    NativeDeliveryInfo,
-    NativeSessionInfo,
-    SessionNotification,
-    SessionStatus,
-)
+from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
 
 logger = logging.getLogger(__name__)
 
-APPROVAL_POLICY = "bypass-permissions"
+# A prompt with no task after this long is 'uncertain' (never replayed, never blocking).
 SEND_RECEIPT_GRACE = timedelta(seconds=60)
-# A prompt seen in the journal whose turn never completes (agent exited, wedged, or actor replaced):
-# after this long, or as soon as the agent is no longer live, it becomes 'uncertain' (never
-# replayed, never blocking) instead of holding the session in flight forever.
-DELIVERED_MAX_AGE = timedelta(minutes=30)
 _NS = uuid.UUID("6f0f7f0e-3f1e-4a3c-9d3b-0e4b6f5c2a11")
-_locks: dict[str, asyncio.Lock] = {}
-_workspaces: dict[tuple[str, ...], SubstrateWorkspace] = {}
-_rotating: set[str] = set()
 OPEN_STATES = ("recorded", "sending", "delivered")
+# States a late observation may still resolve.
+_RESOLVABLE = ("sending", "delivered", "uncertain")
 # Ended by the user or by failure. Agent activity never moves a session out of these.
 ENDED_STATUSES = frozenset({SessionStatus.CANCELLED, SessionStatus.FAILED})
+
+_locks: dict[str, asyncio.Lock] = {}
+# Deliveries this process is currently reading a stream for; sync leaves them to the stream.
+_streaming: set[str] = set()
+_tasks: set[asyncio.Task] = set()
 
 
 def next_status(
@@ -82,130 +89,380 @@ def next_status(
     return SessionStatus.WAITING_ON_USER
 
 
-WRITEOUT_TEXT = (
-    "[mainloop:pre-cut] Your context window is about to be reset by Mainloop. Write out anything "
-    "durable now with `mainloop note`, `mainloop decide` and `mainloop pending` (one command each), "
-    "then reply with the single word: done"
-)
-
-
-def is_rotating(session_id: str) -> bool:
-    return session_id in _rotating
-
-
-def workspace_for(binding: dict) -> SubstrateWorkspace:
-    """Map a native binding to its branch actor or configured shared actor."""
-    agent = binding["kind"]
-    atespace = binding.get("workspace_atespace")
-    actor = binding.get("workspace_actor_name")
-    secret_name = binding.get("workspace_shim_token_secret_name")
-    workspace_route = (atespace, actor, secret_name)
-    if any(workspace_route) and not all(workspace_route):
-        raise RuntimeError("native workspace binding has an incomplete actor route")
-    if not all(workspace_route):
-        actor_binding = settings.substrate_actor_bindings.get(agent)
-        if actor_binding is None:
-            raise RuntimeError(
-                f"no Substrate actor binding is configured for native agent {agent}"
-            )
-        atespace = actor_binding.atespace
-        actor = actor_binding.actor
-        secret_name = actor_binding.shim_token_secret_name
-    key = (
-        binding["session_id"],
-        atespace,
-        actor,
-        secret_name,
-        agent,
-    )
-    if key not in _workspaces:
-        _workspaces[key] = SubstrateWorkspace(
-            atespace=atespace,
-            actor=actor,
-            agent=agent,
-            shim_token_secret_name=secret_name,
-            logical_session_id=binding["session_id"],
-            native_session_id=binding.get("native_session_id"),
-        )
-    workspace = _workspaces[key]
-    workspace.set_native_session_id(binding.get("native_session_id"))
-    return workspace
-
-
-def rotation_due(
-    *,
-    context_tokens: int | None,
-    baseline_tokens: int | None,
-    turns: int,
-    budget_tokens: int,
-    budget_turns: int,
-) -> str | None:
-    """Deterministic rotation trigger. Tokens are measured above the lineage's first-turn baseline
-    (a trivial Claude session already holds ~10-20k tokens of tools and system prompt).
-    """
-    if context_tokens is not None and baseline_tokens is not None:
-        grown = context_tokens - baseline_tokens
-        if grown >= budget_tokens:
-            return f"tokens: context grew {grown} >= {budget_tokens} over baseline {baseline_tokens}"
-    if turns >= budget_turns:
-        return f"turns: {turns} >= {budget_turns}"
-    return None
-
-
 def _lock(session_id: str) -> asyncio.Lock:
     return _locks.setdefault(session_id, asyncio.Lock())
 
 
-def agent_name(session_id: str, kind: str) -> str:
-    return f"ml-{kind}-{session_id[:8]}"
+def _spawn(coro: Coroutine[Any, Any, Any]) -> None:
+    task = asyncio.create_task(coro)
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
+# --------------------------------------------------------------------------------------------
+# kagent client and agent selection
+# --------------------------------------------------------------------------------------------
+
+_client: KagentClient | None = None
+
+
+def get_client() -> KagentClient:
+    global _client
+    if _client is None:
+        _client = KagentClient(
+            settings.kagent_gateway_url,
+            user_id=settings.kagent_user_id,
+            request_timeout=settings.kagent_request_timeout_seconds,
+            stream_timeout=settings.kagent_turn_timeout_seconds,
+            send_retry_budget=settings.kagent_send_retry_budget_seconds,
+        )
+    return _client
+
+
+async def close_client() -> None:
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
+
+
+def agent_name(kind: str) -> str:
+    """Return the kagent Agent that runs a native agent kind."""
+    if kind == "claude":
+        return settings.kagent_claude_agent
+    if kind == "codex":
+        return settings.kagent_codex_agent
+    raise ValueError(f"no kagent Agent is configured for native agent {kind}")
+
+
+def agent_ref(kind: str) -> AgentRef:
+    return AgentRef(settings.kagent_namespace, agent_name(kind))
+
+
+def create_request_id(session_id: str) -> str:
+    """Stable CreateSession request id: a retry returns the same kagent Session."""
+    return str(uuid.uuid5(_NS, f"create-session:{session_id}"))
+
+
+def _request_id(binding: dict) -> str:
+    """Return the binding's create request id: the stable one, or the replacement's."""
+    return binding.get("kagent_request_id") or create_request_id(binding["session_id"])
+
+
+# --------------------------------------------------------------------------------------------
+# Ledger (Postgres)
+# --------------------------------------------------------------------------------------------
+
+
+class Ledger:
+    """Postgres side of the binding and delivery ledger."""
+
+    async def get_binding(self, session_id: str, *, conn=None) -> dict | None:
+        query = "SELECT * FROM native_bindings WHERE session_id=$1"
+        if conn is None:
+            async with db.connection() as connection:
+                row = await connection.fetchrow(query, session_id)
+        else:
+            row = await conn.fetchrow(query, session_id)
+        return dict(row) if row else None
+
+    async def create_binding(
+        self,
+        connection,
+        *,
+        session_id: str,
+        kind: str,
+        role: str,
+        parent_session_id: str | None,
+        topic_id: str | None,
+        token_hash: str | None,
+    ) -> None:
+        await connection.execute(
+            """INSERT INTO native_bindings (session_id, kind, role, parent_session_id, topic_id, token_hash)
+               VALUES ($1,$2,$3,$4,$5,$6)""",
+            session_id,
+            kind,
+            role,
+            parent_session_id,
+            topic_id,
+            token_hash,
+        )
+
+    async def update_binding(self, session_id: str, **fields) -> None:
+        if not fields:
+            return
+        sets = [f"{k}=${i + 2}" for i, k in enumerate(fields)]
+        sets.append("updated_at=NOW()")
+        async with db.connection() as conn:
+            await conn.execute(
+                f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
+                session_id,
+                *fields.values(),
+            )
+
+    async def replace_kagent_session(
+        self, session_id: str, old_kagent_session_id: str | None, request_id: str
+    ) -> bool:
+        """Point the binding at a Session not created yet, after kagent deleted the old one.
+
+        The new create request id is stored before kagent is called, so the replacement is as
+        idempotent as the first create. Deliveries still open on the old Session can never
+        finish there; they become ``uncertain`` (never replayed). False when another pass
+        already replaced it.
+        """
+        async with db.connection() as conn:
+            async with conn.transaction():
+                moved = await conn.fetchval(
+                    """UPDATE native_bindings
+                       SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
+                           updated_at=NOW()
+                       WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
+                       RETURNING session_id""",
+                    session_id,
+                    old_kagent_session_id,
+                    request_id,
+                )
+                if moved is None:
+                    return False
+                await conn.execute(
+                    """UPDATE native_deliveries
+                       SET state='uncertain',
+                           detail='the kagent Session was deleted; not replaying',
+                           updated_at=NOW()
+                       WHERE session_id=$1 AND state IN ('sending','delivered')""",
+                    session_id,
+                )
+        return True
+
+    async def bump_turns(self, session_id: str) -> None:
+        async with db.connection() as conn:
+            await conn.execute(
+                "UPDATE native_bindings SET turns=turns+1, updated_at=NOW() WHERE session_id=$1",
+                session_id,
+            )
+
+    async def record_message(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        text: str,
+        state: str,
+        source: str,
+    ) -> str:
+        """Record the message and delivery under the workspace lock used by suspension."""
+        async with db.connection() as conn:
+            async with conn.transaction():
+                binding = await conn.fetchrow(
+                    """SELECT workspace_id,desired_state FROM workspace_bindings
+                       WHERE workspace_id=$1 FOR UPDATE""",
+                    session_id,
+                )
+                if binding and binding.get("desired_state") == "deleting":
+                    raise ValueError(
+                        "The workspace is being deleted; start another workspace."
+                    )
+                lifecycle = (
+                    await conn.fetchrow(
+                        """SELECT desired_state, observed_state FROM workspace_lifecycles
+                           WHERE workspace_id=$1""",
+                        session_id,
+                    )
+                    if binding
+                    else None
+                )
+                if lifecycle and (
+                    lifecycle["desired_state"] == "suspended"
+                    or lifecycle["observed_state"] in {"suspending", "suspended"}
+                ):
+                    raise ValueError(
+                        "The workspace is suspending or suspended; resume it before sending a message."
+                    )
+
+                message = await db.create_message(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=text,
+                    conn=conn,
+                )
+                await conn.execute(
+                    "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
+                    message.id,
+                    session_id,
+                    state,
+                    source,
+                )
+                if binding:
+                    await conn.execute(
+                        "UPDATE workspace_lifecycles SET last_activity_at=NOW(), updated_at=NOW() WHERE workspace_id=$1",
+                        session_id,
+                    )
+        return message.id
+
+    async def delivery_state(self, message_id: str) -> str | None:
+        async with db.connection() as conn:
+            return await conn.fetchval(
+                "SELECT state FROM native_deliveries WHERE message_id=$1", message_id
+            )
+
+    async def recorded_deliveries(self, session_id: str) -> list[tuple[str, str]]:
+        """Deliveries kagent has never seen (``recorded``), oldest first, with their text."""
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT d.message_id, m.content FROM native_deliveries d
+                   JOIN messages m ON m.id=d.message_id
+                   WHERE d.session_id=$1 AND d.state='recorded' ORDER BY d.created_at""",
+                session_id,
+            )
+        return [(r["message_id"], r["content"]) for r in rows]
+
+    async def open_count(self, session_id: str) -> int:
+        async with db.connection() as conn:
+            return await conn.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND state = ANY($2)",
+                session_id,
+                list(OPEN_STATES),
+            )
+
+    async def set_delivery(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        task_id: str | None = None,
+        evidence_ref: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        async with db.connection() as conn:
+            await conn.execute(
+                """UPDATE native_deliveries SET state=$2, task_id=COALESCE($3, task_id),
+                   evidence_ref=COALESCE($4, evidence_ref),
+                   detail=CASE WHEN $2 IN ('delivered', 'completed') THEN $5 ELSE COALESCE($5, detail) END,
+                   updated_at=NOW()
+                   WHERE message_id=$1""",
+                message_id,
+                state,
+                task_id,
+                evidence_ref,
+                detail,
+            )
+
+    async def transition(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        from_states: tuple[str, ...],
+        task_id: str | None = None,
+        evidence_ref: str | None = None,
+        detail: str | None = None,
+    ) -> bool:
+        """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
+        async with db.connection() as conn:
+            row = await conn.fetchval(
+                """UPDATE native_deliveries SET state=$2, task_id=COALESCE($3, task_id),
+                   evidence_ref=COALESCE($4, evidence_ref),
+                   detail=CASE WHEN $2 IN ('delivered', 'completed') THEN $5 ELSE COALESCE($5, detail) END,
+                   updated_at=NOW()
+                   WHERE message_id=$1 AND state = ANY($6) RETURNING message_id""",
+                message_id,
+                state,
+                task_id,
+                evidence_ref,
+                detail,
+                list(from_states),
+            )
+        return row is not None
+
+    async def deliveries(self, session_id: str) -> list[dict]:
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM native_deliveries WHERE session_id=$1 ORDER BY created_at",
+                session_id,
+            )
+        return [dict(r) for r in rows]
+
+    async def resolvable_deliveries(self, session_id: str) -> list[dict]:
+        """Deliveries a task observation can still move, with the message text."""
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT d.*, m.content FROM native_deliveries d JOIN messages m ON m.id=d.message_id
+                   WHERE d.session_id=$1 AND d.state = ANY($2) ORDER BY d.created_at""",
+                session_id,
+                list(_RESOLVABLE),
+            )
+        return [dict(r) for r in rows]
+
+    async def promote_queued(self, session_id: str) -> tuple[str, str] | None:
+        """Mark the oldest queued delivery ``recorded`` if (and only if) nothing is open. Atomic in
+        SQL, and serialised with ``submit_message`` by the per-session lock."""
+        async with db.connection() as conn:
+            row = await conn.fetchrow(
+                """UPDATE native_deliveries SET state='recorded', updated_at=NOW()
+                   WHERE message_id = (SELECT message_id FROM native_deliveries
+                                       WHERE session_id=$1 AND state='queued' ORDER BY created_at LIMIT 1)
+                     AND state='queued'
+                     AND NOT EXISTS (SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))
+                   RETURNING message_id""",
+                session_id,
+                list(OPEN_STATES),
+            )
+            if row is None:
+                return None
+            text = await conn.fetchval(
+                "SELECT content FROM messages WHERE id=$1", row["message_id"]
+            )
+        return row["message_id"], text
+
+    async def fail_open(self, session_id: str, detail: str) -> list[dict]:
+        """Close every open or queued delivery as failed; return what was open, with the state each
+        had before (``state``) and its task id."""
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """WITH prior AS (
+                       SELECT message_id, state FROM native_deliveries
+                       WHERE session_id=$1
+                         AND state IN ('recorded','sending','delivered','queued','uncertain')
+                       FOR UPDATE)
+                   UPDATE native_deliveries d SET state='failed', detail=$2, updated_at=NOW()
+                   FROM prior WHERE d.message_id = prior.message_id
+                   RETURNING d.message_id, d.task_id, prior.state AS state""",
+                session_id,
+                detail,
+            )
+        return [dict(r) for r in rows]
+
+    async def mirror_reply(
+        self, conversation_id: str, message_id: str, text: str
+    ) -> bool:
+        async with db.connection() as conn:
+            result = await conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
+                message_id,
+                conversation_id,
+                text,
+            )
+        return str(result).endswith(" 1")
+
+    async def sessions_with_open_work(self) -> list[str]:
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT DISTINCT session_id FROM native_deliveries
+                   WHERE state IN ('recorded','sending','delivered','queued')
+                      OR (state='uncertain' AND updated_at > NOW() - INTERVAL '30 minutes')"""
+            )
+        return [r["session_id"] for r in rows]
+
+    async def topic_name(self, topic_id: str) -> str | None:
+        async with db.connection() as conn:
+            return await conn.fetchval("SELECT name FROM topics WHERE id=$1", topic_id)
+
+
+ledger = Ledger()
 
 
 async def get_binding(session_id: str, *, conn=None) -> dict | None:
-    query = """SELECT b.*,
-                      w.atespace AS workspace_atespace,
-                      w.actor_name AS workspace_actor_name,
-                      w.shim_token_secret_name AS workspace_shim_token_secret_name
-               FROM native_bindings b
-               LEFT JOIN workspace_bindings w ON w.workspace_id=b.session_id
-               WHERE b.session_id=$1"""
-    if conn is None:
-        async with db.connection() as connection:
-            row = await connection.fetchrow(query, session_id)
-    else:
-        row = await conn.fetchrow(query, session_id)
-    return dict(row) if row else None
-
-
-async def _update_binding(session_id: str, **fields) -> None:
-    sets = [f"{k}=${i + 2}" for i, k in enumerate(fields)]
-    sets.append("updated_at=NOW()")
-    async with db.connection() as conn:
-        await conn.execute(
-            f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
-            session_id,
-            *fields.values(),
-        )
-
-
-async def _set_delivery(
-    message_id: str,
-    state: str,
-    *,
-    evidence_ref: str | None = None,
-    detail: str | None = None,
-    cursor_before: int | None = None,
-) -> None:
-    async with db.connection() as conn:
-        await conn.execute(
-            """UPDATE native_deliveries SET state=$2, evidence_ref=COALESCE($3, evidence_ref),
-               detail=COALESCE($4, detail), cursor_before=COALESCE($5, cursor_before), updated_at=NOW()
-               WHERE message_id=$1""",
-            message_id,
-            state,
-            evidence_ref,
-            detail,
-            cursor_before,
-        )
+    return await ledger.get_binding(session_id, conn=conn)
 
 
 async def create_binding(
@@ -217,144 +474,56 @@ async def create_binding(
     topic_id: str | None = None,
     conn=None,
 ) -> dict:
-    # Claude takes the native session id up front (--session-id); Codex reports it in its journal.
-    native_id = str(uuid.uuid4()) if kind == "claude" else None
-    name = "ml-main" if role == "main" else agent_name(session_id, kind)
+    agent_name(kind)  # an unconfigured kind fails here, before a row exists
     token_hash = (
         hash_token(token_for(session_id)) if role in ("main", "child") else None
     )
-
-    async def insert_binding(connection) -> None:
-        await connection.execute(
-            """INSERT INTO native_bindings (session_id, kind, agent_name, native_session_id, approval_policy,
-                   role, parent_session_id, topic_id, token_hash, model)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-            session_id,
-            kind,
-            name,
-            native_id,
-            APPROVAL_POLICY if role != "main" else "restricted: Bash(mainloop:*) only",
-            role,
-            parent_session_id,
-            topic_id,
-            token_hash,
-            settings.main_thread_model if role == "main" else None,
-        )
-        if role == "main" and native_id:
-            await connection.execute(
-                "INSERT INTO native_lineage (session_id, seq, native_session_id, started_reason) VALUES ($1,1,$2,'create')",
-                session_id,
-                native_id,
-            )
-
+    fields = dict(
+        session_id=session_id,
+        kind=kind,
+        role=role,
+        parent_session_id=parent_session_id,
+        topic_id=topic_id,
+        token_hash=token_hash,
+    )
     if conn is None:
         async with db.connection() as connection:
-            await insert_binding(connection)
+            await ledger.create_binding(connection, **fields)
         return await get_binding(session_id)  # type: ignore[return-value]
-    await insert_binding(conn)
+    await ledger.create_binding(conn, **fields)
     return await get_binding(session_id, conn=conn)  # type: ignore[return-value]
 
 
-async def _open_count(session_id: str) -> int:
-    async with db.connection() as conn:
-        return await conn.fetchval(
-            "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND state = ANY($2)",
-            session_id,
-            list(OPEN_STATES),
-        )
-
-
-async def _record_delivery_message(
-    *,
-    session_id: str,
-    conversation_id: str,
-    text: str,
-    state: str,
-    source: str,
-) -> str:
-    """Record the message and delivery under the workspace lock used by suspension."""
-    async with db.connection() as conn:
-        async with conn.transaction():
-            binding = await conn.fetchrow(
-                """SELECT workspace_id,desired_state FROM workspace_bindings
-                   WHERE workspace_id=$1 FOR UPDATE""",
-                session_id,
-            )
-            if binding and binding.get("desired_state") == "deleting":
-                raise ValueError(
-                    "The workspace is being deleted; start another workspace."
-                )
-            lifecycle = (
-                await conn.fetchrow(
-                    """SELECT desired_state, observed_state FROM workspace_lifecycles
-                       WHERE workspace_id=$1""",
-                    session_id,
-                )
-                if binding
-                else None
-            )
-            if lifecycle and (
-                lifecycle["desired_state"] == "suspended"
-                or lifecycle["observed_state"] in {"suspending", "suspended"}
-            ):
-                raise ValueError(
-                    "The workspace is suspending or suspended; resume it before sending a message."
-                )
-
-            message = await db.create_message(
-                conversation_id=conversation_id,
-                role="user",
-                content=text,
-                conn=conn,
-            )
-            await conn.execute(
-                "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
-                message.id,
-                session_id,
-                state,
-                source,
-            )
-            if binding:
-                await conn.execute(
-                    "UPDATE workspace_lifecycles SET last_activity_at=NOW(), updated_at=NOW() WHERE workspace_id=$1",
-                    session_id,
-                )
-    return message.id
+# --------------------------------------------------------------------------------------------
+# Submit and deliver
+# --------------------------------------------------------------------------------------------
 
 
 async def submit_message(session_id: str, text: str, *, source: str = "user") -> str:
     """Record a message and its delivery intent, then deliver in the background.
 
     ``source``: ``user`` (typed in the UI; refused while a turn is open), ``report`` (a child's
-    report; queued while a turn is open), ``writeout`` (the pre-cut turn), ``brief`` (a parent's
-    task brief to a fresh child). A ``queued`` delivery is sent by ``sync`` once the agent is idle.
+    report; queued while a turn is open), ``brief`` (a parent's task brief to a fresh child). A
+    ``queued`` delivery is sent by ``sync`` once the agent is idle.
     """
     session = await db.get_session(session_id)
-    # Branch workspace turns touch and wake their actor before the delivery is recorded. Static
-    # agent bindings have no workspace_bindings row and continue through their existing path.
+    # Branch workspace turns touch and wake their actor before the delivery is recorded. Sessions
+    # without a workspace binding have nothing to wake.
     if await workspace_adapter.get_workspace(session_id) is not None:
         await workspace_adapter.touch_workspace(session_id, reason="turn")
     if source == "user" and session.status in ENDED_STATUSES:
         raise ValueError(f"This session is {session.status.value}; start a new one.")
-    if source == "user" and session_id in _rotating:
-        raise ValueError(
-            "The main thread is rotating its context window; try again in a moment."
-        )
     # The in-flight check and the ledger insert are one critical section (per session), so two
-    # concurrent submissions cannot both see an idle agent and interleave in one turn (E4).
+    # concurrent submissions cannot both see an idle agent and interleave in one task.
     async with _lock(session_id):
-        busy = await _open_count(session_id)
+        busy = await ledger.open_count(session_id)
         # An 'uncertain' delivery does not block: the user decides whether to send again.
-        if busy and source in ("user", "writeout", "brief"):
+        if busy and source in ("user", "brief"):
             raise ValueError(
                 "A previous message is still in flight; wait for its reply before sending another."
             )
-        state = (
-            "queued"
-            if busy or (source == "report" and session_id in _rotating)
-            else "recorded"
-        )
-        message_id = await _record_delivery_message(
+        state = "queued" if busy else "recorded"
+        message_id = await ledger.record_message(
             session_id=session_id,
             conversation_id=session.conversation_id,
             text=text,
@@ -362,551 +531,518 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
             source=source,
         )
     if state == "recorded":
-        asyncio.create_task(_deliver(session_id, message_id, text))
+        _spawn_deliver(session_id, message_id, text)
     return message_id
 
 
-async def _start_extra(binding: dict) -> tuple[dict[str, str], str | None]:
-    """Agentctl options for main/child bindings: scratch cwd, scoped token, standing context."""
-    if binding["role"] == "agent":
-        return {}, None
+def _spawn_deliver(session_id: str, message_id: str, text: str) -> None:
+    # Marked before the task runs, so a sync in between leaves the message to this delivery.
+    _streaming.add(message_id)
+    _spawn(_deliver(session_id, message_id, text))
+
+
+def _create_hit_deleted(exc: SessionError) -> bool:
+    """CreateSession refused the request id because its Session was deleted."""
+    return exc.grpc_status == 9 and "deleted" in str(exc).lower()
+
+
+async def _live_session(session_id: str) -> KagentSession | None:
+    """Return the kagent Session, or None when kagent has deleted it (idle TTL or out of band)."""
+    try:
+        session = await get_client().get_session(session_id)
+    except SessionError as exc:
+        if exc.grpc_status == 5:  # NOT_FOUND
+            return None
+        raise
+    if session.state in (RuntimeState.DELETING, RuntimeState.DELETED):
+        return None
+    return session
+
+
+async def _replace_kagent_session(binding: dict) -> None:
+    old = binding["kagent_session_id"]
+    logger.warning(
+        "kagent Session %s of %s is gone; creating a new one",
+        old or _request_id(binding),
+        binding["session_id"],
+    )
+    # When another pass replaced it first this changes nothing; either way continue from what
+    # is stored.
+    await ledger.replace_kagent_session(binding["session_id"], old, str(uuid.uuid4()))
+    binding.update(await ledger.get_binding(binding["session_id"]) or {})
+
+
+async def _ensure_kagent_session(binding: dict) -> KagentSession:
+    """Return the binding's kagent Session, ready for a turn.
+
+    It is created on first use and resumed if suspended. A Session kagent has deleted (the idle
+    TTL, or out of band) is replaced once, under a fresh create request id; the replacement gets
+    the standing context again, because ``standing_hash`` belongs to the Session it went to.
+    """
+    client = get_client()
+    for replaced in (False, True):
+        if binding["kagent_session_id"] is None:
+            try:
+                session = await client.create_session(
+                    agent_ref(binding["kind"]), request_id=_request_id(binding)
+                )
+            except SessionError as exc:
+                if replaced or not _create_hit_deleted(exc):
+                    raise
+                await _replace_kagent_session(binding)
+                continue
+            await ledger.update_binding(
+                binding["session_id"], kagent_session_id=session.id, standing_hash=None
+            )
+            binding.update(kagent_session_id=session.id, standing_hash=None)
+        else:
+            live = await _live_session(binding["kagent_session_id"])
+            if live is None:
+                if replaced:
+                    raise SessionError("the replacement kagent Session is already gone")
+                await _replace_kagent_session(binding)
+                continue
+            session = live
+        return await client.ensure_ready(
+            session, timeout=settings.kagent_session_ready_timeout_seconds
+        )
+    raise AssertionError("unreachable")
+
+
+async def _with_standing(binding: dict, text: str) -> tuple[str, str | None]:
+    """Prefix the first message of a main or child session with its standing context.
+
+    Returns the prompt and the standing hash to record once kagent has accepted it.
+    """
+    if binding["role"] == "agent" or binding["standing_hash"]:
+        return text, None
     from mainloop.runtime.delegation import render_for_binding
 
     standing = await render_for_binding(binding)
-    extra = {
-        "--cwd-rel": (
-            "main" if binding["role"] == "main" else f"children/{binding['agent_name']}"
-        ),
-        "--token": token_for(binding["session_id"]),
-        "--standing-b64": base64.b64encode(standing.encode()).decode(),
-        "--approval-policy": binding["approval_policy"],
-    }
-    if binding["role"] == "main":
-        extra["--model"] = settings.main_thread_model
-        extra["--effort"] = settings.main_thread_effort
-    return extra, content_hash(standing)
-
-
-async def _ensure_agent(session_id: str, binding: dict) -> dict:
-    """Check native session readiness in its Substrate actor."""
-    ws = workspace_for(binding)
-    await ws.require_ready()
-    name = binding["agent_name"]
-    resume = binding["journal_ref"] is not None
-    status = await ws.agent_status(name)
-    extra, standing_hash = await _start_extra(binding)
-    fields: dict = {}
-    if status is None:
-        # A journal already seen for this native session id means an earlier run: resume it.
-        await ws.start(
-            binding["kind"],
-            name,
-            native_id=binding["native_session_id"],
-            resume=resume,
-            extra=extra,
-        )
-        fields.update(generation=binding["generation"] + (1 if resume else 0))
-        if standing_hash:
-            fields["standing_hash"] = standing_hash
-    else:
-        ws.set_resume_history(resume)
-        ws.set_startup_options(extra)
-        # An already running agent may have resumed from a parked actor snapshot.
-        await ws.prepare_credentials()
-        if standing_hash and standing_hash != binding.get("standing_hash"):
-            fields["standing_hash"] = standing_hash
-    await _update_binding(session_id, **fields)
-    return await get_binding(session_id)  # type: ignore[return-value]
+    return f"{standing}\n\n---\n\n{text}", content_hash(standing)
 
 
 async def _deliver(session_id: str, message_id: str, text: str) -> None:
-    async with _lock(session_id):
-        try:
-            binding = await get_binding(session_id)
-            ws = workspace_for(binding)
-            binding = await _ensure_agent(
-                session_id, binding
-            )  # not attempted => nothing sent
-            cursor_before = 0
-            if binding["native_session_id"]:
-                cursor_before = (
-                    await ws.journal(
-                        binding["agent_name"], binding["native_session_id"], 10**9
-                    )
-                ).total_lines
-            await _set_delivery(message_id, "sending", cursor_before=cursor_before)
-        except CredentialNeedsSignin as exc:
-            await _set_delivery(
-                message_id, "failed", detail=f"not sent: {exc.provider} needs sign-in"
+    _streaming.add(message_id)
+    reply: str | None = None
+    try:
+        async with _lock(session_id):
+            # 'recorded' means kagent has never seen the message. Any other state means it was
+            # cancelled or another pass already took it: there is nothing to send.
+            if await ledger.delivery_state(message_id) != "recorded":
+                return
+            try:
+                binding = await get_binding(session_id)
+                await _ensure_kagent_session(binding)  # not attempted => nothing sent
+                prompt, standing_hash = await _with_standing(binding, text)
+            except Exception as exc:
+                logger.exception("delivery not attempted for %s", message_id)
+                await ledger.transition(
+                    message_id,
+                    "failed",
+                    from_states=("recorded",),
+                    detail=f"not sent: {type(exc).__name__}: {exc}",
+                )
+                prompt = None
+            # The claim is atomic, so a cancel or a second process cannot also send it.
+            if prompt is not None and not await ledger.transition(
+                message_id, "sending", from_states=("recorded",)
+            ):
+                return
+        if prompt is not None:
+            events = get_client().send_message(
+                agent_ref(binding["kind"]),
+                text=prompt,
+                message_id=message_id,
+                context_id=binding["kagent_session_id"],
             )
-            await _notify_credential_signin(session_id, exc.provider)
-            return
-        except Exception as exc:
-            logger.exception("delivery not attempted for %s", message_id)
-            await _set_delivery(
-                message_id, "failed", detail=f"not sent: {type(exc).__name__}: {exc}"
+            reply = await _consume(
+                session_id, message_id, binding, events, standing_hash=standing_hash
             )
-            return
-        try:
-            await ws.send(binding["agent_name"], text)
-        except TransportError as exc:
-            await _set_delivery(
-                message_id,
-                "uncertain",
-                detail=f"transport error, outcome unknown: {exc}",
-            )
-            return
-        except RuntimeError as exc:
-            await _set_delivery(message_id, "failed", detail=f"send rejected: {exc}")
-            return
-        except Exception as exc:
-            logger.exception("delivery outcome unknown for %s", message_id)
-            await _set_delivery(
-                message_id, "uncertain", detail=f"unexpected error after send: {exc}"
-            )
-            return
-    await sync(session_id)
+    finally:
+        _streaming.discard(message_id)
+    # Outside the lock: _after may promote the next queued delivery, which takes it.
+    await _after(session_id, reply)
 
 
-async def _notify_credential_signin(
-    session_id: str, provider: str, *, prompt_sent: bool = False
-) -> None:
-    session = await db.get_session(session_id)
-    if session is None:
-        return
-    title = f"{provider.title()} needs sign-in"
-    preview = (
-        "The agent rejected a provider request. Sign in before sending again."
-        if prompt_sent
-        else "No prompt was sent. Open the workspace page to start sign-in."
-    )
-    notification = SessionNotification(
-        id=f"credential-signin-{provider}-{session_id}",
-        session_id=session_id,
-        user_id=session.user_id,
-        title=title,
-        preview=preview,
-    )
-    async with db.connection() as conn:
-        await conn.execute(
-            """INSERT INTO session_notifications
-               (id, session_id, user_id, title, preview, read, created_at)
-               VALUES ($1,$2,$3,$4,$5,FALSE,$6)
-               ON CONFLICT (id) DO UPDATE SET
-                   title=EXCLUDED.title, preview=EXCLUDED.preview, read=FALSE,
-                   created_at=EXCLUDED.created_at""",
-            notification.id,
-            notification.session_id,
-            notification.user_id,
-            notification.title,
-            notification.preview,
-            notification.created_at,
-        )
-    await notify_session_needs_input(notification.user_id, session_id, title, preview)
+async def _consume(
+    session_id: str,
+    message_id: str,
+    binding: dict,
+    events: AsyncIterator[StreamEvent],
+    *,
+    snapshot: bool = False,
+    standing_hash: str | None = None,
+) -> str | None:
+    """Fold a task event stream into the ledger. Returns the reply if this call completed it.
 
-
-async def sync(session_id: str) -> None:
-    """Mirror new journal evidence into Postgres, then run the follow-up actions (queued
-    deliveries, child fallback report, rotation) that are only safe outside the binding lock.
+    ``snapshot`` is for ``SubscribeToTask``: its first event is the current task, which replaces
+    the projection rather than extending it. The delivery was already settled, so a failed
+    follow is left to the next sync.
     """
-    follow = await _sync_locked(session_id)
-    if not follow:
+    proj = TaskProjection()
+    recorded = False
+    try:
+        async for event in events:
+            proj.apply(event)
+            if proj.task_id and not recorded:
+                recorded = True
+                await ledger.transition(
+                    message_id,
+                    "delivered",
+                    from_states=_RESOLVABLE,
+                    task_id=proj.task_id,
+                    evidence_ref=f"a2a:task/{proj.task_id}",
+                )
+                if standing_hash:
+                    # kagent has the standing context now; never prefix it again.
+                    await ledger.update_binding(session_id, standing_hash=standing_hash)
+    except TaskNotFound:
+        await ledger.transition(
+            message_id,
+            "uncertain",
+            from_states=_RESOLVABLE,
+            detail="the task no longer exists; not replaying",
+        )
+        return None
+    except (SendNotAccepted, Unreachable, A2AError) as exc:
+        if snapshot:
+            # Following an existing task: the delivery is already settled; the next sync retries.
+            logger.info("follow of %s failed: %s", message_id, exc)
+            return None
+        if isinstance(exc, Unreachable):
+            await ledger.transition(
+                message_id,
+                "failed",
+                from_states=_RESOLVABLE + ("recorded",),
+                detail=f"not sent: {exc}",
+            )
+            return None
+        if proj.task_id:
+            return await _resolve(session_id, message_id, binding, proj, str(exc))
+        if isinstance(exc, SendNotAccepted):
+            # kagent accepted nothing, even after the same-message retries: a definite non-delivery.
+            detail = f"not sent: kagent did not accept the message ({exc.message})"
+        else:
+            detail = f"send rejected: {exc.message}"
+        await ledger.transition(
+            message_id,
+            "failed",
+            from_states=_RESOLVABLE + ("recorded",),
+            detail=detail,
+        )
+        return None
+    except OutcomeUnknown as exc:
+        logger.info("stream for %s broke: %s", message_id, exc)
+        return await _resolve(session_id, message_id, binding, proj, str(exc))
+    except Exception as exc:
+        logger.exception("delivery outcome unknown for %s", message_id)
+        await ledger.transition(
+            message_id,
+            "uncertain",
+            from_states=_RESOLVABLE,
+            detail=f"unexpected error after send: {exc}",
+        )
+        return None
+    if proj.terminal:
+        return await _finalize(session_id, message_id, proj)
+    if proj.task_id is None and not proj.parked:
+        # The stream ended without ever naming a task: the outcome is unobserved.
+        return await _resolve(session_id, message_id, binding, proj, "stream ended")
+    return None
+
+
+async def _resolve(
+    session_id: str,
+    message_id: str,
+    binding: dict,
+    proj: TaskProjection,
+    why: str,
+) -> str | None:
+    """After an ambiguous outcome, observe the task. Never re-sends.
+
+    With a task id the current task replaces the projection. Without one, ``ListTasks`` is
+    searched for the message id; if nothing shows the message, the delivery is ``uncertain``.
+    """
+    agent = agent_ref(binding["kind"])
+    try:
+        client = get_client()
+        if proj.task_id:
+            task = await client.get_task(agent, proj.task_id)
+        else:
+            task = await client.find_task_for_message(
+                agent, binding["kagent_session_id"], message_id
+            )
+    except (KagentError, TaskNotFound) as exc:
+        await ledger.transition(
+            message_id,
+            "uncertain",
+            from_states=_RESOLVABLE,
+            detail=f"transport error, outcome unknown ({why}); not replaying: {exc}",
+        )
+        return None
+    if task is None:
+        await ledger.transition(
+            message_id,
+            "uncertain",
+            from_states=_RESOLVABLE,
+            detail=f"no task shows this message after: {why}; not replaying",
+        )
+        return None
+    proj.replace(task)
+    await ledger.transition(
+        message_id,
+        "delivered",
+        from_states=_RESOLVABLE,
+        task_id=task.id,
+        evidence_ref=f"a2a:task/{task.id}",
+    )
+    if proj.terminal:
+        return await _finalize(session_id, message_id, proj)
+    return None
+
+
+async def _finalize(
+    session_id: str, message_id: str, proj: TaskProjection
+) -> str | None:
+    """Close the delivery from a terminal projection and mirror the reply, once.
+
+    Returns the reply when the task completed (for the child fallback report).
+    """
+    state = proj.normalised_state
+    if state == "completed":
+        new_state, detail = "completed", None
+    elif state == "canceled":
+        new_state, detail = "failed", "task was cancelled"
+    else:
+        new_state = "failed"
+        detail = f"task {state}: {proj.failure_text}".rstrip(": ")
+    moved = await ledger.transition(
+        message_id,
+        new_state,
+        from_states=_RESOLVABLE,
+        task_id=proj.task_id,
+        evidence_ref=f"a2a:task/{proj.task_id}" if proj.task_id else None,
+        detail=detail,
+    )
+    if not moved:
+        return None
+    reply = proj.text
+    if reply:
+        session = await db.get_session(session_id)
+        reply_id = assistant_message_id(session_id, proj.task_id or message_id)
+        if await ledger.mirror_reply(session.conversation_id, reply_id, reply):
+            await notify_session_message(
+                session.user_id, session_id, reply_id, "assistant"
+            )
+    if state == "completed":
+        await ledger.bump_turns(session_id)
+        return reply or None
+    return None
+
+
+async def _after(session_id: str, reply: str | None) -> None:
+    """Follow-up actions that are only safe outside the stream: status, the child fallback
+    report, and the next queued delivery."""
+    binding = await get_binding(session_id)
+    session = await db.get_session(session_id)
+    if binding is None or session is None:
         return
-    if follow.get("fallback_report"):
+    open_n = await ledger.open_count(session_id)
+    is_child = binding["role"] == "child"
+    new_status = next_status(
+        session.status,
+        turn_open=bool(open_n),
+        is_child=is_child,
+        reported=bool(binding["reported_at"]),
+    )
+    if session.status != new_status:
+        await db.update_session(session_id, status=new_status)
+    if (
+        is_child
+        and reply
+        and new_status not in ENDED_STATUSES
+        and binding["reported_at"] is None
+    ):
         from mainloop.runtime.delegation import auto_report
 
-        await auto_report(session_id, follow["fallback_report"])
-    if follow.get("idle") and session_id not in _rotating:
-        binding = await get_binding(session_id)
-        if binding and binding["role"] == "main":
-            reason = rotation_due(
-                context_tokens=binding["context_tokens"],
-                baseline_tokens=binding["baseline_tokens"],
-                turns=binding["turns_in_lineage"],
-                budget_tokens=settings.main_rotate_tokens,
-                budget_turns=settings.main_rotate_turns,
-            )
-            if reason:
-                asyncio.create_task(rotate(session_id, reason))
-                return
+        await auto_report(session_id, reply)
+    if open_n == 0:
         await _promote_queued(session_id)
 
 
 async def _promote_queued(session_id: str) -> None:
-    """Send the oldest queued delivery if (and only if) nothing is open. Atomic in SQL, and
-    serialised with ``submit_message`` by the per-session lock."""
-    async with _lock(session_id), db.connection() as conn:
-        row = await conn.fetchrow(
-            """UPDATE native_deliveries SET state='recorded', updated_at=NOW()
-               WHERE message_id = (SELECT message_id FROM native_deliveries
-                                   WHERE session_id=$1 AND state='queued' ORDER BY created_at LIMIT 1)
-                 AND state='queued'
-                 AND NOT EXISTS (SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))
-               RETURNING message_id""",
-            session_id,
-            list(OPEN_STATES),
-        )
-        if row is None:
-            return
-        text = await conn.fetchval(
-            "SELECT content FROM messages WHERE id=$1", row["message_id"]
-        )
-    asyncio.create_task(_deliver(session_id, row["message_id"], text))
-
-
-async def _sync_locked(session_id: str) -> dict | None:
     async with _lock(session_id):
-        binding = await get_binding(session_id)
-        if binding is None:
-            return None
-        ws = workspace_for(binding)
-        try:
-            if not binding["native_session_id"]:
-                nid = await ws.native_id(binding["agent_name"])
-                if not nid:
-                    return None
-                await _update_binding(session_id, native_session_id=nid)
-                binding["native_session_id"] = nid
-            jl = await _journal_through_high_water(
-                ws,
-                binding["agent_name"],
-                binding["native_session_id"],
-                binding["journal_cursor"],
-            )
-            if await ws.credential_rejected():
-                await _notify_credential_signin(
-                    session_id, binding["kind"], prompt_sent=True
-                )
-        except (TransportError, WorkspaceUnavailable) as exc:
-            logger.info("sync skipped for %s: %s", session_id, exc)
-            return None
-        if jl.file is None:
-            return None
-        ref = jl.file.rsplit("/", 1)[-1]
-        events = parse_journal(
-            binding["kind"],
-            jl.lines,
-            file_ref=ref,
-            native_id=binding["native_session_id"],
-        )
-        session = await db.get_session(session_id)
-        async with db.connection() as conn:
-            pending = [
-                dict(r)
-                for r in await conn.fetch(
-                    """SELECT d.*, m.content FROM native_deliveries d JOIN messages m ON m.id=d.message_id
-                   WHERE d.session_id=$1 AND d.state IN ('sending','uncertain','delivered') ORDER BY d.created_at""",
-                    session_id,
-                )
-            ]
-        # Receipts and completion, by correlating prompt text after the recorded cursor.
-        turns, safe = completed_turns(events)
-        for d in pending:
-            want = d["content"].strip()
-            hit = next(
-                (
-                    e
-                    for e in events
-                    if e.kind == "prompt"
-                    and e.cursor > (d["cursor_before"] or 0)
-                    and want in (e.text or "")
-                ),
-                None,
-            )
-            if hit is None:
-                if (
-                    d["state"] == "sending"
-                    and datetime.now(UTC) - d["updated_at"] > SEND_RECEIPT_GRACE
-                ):
-                    await _set_delivery(
-                        d["message_id"],
-                        "uncertain",
-                        detail="no journal receipt after send; not replaying",
-                    )
-                continue
-            done = next((t for t in turns if hit.cursor in t.prompt_cursors), None)
-            if done is not None:
-                await _set_delivery(
-                    d["message_id"], "completed", evidence_ref=done.evidence_ref
-                )
-            elif d["state"] != "delivered":
-                await _set_delivery(
-                    d["message_id"], "delivered", evidence_ref=hit.evidence_ref
-                )
-            else:
-                age = datetime.now(UTC) - d["updated_at"]
-                gone = False
-                if age > SEND_RECEIPT_GRACE:
-                    try:
-                        gone = (await ws.agent_status(binding["agent_name"])) is None
-                    except TransportError:
-                        gone = False
-                if gone or age > DELIVERED_MAX_AGE:
-                    await _set_delivery(
-                        d["message_id"],
-                        "uncertain",
-                        detail="prompt was received but its turn never completed"
-                        + (" (agent no longer live)" if gone else " (timed out)")
-                        + "; not replaying",
-                    )
-        new_reply = None
-        for t in turns:
-            if not t.reply:
-                continue
-            mid = str(uuid.uuid5(_NS, f"{session_id}:{ref}:{t.end_cursor}"))
-            async with db.connection() as conn:
-                await conn.execute(
-                    "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
-                    mid,
-                    session.conversation_id,
-                    t.reply,
-                )
-            new_reply = t.reply
-        # Continuation events (native compaction): recorded, never replayed. The standing
-        # context reaches a compacted worker through its SessionStart(compact) hook.
-        compactions = [
-            e for e in events if e.native_type == "claude.system.compact_boundary"
-        ]
-        for e in compactions:
-            async with db.connection() as conn:
-                await conn.execute(
-                    """INSERT INTO native_events (id, session_id, kind, detail, evidence_ref)
-                       VALUES ($1,$2,'continuation','compact_boundary',$3) ON CONFLICT DO NOTHING""",
-                    str(uuid.uuid4()),
-                    session_id,
-                    e.evidence_ref,
-                )
-            if binding["role"] == "main":
-                logger.warning(
-                    "native compaction fired on the main thread (%s): rotation budget is too high",
-                    e.evidence_ref,
-                )
-        model = next((e.model for e in reversed(events) if e.model), None)
-        ctx = [e.context_tokens for e in events if e.context_tokens]
-        fields: dict = {
-            "journal_cursor": max(binding["journal_cursor"], safe),
-            "journal_ref": ref,
-            "turns_in_lineage": binding["turns_in_lineage"] + len(turns),
-            "continuations": binding["continuations"] + len(compactions),
-        }
-        if ctx:
-            fields["context_tokens"] = ctx[-1]
-            if binding["baseline_tokens"] is None:
-                fields["baseline_tokens"] = ctx[0]
-        if model:
-            fields["model"] = model
-        await _update_binding(session_id, **fields)
-        open_n = await _open_count(session_id)
-        is_child = binding["role"] == "child"
-        fresh = await get_binding(session_id) if is_child else None
-        new_status = next_status(
-            session.status,
-            turn_open=bool(open_n),
-            is_child=is_child,
-            reported=bool(fresh and fresh["reported_at"]),
-        )
-        if session.status != new_status:
-            await db.update_session(session_id, status=new_status)
-        follow: dict = {"idle": open_n == 0}
-        if (
-            is_child
-            and new_reply
-            and new_status not in ENDED_STATUSES
-            and fresh
-            and fresh["reported_at"] is None
-        ):
-            follow["fallback_report"] = new_reply
-        return follow
+        promoted = await ledger.promote_queued(session_id)
+    if promoted is not None:
+        _spawn_deliver(session_id, *promoted)
 
 
-async def _journal_through_high_water(
-    ws: SubstrateWorkspace, name: str, native_id: str, from_line: int
-) -> JournalSlice:
-    """Read bounded journal pages through the first page's captured line high-water mark."""
-    first = await ws.journal(name, native_id, from_line)
-    if first.file is None or not first.lines:
-        return first
-    high_water = first.total_lines
-    lines = list(first.lines)
-    cursor = lines[-1][0]
-    while cursor < high_water:
-        page = await ws.journal(name, native_id, cursor)
-        if page.file != first.file:
-            raise TransportError("native journal changed while paging")
-        additions = [line for line in page.lines if cursor < line[0] <= high_water]
-        if not additions:
-            raise TransportError(
-                "native journal page did not advance to its high-water mark"
+# --------------------------------------------------------------------------------------------
+# Sync / reconcile
+# --------------------------------------------------------------------------------------------
+
+
+async def sync(session_id: str) -> None:
+    """Observe the A2A task of every unresolved delivery, replace the projection with it, and
+    run the follow-ups. Safe to call at any time and from several places."""
+    binding = await get_binding(session_id)
+    if binding is None:
+        return
+    for message_id, text in await ledger.recorded_deliveries(session_id):
+        if message_id not in _streaming:
+            # Left 'recorded' by a restart before the send: kagent never saw it, so delivering it
+            # now is the first send, not a replay. Without this the session stays busy for good.
+            _spawn_deliver(session_id, message_id, text)
+    if binding["kagent_session_id"] is None:
+        return
+    reply: str | None = None
+    for delivery in await ledger.resolvable_deliveries(session_id):
+        if delivery["message_id"] in _streaming:
+            continue
+        reply = await _observe(session_id, binding, delivery) or reply
+    await _after(session_id, reply)
+
+
+async def _observe(session_id: str, binding: dict, delivery: dict) -> str | None:
+    message_id = delivery["message_id"]
+    agent = agent_ref(binding["kind"])
+    client = get_client()
+    try:
+        if delivery["task_id"]:
+            task = await client.get_task(agent, delivery["task_id"])
+        else:
+            task = await client.find_task_for_message(
+                agent, binding["kagent_session_id"], message_id
             )
-        lines.extend(additions)
-        cursor = additions[-1][0]
-    return JournalSlice(first.file, high_water, lines)
+    except TaskNotFound:
+        await ledger.transition(
+            message_id,
+            "uncertain",
+            from_states=_RESOLVABLE,
+            detail="the task no longer exists; not replaying",
+        )
+        return None
+    except KagentError as exc:
+        logger.info("sync of %s skipped: %s", message_id, exc)
+        if not isinstance(exc, Unreachable) and await _session_gone(binding):
+            # Its tasks went with the Session; nothing will ever show this message again.
+            await ledger.transition(
+                message_id,
+                "uncertain",
+                from_states=_RESOLVABLE,
+                detail="the kagent Session was deleted; not replaying",
+            )
+        else:
+            await _expire_sending(delivery, "the task lookup keeps failing")
+        return None
+    if task is None:
+        await _expire_sending(delivery, "no task shows this message after send")
+        return None
+    proj = TaskProjection()
+    proj.replace(task)
+    await ledger.transition(
+        message_id,
+        "delivered",
+        from_states=_RESOLVABLE,
+        task_id=task.id,
+        evidence_ref=f"a2a:task/{task.id}",
+    )
+    if proj.terminal:
+        return await _finalize(session_id, message_id, proj)
+    if not proj.parked and message_id not in _streaming:
+        _streaming.add(message_id)
+        _spawn(_follow(session_id, message_id, binding, task.id))
+    return None
+
+
+async def _session_gone(binding: dict) -> bool:
+    try:
+        return await _live_session(binding["kagent_session_id"]) is None
+    except KagentError:
+        return False
+
+
+async def _expire_sending(delivery: dict, why: str) -> None:
+    """Expire a ``sending`` delivery with no receipt after the grace period to ``uncertain``, so a
+    failing or empty lookup cannot keep the session busy for good. It is still never replayed.
+    """
+    if (
+        delivery["state"] == "sending"
+        and datetime.now(UTC) - delivery["updated_at"] > SEND_RECEIPT_GRACE
+    ):
+        await ledger.transition(
+            delivery["message_id"],
+            "uncertain",
+            from_states=("sending",),
+            detail=f"{why}; not replaying",
+        )
+
+
+async def _follow(
+    session_id: str, message_id: str, binding: dict, task_id: str
+) -> None:
+    """Reattach to a running task after a restart or a dropped stream (SubscribeToTask)."""
+    try:
+        events = get_client().subscribe_to_task(agent_ref(binding["kind"]), task_id)
+        reply = await _consume(session_id, message_id, binding, events, snapshot=True)
+    finally:
+        _streaming.discard(message_id)
+    await _after(session_id, reply)
 
 
 async def cancel(session_id: str) -> str:
-    """End a native session: stop its agent and close its open deliveries.
+    """End a native session: cancel its open tasks and close its open deliveries.
 
     The status is set first and is sticky, so no later sync brings the session back, and open
     deliveries are failed so the reconcile loop stops visiting it. Returns ``stopped``,
-    ``not_running`` (the actor had no active turn) or ``unknown`` (the stop could not be
-    confirmed; the agent may still be running, and it is not retried blindly).
+    ``not_running`` (nothing was running) or ``unknown`` (a cancel could not be confirmed; the
+    agent may still be running, and it is not retried blindly).
     """
     binding = await get_binding(session_id)
     if binding is not None and binding["role"] == "main":
         raise ValueError("The main thread cannot be cancelled.")
     async with _lock(session_id):
         await db.update_session(session_id, status=SessionStatus.CANCELLED)
-        async with db.connection() as conn:
-            await conn.execute(
-                """UPDATE native_deliveries SET state='failed', detail='cancelled by user',
-                          updated_at=NOW()
-                   WHERE session_id=$1 AND state IN ('recorded','sending','delivered','queued')""",
-                session_id,
-            )
-        if binding is None:
+        opened = await ledger.fail_open(session_id, "cancelled by user")
+        if binding is None or binding["kagent_session_id"] is None:
             return "not_running"
-        ws = workspace_for(binding)
-        try:
-            if await ws.agent_status(binding["agent_name"]) is None:
-                return "not_running"
-            await ws.stop(binding["agent_name"])
-            return "stopped"
-        except (TransportError, WorkspaceUnavailable, RuntimeError) as exc:
-            logger.warning("cancel of %s: agent stop unconfirmed: %s", session_id, exc)
-            return "unknown"
-
-
-async def _wait_delivery(message_id: str, session_id: str, timeout: float) -> str:
-    deadline = asyncio.get_event_loop().time() + timeout
-    state = "recorded"
-    while asyncio.get_event_loop().time() < deadline:
-        await sync(session_id)
-        async with db.connection() as conn:
-            state = await conn.fetchval(
-                "SELECT state FROM native_deliveries WHERE message_id=$1", message_id
-            )
-        if state in ("completed", "failed", "uncertain"):
-            return state
-        await asyncio.sleep(2)
-    return f"timeout({state})"
-
-
-async def rotate(
-    session_id: str, reason: str, *, writeout_timeout: float = 180
-) -> dict:
-    """Cut the main thread to a fresh native session (Mainloop owns the window, not the model).
-
-    1. one receipt-tracked pre-cut turn asks the agent to write durable facts through the CLI;
-    2. the old native session is stopped and the lineage records old id -> new id;
-    3. a fresh native session starts with the carry-over (standing context, topic index,
-       checkpoint, pending intent, last K visible messages), rendered from Postgres.
-    The new native journal contains none of the old transcript.
-    """
-    if session_id in _rotating:
-        return {"status": "already-rotating"}
-    _rotating.add(session_id)
-    try:
-        binding = await get_binding(session_id)
-        if binding is None or binding["role"] != "main":
-            return {"status": "not-a-main-thread"}
-        if await _open_count(session_id):
-            return {"status": "busy"}
-        mid = await submit_message(session_id, WRITEOUT_TEXT, source="writeout")
-        writeout = await _wait_delivery(mid, session_id, writeout_timeout)
-        async with _lock(session_id):
-            binding = await get_binding(session_id)
-            ws = workspace_for(binding)
+        agent = agent_ref(binding["kind"])
+        client = get_client()
+        outcome = "not_running"
+        for delivery in opened:
+            if delivery["state"] == "queued" or delivery["state"] == "recorded":
+                continue  # never sent
             try:
-                await ws.stop(binding["agent_name"])
-            except (
-                Exception
-            ) as exc:  # the old session stays authoritative; nothing was switched
-                logger.exception("rotation aborted: could not stop the old agent")
-                return {
-                    "status": "aborted",
-                    "detail": f"stop failed: {exc}",
-                    "writeout": writeout,
-                }
-            new_id = str(uuid.uuid4())
-            seq = binding["lineage_seq"] + 1
-            async with db.connection() as conn:
-                # Nothing of the old lineage can be resolved after the cut (new journal, cursor 0):
-                # close its open rows as unknown rather than leaving the session "in flight".
-                await conn.execute(
-                    """UPDATE native_deliveries SET state='uncertain', updated_at=NOW(),
-                       detail='the native session was rotated before this turn completed; not replaying'
-                       WHERE session_id=$1 AND state = ANY($2)""",
-                    session_id,
-                    list(OPEN_STATES),
+                task_id = delivery["task_id"]
+                if task_id is None:
+                    task = await client.find_task_for_message(
+                        agent, binding["kagent_session_id"], delivery["message_id"]
+                    )
+                    task_id = task.id if task else None
+                if task_id is None:
+                    if delivery["state"] == "sending":
+                        # The send may still land and start a task this cancel cannot see.
+                        outcome = "unknown"
+                    continue
+                await client.cancel_task(agent, task_id)
+                outcome = "stopped" if outcome != "unknown" else outcome
+            except KagentError as exc:
+                logger.warning(
+                    "cancel of %s: task cancel unconfirmed: %s", session_id, exc
                 )
-                await conn.execute(
-                    "UPDATE native_lineage SET ended_reason=$3, writeout=$4, ended_at=NOW() WHERE session_id=$1 AND seq=$2",
-                    session_id,
-                    binding["lineage_seq"],
-                    reason,
-                    writeout,
-                )
-                await conn.execute(
-                    "INSERT INTO native_lineage (session_id, seq, native_session_id, started_reason) VALUES ($1,$2,$3,$4)",
-                    session_id,
-                    seq,
-                    new_id,
-                    reason,
-                )
-            await _update_binding(
-                session_id,
-                native_session_id=new_id,
-                journal_cursor=0,
-                journal_ref=None,
-                context_tokens=None,
-                baseline_tokens=None,
-                turns_in_lineage=0,
-                lineage_seq=seq,
-                generation=binding["generation"] + 1,
-            )
-            binding = await get_binding(session_id)
-            binding = await _ensure_agent(
-                session_id, binding
-            )  # fresh session + carry-over
-            async with db.connection() as conn:
-                await conn.execute(
-                    "UPDATE native_lineage SET carry_over_hash=$3 WHERE session_id=$1 AND seq=$2",
-                    session_id,
-                    seq,
-                    binding["standing_hash"],
-                )
-        return {
-            "status": "rotated",
-            "new_native_session_id": new_id,
-            "lineage_seq": seq,
-            "writeout": writeout,
-            "reason": reason,
-        }
-    finally:
-        _rotating.discard(session_id)
-        asyncio.create_task(
-            sync(session_id)
-        )  # promote queued reports into the new session
+                outcome = "unknown"
+        return outcome
 
 
 async def reconcile_loop(interval: float = 3.0) -> None:
-    """Background mirror for sessions with open work, so replies, reports and rotation do not
-    depend on a browser polling."""
+    """Background mirror for sessions with open work, so replies and reports do not depend on a
+    browser polling."""
     next_idle_check = 0.0
     while True:
         try:
-            async with db.connection() as conn:
-                ids = [
-                    r["session_id"]
-                    for r in await conn.fetch(
-                        """SELECT DISTINCT session_id FROM native_deliveries
-                           WHERE state IN ('recorded','sending','delivered','queued')
-                              OR (state='uncertain' AND updated_at > NOW() - INTERVAL '30 minutes')"""
-                    )
-                ]
-            for sid in ids:
-                if sid not in _rotating:
-                    await sync(sid)
+            for sid in await ledger.sessions_with_open_work():
+                await sync(sid)
             loop = asyncio.get_running_loop()
             if loop.time() >= next_idle_check:
                 await workspace_adapter.suspend_idle_workspaces()
@@ -920,61 +1056,44 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
     binding = await get_binding(session_id)
     if binding is None:
         return None
-    async with db.connection() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM native_deliveries WHERE session_id=$1 ORDER BY created_at",
-            session_id,
-        )
-        topic = (
-            await conn.fetchval(
-                "SELECT name FROM topics WHERE id=$1", binding["topic_id"]
-            )
-            if binding["topic_id"]
-            else None
-        )
+    rows = await ledger.deliveries(session_id)
+    topic = (
+        await ledger.topic_name(binding["topic_id"]) if binding["topic_id"] else None
+    )
     deliveries = [
         NativeDeliveryInfo(
             message_id=r["message_id"],
             state=r["state"],
+            task_id=r["task_id"],
             evidence_ref=r["evidence_ref"],
             detail=r["detail"],
             source=r["source"],
         )
         for r in rows
     ]
-    ws = workspace_for(binding)
-    ready, live, _uid, note = False, None, None, None
-    try:
-        workspace = await ws.workspace_state()
-        ready = workspace.ready
-        if ready:
-            live = (await ws.agent_status(binding["agent_name"])) is not None
-    except (TransportError, WorkspaceUnavailable) as exc:
-        note = f"workspace unreachable: {exc}"
+    state, note = None, None
+    if binding["kagent_session_id"]:
+        try:
+            state = (
+                await get_client().get_session(binding["kagent_session_id"])
+            ).state.name.lower()
+        except Unreachable as exc:
+            note = f"kagent unreachable: {exc}"
+        except KagentError as exc:
+            note = f"kagent session unavailable: {exc}"
     if any(d.state == "uncertain" for d in deliveries):
-        note = "delivery unknown: the last prompt was not replayed; check the reply, then send again if needed"
+        note = "delivery unknown: the last message was not replayed; check the reply, then send again if needed"
     return NativeSessionInfo(
         session_id=session_id,
         kind=binding["kind"],
         role=binding["role"],
         parent_session_id=binding["parent_session_id"],
         topic=topic,
-        agent_name=binding["agent_name"],
-        native_session_id=binding["native_session_id"],
+        agent_name=agent_name(binding["kind"]),
+        kagent_session_id=binding["kagent_session_id"],
+        session_state=state,
         model=binding["model"],
-        approval_policy=binding["approval_policy"],
-        workspace_name=ws.workspace_name,
-        workspace_ready=ready,
-        agent_live=live,
-        generation=binding["generation"],
-        lineage_seq=binding["lineage_seq"],
-        context_tokens=binding["context_tokens"],
-        baseline_tokens=binding["baseline_tokens"],
-        turns_in_lineage=binding["turns_in_lineage"],
-        continuations=binding["continuations"],
-        rotating=session_id in _rotating,
-        journal_cursor=binding["journal_cursor"],
-        journal_ref=binding["journal_ref"],
+        turns=binding["turns"],
         turn_in_flight=any(d.state in (*OPEN_STATES, "queued") for d in deliveries),
         deliveries=deliveries,
         note=note,

@@ -1,1 +1,1 @@
-"""Fixture-backed native runtime contracts, not wired into production execution."""
+"""Native runtime: kagent client, native sessions, delegation, and the workspace adapter."""

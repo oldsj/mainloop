@@ -1,14 +1,11 @@
 """Context model (plan r7) with fakes only: no cluster, no agents, no Postgres, no credentials."""
 
-import json
 import unittest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mainloop.runtime import agent_api, policy
 from mainloop.runtime.agent_api import AgentService, hash_token
-from mainloop.runtime.journal import parse_claude
-from mainloop.runtime.native_sessions import rotation_due
 from mainloop.runtime.policy import Actor, PolicyError
 from mainloop.runtime.standing import (
     RecentMessage,
@@ -62,42 +59,6 @@ class PolicyTests(unittest.TestCase):
             policy.may_report(Actor("main", 0))
 
 
-class RotationTests(unittest.TestCase):
-    def test_tokens_are_measured_above_the_lineage_baseline(self):
-        kw = dict(turns=1, budget_tokens=20000, budget_turns=12)
-        # A trivial session already holds ~10k tokens: absolute size alone must not trigger.
-        self.assertIsNone(
-            rotation_due(context_tokens=10500, baseline_tokens=10200, **kw)
-        )
-        self.assertIsNone(
-            rotation_due(context_tokens=29999, baseline_tokens=10200, **kw)
-        )
-        self.assertIn(
-            "tokens", rotation_due(context_tokens=30200, baseline_tokens=10200, **kw)
-        )
-
-    def test_turn_budget_and_unknown_usage(self):
-        self.assertIn(
-            "turns",
-            rotation_due(
-                context_tokens=None,
-                baseline_tokens=None,
-                turns=12,
-                budget_tokens=20000,
-                budget_turns=12,
-            ),
-        )
-        self.assertIsNone(
-            rotation_due(
-                context_tokens=None,
-                baseline_tokens=None,
-                turns=3,
-                budget_tokens=20000,
-                budget_turns=12,
-            )
-        )
-
-
 class StandingTests(unittest.TestCase):
     def test_carry_over_is_small_and_lists_topic_index_pending_and_recent(self):
         text = render_standing(
@@ -114,13 +75,11 @@ class StandingTests(unittest.TestCase):
                     RecentMessage("user", "x" * 5000),
                     RecentMessage("assistant", "ok"),
                 ],
-                lineage_note="This is native session #2",
             )
         )
         self.assertIn("billing: waiting on child [2 pending]", text)
         self.assertIn("send the March invoice", text)
         self.assertIn("decision: use invoices v2", text)
-        self.assertIn("native session #2", text)
         self.assertLess(
             len(text), 6000
         )  # long messages are clipped, never carried whole
@@ -136,43 +95,6 @@ class StandingTests(unittest.TestCase):
     def test_hash_is_stable(self):
         self.assertEqual(content_hash("a"), content_hash("a"))
         self.assertNotEqual(content_hash("a"), content_hash("b"))
-
-
-class JournalUsageTests(unittest.TestCase):
-    def test_context_tokens_and_compact_boundary(self):
-        lines = [
-            (1, json.dumps({"type": "user", "message": {"content": "hi"}})),
-            (
-                2,
-                json.dumps(
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "model": "claude-sonnet-x",
-                            "content": [{"type": "text", "text": "ok"}],
-                            "usage": {
-                                "input_tokens": 10,
-                                "cache_creation_input_tokens": 3016,
-                                "cache_read_input_tokens": 17598,
-                            },
-                        },
-                    }
-                ),
-            ),
-            (
-                3,
-                json.dumps(
-                    {
-                        "type": "system",
-                        "subtype": "compact_boundary",
-                        "compactMetadata": {"trigger": "auto", "preTokens": 9},
-                    }
-                ),
-            ),
-        ]
-        ev = parse_claude(lines, file_ref="f.jsonl", native_id="n")
-        self.assertEqual([e.context_tokens for e in ev], [None, 20624, None])
-        self.assertEqual(ev[2].native_type, "claude.system.compact_boundary")
 
 
 class FakeStore:

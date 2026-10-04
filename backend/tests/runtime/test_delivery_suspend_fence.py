@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from mainloop.db import db
-from mainloop.runtime.native_sessions import _record_delivery_message
+from mainloop.runtime.native_sessions import ledger
 
 
 class FakeConnection:
@@ -78,7 +78,7 @@ class DeliverySuspendFenceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(side_effect=create_message),
             ) as create,
         ):
-            message_id = await _record_delivery_message(
+            message_id = await ledger.record_message(
                 session_id="session-1",
                 conversation_id="conversation-1",
                 text="hello",
@@ -118,7 +118,7 @@ class DeliverySuspendFenceTests(unittest.IsolatedAsyncioTestCase):
             ) as create,
         ):
             with self.assertRaisesRegex(ValueError, "resume it before sending"):
-                await _record_delivery_message(
+                await ledger.record_message(
                     session_id="session-1",
                     conversation_id="conversation-1",
                     text="hello",
