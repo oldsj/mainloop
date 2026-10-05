@@ -1,0 +1,9 @@
+# The origin is site-specific; take it from the site ConfigMap.
+- op: replace
+  path: /spec/template/spec/containers/0/env
+  value:
+    - name: ORIGIN
+      valueFrom:
+        configMapKeyRef:
+          name: mainloop-site
+          key: FRONTEND_ORIGIN

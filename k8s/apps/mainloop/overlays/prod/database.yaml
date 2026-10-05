@@ -1,21 +1,18 @@
+# Fresh CloudNativePG cluster. CNPG generates the application credentials in
+# Secret mainloop-pg-app (keys username, password). The backend reads them from there.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: mainloop-db
+  name: mainloop-pg
   namespace: mainloop
 spec:
   instances: 1
-
   storage:
     size: 10Gi
-
-  # Bootstrap: create initial database and owner
   bootstrap:
     initdb:
       database: mainloop
       owner: mainloop
-
-  # Resource limits for home lab
   resources:
     requests:
       cpu: 100m
@@ -23,42 +20,22 @@ spec:
     limits:
       cpu: '1'
       memory: 1Gi
-
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: mainloop-db-database
-  namespace: mainloop
-  annotations:
-    argocd.argoproj.io/sync-options: Prune=false,Delete=false
-spec:
-  name: mainloop
-  owner: mainloop
-  cluster:
-    name: mainloop-db
-  extensions:
-    - name: vector
-
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Pooler
 metadata:
-  name: mainloop-db-pooler
+  name: mainloop-pg-pooler
   namespace: mainloop
-  annotations:
-    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   cluster:
-    name: mainloop-db
+    name: mainloop-pg
   instances: 1
   type: rw
-
   pgbouncer:
     poolMode: session
     parameters:
       max_client_conn: '100'
       default_pool_size: '10'
-      # Disable query_wait_timeout (default 120s) because DBOS notification
-      # listener holds connections waiting for LISTEN/NOTIFY indefinitely
+      # DBOS holds LISTEN/NOTIFY connections open indefinitely, so the default
+      # query_wait_timeout (120s) would drop them.
       query_wait_timeout: '0'
