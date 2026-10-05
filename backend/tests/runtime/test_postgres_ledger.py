@@ -554,7 +554,8 @@ class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
         queued = await self.delivery(sid, cid, "queued", source="report")
         for _ in range(5):
             await self.pool.execute(
-                "UPDATE native_deliveries SET state='queued' WHERE message_id=$1", queued
+                "UPDATE native_deliveries SET state='queued' WHERE message_id=$1",
+                queued,
             )
             await self.pool.execute(
                 "DELETE FROM native_deliveries WHERE session_id=$1 AND message_id<>$2",
@@ -575,15 +576,19 @@ class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
         sid, cid = await self.bound_session()
         old = await self.delivery(sid, cid, "uncertain")
         await self.submit(sid, cid, "user")
-        self.assertFalse(await ns.ledger.transition(
-            old, "delivered", from_states=ns._RESOLVABLE, task_id="late-task"
-        ))
+        self.assertFalse(
+            await ns.ledger.transition(
+                old, "delivered", from_states=ns._RESOLVABLE, task_id="late-task"
+            )
+        )
         self.assertEqual(await self.state_of(old), "uncertain")
         self.assertEqual(await ns.ledger.open_count(sid), 1)
         # Its terminal outcome can still be recorded without replaying it.
-        self.assertTrue(await ns.ledger.transition(
-            old, "completed", from_states=ns._RESOLVABLE, task_id="late-task"
-        ))
+        self.assertTrue(
+            await ns.ledger.transition(
+                old, "completed", from_states=ns._RESOLVABLE, task_id="late-task"
+            )
+        )
 
 
 class LedgerTests(PostgresTestCase):
@@ -642,7 +647,9 @@ class LedgerTests(PostgresTestCase):
     async def test_transition_coalesces_and_gates(self):
         sid, cid = await self.bound_session()
         mid = await self.delivery(sid, cid, "recorded")
-        await ns.ledger.transition(mid, "sending", from_states=("recorded",), detail="d")
+        await ns.ledger.transition(
+            mid, "sending", from_states=("recorded",), detail="d"
+        )
         row = await self.pool.fetchrow(
             "SELECT * FROM native_deliveries WHERE message_id=$1", mid
         )
@@ -845,9 +852,11 @@ class LedgerTests(PostgresTestCase):
             self.assertEqual(await self.state_of(mid), state)
         self.assertEqual(await self.notes(cid), [])
 
-        self.assertFalse(await self.pool.fetchval(
-            "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
-        ))
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
+            )
+        )
 
     async def test_settle_cancelled_rolls_back_the_state_when_the_note_fails(self):
         sid, cid = await self.bound_session()
@@ -862,9 +871,11 @@ class LedgerTests(PostgresTestCase):
             (row["state"], row["task_id"], row["detail"]), ("delivered", None, None)
         )
         self.assertEqual(await self.notes(cid), [])
-        self.assertFalse(await self.pool.fetchval(
-            "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
-        ))
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
+            )
+        )
 
     async def test_two_concurrent_settles_produce_one_state_change_and_one_note(self):
         sid, cid = await self.bound_session()
@@ -881,8 +892,9 @@ class LedgerTests(PostgresTestCase):
         stopped, promoted, report = await asyncio.gather(
             self.settle(mid, cid),
             ns.ledger.promote_queued(sid),
-            ns.ledger.record_submission(session_id=sid, conversation_id=cid,
-                                        text="late report", source="report"),
+            ns.ledger.record_submission(
+                session_id=sid, conversation_id=cid, text="late report", source="report"
+            ),
         )
         self.assertTrue(stopped)
         self.assertIsNone(promoted)
@@ -901,14 +913,20 @@ class LedgerTests(PostgresTestCase):
         await restarted.transition(user, "completed", from_states=("recorded",))
         self.assertIsNotNone(await restarted.promote_queued(sid))
 
-    async def test_cancel_keeps_durable_partial_when_the_response_has_no_artifacts(self):
+    async def test_cancel_keeps_durable_partial_when_the_response_has_no_artifacts(
+        self,
+    ):
         sid, cid = await self.bound_session()
         mid = await self.delivery(sid, cid, "delivered")
         await ns.ledger.remember_partial(mid, "An unfinished answer")
         await self.settle(mid, cid)
-        self.assertEqual(await self.notes(cid), [ns.stopped_message("An unfinished answer")])
+        self.assertEqual(
+            await self.notes(cid), [ns.stopped_message("An unfinished answer")]
+        )
         await ns.ledger.remember_partial(mid, "late stream")
-        self.assertEqual(await self.notes(cid), [ns.stopped_message("An unfinished answer")])
+        self.assertEqual(
+            await self.notes(cid), [ns.stopped_message("An unfinished answer")]
+        )
 
     async def test_cancel_racing_completion_ends_in_exactly_one_terminal_state(self):
         for _ in range(10):
@@ -2021,7 +2039,7 @@ class ApiQueryTests(PostgresTestCase):
             topic_id=topic["id"],
         )
         with patch.object(ns, "sync", new=AsyncMock()) as sync:
-            response = await api.get_conversation(cid)
+            response = await api.get_conversation(cid, user_id=self.user)
         sync.assert_awaited_once_with(main["session_id"])
         self.assertEqual(response.conversation.id, cid)
 

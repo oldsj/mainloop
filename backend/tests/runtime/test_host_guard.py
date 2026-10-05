@@ -31,7 +31,12 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
         return (await self.client.get(path, headers={"Host": host})).status_code
 
     async def test_the_api_host_is_served_with_or_without_a_port(self):
-        for host in (FRONTEND, f"{FRONTEND}:8443", FRONTEND.upper(), "mainloop-backend:8000"):
+        for host in (
+            FRONTEND,
+            f"{FRONTEND}:8443",
+            FRONTEND.upper(),
+            "mainloop-backend:8000",
+        ):
             with self.subTest(host=host):
                 self.assertEqual(await self.status(host), 200)
 
@@ -41,7 +46,9 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.status(host), 200)
 
     async def test_loopback_is_not_implicitly_allowed_outside_development(self):
-        with patch.object(settings, "dev_mode", False), patch.object(settings, "is_test_env", False):
+        with patch.object(settings, "dev_mode", False), patch.object(
+            settings, "is_test_env", False
+        ):
             self.assertEqual(await self.status("localhost:8000"), 404)
 
     async def test_any_other_host_is_a_404(self):
@@ -57,12 +64,20 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(host=host):
                 self.assertEqual(await self.status(host), 404)
 
-    async def test_a_preview_shaped_host_that_is_not_a_live_preview_is_not_the_api(self):
+    async def test_a_preview_shaped_host_that_is_not_a_live_preview_is_not_the_api(
+        self,
+    ):
         host = "3000--ws--preview.100-116-68-0.sslip.io:8001"
-        with patch.object(preview_proxy, "_resolve_target", AsyncMock(return_value=None)):
-            self.assertEqual(await self.status(host), 404)  # a preview, workspace not found
+        with patch.object(
+            preview_proxy, "_resolve_target", AsyncMock(return_value=None)
+        ):
+            self.assertEqual(
+                await self.status(host), 404
+            )  # a preview, workspace not found
         # Same name on another port is not a preview host at all, and not the API either.
-        self.assertEqual(await self.status("3000--ws--preview.100-116-68-0.sslip.io"), 404)
+        self.assertEqual(
+            await self.status("3000--ws--preview.100-116-68-0.sslip.io"), 404
+        )
 
     async def test_the_health_probe_is_exempt_because_kubelet_uses_the_pod_ip(self):
         self.assertEqual(await self.status("10.244.0.7:8000", "/health"), 200)
@@ -84,14 +99,20 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
 
     def test_api_hosts_are_normalised(self):
         loaded = Settings(
-            _env_file=None, frontend_domain="A.example", MAINLOOP_API_HOSTS=" B.example. ,,c"
+            _env_file=None,
+            frontend_domain="A.example",
+            MAINLOOP_API_HOSTS=" B.example. ,,c",
         )
         self.assertEqual(
             loaded.allowed_api_hosts, frozenset({"a.example", "b.example", "c"})
         )
 
     def test_configured_domains_with_ports_are_compared_as_hostnames(self):
-        loaded = Settings(_env_file=None, frontend_domain="localhost:5173", api_domain="API.example:8443")
+        loaded = Settings(
+            _env_file=None,
+            frontend_domain="localhost:5173",
+            api_domain="API.example:8443",
+        )
         self.assertEqual(loaded.frontend_origin, "https://localhost:5173")
         self.assertIn("api.example", loaded.allowed_api_hosts)
         self.assertIn("localhost", loaded.allowed_api_hosts)

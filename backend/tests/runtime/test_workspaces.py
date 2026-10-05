@@ -422,12 +422,12 @@ class DeleteTests(WorkspaceTestCase):
                 await workspaces.delete(SESSION, "user-1")
         delete_rows.assert_not_awaited()
 
-    async def test_delete_of_an_unknown_create_resolves_it_and_deletes_the_session(self):
+    async def test_delete_of_an_unknown_create_resolves_it_and_deletes_the_session(
+        self,
+    ):
         # The create's reply was lost: Mainloop has no Session id, kagent has the Session.
         self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
-        self.fake.created_request_ids[ns._request_id(self.ledger.binding)] = (
-            CONTEXT_ID
-        )
+        self.fake.created_request_ids[ns._request_id(self.ledger.binding)] = CONTEXT_ID
         self.assertIsNone(self.ledger.binding["kagent_session_id"])
         delete_rows = AsyncMock()
         with (
@@ -445,14 +445,18 @@ class DeleteTests(WorkspaceTestCase):
             patch.object(workspaces, "_owned_row", AsyncMock()),
             patch.object(workspaces, "_delete_rows", delete_rows),
             patch.object(
-                ns.get_client(), "create_session", AsyncMock(side_effect=Unreachable("x"))
+                ns.get_client(),
+                "create_session",
+                AsyncMock(side_effect=Unreachable("x")),
             ),
         ):
             with self.assertRaises(workspaces.WorkspaceUnconfirmed):
                 await workspaces.delete(SESSION, "user-1")
         delete_rows.assert_not_awaited()
 
-    async def test_delete_keeps_unknown_create_rows_when_reconciliation_is_rejected(self):
+    async def test_delete_keeps_unknown_create_rows_when_reconciliation_is_rejected(
+        self,
+    ):
         delete_rows = AsyncMock()
         with (
             patch.object(workspaces, "_owned_row", AsyncMock()),

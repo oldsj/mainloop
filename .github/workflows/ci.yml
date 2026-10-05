@@ -24,7 +24,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: mainloop
-          POSTGRES_PASSWORD: mainloop-ci-only
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -32,8 +32,8 @@ jobs:
           --health-cmd "pg_isready -U mainloop -d postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:mainloop-ci-only@localhost:5432/postgres
-      AGENT_TOKEN_KEY: mainloop-ci-fixture-key
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
+      AGENT_TOKEN_KEY: ci-key-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

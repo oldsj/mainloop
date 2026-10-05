@@ -10,10 +10,10 @@ spec:
   sessionIdleTTL: 0s
   git:
     origins: [github.com]
-    credentialSecretRef: {name: mainloop-workspace-git, key: authorization}
+    credentialSecretRef: { name: mainloop-workspace-git, key: authorization }
   substrate:
-    snapshotPolicy: {location: 's3://ate-snapshots/kagent/', onQuiesce: Full}
-    workerPoolRef: {name: kagent-default}
+    snapshotPolicy: { location: s3://ate-snapshots/kagent/, onQuiesce: Full }
+    workerPoolRef: { name: kagent-default }
   workload:
     image: kagent-claude-harness:kind
 ---
@@ -23,7 +23,7 @@ metadata:
   name: claude-workspace-template
   namespace: kagent
 spec:
-  modelConfig: {name: claude-subscription-model}
+  modelConfig: { name: claude-subscription-model }
   systemPrompt: Work in the supplied repository and follow the owner's instructions.
 ---
 apiVersion: api.kagent.dev/v1alpha3
@@ -32,8 +32,8 @@ metadata:
   name: claude-workspace
   namespace: kagent
 spec:
-  harnessRef: {name: claude-workspace-harness}
-  templateRef: {name: claude-workspace-template}
+  harnessRef: { name: claude-workspace-harness }
+  templateRef: { name: claude-workspace-template }
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
@@ -45,10 +45,10 @@ spec:
   sessionIdleTTL: 0s
   git:
     origins: [github.com]
-    credentialSecretRef: {name: mainloop-workspace-git, key: authorization}
+    credentialSecretRef: { name: mainloop-workspace-git, key: authorization }
   substrate:
-    snapshotPolicy: {location: 's3://ate-snapshots/kagent/', onQuiesce: Full}
-    workerPoolRef: {name: kagent-default}
+    snapshotPolicy: { location: s3://ate-snapshots/kagent/, onQuiesce: Full }
+    workerPoolRef: { name: kagent-default }
   workload:
     image: kagent-codex-harness:kind
 ---
@@ -58,7 +58,7 @@ metadata:
   name: codex-workspace-template
   namespace: kagent
 spec:
-  modelConfig: {name: codex-subscription-model}
+  modelConfig: { name: codex-subscription-model }
   systemPrompt: Work in the supplied repository and follow the owner's instructions.
 ---
 apiVersion: api.kagent.dev/v1alpha3
@@ -67,5 +67,5 @@ metadata:
   name: codex-workspace
   namespace: kagent
 spec:
-  harnessRef: {name: codex-workspace-harness}
-  templateRef: {name: codex-workspace-template}
+  harnessRef: { name: codex-workspace-harness }
+  templateRef: { name: codex-workspace-template }

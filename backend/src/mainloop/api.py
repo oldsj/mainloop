@@ -97,7 +97,9 @@ def _host_allowed(host_header: str) -> bool:
     if not hostname:
         return False
     hostname = hostname.lower().rstrip(".")
-    return (settings.is_dev and hostname in _LOOPBACK_HOSTS) or hostname in settings.allowed_api_hosts
+    return (
+        settings.is_dev and hostname in _LOOPBACK_HOSTS
+    ) or hostname in settings.allowed_api_hosts
 
 
 @app.middleware("http")
@@ -109,9 +111,8 @@ async def refuse_unknown_hosts(request: Request, call_next):
     check any name that resolves to the node (a wildcard DNS name, a rebinding name) would reach
     the API, and the preview origins are same-site with it.
     """
-    if (
-        request.scope["path"] not in _HOST_EXEMPT_PATHS
-        and not _host_allowed(request.headers.get("host", ""))
+    if request.scope["path"] not in _HOST_EXEMPT_PATHS and not _host_allowed(
+        request.headers.get("host", "")
     ):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return await call_next(request)
@@ -126,7 +127,8 @@ async def refuse_foreign_origin_writes(request: Request, call_next):
     the API has no per-request authentication, so it would cancel, archive or suspend. Browsers
     always send ``Origin`` on a cross-origin write; a client that sends none (the MCP actors,
     scripts, curl) is not a browser page and is not affected. The preview listener is handled
-    before this middleware.
+    before this middleware and applies its own Origin check (``preview_proxy._origin_refused``):
+    a preview accepts a write or WebSocket only from its own origin.
     """
     origin = request.headers.get("origin")
     if (
@@ -380,9 +382,7 @@ async def list_conversations(
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(
-    conversation_id: str, user_id: str = Depends(current_user)
-):
+async def get_conversation(conversation_id: str, user_id: str = Depends(current_user)):
     """Get a conversation with its messages."""
     conversation = await db.get_conversation(conversation_id)
     if not conversation or conversation.user_id != user_id:
@@ -740,9 +740,7 @@ async def get_session_conversation(
 
 
 @app.get("/sessions/{session_id}/native", response_model=NativeSessionInfo)
-async def get_session_native(
-    session_id: str, user_id: str = Depends(current_user)
-):
+async def get_session_native(session_id: str, user_id: str = Depends(current_user)):
     """Identity strip for a session bound to a native agent in kagent."""
     owner = await db.get_session(session_id)
     if owner is None or owner.user_id != user_id:

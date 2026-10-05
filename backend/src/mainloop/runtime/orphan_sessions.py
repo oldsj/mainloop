@@ -61,7 +61,9 @@ async def delete_orphan(session: KagentSession) -> bool:
     """Delete one Session unless a binding has claimed it since the listing."""
     bound, unresolved = await _bound_ids()
     if unresolved:
-        raise KagentError("unresolved creates exist; resolve them before deleting orphans")
+        raise KagentError(
+            "unresolved creates exist; resolve them before deleting orphans"
+        )
     if session.id in bound:
         return False
     await ns.get_client().delete_session(session.id)
@@ -121,7 +123,9 @@ def main(argv: list[str] | None = None) -> None:
         description="List (and with --delete, delete) kagent Sessions Mainloop has no binding for."
     )
     parser.add_argument(
-        "--delete", action="store_true", help="delete the orphans; the default only lists"
+        "--delete",
+        action="store_true",
+        help="delete the orphans; the default only lists",
     )
     args = parser.parse_args(argv)
     sys.exit(asyncio.run(_run(args.delete)))

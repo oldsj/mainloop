@@ -271,11 +271,14 @@ class Ledger:
         kagent.
         """
         await conn.execute(
-            "SELECT pg_advisory_xact_lock(hashtext($1))", f"native-deliveries:{session_id}"
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            f"native-deliveries:{session_id}",
         )
 
     @staticmethod
-    async def _insert_message(conn, session_id, conversation_id, text, state, source) -> str:
+    async def _insert_message(
+        conn, session_id, conversation_id, text, state, source
+    ) -> str:
         message = await db.create_message(
             conversation_id=conversation_id, role="user", content=text, conn=conn
         )
@@ -416,7 +419,8 @@ class Ledger:
         async with db.connection() as conn, conn.transaction():
             if state in OPEN_STATES:
                 session_id = await conn.fetchval(
-                    "SELECT session_id FROM native_deliveries WHERE message_id=$1", message_id
+                    "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                    message_id,
                 )
                 if session_id is None:
                     return False
@@ -424,7 +428,9 @@ class Ledger:
                 if await conn.fetchval(
                     """SELECT EXISTS(SELECT 1 FROM native_deliveries
                        WHERE session_id=$1 AND message_id<>$2 AND state = ANY($3))""",
-                    session_id, message_id, list(OPEN_STATES),
+                    session_id,
+                    message_id,
+                    list(OPEN_STATES),
                 ):
                     # A late receipt for an uncertain delivery must not reopen it alongside
                     # the owner's newer turn. It stays observable and is never resent.
@@ -472,7 +478,8 @@ class Ledger:
         """
         async with db.connection() as conn, conn.transaction():
             session_id = await conn.fetchval(
-                "SELECT session_id FROM native_deliveries WHERE message_id=$1", message_id
+                "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                message_id,
             )
             if session_id is None:
                 return False
@@ -492,10 +499,12 @@ class Ledger:
             if moved is None:
                 return False
             await conn.execute(
-                "UPDATE native_bindings SET queue_held=TRUE WHERE session_id=$1", session_id
+                "UPDATE native_bindings SET queue_held=TRUE WHERE session_id=$1",
+                session_id,
             )
             saved = await conn.fetchval(
-                "SELECT partial_text FROM native_deliveries WHERE message_id=$1", message_id
+                "SELECT partial_text FROM native_deliveries WHERE message_id=$1",
+                message_id,
             )
             note = stopped_message(partial or saved) if partial or saved else note
             await conn.execute(
@@ -518,7 +527,9 @@ class Ledger:
             await conn.execute(
                 """UPDATE native_deliveries SET partial_text=$2
                    WHERE message_id=$1 AND state = ANY($3)""",
-                message_id, text, list(_RESOLVABLE),
+                message_id,
+                text,
+                list(_RESOLVABLE),
             )
 
     async def remember_child_start_failure(self, session_id: str, reason: str) -> bool:
@@ -1429,9 +1440,7 @@ async def stop_turn(session_id: str) -> str:
             d for d in await ledger.deliveries(session_id) if d["state"] in OPEN_STATES
         ]
         for delivery in open_now:
-            result, finished_reply = await _stop_delivery(
-                session_id, binding, delivery
-            )
+            result, finished_reply = await _stop_delivery(session_id, binding, delivery)
             reply = finished_reply or reply
             if outcome != "stopped":
                 outcome = result
@@ -1496,7 +1505,8 @@ async def _partial_reply(
     client: KagentClient, agent: AgentRef, task_id: str, proj: TaskProjection
 ) -> str:
     """Return the reply streamed before a stop: from the cancel response, else the task read
-    again (a cancel response may leave the artifacts out). A failed read keeps nothing."""
+    again (a cancel response may leave the artifacts out). A failed read keeps nothing.
+    """
     if proj.text:
         return proj.text
     try:

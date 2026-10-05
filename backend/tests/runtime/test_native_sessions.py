@@ -1258,8 +1258,10 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             c["params"]["message"]["parts"][0]["text"]
             for c in self.fake.rpc_calls("SendStreamingMessage")
         ]
-        self.assertEqual([t for t in sent if t in ("carry on", "report", "another")],
-                         ["carry on", "report", "another"])
+        self.assertEqual(
+            [t for t in sent if t in ("carry on", "report", "another")],
+            ["carry on", "report", "another"],
+        )
 
     async def test_a_stop_that_finds_the_turn_finished_does_not_hold_the_queue(self):
         self.ledger.binding["kagent_session_id"] = CONTEXT_ID
@@ -1329,7 +1331,10 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             projection.replace(task)
             await ns._finalize(SESSION, first, projection)
             next_message, _ = await self.ledger.record_submission(
-                session_id=SESSION, conversation_id="conv-1", text="continue", source="user"
+                session_id=SESSION,
+                conversation_id="conv-1",
+                text="continue",
+                source="user",
             )
             return task
 
@@ -1616,7 +1621,9 @@ class NextAgentTests(unittest.TestCase):
             patch.object(settings, "kagent_workspace_claude_agent", "ws-claude"),
             patch.object(settings, "kagent_workspace_codex_agent", "ws-codex"),
         ):
-            self.assertEqual(ns.agent_name("claude"), "ws-claude")  # default role: agent
+            self.assertEqual(
+                ns.agent_name("claude"), "ws-claude"
+            )  # default role: agent
             self.assertEqual(ns.agent_name("codex", "agent"), "ws-codex")
             self.assertEqual(ns.agent_name("claude", "child"), "child-claude")
             self.assertEqual(ns.agent_name("codex", "child"), "child-codex")

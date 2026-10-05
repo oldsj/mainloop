@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from mainloop import api
-from mainloop.mcp_app import create_app
 from mainloop.config import settings
+from mainloop.mcp_app import create_app
 from mainloop.runtime import agent_identity
 
 
@@ -51,8 +51,9 @@ class TokenKeyTests(unittest.TestCase):
 
     def test_dev_mode_and_the_test_env_fall_back_to_the_db_password(self):
         for kwargs in ({"dev": True}, {"test_env": True}):
-            with self.subTest(kwargs=kwargs), _Patched(
-                *_settings("", "db-password", **kwargs)
+            with (
+                self.subTest(kwargs=kwargs),
+                _Patched(*_settings("", "db-password", **kwargs)),
             ):
                 agent_identity.require_token_key()
                 self.assertTrue(agent_identity.token_for("s1").startswith("ml_"))

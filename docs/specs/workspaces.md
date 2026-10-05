@@ -83,7 +83,7 @@ cannot make a browser post a cancel, archive, suspend or resume.
 (comma-separated, for in-cluster Service names), loopback (development) or a preview host. The
 kubelet health probe (`/health`) is exempt because it addresses the pod by IP. Preview hosts are
 handled before this check. The preview base domain is a wildcard (the owner keeps
-`*.olds.network` or a `sslip.io` name), so preview origins and the API can be *same-site* (they
+`*.olds.network` or a `sslip.io` name), so preview origins and the API can be _same-site_ (they
 share a registrable domain for the accepted `*.olds.network` deployment), and the agent writes the page served
 from a preview origin. The Origin guard, the Host check and the unauthenticated tailnet boundary
 are the only things between that page and the API. This is a known, accepted risk for one owner;
@@ -92,6 +92,18 @@ The preview listener never reads an identity header (`X-User-ID` included): a
 workspace that is not the configured owner's is `404` (WebSocket close `4404`), and an undeclared
 port is `403` (close `4403`). A refused request does not touch the workspace's idle clock; only a
 request that passes both checks does.
+
+**Preview Origin check.** An unsafe HTTP method (anything but `GET`, `HEAD` and `OPTIONS`) and
+every WebSocket handshake to a preview host must carry either no `Origin` or the preview's own
+origin (the configured base URL's scheme with the request's `Host`). A different origin is
+refused with `403` (WebSocket close `4403`) _before_ the workspace is looked up, touched or woken
+and before the router is contacted, so the dev server never sees it. This covers a foreign site,
+the API's origin, a sibling preview (`*.<domain>`, including another workspace's preview), another
+scheme or port, and `null` (a sandboxed or redirected page). Same-origin requests, including a dev
+server's HMR WebSocket, pass. `GET`, `HEAD` and `OPTIONS` navigation is not checked. A request with
+**no `Origin`** is allowed: a browser always sends `Origin` on a cross-origin write or WebSocket
+handshake, so only a non-browser client (curl, a script) omits it, and a page cannot cause it. The
+dev server's own CSRF protection remains its own responsibility for same-origin pages.
 
 The proxy replaces the client Host with exactly one upstream Host header. It does not forward `Cookie`, `Authorization`, `X-User-ID`, `Forwarded`, `X-Real-IP`,
 `X-Forwarded-*` or `Tailscale-*` headers to the dev server (the agent writes the page and runs the

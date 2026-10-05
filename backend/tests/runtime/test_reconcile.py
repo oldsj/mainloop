@@ -6,8 +6,9 @@ import logging
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from mainloop.runtime import agent_credentials, workspaces
+from mainloop.runtime import agent_credentials
 from mainloop.runtime import native_sessions as ns
+from mainloop.runtime import workspaces
 
 
 class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
@@ -24,8 +25,12 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         for p in (
             patch.object(ns, "ledger", ledger),
             patch.object(ns, "sync", steps["sync"]),
-            patch.object(ns, "reconcile_archived_deletes", steps["reconcile_archived_deletes"]),
-            patch.object(agent_credentials, "reconcile_cleanup", steps["reconcile_cleanup"]),
+            patch.object(
+                ns, "reconcile_archived_deletes", steps["reconcile_archived_deletes"]
+            ),
+            patch.object(
+                agent_credentials, "reconcile_cleanup", steps["reconcile_cleanup"]
+            ),
             patch.object(workspaces, "suspend_idle", steps["suspend_idle"]),
         ):
             p.start()

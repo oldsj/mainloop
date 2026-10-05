@@ -150,11 +150,11 @@ Secret's runtime-managed data. Main and child AgentTemplates must bind that Remo
 Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
 remain owned by the kagent installation.
 
-| Setting                                                       | Runs                                           | Harness requirements                                                                                  |
-| ------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `KAGENT_MAIN_AGENT` (`mainloop-main`)                         | the main thread                                | `sessionIdleTTL: 0s`                                                                                  |
-| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`              | workspaces and sessions the owner starts       | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full`          |
-| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`                  | child agents the main thread delegates to      | default TTL and snapshot scope                                                                        |
+| Setting                                          | Runs                                      | Harness requirements                                                                         |
+| ------------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)            | the main thread                           | `sessionIdleTTL: 0s`                                                                         |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT` | workspaces and sessions the owner starts  | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full` |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`     | child agents the main thread delegates to | default TTL and snapshot scope                                                               |
 
 A workspace needs its own Agents because kagent measures idle time from the last A2A event
 (previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,

@@ -716,15 +716,13 @@ class KagentClient:
         An empty page is a response with no message, so it is not an error here.
         """
         sessions: list[KagentSession] = []
-        token = ""
+        cursor = ""
         while True:
-            page = _field_varint(1, 100) + _field_str(2, token)
-            frames = await self._session_frames(
-                "ListSessions", _field_bytes(3, page)
-            )
-            batch, token = decode_session_list(frames[0]) if frames else ([], "")
+            page = _field_varint(1, 100) + _field_str(2, cursor)
+            frames = await self._session_frames("ListSessions", _field_bytes(3, page))
+            batch, cursor = decode_session_list(frames[0]) if frames else ([], "")
             sessions.extend(batch)
-            if not token:
+            if not cursor:
                 return sessions
 
     async def get_session(self, session_id: str) -> KagentSession:

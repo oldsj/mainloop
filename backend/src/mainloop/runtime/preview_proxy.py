@@ -9,6 +9,16 @@ Every request for a declared port restarts the workspace's idle debounce (see
 
 Mainloop has one configured owner (``current_user()``, which reads ``settings.owner_id``) and is reached only over the tailnet,
 so previews carry no per-request identity: the workspace must belong to that owner.
+
+Origin boundary. The agent writes the page a preview serves, and a browser on that page can send
+a request to any other preview host or to the API. Before any lookup, touch, wake or router
+connect, an unsafe HTTP method (anything but GET, HEAD, OPTIONS) and every WebSocket handshake
+must carry no `Origin` header or the preview's own origin (the base URL's scheme and the
+request's `Host`). A foreign origin, a sibling `*.<domain>` preview, and `null` are refused
+(`403`, WebSocket close `4403`), so the dev server never sees them. A request with no `Origin`
+is allowed: browsers always send one on a cross-origin write or WebSocket handshake, so only a
+non-browser client (curl, a script) omits it, and it is not a page that can be forged into
+sending the request. GET, HEAD and OPTIONS navigation is not affected.
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ _MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024 * 1024
 _PREVIEW_TOUCH_INTERVAL_SECONDS = 20.0
 _RESPONSE_READ_BLOCK_BYTES = 64 * 1024
 _LOGGER = logging.getLogger(__name__)
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _ACTIVE_PREVIEW_LEASES: dict[str, tuple[asyncio.Task[None], int]] = {}
 _HOP_HEADERS = {
     "connection",
@@ -154,6 +165,14 @@ def parse_preview_host(
     if port > 65535 or not _WORKSPACE_LABEL.fullmatch(workspace_id):
         return None
     return PreviewHost(port, workspace_id)
+
+
+def _origin_refused(origin: str | None, host_header: str) -> bool:
+    """Whether a request's ``Origin`` is present and is not the preview's own origin."""
+    if origin is None:
+        return False
+    scheme = urlsplit(settings.substrate_preview_base_url).scheme.lower()
+    return origin.lower().rstrip("/") != f"{scheme}://{host_header.lower()}"
 
 
 def session_actor(kagent_session_id: str) -> str:
@@ -311,7 +330,8 @@ def _connect_router(
             for name, value in headers
             # The client's Host is replaced by the upstream one below; two Host headers make
             # strict servers (Go net/http, h11) answer 400.
-            if _forwardable_header(name) and name.lower() not in ("content-length", "host")
+            if _forwardable_header(name)
+            and name.lower() not in ("content-length", "host")
         ]
         request_headers.extend(
             [
@@ -449,6 +469,14 @@ def _waking_page() -> HTMLResponse:
 
 
 async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
+    if request.method not in _SAFE_METHODS and _origin_refused(
+        request.headers.get("origin"), request.headers.get("host", "")
+    ):
+        return Response(
+            "Cross-origin preview request refused",
+            status_code=403,
+            headers={"cache-control": "no-store"},
+        )
     target = await _resolve_target(parsed.workspace_id, current_user())
     if target is None:
         return Response("Workspace not found", status_code=404)
@@ -655,6 +683,11 @@ async def _relay_websocket(
 
 
 async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
+    if _origin_refused(
+        websocket.headers.get("origin"), websocket.headers.get("host", "")
+    ):
+        await websocket.close(code=4403, reason="Cross-origin preview refused")
+        return
     target = await _resolve_target(parsed.workspace_id, current_user())
     if target is None:
         await websocket.close(code=4404, reason="Workspace not found")

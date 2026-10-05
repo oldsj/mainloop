@@ -60,7 +60,9 @@ class IdentitySeamTests(unittest.IsolatedAsyncioTestCase):
     async def test_x_user_id_does_not_unlock_another_users_row(self):
         for method, path, function in ROUTES:
             for header in (OTHER, OWNER):
-                with self.subTest(path=path, header=header), self.found(function, OTHER):
+                with self.subTest(path=path, header=header), self.found(
+                    function, OTHER
+                ):
                     response = await self.client.request(
                         method, path, headers={"X-User-ID": header}
                     )
@@ -77,7 +79,9 @@ class IdentitySeamTests(unittest.IsolatedAsyncioTestCase):
             conversation_id="c",
         )
         with patch.object(api.db, "get_session", AsyncMock(return_value=session)):
-            response = await self.client.get("/sessions/x", headers={"X-User-ID": OTHER})
+            response = await self.client.get(
+                "/sessions/x", headers={"X-User-ID": OTHER}
+            )
         self.assertEqual(response.status_code, 200)
 
     async def test_dismiss_is_scoped_to_the_owner(self):

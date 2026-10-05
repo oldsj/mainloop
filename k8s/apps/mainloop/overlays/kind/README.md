@@ -50,10 +50,10 @@ the credential provider's permission to read that namespace.
 The checked-in values are the requested spike example and should be changed together for a
 new host. All services below retain their in-cluster Service names.
 
-| Surface | Service NodePort | Browser URL / setting |
-| --- | --- | --- |
-| Frontend | 30300 | `https://dev.husky-komodo.ts.net`; frontend `ORIGIN` in `deployments.yaml` |
-| REST API | 30800 | `https://dev.husky-komodo.ts.net:8443`; frontend build argument `VITE_API_URL` |
+| Surface  | Service NodePort   | Browser URL / setting                                                                |
+| -------- | ------------------ | ------------------------------------------------------------------------------------ |
+| Frontend | 30300              | `https://dev.husky-komodo.ts.net`; frontend `ORIGIN` in `deployments.yaml`           |
+| REST API | 30800              | `https://dev.husky-komodo.ts.net:8443`; frontend build argument `VITE_API_URL`       |
 | Previews | same backend 30800 | TCP listener `:8001`; `SUBSTRATE_PREVIEW_BASE_URL=http://100-116-68-0.sslip.io:8001` |
 
 A host-managed Tailscale listener terminates HTTPS for frontend/API and forwards raw TCP for

@@ -103,9 +103,11 @@ class SweepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.session_calls("DeleteSession"), [])
 
     async def test_unresolved_create_appearing_after_listing_blocks_deletion(self):
-        with patch.object(orphan_sessions, "_bound_ids", AsyncMock(side_effect=[
-            ({BOUND}, 0), ({BOUND}, 1), ({BOUND}, 1)
-        ])):
+        with patch.object(
+            orphan_sessions,
+            "_bound_ids",
+            AsyncMock(side_effect=[({BOUND}, 0), ({BOUND}, 1), ({BOUND}, 1)]),
+        ):
             self.assertEqual(await orphan_sessions.sweep(True, self.out), 1)
         self.assertEqual(self.fake.session_calls("DeleteSession"), [])
 

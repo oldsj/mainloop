@@ -7,8 +7,8 @@ spec:
   claude: {}
   sessionIdleTTL: 0s
   substrate:
-    snapshotPolicy: {location: 's3://ate-snapshots/kagent/'}
-    workerPoolRef: {name: kagent-default}
+    snapshotPolicy: { location: s3://ate-snapshots/kagent/ }
+    workerPoolRef: { name: kagent-default }
   workload:
     image: kagent-claude-harness:kind
 ---
@@ -18,11 +18,11 @@ metadata:
   name: mainloop-main-template
   namespace: kagent
 spec:
-  modelConfig: {name: claude-subscription-model}
+  modelConfig: { name: claude-subscription-model }
   systemPrompt: You are the Mainloop main thread. Use the mainloop MCP tools when asked.
   tools:
     - mcp:
-        server: {kind: RemoteMCPServer, name: mainloop}
+        server: { kind: RemoteMCPServer, name: mainloop }
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
@@ -30,5 +30,5 @@ metadata:
   name: mainloop-main
   namespace: kagent
 spec:
-  harnessRef: {name: mainloop-main-harness}
-  templateRef: {name: mainloop-main-template}
+  harnessRef: { name: mainloop-main-harness }
+  templateRef: { name: mainloop-main-template }

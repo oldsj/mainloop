@@ -83,8 +83,12 @@ async def _cleanup(binding_id: str):
             "reconcile step failed: step=credential_cleanup session_id=%s error_class=%s",
             binding_id,
             type(exc).__name__,
-            extra={"event": "reconcile_step_failed", "step": "credential_cleanup",
-                   "session_id": binding_id, "error_class": type(exc).__name__},
+            extra={
+                "event": "reconcile_step_failed",
+                "step": "credential_cleanup",
+                "session_id": binding_id,
+                "error_class": type(exc).__name__,
+            },
         )
         return
     async with db.connection() as conn:
@@ -110,6 +114,10 @@ async def reconcile_cleanup():
                 row["session_id"],
                 type(exc).__name__,
                 exc_info=exc,
-                extra={"event": "reconcile_step_failed", "step": "credential_cleanup",
-                       "session_id": row["session_id"], "error_class": type(exc).__name__},
+                extra={
+                    "event": "reconcile_step_failed",
+                    "step": "credential_cleanup",
+                    "session_id": row["session_id"],
+                    "error_class": type(exc).__name__,
+                },
             )
