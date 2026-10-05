@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  # Even accidental startup must never use the archived old database.
+  DB_HOST: mainloop-feature-db-pooler.mainloop.svc.cluster.local
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: mainloop.olds.network
+  FRONTEND_SCHEME: https
+  API_DOMAIN: mainloop-api.olds.network
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop,mainloop-backend.mainloop.svc,mainloop-backend.mainloop.svc.cluster.local
+  DEV_MODE: 'false'
+  IS_TEST_ENV: 'false'
+  KAGENT_GATEWAY_URL: http://kagent-controller.kagent.svc.cluster.local:8083
+  KAGENT_USER_ID: mainloop
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: mainloop-main
+  KAGENT_CLAUDE_AGENT: claude-subscription
+  KAGENT_CODEX_AGENT: codex-subscription-https
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
+  SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
+  SUBSTRATE_PREVIEW_BASE_URL: https://olds.network

@@ -1,0 +1,5 @@
+# Excluded. Replace database-patch.yaml hibernation "on" with "off" ONLY
+# after the Stage 2 bound-PV Retain gate; keep every other field unchanged.
+- op: replace
+  path: /metadata/annotations/cnpg.io~1hibernation
+  value: 'off'

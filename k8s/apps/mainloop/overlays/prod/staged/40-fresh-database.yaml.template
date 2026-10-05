@@ -1,21 +1,22 @@
+# Excluded. Requires retained archive verification and separate owner approval.
+# Do not rename/replace the old Cluster, Database or Pooler.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: mainloop-db
+  name: mainloop-feature-db
   namespace: mainloop
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
+  imageName: '${VERIFIED_CNPG_VECTOR_IMAGE_AT_DIGEST}'
   instances: 1
-
   storage:
     size: 10Gi
-
-  # Bootstrap: create initial database and owner
+    storageClass: synology-ssd
   bootstrap:
     initdb:
       database: mainloop
       owner: mainloop
-
-  # Resource limits for home lab
   resources:
     requests:
       cpu: 100m
@@ -23,12 +24,11 @@ spec:
     limits:
       cpu: '1'
       memory: 1Gi
-
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: mainloop-db-database
+  name: mainloop-feature-db-database
   namespace: mainloop
   annotations:
     argocd.argoproj.io/sync-options: Prune=false,Delete=false
@@ -36,29 +36,25 @@ spec:
   name: mainloop
   owner: mainloop
   cluster:
-    name: mainloop-db
+    name: mainloop-feature-db
   extensions:
     - name: vector
-
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Pooler
 metadata:
-  name: mainloop-db-pooler
+  name: mainloop-feature-db-pooler
   namespace: mainloop
   annotations:
     argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   cluster:
-    name: mainloop-db
+    name: mainloop-feature-db
   instances: 1
   type: rw
-
   pgbouncer:
     poolMode: session
     parameters:
       max_client_conn: '100'
       default_pool_size: '10'
-      # Disable query_wait_timeout (default 120s) because DBOS notification
-      # listener holds connections waiting for LISTEN/NOTIFY indefinitely
       query_wait_timeout: '0'

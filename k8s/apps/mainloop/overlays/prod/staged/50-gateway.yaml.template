@@ -1,0 +1,26 @@
+# Excluded. Resolve both tokens from the actual tailscale-gateway Envoy Pod
+# labels (not the Gateway object's labels). Never allow the entire namespace.
+# Replace ingress-patch.yaml with this resolved JSON6902 patch at Stage 5.
+- op: replace
+  path: /spec/ingress
+  value:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              '${VERIFIED_GATEWAY_POD_LABEL_KEY}': '${VERIFIED_GATEWAY_POD_LABEL_VALUE}'
+      ports:
+        - protocol: TCP
+          port: 8000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002

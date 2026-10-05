@@ -2,6 +2,10 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: mainloop-db
+  namespace: mainloop
+  annotations:
+    cnpg.io/hibernation: "on"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   # Reference 1Password-managed secret for app credentials
   bootstrap:

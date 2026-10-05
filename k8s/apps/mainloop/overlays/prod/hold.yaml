@@ -1,0 +1,17 @@
+# Backend includes both REST and MCP, either of which can initialize the schema.
+# Do not remove until the separately approved activation stage.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  replicas: 0

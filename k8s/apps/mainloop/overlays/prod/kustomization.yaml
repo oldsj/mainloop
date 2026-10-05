@@ -10,6 +10,15 @@ resources:
   - 1password.yaml # 1Password Connect integration
 
 patches:
+  # Stage 1 is inert. Promotion templates are deliberately not resources.
+  - path: hold.yaml
+  - path: configmap-patch.yaml
+  - path: backend-config-patch.yaml
+  - path: frontend-config-patch.yaml
+  - path: ingress-patch.yaml
+    target:
+      kind: NetworkPolicy
+      name: mainloop-backend-ingress
   # Patch CloudNativePG storage class
   - path: database-patch.yaml
     target:

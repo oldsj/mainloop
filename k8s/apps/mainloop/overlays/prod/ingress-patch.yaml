@@ -1,0 +1,16 @@
+# Replace the entire list: NetworkPolicies are additive. Appending another
+# policy would retain the base's frontend and incorrect tailscale peers.
+# REST/preview stays closed until actual Envoy pod labels have been verified.
+- op: replace
+  path: /spec/ingress
+  value:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002

@@ -1,0 +1,11 @@
+# Excluded. Add these entries to the root Kustomization only after publication
+# provenance/CI is verified. A local source commit or :latest is insufficient.
+images:
+  - name: ghcr.io/oldsj/mainloop-backend
+    newName: ghcr.io/oldsj/mainloop-backend
+    digest: '${PUBLISHED_FEATURE_BACKEND_SHA256}'
+  - name: ghcr.io/oldsj/mainloop-frontend
+    newName: ghcr.io/oldsj/mainloop-frontend
+    digest: '${PUBLISHED_FEATURE_FRONTEND_SHA256}'
+# Frontend artifact MUST have VITE_API_URL=https://mainloop-api.olds.network
+# built into it. Deployment ORIGIN/env cannot change the embedded API URL.
