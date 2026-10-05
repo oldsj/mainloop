@@ -1451,18 +1451,33 @@ async def stop_turn(session_id: str) -> str:
 
 
 async def _stop_delivery(
-    session_id: str, binding: dict, delivery: dict
+    session_id: str, binding: dict, delivery: dict, *, retried: bool = False
 ) -> tuple[str, str | None]:
     message_id = delivery["message_id"]
     if delivery["state"] == "recorded":
         # kagent never saw it: there is no task to cancel.
-        await _settle_cancelled(
+        moved = await _settle_cancelled(
             session_id,
             message_id,
             None,
             from_states=("recorded",),
             detail="stopped by user before it was sent",
         )
+        if not moved and not retried:
+            # Another writer (the MCP container) may have claimed it to ``sending`` after this
+            # stop read it, so kagent can now hold a task for it. Re-read and stop it as the
+            # in-flight turn it has become, once; reporting ``finished`` would leave it running.
+            current = next(
+                (
+                    d
+                    for d in await ledger.deliveries(session_id)
+                    if d["message_id"] == message_id
+                ),
+                None,
+            )
+            if current is not None and current["state"] in ("sending", "delivered"):
+                fresh = await get_binding(session_id) or binding
+                return await _stop_delivery(session_id, fresh, current, retried=True)
         return await _stop_result(message_id), None
     if binding["kagent_session_id"] is None:
         raise StopUnconfirmed(

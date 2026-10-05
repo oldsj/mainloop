@@ -1219,6 +1219,32 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.rows[mid]["state"], "sending")
         self.assertEqual(self.fake.rpc_calls("CancelTask"), [])
 
+    async def test_stop_of_a_recorded_delivery_claimed_meanwhile_stops_the_in_flight_turn(
+        self,
+    ):
+        # The stop reads the delivery as ``recorded``; before it settles, another writer claims
+        # it to ``sending`` and kagent takes the message. The stop must re-read and cancel that
+        # task, not report ``finished`` and leave the turn running.
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        self.ledger.rows[mid].update(state="recorded", task_id=None)
+        real_settle = self.ledger.settle_cancelled
+        claimed = []
+
+        async def claimed_first(message_id, **kw):
+            if not claimed:
+                claimed.append(message_id)
+                self.ledger.rows[message_id]["state"] = "sending"
+            return await real_settle(message_id, **kw)
+
+        with patch.object(self.ledger, "settle_cancelled", claimed_first):
+            self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(claimed, [mid])
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+        self.assertEqual(self.ledger.rows[mid]["task_id"], TASK_ID)
+        self.assertEqual(len(self.fake.rpc_calls("CancelTask")), 1)
+        self.assertEqual(len(self.notes_for(mid)), 1)
+
     async def test_stop_turn_of_a_message_kagent_never_saw_calls_nothing(self):
         mid = await self.ledger.record_message(
             session_id=SESSION,

@@ -112,10 +112,10 @@ class PreviewProxyTests(unittest.TestCase):
                     preview_proxy.parse_preview_host(host, base),
                     preview_proxy.PreviewHost(*expected),
                 )
-        wildcard = "https://olds.network"
+        wildcard = "https://example.test"
         self.assertEqual(
             preview_proxy.parse_preview_host(
-                "3000--workspace-1--preview.olds.network", wildcard
+                "3000--workspace-1--preview.example.test", wildcard
             ),
             preview_proxy.PreviewHost(3000, "workspace-1"),
         )
@@ -146,7 +146,7 @@ class PreviewProxyTests(unittest.TestCase):
     def test_a_nested_subdomain_is_rejected(self):
         for base, valid in (
             ("http://localhost:8001", "5173--workspace-1--preview.localhost:8001"),
-            ("https://olds.network", "5173--workspace-1--preview.olds.network"),
+            ("https://example.test", "5173--workspace-1--preview.example.test"),
         ):
             self.assertIsNotNone(preview_proxy.parse_preview_host(valid, base))
             for nested in (
@@ -163,10 +163,10 @@ class PreviewProxyTests(unittest.TestCase):
                 "http://localhost:8001",
                 "http://5173--workspace-1--preview.localhost:8001",
             ),
-            ("https://olds.network", "https://5173--workspace-1--preview.olds.network"),
+            ("https://example.test", "https://5173--workspace-1--preview.example.test"),
             (
-                "https://olds.network:8443",
-                "https://5173--workspace-1--preview.olds.network:8443",
+                "https://example.test:8443",
+                "https://5173--workspace-1--preview.example.test:8443",
             ),
         ):
             with self.subTest(base=base):

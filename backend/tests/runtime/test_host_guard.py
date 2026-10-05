@@ -10,8 +10,8 @@ from mainloop import api
 from mainloop.config import Settings, settings
 from mainloop.runtime import preview_proxy
 
-PREVIEW_BASE = "http://100-116-68-0.sslip.io:8001"
-FRONTEND = "dev.husky-komodo.ts.net"
+PREVIEW_BASE = "http://previews.example.test:8001"
+FRONTEND = "mainloop.example.ts.net"
 
 
 class HostGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -57,7 +57,7 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
             "evil.example:8443",
             f"{FRONTEND}.evil.example",
             f"evil.{FRONTEND}",
-            "100-116-68-0.sslip.io:8001",
+            "previews.example.test:8001",
             "",
             "[bad",
         ):
@@ -67,7 +67,7 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_preview_shaped_host_that_is_not_a_live_preview_is_not_the_api(
         self,
     ):
-        host = "3000--ws--preview.100-116-68-0.sslip.io:8001"
+        host = "3000--ws--preview.previews.example.test:8001"
         with patch.object(
             preview_proxy, "_resolve_target", AsyncMock(return_value=None)
         ):
@@ -76,7 +76,7 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
             )  # a preview, workspace not found
         # Same name on another port is not a preview host at all, and not the API either.
         self.assertEqual(
-            await self.status("3000--ws--preview.100-116-68-0.sslip.io"), 404
+            await self.status("3000--ws--preview.previews.example.test"), 404
         )
 
     async def test_the_health_probe_is_exempt_because_kubelet_uses_the_pod_ip(self):
@@ -85,11 +85,11 @@ class HostGuardTests(unittest.IsolatedAsyncioTestCase):
 
     def test_a_preview_host_with_the_base_port_is_parsed(self):
         parsed = preview_proxy.parse_preview_host(
-            "3000--ws--preview.100-116-68-0.sslip.io:8001"
+            "3000--ws--preview.previews.example.test:8001"
         )
         self.assertEqual(parsed, preview_proxy.PreviewHost(3000, "ws"))
         self.assertIsNone(
-            preview_proxy.parse_preview_host("3000--ws--preview.100-116-68-0.sslip.io")
+            preview_proxy.parse_preview_host("3000--ws--preview.previews.example.test")
         )
 
     def test_the_frontend_origin_follows_the_scheme_setting(self):

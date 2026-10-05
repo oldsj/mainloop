@@ -7,9 +7,9 @@ data:
   DB_HOST: mainloop-db-pooler.mainloop.svc.cluster.local
   DB_NAME: mainloop
   MAINLOOP_OWNER_ID: local-dev-user
-  FRONTEND_DOMAIN: dev.husky-komodo.ts.net
+  FRONTEND_DOMAIN: mainloop.example.ts.net
   FRONTEND_SCHEME: https
-  API_DOMAIN: dev.husky-komodo.ts.net
+  API_DOMAIN: mainloop.example.ts.net
   MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop,mainloop-backend.mainloop.svc.cluster.local
   KAGENT_GATEWAY_URL: http://kagent-controller.kagent.svc.cluster.local:8083
   KAGENT_USER_ID: mainloop
@@ -21,4 +21,4 @@ data:
   KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
   KAGENT_ACTOR_ATESPACE: kagent
   SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
-  SUBSTRATE_PREVIEW_BASE_URL: http://100-116-68-0.sslip.io:8001
+  SUBSTRATE_PREVIEW_BASE_URL: http://previews.example.test:8001

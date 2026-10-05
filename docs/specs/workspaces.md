@@ -75,16 +75,16 @@ notifications) also check that the row belongs to that user and answer `404` oth
 multi-user setup reads the identity a trusted gateway sets, in `current_user()` only.
 Access to the tailnet, plus the in-cluster NetworkPolicy, is the security boundary. The API also
 refuses a non-GET request that carries an `Origin` other than the frontend's, a localhost
-development origin or its own, so another origin's page (the agent's preview page, for one)
+development origin (development mode only) or its own, so another origin's page (the agent's preview page, for one)
 cannot make a browser post a cancel, archive, suspend or resume.
 
 **Host check.** The API answers `404` to any `Host` that is not the frontend domain
 (`FRONTEND_DOMAIN`), the configured `API_DOMAIN` (with or without a port), a name in `MAINLOOP_API_HOSTS`
 (comma-separated, for in-cluster Service names), loopback (development) or a preview host. The
 kubelet health probe (`/health`) is exempt because it addresses the pod by IP. Preview hosts are
-handled before this check. The preview base domain is a wildcard (the owner keeps
-`*.olds.network` or a `sslip.io` name), so preview origins and the API can be _same-site_ (they
-share a registrable domain for the accepted `*.olds.network` deployment), and the agent writes the page served
+handled before this check. The preview base domain is a wildcard (an owner-controlled domain, or a
+name from a wildcard DNS service such as `sslip.io`), so preview origins and the API can be _same-site_ (they
+share a registrable domain for a deployment whose previews sit under the same domain as the API), and the agent writes the page served
 from a preview origin. The Origin guard, the Host check and the unauthenticated tailnet boundary
 are the only things between that page and the API. This is a known, accepted risk for one owner;
 a deployment that cannot accept it must serve previews under a registrable domain of their own.

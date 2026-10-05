@@ -73,7 +73,8 @@ _HOST_EXEMPT_PATHS = frozenset({"/health"})
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=_LOCALHOST_ORIGIN.pattern,  # All localhost ports
+    # Any localhost port, in development only: a production deployment trusts the frontend alone.
+    allow_origin_regex=_LOCALHOST_ORIGIN.pattern if settings.is_dev else None,
     allow_origins=[settings.frontend_origin],  # Production
     allow_credentials=True,
     allow_methods=["*"],
@@ -84,7 +85,7 @@ app.add_middleware(
 def _origin_allowed(origin: str, host: str) -> bool:
     return (
         origin == settings.frontend_origin
-        or _LOCALHOST_ORIGIN.fullmatch(origin) is not None
+        or (settings.is_dev and _LOCALHOST_ORIGIN.fullmatch(origin) is not None)
         or urlsplit(origin).netloc == host  # the API's own origin
     )
 

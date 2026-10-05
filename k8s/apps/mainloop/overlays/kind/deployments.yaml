@@ -39,4 +39,4 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: ORIGIN
-              value: https://dev.husky-komodo.ts.net
+              value: https://mainloop.example.ts.net

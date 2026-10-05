@@ -49,11 +49,23 @@ class OriginGuardTests(unittest.IsolatedAsyncioTestCase):
                     )
 
     async def test_the_frontend_origin_is_allowed(self):
-        for origin in (settings.frontend_origin, "http://localhost:5173"):
-            for path in WRITES:
-                with self.subTest(origin=origin, path=path):
-                    response = await self.post(path, origin)
-                    self.assertNotEqual(response.status_code, 403)
+        for path in WRITES:
+            with self.subTest(path=path):
+                response = await self.post(path, settings.frontend_origin)
+                self.assertNotEqual(response.status_code, 403)
+
+    async def test_a_localhost_origin_is_allowed_only_in_development(self):
+        for path in WRITES:
+            with self.subTest(mode="dev", path=path), patch.object(
+                settings, "dev_mode", True
+            ):
+                response = await self.post(path, "http://localhost:5173")
+                self.assertNotEqual(response.status_code, 403)
+            with self.subTest(mode="prod", path=path), patch.object(
+                settings, "dev_mode", False
+            ), patch.object(settings, "is_test_env", False):
+                response = await self.post(path, "http://localhost:5173")
+                self.assertEqual(response.status_code, 403)
 
     async def test_the_apis_own_origin_is_allowed(self):
         self.assertNotEqual(
