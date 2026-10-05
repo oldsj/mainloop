@@ -3,12 +3,17 @@
 #
 # envFrom has no merge key, so listing it here replaces the base list: the
 # whole mainloop-secrets Secret is no longer imported. env is merged by name.
+#
+# One replica runs DBOS, so replace pods instead of surging a second one, and size the MCP
+# container for its small footprint (the base requests are for the REST container).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mainloop-backend
   namespace: mainloop
 spec:
+  strategy:
+    type: Recreate
   template:
     spec:
       containers:
@@ -38,3 +43,10 @@ spec:
         - name: mcp
           envFrom: *envFrom
           env: *env
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi

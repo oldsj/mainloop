@@ -14,9 +14,10 @@ and Substrate before Mainloop can serve a turn. The overlay does not install eit
 | Resource | Notes |
 | --- | --- |
 | Base | Namespace, ServiceAccount, backend (REST `:8000` + MCP `:8002` containers), frontend, Services, `mainloop-config`, `mainloop-backend-ingress` |
-| `Cluster/mainloop-pg`, `Pooler/mainloop-pg-pooler` | Fresh CNPG database on the cluster's default storage class. Pooler is `rw`, session mode, `query_wait_timeout: 0` for DBOS `LISTEN`/`NOTIFY` |
-| `mainloop-config` patch | DB host, `KAGENT_*` Agent names and gateway URL, `SUBSTRATE_ROUTER_ADDRESS`, `DEV_MODE`/`IS_TEST_ENV` false. Drops the example `FRONTEND_DOMAIN` |
+| `Cluster/mainloop-pg` | Fresh single-instance CNPG database on the cluster's default storage class. The backend connects to the `mainloop-pg-rw` Service directly; there is no pooler, so DBOS `LISTEN`/`NOTIFY` sessions cannot be starved by a pool limit |
+| `mainloop-config` patch | DB host (`mainloop-pg-rw`), `KAGENT_*` Agent names and gateway URL, `SUBSTRATE_ROUTER_ADDRESS`, `DEV_MODE`/`IS_TEST_ENV` false. Drops the example `FRONTEND_DOMAIN` |
 | Backend patch | Both containers read `mainloop-config` and `mainloop-site` only (no whole-Secret import) and set `DB_USER`/`DB_PASSWORD`/`AGENT_TOKEN_KEY` explicitly |
+| Backend Deployment | `strategy: Recreate` (one DBOS replica; no surge pod needed), and the `mcp` container requests 100m / 256Mi instead of the REST container's base values |
 | Frontend patch | `ORIGIN` from `mainloop-site` |
 | `mainloop-backend-ingress` patch | Ingress list replaced: only `ate-system` `atenet-egress` reaches `:8002` |
 

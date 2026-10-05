@@ -4,7 +4,7 @@ metadata:
   name: mainloop-config
   namespace: mainloop
 data:
-  DB_HOST: mainloop-pg-pooler.mainloop.svc.cluster.local
+  DB_HOST: mainloop-pg-rw.mainloop.svc.cluster.local
   DB_PORT: '5432'
   DB_NAME: mainloop
   # Domains come from the site ConfigMap (mainloop-site), not from this base value.
