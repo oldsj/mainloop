@@ -39,7 +39,7 @@ class Session(BaseModel):
     """
 
     id: str = Field(default_factory=_uuid, description="Unique session ID")
-    user_id: str = Field(..., description="User ID from Cloudflare Access")
+    user_id: str = Field(..., description="Owner ID (the single configured owner)")
     main_thread_id: str = Field(..., description="Parent main thread ID")
 
     # Session definition
@@ -175,7 +175,7 @@ class NativeDeliveryInfo(BaseModel):
     message_id: str
     state: str = Field(
         ...,
-        description="queued|recorded|sending|delivered|completed|uncertain|failed",
+        description="queued|recorded|sending|delivered|completed|uncertain|failed|cancelled",
     )
     task_id: str | None = None
     evidence_ref: str | None = None

@@ -12,14 +12,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from mainloop.config import settings
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import (
     KagentClient,
+    KagentError,
     OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
     SessionCredential,
     SessionError,
+    SessionWorkspace,
     Unreachable,
     assistant_message_id,
 )
@@ -48,9 +51,16 @@ class MemoryLedger:
             "standing_hash": None,
             "reported_at": None,
         }
+        self.queue_held = False
         self.rows: dict[str, dict] = {}
         self.replies: dict[str, str] = {}
+        # Conversation notes written with a ``cancelled`` settle, by note id.
+        self.notes: dict[str, str] = {}
         self.sequence = 0
+        # The Session ``workspace`` of a branch workspace (None for any other session).
+        self.workspace: SessionWorkspace | None = None
+        self.archived = False
+        self.kagent_deleted = False
 
     async def get_binding(self, session_id, *, conn=None):
         return self.binding if session_id == SESSION else None
@@ -63,6 +73,7 @@ class MemoryLedger:
             return False
         if any(
             r["state"] in ("sending", "delivered", "completed", "uncertain")
+            or r.get("task_id")
             for r in self.rows.values()
         ):
             return False
@@ -106,6 +117,24 @@ class MemoryLedger:
         }
         return mid
 
+    async def record_submission(self, *, session_id, conversation_id, text, source):
+        busy = await self.open_count(session_id)
+        if busy and source in ("user", "brief"):
+            raise ValueError(
+                "A previous message is still in flight; wait for its reply before sending another."
+            )
+        if source == "user":
+            self.queue_held = False
+        state = "queued" if busy or self.queue_held else "recorded"
+        mid = await self.record_message(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            text=text,
+            state=state,
+            source=source,
+        )
+        return mid, state
+
     async def delivery_state(self, message_id):
         row = self.rows.get(message_id)
         return row["state"] if row else None
@@ -119,6 +148,29 @@ class MemoryLedger:
 
     async def open_count(self, session_id):
         return sum(r["state"] in ns.OPEN_STATES for r in self.rows.values())
+
+    async def active_count(self, session_id):
+        queued = () if self.queue_held else ("queued",)
+        return sum(r["state"] in (*ns.OPEN_STATES, *queued) for r in self.rows.values())
+
+    async def remember_partial(self, message_id, text):
+        if text and self.rows[message_id]["state"] in ns._RESOLVABLE:
+            self.rows[message_id]["partial_text"] = text
+
+    async def get_workspace(self, session_id, *, conn=None):
+        return self.workspace
+
+    async def undeleted_archived(self):
+        if (
+            self.archived
+            and not self.kagent_deleted
+            and self.binding["kagent_session_id"]
+        ):
+            return [{"session_id": SESSION}]
+        return []
+
+    async def mark_kagent_deleted(self, session_id):
+        self.kagent_deleted = True
 
     async def set_delivery(
         self, message_id, state, *, task_id=None, evidence_ref=None, detail=None
@@ -140,6 +192,32 @@ class MemoryLedger:
         await self.set_delivery(message_id, state, **kw)
         return True
 
+    async def settle_cancelled(
+        self,
+        message_id,
+        *,
+        from_states,
+        conversation_id,
+        note_id,
+        note,
+        task_id=None,
+        detail=None,
+        partial=None,
+    ):
+        if self.rows[message_id]["state"] not in from_states:
+            return False
+        await self.set_delivery(
+            message_id,
+            "cancelled",
+            task_id=task_id,
+            evidence_ref=f"a2a:task/{task_id}" if task_id else None,
+            detail=detail,
+        )
+        self.queue_held = True
+        partial = partial or self.rows[message_id].get("partial_text")
+        self.notes.setdefault(note_id, ns.stopped_message(partial) if partial else note)
+        return True
+
     async def deliveries(self, session_id):
         return list(self.rows.values())
 
@@ -147,7 +225,7 @@ class MemoryLedger:
         return [dict(r) for r in self.rows.values() if r["state"] in ns._RESOLVABLE]
 
     async def promote_queued(self, session_id):
-        if await self.open_count(session_id):
+        if await self.open_count(session_id) or self.queue_held:
             return None
         for r in self.rows.values():
             if r["state"] == "queued":
@@ -198,6 +276,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             user_id="user-1",
             conversation_id="conv-1",
             status=SessionStatus.ACTIVE,
+            archived_at=None,
         )
         self.mirrored: list[str] = []
 
@@ -244,9 +323,6 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             patch.object(ns.db, "get_session", AsyncMock(return_value=self.session)),
             patch.object(ns.db, "update_session", update_session),
             patch.object(ns, "notify_session_message", notify_message),
-            patch.object(
-                ns.workspace_adapter, "get_workspace", AsyncMock(return_value=None)
-            ),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -258,6 +334,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def settle(self):
         while ns._tasks:
             await asyncio.gather(*list(ns._tasks), return_exceptions=True)
+            # Gathering already-completed tasks can finish without yielding.
+            # Let _spawn's completion callbacks retire them before polling again.
+            await asyncio.sleep(0)
 
     async def send(self, text="hello", **kw) -> str:
         mid = await ns.submit_message(SESSION, text, **kw)
@@ -759,9 +838,16 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_kind_selects_the_kagent_agent(self):
         self.ledger.binding["kind"] = "codex"
+        self.ledger.binding["role"] = "child"
         await self.send()
         path = next(p for _, p, b in self.fake.requests if isinstance(b, dict))
         self.assertTrue(path.endswith("/codex-subscription-https"))
+
+    async def test_a_workspace_session_runs_on_the_workspace_agent(self):
+        self.ledger.binding["kind"] = "codex"
+        await self.send()
+        path = next(p for _, p, b in self.fake.requests if isinstance(b, dict))
+        self.assertTrue(path.endswith("/codex-workspace"))
 
     async def test_standing_context_prefixes_only_the_first_turn(self):
         self.ledger.binding["role"] = "main"
@@ -990,6 +1076,268 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.binding["role"] = "main"
         with self.assertRaises(ValueError):
             await ns.cancel(SESSION)
+
+    # ---- stop the open turn, keep the session -------------------------------------------------
+
+    def notes_for(self, mid: str) -> list[str]:
+        return [
+            note
+            for note_id, note in self.ledger.notes.items()
+            if note_id == ns._stop_note_id(mid)
+        ]
+
+    async def test_stop_turn_cancels_the_task_and_the_next_message_starts_fresh(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        self.assertEqual(self.ledger.rows[mid]["state"], "delivered")
+        self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        row = self.ledger.rows[mid]
+        self.assertEqual(row["state"], "cancelled")
+        self.assertEqual(row["task_id"], TASK_ID)
+        self.assertEqual(self.notes_for(mid), [ns.stopped_message("ok")])
+        self.assertEqual(len(self.fake.rpc_calls("CancelTask")), 1)
+        # The session and its kagent Session are untouched: idle, not cancelled or deleted.
+        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+        # A late observation cannot revive or re-settle it.
+        await ns.sync(SESSION)
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+        # The next message is a new task on the same Session.
+        next_mid = await self.send("again")
+        self.assertEqual(self.ledger.rows[next_mid]["state"], "completed")
+        sent = self.fake.rpc_calls("SendStreamingMessage")[-1]["params"]["message"]
+        self.assertEqual(sent["contextId"], CONTEXT_ID)
+        self.assertNotIn("taskId", sent)
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+
+    async def test_stop_turn_clears_a_parked_task(self):
+        for parked in ("TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED"):
+            with self.subTest(parked):
+                self.fake.send_script = ["cut"]
+                mid = await self.send()
+                self.fake.tasks[TASK_ID]["status"] = {"state": parked}
+                self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+                self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+                self.assertEqual(await ns.ledger.open_count(SESSION), 0)
+
+    async def test_stop_turn_without_an_open_turn_is_a_noop(self):
+        self.ledger.binding["kagent_session_id"] = CONTEXT_ID
+        self.assertEqual(await ns.stop_turn(SESSION), "no_open_turn")
+        mid = await self.send()  # completes
+        self.assertEqual(await ns.stop_turn(SESSION), "no_open_turn")
+        self.assertEqual(self.ledger.rows[mid]["state"], "completed")
+        self.assertEqual(self.fake.rpc_calls("CancelTask"), [])
+        self.assertEqual(self.ledger.notes, {})
+
+    async def test_stop_turn_twice_is_idempotent(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(await ns.stop_turn(SESSION), "no_open_turn")
+        self.assertEqual(len(self.fake.rpc_calls("CancelTask")), 1)
+        self.assertEqual(self.notes_for(mid), [ns.stopped_message("ok")])
+
+    async def test_stop_turn_that_loses_the_race_to_completion_records_the_completion(
+        self,
+    ):
+        # The turn finished at kagent while Mainloop still showed it open: kagent returns a
+        # finished task unchanged, so the delivery completes with its reply and is not cancelled.
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        self.fake.tasks[TASK_ID]["status"] = {"state": "TASK_STATE_COMPLETED"}
+        self.assertEqual(await ns.stop_turn(SESSION), "finished")
+        self.assertEqual(self.ledger.rows[mid]["state"], "completed")
+        self.assertEqual(self.ledger.notes, {})
+        self.assertEqual(self.ledger.binding["turns"], 1)
+        self.assertEqual(await ns.stop_turn(SESSION), "no_open_turn")
+
+    async def test_stop_turn_when_the_stream_settles_the_cancellation_first(self):
+        # The stream sees the task cancelled and settles it between kagent's answer and ours:
+        # one terminal state, one note, and the stop still reports it stopped.
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        client = ns.get_client()
+        real_cancel = client.cancel_task
+
+        async def cancel_then_stream_settles(agent, task_id):
+            task = await real_cancel(agent, task_id)
+            proj = ns.TaskProjection()
+            proj.replace(task)
+            await ns._finalize(SESSION, mid, proj)
+            return task
+
+        with patch.object(client, "cancel_task", cancel_then_stream_settles):
+            self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+        self.assertEqual(self.notes_for(mid), [ns.stopped_message("ok")])
+        self.assertEqual(len(self.ledger.notes), 1)
+
+    async def test_a_cancelled_task_seen_by_sync_settles_as_cancelled(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        self.fake.tasks[TASK_ID]["status"] = {"state": "TASK_STATE_CANCELED"}
+        await ns.sync(SESSION)
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+        self.assertEqual(self.notes_for(mid), [ns.stopped_message("ok")])
+
+    async def test_stop_turn_kagent_error_leaves_the_ledger_untouched(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        before = dict(self.ledger.rows[mid])
+        self.fake.cancel_task_fails = True
+        with self.assertRaises(KagentError):
+            await ns.stop_turn(SESSION)
+        self.assertEqual(self.ledger.rows[mid], before)
+        self.assertEqual(self.ledger.notes, {})
+        self.assertEqual(self.session.status, SessionStatus.ACTIVE)
+        # Retry once kagent answers.
+        self.fake.cancel_task_fails = False
+        self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+
+    async def test_stop_turn_task_that_keeps_running_is_unconfirmed(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        before = dict(self.ledger.rows[mid])
+        self.fake.cancel_task_ignored = True
+        with self.assertRaises(ns.StopUnconfirmed):
+            await ns.stop_turn(SESSION)
+        self.assertEqual(self.ledger.rows[mid], before)
+        self.assertEqual(self.ledger.notes, {})
+
+    async def test_stop_turn_of_a_send_with_no_visible_task_is_unconfirmed(self):
+        mid = await self.ledger.record_message(
+            session_id=SESSION,
+            conversation_id="conv-1",
+            text="x",
+            state="sending",
+            source="user",
+        )
+        self.ledger.binding["kagent_session_id"] = CONTEXT_ID
+        with self.assertRaises(ns.StopUnconfirmed):
+            await ns.stop_turn(SESSION)
+        self.assertEqual(self.ledger.rows[mid]["state"], "sending")
+        self.assertEqual(self.fake.rpc_calls("CancelTask"), [])
+
+    async def test_stop_turn_of_a_message_kagent_never_saw_calls_nothing(self):
+        mid = await self.ledger.record_message(
+            session_id=SESSION,
+            conversation_id="conv-1",
+            text="x",
+            state="recorded",
+            source="user",
+        )
+        self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.ledger.rows[mid]["state"], "cancelled")
+        self.assertEqual(self.fake.rpc_calls("CancelTask"), [])
+        self.assertEqual(self.notes_for(mid), [ns.TURN_STOPPED_NOTE])
+
+    async def test_a_report_queued_behind_a_stopped_turn_waits_for_the_owner(self):
+        self.fake.send_script = ["cut"]
+        first = await self.send()
+        queued = await self.send("report", source="report")
+        self.assertEqual(self.ledger.rows[queued]["state"], "queued")
+        await ns.stop_turn(SESSION)
+        await self.settle()
+        self.assertEqual(self.ledger.rows[first]["state"], "cancelled")
+        self.assertEqual(self.ledger.rows[queued]["state"], "queued")
+        self.assertEqual(len(self.fake.rpc_calls("SendStreamingMessage")), 1)
+        # A reconcile pass does not start it either.
+        await ns.sync(SESSION)
+        await self.settle()
+        self.assertEqual(self.ledger.rows[queued]["state"], "queued")
+        # A report that arrives after the stop is queued too, behind the held one.
+        later = await self.send("another", source="report")
+        self.assertEqual(self.ledger.rows[later]["state"], "queued")
+        # The owner's next message goes first; the held reports then follow, one at a time.
+        mine = await self.send("carry on")
+        self.assertEqual(self.ledger.rows[mine]["state"], "completed")
+        self.assertEqual(self.ledger.rows[queued]["state"], "completed")
+        self.assertEqual(self.ledger.rows[later]["state"], "completed")
+        sent = [
+            c["params"]["message"]["parts"][0]["text"]
+            for c in self.fake.rpc_calls("SendStreamingMessage")
+        ]
+        self.assertEqual([t for t in sent if t in ("carry on", "report", "another")],
+                         ["carry on", "report", "another"])
+
+    async def test_a_stop_that_finds_the_turn_finished_does_not_hold_the_queue(self):
+        self.ledger.binding["kagent_session_id"] = CONTEXT_ID
+        mid = await self.send()
+        self.assertEqual(self.ledger.rows[mid]["state"], "completed")
+        self.assertEqual(await ns.stop_turn(SESSION), "no_open_turn")
+        report = await self.send("report", source="report")
+        self.assertEqual(self.ledger.rows[report]["state"], "completed")
+
+    async def test_a_stopped_turn_keeps_the_partial_reply_marked_as_stopped(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        await ns.stop_turn(SESSION)
+        (note,) = self.notes_for(mid)
+        self.assertTrue(note.endswith(ns.TURN_STOPPED_NOTE))
+        self.assertTrue(note.startswith("ok"))
+        self.assertEqual(self.ledger.replies, {})
+
+    async def test_a_stop_before_any_text_writes_only_the_note(self):
+        self.assertEqual(ns.stopped_message(None), ns.TURN_STOPPED_NOTE)
+        self.assertEqual(ns.stopped_message("  \n"), ns.TURN_STOPPED_NOTE)
+        self.assertEqual(
+            ns.stopped_message(" half an answer "),
+            "half an answer\n\n" + ns.TURN_STOPPED_NOTE,
+        )
+
+    async def test_stop_keeps_streamed_text_when_cancel_and_get_omit_artifacts(self):
+        self.fake.send_script = ["cut"]
+        self.fake.cut_after = 3  # include the artifact before the stream disconnects
+        mid = await self.send()
+        self.assertTrue(self.ledger.rows[mid].get("partial_text"))
+        partial = self.ledger.rows[mid]["partial_text"]
+        self.fake.tasks[TASK_ID].pop("artifacts", None)
+        self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.notes_for(mid), [ns.stopped_message(partial)])
+
+    async def test_stream_cancellation_holds_the_queue_before_stop_returns(self):
+        self.fake.send_script = ["cut"]
+        mid = await self.send()
+        queued = await self.send("report", source="report")
+        client = ns.get_client()
+        real_cancel = client.cancel_task
+
+        async def observe_in_other_process(agent, task_id):
+            task = await real_cancel(agent, task_id)
+            projection = ns.TaskProjection()
+            projection.replace(task)
+            await ns._finalize(SESSION, mid, projection)
+            self.assertIsNone(await self.ledger.promote_queued(SESSION))
+            return task
+
+        with patch.object(client, "cancel_task", observe_in_other_process):
+            self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.ledger.rows[queued]["state"], "queued")
+
+    async def test_stop_does_not_cancel_a_new_owner_message_from_another_process(self):
+        self.fake.send_script = ["cut"]
+        first = await self.send()
+        client = ns.get_client()
+        real_cancel = client.cancel_task
+        next_message = None
+
+        async def observe_then_accept_next_message(agent, task_id):
+            nonlocal next_message
+            task = await real_cancel(agent, task_id)
+            projection = ns.TaskProjection()
+            projection.replace(task)
+            await ns._finalize(SESSION, first, projection)
+            next_message, _ = await self.ledger.record_submission(
+                session_id=SESSION, conversation_id="conv-1", text="continue", source="user"
+            )
+            return task
+
+        with patch.object(client, "cancel_task", observe_then_accept_next_message):
+            self.assertEqual(await ns.stop_turn(SESSION), "stopped")
+        self.assertEqual(self.ledger.rows[first]["state"], "cancelled")
+        self.assertEqual(self.ledger.rows[next_message]["state"], "recorded")
+        self.assertFalse(self.ledger.queue_held)
 
     # ---- uncertain delivery: look the task up by messageId, never resend --------------------
 
@@ -1237,7 +1585,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.fake.send_script = ["drop"]
         await self.send()
         info = await ns.identity(SESSION)
-        self.assertEqual(info.agent_name, "claude-subscription")
+        self.assertEqual(info.agent_name, "claude-workspace")
         self.assertEqual(info.kagent_session_id, CONTEXT_ID)
         self.assertEqual(info.session_state, "ready")
         self.assertIn("delivery unknown", info.note)
@@ -1258,6 +1606,23 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NextAgentTests(unittest.TestCase):
+    def test_workspaces_and_owner_sessions_use_the_workspace_agents_children_the_defaults(
+        self,
+    ):
+        with (
+            patch.object(settings, "kagent_main_agent", "main-a"),
+            patch.object(settings, "kagent_claude_agent", "child-claude"),
+            patch.object(settings, "kagent_codex_agent", "child-codex"),
+            patch.object(settings, "kagent_workspace_claude_agent", "ws-claude"),
+            patch.object(settings, "kagent_workspace_codex_agent", "ws-codex"),
+        ):
+            self.assertEqual(ns.agent_name("claude"), "ws-claude")  # default role: agent
+            self.assertEqual(ns.agent_name("codex", "agent"), "ws-codex")
+            self.assertEqual(ns.agent_name("claude", "child"), "child-claude")
+            self.assertEqual(ns.agent_name("codex", "child"), "child-codex")
+            self.assertEqual(ns.agent_name("claude", "main"), "main-a")
+            self.assertEqual(ns.agent_ref("codex", "agent").name, "ws-codex")
+
     def test_unknown_kind_has_no_agent(self):
         with self.assertRaises(ValueError):
             ns.agent_name("gemini")

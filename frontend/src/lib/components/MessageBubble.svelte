@@ -6,10 +6,13 @@
 
   let { message, context = 'main' }: { message: Message; context?: string } = $props();
   let isUser = $derived(message.role === 'user');
+  const stoppedNote = 'This turn was stopped before it finished.';
+  let stopped = $derived(!isUser && message.content.endsWith(stoppedNote));
+  let content = $derived(stopped ? message.content.slice(0, -stoppedNote.length).trimEnd() : message.content);
 
   // A child agent's report, delivered to the main thread as a message: not something the user said.
   let report = $derived(isUser ? parseChildReport(message.content) : null);
-  let htmlContent = $derived(renderMarkdown(report ? report.body : message.content));
+  let htmlContent = $derived(renderMarkdown(report ? report.body : content));
 </script>
 
 <div
@@ -30,12 +33,16 @@
         child · {report.title}{report.fallback ? ' (ended without a report)' : ''}
       {:else}
         {isUser ? 'user' : 'claude'}@{context}$
+        {#if stopped}<span class="text-term-yellow"> · stopped</span>{/if}
       {/if}
     </span>
     <div class="min-w-0 flex-1">
       <div class="prose-terminal text-term-fg text-sm md:text-base">
         {@html htmlContent}
       </div>
+      {#if stopped}
+        <p class="mt-2 text-sm text-term-fg-muted" data-testid="turn-stopped-note">{stoppedNote}</p>
+      {/if}
       <time class="text-term-fg-muted mt-1 block text-xs">
         {messageTime(message.created_at)}
       </time>

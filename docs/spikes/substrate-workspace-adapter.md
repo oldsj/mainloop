@@ -1,5 +1,10 @@
 # Spike: Substrate as Mainloop's Kubernetes workspace runtime
 
+> Historical record, superseded by the kagent integration (2026-10-05). The adapter, shim and
+> live scripts described below have been removed. Current behavior is in
+> [Workspaces](../specs/workspaces.md) and [architecture](../architecture.md). Historical
+> projected-token and cluster privilege descriptions below are not deployment instructions.
+
 > Cutover note (2026-09-24): Herdr was removed; Substrate is now the only workspace runtime.
 
 Status: local spike, not a product feature. Adapter code lives in

@@ -58,7 +58,7 @@ class CredentialPostgresTests(PostgresTestCase):
         )
         creates, deletes = [], []
 
-        async def create(agent, *, request_id, credentials):
+        async def create(agent, *, request_id, credentials, workspace=None):
             creates.append((request_id, credentials))
             nonlocal actor
             actor = replace(
@@ -145,6 +145,30 @@ class CredentialPostgresTests(PostgresTestCase):
         )
         self.assertTrue(binding["token_hash"])
         self.assertEqual((await db.get_session(sid)).status, SessionStatus.ACTIVE)
+
+    async def test_a_delivery_with_a_task_is_a_claim_whatever_state_it_ended_in(self):
+        for state, task_id, expected in (
+            ("cancelled", "task-1", False),  # a first turn the owner stopped
+            ("failed", "task-2", False),
+            ("cancelled", None, True),  # cancelled before anything was sent
+            ("failed", None, True),
+        ):
+            with self.subTest(state=state, task_id=task_id):
+                sid, cid = await self.bound_session(role="child", status="active")
+                mid = await self.delivery(sid, cid, state, source="brief")
+                await self.pool.execute(
+                    "UPDATE native_deliveries SET task_id=$2 WHERE message_id=$1",
+                    mid,
+                    task_id,
+                )
+                self.assertEqual(
+                    await native_sessions.ledger.remember_child_start_failure(
+                        sid, "kagent blip"
+                    ),
+                    expected,
+                )
+                binding = await self.reload_binding(sid)
+                self.assertEqual(bool(binding["child_start_failure"]), expected)
 
     async def test_context_failure_intent_reloads_before_disposal_and_revocation(self):
         sid, cid = await self.bound_session(role="child", status="active")

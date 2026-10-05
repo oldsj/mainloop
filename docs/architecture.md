@@ -1,9 +1,9 @@
 # How Mainloop works
 
 Mainloop keeps project conversations, agent work, and workspace state together. The control
-plane stores messages and delivery state; native Claude Code and Codex sessions run in isolated
-Substrate workspaces. Mainloop uses attention as a compute budget: active workspaces run, while
-inactive workspaces are snapshotted and suspended until needed.
+plane stores messages and delivery state; native Claude Code and Codex sessions run as kagent
+Sessions. Branch workspace Sessions have their own git checkout. Mainloop uses attention as a compute
+budget: active workspaces run, while inactive workspaces are suspended until needed.
 
 These diagrams describe implemented code paths; they do not claim a live cluster proof. Known
 verification gaps are listed below.
@@ -15,32 +15,28 @@ flowchart LR
   person["Browser or phone"] --> app["SvelteKit app"]
   app <--> api["FastAPI + DBOS"]
   api --> data[("PostgreSQL<br/>messages, deliveries, workspace state")]
-  api -->|workspace lifecycle| router["Substrate router"]
   api -->|"agent turns (A2A) and Sessions"| kagent["kagent gateway"]
-  person -->|authenticated preview URL| preview["Mainloop preview proxy"]
-  preview --> router
+  person -->|tailnet preview URL| preview["Mainloop preview proxy"]
+  preview --> router["Substrate router"]
 
-  subgraph workspace["One gVisor actor per workspace"]
-    runtime["App container<br/>toolchain, native CLI, shim, project app"]
-    services["Sibling service containers<br/>for example, Postgres"]
-    runtime --- services
+  subgraph workspace["One kagent Session actor per workspace"]
+    runtime["Harness container<br/>checkout, native CLI, dev server"]
   end
+  kagent --> workspace
   router --> workspace
-  workspace -->|allowlisted provider requests| egress["Egress proxy"]
-  egress --> providers["External provider APIs"]
 ```
 
 Mainloop owns conversations, message delivery, workspace policy, and the mapping from native
-sessions to workspaces. Substrate runs and snapshots the workspace actors. Native agent turns go to kagent over A2A; agent sessions keep their
+sessions to workspaces. kagent runs the Sessions and their actors. Native agent turns go to kagent over A2A; agent sessions keep their
 native session identity, history, and tools. The preview proxy checks the
 owner and allowed ports before sending traffic through the router.
 
 ## Attention and parking
 
 Think of workspace compute like foveated rendering in VR: what needs attention is loaded and
-running; the rest is parked. Here, parking means that Substrate snapshots and suspends an actor.
+running; the rest is parked. Here, parking means that Mainloop asks kagent to suspend the Session.
 An `idle` workspace is still present in Mainloop; `idle` is the waiting period before suspension,
-not a separate Substrate state.
+not a separate kagent state.
 
 ```mermaid
 stateDiagram-v2
@@ -54,16 +50,23 @@ stateDiagram-v2
   Waking --> Unknown: wake result is not confirmed
 ```
 
-The project `dev` manifest sets the idle timeout; its current default is 30 minutes. Mainloop
-checks for expired workspaces about once a minute. Turns and preview requests count as activity.
-Opening a workspace page does not wake its actor. Deliveries in `recorded`, `queued`, `sending`,
-or `uncertain` states, and deliveries sent without completion, block parking. A new message, turn,
-or allowed preview request asks the router to wake a parked actor. The intended interactive wake
-is about a second.
+Each workspace sets its idle timeout (`dev.idle_timeout_minutes`); the default is 30 minutes.
+Mainloop checks for expired workspaces about once a minute. Turns, resumes and preview requests
+count as activity. Opening a workspace page does not wake its actor. Deliveries in `recorded`,
+`queued` (unless held after stop), `sending` or `delivered` states block parking. The check runs under the per-session
+lock of the REST process, which orders it with that process's own deliveries. That lock does not
+reach the MCP container, a second writer in the same pod, so a message it records during a
+suspend can still arrive. Delivery handles that case: a turn that finds the Session suspended
+resumes it before sending. A new message resumes a suspended Session, and so does a preview
+request (below).
 
-Measured locally on Kind in earlier Substrate actor runs: resume took about 0.4–0.8 seconds.
-That is an observed actor-resume time, not an end-to-end latency promise. The current headless
-native-CLI path and live wake-on-preview path have not been verified on a cluster.
+**One open turn per session** is enforced in PostgreSQL, not in memory. Recording a message takes
+`pg_advisory_xact_lock(hashtext(...))` for the session, then decides `recorded` or `queued` from
+the open deliveries in the same transaction. The REST and MCP containers both write the ledger,
+so the in-process `asyncio` lock only orders work inside one process.
+
+No wake or suspend latency has been measured against kagent. The live checks that are still
+owed are listed in `docs/specs/workspaces.md`.
 
 ## Sending a message
 
@@ -101,109 +104,51 @@ every existing kagent Session becomes not found and is replaced, losing its nati
 
 ## Development workspaces and previews
 
-A project manifest has a `dev` section for the app image or devcontainer, sibling services,
-preview ports, and idle timeout. Each existing branch workspace has its own actor; new workspaces
-are refused (`409`) until they are created as kagent Sessions.
-Each actor has an app container with its toolchain, agent CLIs, shim, and app process; declared
-services such as Postgres run alongside it in the same actor. Branches have separate app and
-service state.
+A workspace is a kagent Session created with a checkout request (repository, ref, branch, depth).
+The request is stored and resent unchanged if the Session is replaced. A workspace declares its
+preview ports and idle timeout. Archiving a session or deleting the workspace deletes its kagent
+Session.
 
 ```mermaid
 flowchart LR
-  manifest["Project manifest<br/>dev: image, services, ports, idle timeout"]
-  manifest --> branchA["Branch: feature-a"]
-  manifest --> branchB["Branch: fix-123"]
-
-  subgraph actorA["Workspace actor A"]
-    appA["App container<br/>toolchain + CLI + shim + app"]
-    dbA[("Postgres")]
-    appA --- dbA
-  end
-  subgraph actorB["Workspace actor B"]
-    appB["App container<br/>toolchain + CLI + shim + app"]
-    dbB[("Postgres")]
-    appB --- dbB
-  end
-  branchA --> actorA
-  branchB --> actorB
-
-  browser["Browser"] --> url["Preview URL<br/>port--workspace.preview.domain"]
+  browser["Browser"] --> url["Preview URL<br/>port--workspace--preview.domain"]
   url --> proxy["Mainloop preview proxy<br/>owner and port checks"]
-  proxy --> router["Substrate router<br/>CONNECT"]
-  router --> appA
-  router --> appB
+  proxy --> router["Substrate router<br/>CONNECT actor-upstream:port"]
+  router --> actor["Session actor<br/>dev server"]
 ```
 
-The preview URL is `https://<port>--<workspace>.preview.<domain>`. The preview proxy routes the
-requested port to that workspace through the router. It accepts ports declared in the manifest
-or reported by the authenticated shim. A preview request is designed to wake a parked workspace,
-then serve the app after it is ready.
-
-## Credentials
-
-Actors do not receive the real provider credentials. The credential broker keeps the real
-Codex `auth.json` and Claude token in control-plane Secrets. In the actor, Codex gets a synthetic
-placeholder `auth.json` and Claude gets a placeholder token. The egress credential provider
-injects the broker-owned value into approved provider requests.
-
-```mermaid
-flowchart LR
-  subgraph actor["Workspace actor"]
-    cli["Native agent CLI"]
-    placeholder["Placeholder auth.json<br/>or Claude token"]
-    cli --- placeholder
-  end
-  subgraph control["Mainloop control plane"]
-    broker["Credential broker"]
-    secrets[("Kubernetes Secrets<br/>real provider credentials")]
-    job["Bounded sign-in job"]
-    owner["Owner"]
-    broker --> secrets
-    owner --> job --> broker
-  end
-  egress["Egress proxy and credential provider"]
-  provider["Provider API"]
-  cli -->|approved request| egress
-  secrets -->|credential injection| egress
-  egress --> provider
-```
-
-When a credential is missing or rejected, Mainloop raises an attention item instead of replaying
-the failed turn. The owner can complete a provider sign-in flow from the workspace page. The
-Kubernetes sign-in job and the external egress credential-provider contract are not live-verified.
+The preview URL is `https://<port>--<workspace>--preview.<domain>`. The preview proxy checks that
+the workspace is the configured owner's and that the port is declared, then reaches the Session's actor
+through the router. With `onQuiesce: Full` on the harness, the router would wake a suspended
+actor without telling kagent, leaving the Session `suspended` and invisible to idle-out. So before
+connecting, the proxy resumes a suspended Session through kagent (`ResumeSession`, the same path as
+the resume endpoint), once however many previews arrive together. If kagent cannot be asked, the
+preview fails (`502`, WebSocket close `1013`) without touching the router. Idle-out then suspends
+the workspace again after its idle timeout.
 
 ## Isolation and known gaps
 
-- Substrate actors use gVisor isolation; microVM isolation is deferred. The router admits actor
-  control traffic from the Mainloop control namespace, and each actor has a distinct shim token.
-  By default, shim token Secrets live in a namespace separate from provider credentials.
-- Actor egress is restricted by host allowlists and passes through the egress proxy.
-- Workspace lifecycle and credential paths have fake-backed coverage; their combined behavior
-  has not been verified end to end on a live cluster.
-- The backend authenticates to the pinned Substrate API (`0f9635aed37bd5dde604a9bca1975421cd07181a`)
-  with a projected ServiceAccount token whose audience is `api.ate-system.svc`. That API verifies
-  trusted tokens with this audience but does not check caller authorization through its OpenFGA
-  model yet, so the token effectively grants full Substrate access. This is a known authorization
-  gap; the ClusterTrustBundle permission is limited to `list`.
-- Mainloop pins a Substrate fork whose actor runtime runs containers as the image's `USER` in
-  its `WORKDIR`; the agent image runs as UID `10001` and refuses UID 0. The fork gives a fresh
-  durable volume to that user. Non-root startup and a durable volume surviving suspend and resume
-  were live checked on Kind with fork commit `0f9635ae` using the spike's proof scripts.
-- The actor's observed `RLIMIT_NOFILE` is 1024.
-- Restoring Postgres from an actor snapshot is unverified.
-- Live wake-on-preview is unverified.
+- Preview CONNECT traffic goes through the Substrate router, which has no authentication of its
+  own; the owner and port checks live in Mainloop.
+- The backend reaches Substrate only through the router CONNECT path.
+- Workspace lifecycle, preview and idle-out have fake-backed and Postgres-backed tests. They were
+  also verified live on a Kind cluster: create, first and second turn, idle-out, a message to a
+  suspended workspace, a suspend racing a message, wake-on-preview from a suspended workspace
+  (one `ResumeSession` for concurrent previews) and stopping a turn. Still unverified live: the
+  cold-clone first turn against the client's 30 second timeout, the K1 negative cases, stopping a
+  parked turn, WebSocket previews of a suspended workspace, and the review repairs (they were not
+  redeployed). `docs/specs/workspaces.md` lists both.
+- The Agent Harness's git origins and `onQuiesce: Full` are kagent installation settings.
 
 ## Glossary
 
-| Term                | Meaning                                                                                             |
-| ------------------- | --------------------------------------------------------------------------------------------------- |
-| **Actor**           | An isolated Substrate sandbox for one workspace; it can contain the app and sibling services.       |
-| **Atespace**        | A Substrate namespace that groups actors and their templates.                                       |
-| **Template**        | The configuration Substrate uses to create an actor, including its containers and startup settings. |
-| **Golden snapshot** | A saved template starting state used to create a ready-to-run actor.                                |
-| **Shim**            | The small workspace process that accepts turns, starts native CLIs, and reports journals and ports. |
-| **Router**          | Substrate's control path for connecting Mainloop to an actor.                                       |
-| **Park**            | Snapshot and suspend an idle actor so its compute is not running until needed.                      |
+| Term          | Meaning                                                                              |
+| ------------- | ------------------------------------------------------------------------------------ |
+| **Session**   | A kagent Session: one native agent conversation and the actor it runs in.            |
+| **Workspace** | The git checkout a Session is created with, plus its preview ports and idle timeout. |
+| **Actor**     | The Substrate sandbox kagent runs a Session in.                                      |
+| **Router**    | Substrate's control path for connecting Mainloop to an actor.                        |
+| **Park**      | Suspend an idle Session so its compute is not running until needed.                  |
 
 ## Agent tools and network isolation
 
@@ -226,11 +171,24 @@ never expose the MCP Service outside the cluster.
 The base includes the dedicated MCP container, Service and ingress policy. Cross-namespace
 bootstrap resources are separately rendered with `k8s/integrations/kagent`: the empty token
 Secret, name-scoped Role/RoleBinding, and RemoteMCPServer. Configure GitOps to preserve the
-Secret's runtime-managed data. Each native AgentTemplate must bind that RemoteMCPServer.
-Configure `KAGENT_MAIN_AGENT` (default `mainloop-main`) as a dedicated Claude Agent whose
-Harness has `sessionIdleTTL: 0s`; child agents retain their own TTLs. Agent templates and
-harnesses remain owned by the kagent installation. Gateway port 8083 must admit only Mainloop,
-and TaskStore must admit only actors, using installation-specific policies.
+Secret's runtime-managed data. Main and child AgentTemplates must bind that RemoteMCPServer.
+Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
+remain owned by the kagent installation.
+
+| Setting                                                       | Runs                                           | Harness requirements                                                                                  |
+| ------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)                         | the main thread                                | `sessionIdleTTL: 0s`                                                                                  |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`              | workspaces and sessions the owner starts       | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full`          |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`                  | child agents the main thread delegates to      | default TTL and snapshot scope                                                                        |
+
+A workspace needs its own Agents because kagent measures idle time from the last A2A event
+(previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,
+along with uncommitted and unpushed work. `onQuiesce: Full` keeps files and the dev server across
+a suspend, which previews need, but costs a full snapshot at every quiesce, which children should
+not pay. The main thread is exempt from Mainloop idle-out. Mainloop parks idle workspace compute itself (`SuspendSession`); archiving or deleting ends the
+Session. Main and child templates bind the `mainloop` RemoteMCPServer. Standalone workspace Agents
+have no Mainloop tool identity and do not bind that server. Gateway port 8083 must admit only
+Mainloop, and TaskStore must admit only actors, using installation-specific policies.
 
 The supported gateway is stock Substrate v0.3.0-alpha3 using agentgateway revision
 `50999825cb55904801f7fd6b18b865179d0d50c4`, image digest
@@ -243,6 +201,8 @@ proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable 
 other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
 
 The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
-isolation on that pinned stock dataplane. Joint Mainloop/native-agent MCP proof and blocked
-connection/CNI verification remain pending. The Secret holds the complete `Bearer ml_…` header
-value; NetworkPolicy remains required even though the gateway proof passed.
+isolation on that pinned stock dataplane. The joint proof (a native agent calling the Mainloop MCP
+server through the gateway, and blocked connections) passed on a Cilium cluster; the Kind
+overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
+policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
+remains required.

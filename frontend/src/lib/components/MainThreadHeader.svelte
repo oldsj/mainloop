@@ -3,7 +3,11 @@
   import { connection } from '$lib/stores/connection';
   import NativeIdentityStrip from './NativeIdentityStrip.svelte';
 
-  let { info }: { info: MainThreadInfo } = $props();
+  let {
+    info,
+    onStop,
+    stopping = false
+  }: { info: MainThreadInfo; onStop?: () => void; stopping?: boolean } = $props();
 
   let open = $state(false);
 
@@ -43,6 +47,17 @@
     {#if pending > 0}
       <span>·</span>
       <span data-testid="mt-pending">{pending} pending</span>
+    {/if}
+    {#if onStop && native?.turn_in_flight}
+      <button
+        type="button"
+        class="border-term-border text-term-fg hover:text-term-red min-h-9 rounded border px-3 disabled:opacity-50"
+        disabled={stopping || $connection.status === 'offline'}
+        onclick={onStop}
+        data-testid="mt-stop-turn"
+      >
+        {stopping ? 'stopping…' : 'stop'}
+      </button>
     {/if}
     <button
       type="button"

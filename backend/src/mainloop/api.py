@@ -1,22 +1,23 @@
 """FastAPI application with DBOS durable workflows."""
 
 import logging
+import re
 from dataclasses import asdict
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from dbos import DBOS
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.identity import current_user
 from mainloop.models import (
     ChatRequest,
     ChatResponse,
     ConversationListResponse,
     ConversationResponse,
-)
-from mainloop.runtime.credential_reauth_api import (
-    router as credential_reauth_api_router,
 )
 from mainloop.runtime.preview_proxy import register_preview_proxy
 from mainloop.runtime.workspace_api import router as workspace_api_router
@@ -56,21 +57,87 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
 app = FastAPI(
     title="Mainloop API",
     description="AI agent orchestrator API with durable workflows",
     version="0.2.0",
 )
 
+_LOCALHOST_ORIGIN = re.compile(r"http://localhost:\d+")
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# Kubernetes probes address the pod by IP, so the health check is exempt from the Host check.
+_HOST_EXEMPT_PATHS = frozenset({"/health"})
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://localhost:\d+",  # All localhost ports
+    allow_origin_regex=_LOCALHOST_ORIGIN.pattern,  # All localhost ports
     allow_origins=[settings.frontend_origin],  # Production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _origin_allowed(origin: str, host: str) -> bool:
+    return (
+        origin == settings.frontend_origin
+        or _LOCALHOST_ORIGIN.fullmatch(origin) is not None
+        or urlsplit(origin).netloc == host  # the API's own origin
+    )
+
+
+def _host_allowed(host_header: str) -> bool:
+    try:
+        hostname = urlsplit(f"//{host_header}").hostname
+    except ValueError:
+        return False
+    if not hostname:
+        return False
+    hostname = hostname.lower().rstrip(".")
+    return (settings.is_dev and hostname in _LOOPBACK_HOSTS) or hostname in settings.allowed_api_hosts
+
+
+@app.middleware("http")
+async def refuse_unknown_hosts(request: Request, call_next):
+    """Return 404 for a Host that is neither the API's nor a preview host.
+
+    Preview hosts are served (or refused) by the preview middleware, which wraps this one, so a
+    request that reaches here with a preview-shaped Host is not a live preview. Without this
+    check any name that resolves to the node (a wildcard DNS name, a rebinding name) would reach
+    the API, and the preview origins are same-site with it.
+    """
+    if (
+        request.scope["path"] not in _HOST_EXEMPT_PATHS
+        and not _host_allowed(request.headers.get("host", ""))
+    ):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def refuse_foreign_origin_writes(request: Request, call_next):
+    """Reject a browser write that a page on another origin sent.
+
+    CORS only stops a page from reading the response. A body-less ``no-cors`` POST from the
+    agent's own preview page (another origin, and the agent writes that page) is still sent, and
+    the API has no per-request authentication, so it would cancel, archive or suspend. Browsers
+    always send ``Origin`` on a cross-origin write; a client that sends none (the MCP actors,
+    scripts, curl) is not a browser page and is not affected. The preview listener is handled
+    before this middleware.
+    """
+    origin = request.headers.get("origin")
+    if (
+        origin is not None
+        and request.method not in _SAFE_METHODS
+        and not _origin_allowed(origin, request.headers.get("host", ""))
+    ):
+        return JSONResponse(
+            {"detail": "Cross-origin request refused."}, status_code=403
+        )
+    return await call_next(request)
 
 
 def _apply_mock_github():
@@ -108,6 +175,11 @@ def _apply_mock_github():
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and DBOS on startup."""
+    from mainloop.runtime.agent_identity import require_token_key
+
+    # Fail before touching anything when agent tokens could not be issued.
+    require_token_key()
+
     # Apply mocks before anything else
     _apply_mock_github()
 
@@ -140,11 +212,6 @@ async def shutdown_event():
     await db.disconnect()
 
 
-def get_user_id_from_cf_header() -> str:
-    """Get user ID - always returns local-dev-user for now."""
-    return "local-dev-user"
-
-
 # ============= Health & Info =============
 
 
@@ -166,8 +233,7 @@ async def health():
 @app.get("/events")
 async def sse_events(
     request: Request,
-    user_id: str = Header(alias="X-User-ID", default=None),
-    user_id_query: str | None = None,
+    user_id: str = Depends(current_user),
 ):
     """SSE endpoint for real-time updates.
 
@@ -178,12 +244,6 @@ async def sse_events(
     The client should reconnect automatically on disconnect.
     EventSource handles this natively.
     """
-    if not user_id:
-        if user_id_query and settings.is_test_env:
-            user_id = user_id_query
-        else:
-            user_id = get_user_id_from_cf_header()
-
     return create_sse_response(event_stream(user_id, request))
 
 
@@ -192,12 +252,9 @@ async def sse_events(
 
 @app.post("/threads", response_model=MainThread)
 async def create_or_get_thread(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Get or create the user's main thread and start the workflow."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     # Start the main thread workflow (idempotent - uses user_id as workflow ID)
     workflow_id = get_or_start_main_thread(user_id)
 
@@ -212,10 +269,10 @@ async def create_or_get_thread(
 
 
 @app.get("/threads/{thread_id}", response_model=MainThread)
-async def get_thread(thread_id: str):
+async def get_thread(thread_id: str, user_id: str = Depends(current_user)):
     """Get a main thread by ID."""
     thread = await db.get_main_thread(thread_id)
-    if not thread:
+    if not thread or thread.user_id != user_id:
         raise HTTPException(status_code=404, detail="Thread not found")
     return thread
 
@@ -226,11 +283,9 @@ async def get_thread(thread_id: str):
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Record and deliver a message to the user's native main session."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
     return await _chat_native(request, user_id)
 
 
@@ -264,10 +319,8 @@ class MainThreadInfo(BaseModel):
 
 
 @app.get("/main-thread", response_model=MainThreadInfo)
-async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=None)):
+async def get_main_thread_info(user_id: str = Depends(current_user)):
     """Main-thread mode, native identity strip, and the topic index."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
     from mainloop.runtime import delegation, native_sessions
 
     binding = await delegation.ensure_main_session(user_id)
@@ -284,10 +337,8 @@ async def get_main_thread_info(user_id: str = Header(alias="X-User-ID", default=
 
 
 @app.get("/topics")
-async def list_topics(user_id: str = Header(alias="X-User-ID", default=None)):
+async def list_topics(user_id: str = Depends(current_user)):
     """Topic index with records (notes, decisions, pending intent, reports) for the UI."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
     async with db.connection() as conn:
         topics = await conn.fetch(
             "SELECT * FROM topics WHERE user_id=$1 ORDER BY updated_at DESC", user_id
@@ -310,7 +361,6 @@ async def list_topics(user_id: str = Header(alias="X-User-ID", default=None)):
 
 
 app.include_router(workspace_api_router)
-app.include_router(credential_reauth_api_router)
 register_preview_proxy(app)
 
 
@@ -319,12 +369,9 @@ register_preview_proxy(app)
 
 @app.get("/conversations", response_model=ConversationListResponse)
 async def list_conversations(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """List user's conversations."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     conversations = await db.list_conversations(user_id)
     return ConversationListResponse(
         conversations=conversations,
@@ -333,10 +380,12 @@ async def list_conversations(
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(conversation_id: str):
+async def get_conversation(
+    conversation_id: str, user_id: str = Depends(current_user)
+):
     """Get a conversation with its messages."""
     conversation = await db.get_conversation(conversation_id)
-    if not conversation:
+    if not conversation or conversation.user_id != user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     from mainloop.runtime import native_sessions
@@ -368,7 +417,7 @@ class UnreadCountResponse(BaseModel):
 
 @app.get("/queue", response_model=list[QueueItem])
 async def list_queue_items(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
     status: str = "pending",
     unread_only: bool = False,
     task_id: str | None = None,
@@ -376,15 +425,12 @@ async def list_queue_items(
     """List queue items for the user.
 
     Args:
-        user_id: User ID from X-User-ID header
+        user_id: The owner
         status: Filter by status (default: "pending")
         unread_only: Only return unread items
         task_id: Filter by task ID
 
     """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     items = await db.list_queue_items(
         user_id=user_id,
         status=status,
@@ -396,21 +442,18 @@ async def list_queue_items(
 
 @app.get("/queue/unread/count", response_model=UnreadCountResponse)
 async def get_unread_count(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Get the count of unread queue items (for inbox badge)."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     count = await db.count_unread_queue_items(user_id)
     return UnreadCountResponse(count=count)
 
 
 @app.get("/queue/{item_id}", response_model=QueueItem)
-async def get_queue_item(item_id: str):
+async def get_queue_item(item_id: str, user_id: str = Depends(current_user)):
     """Get a specific queue item."""
     item = await db.get_queue_item(item_id)
-    if not item:
+    if not item or item.user_id != user_id:
         raise HTTPException(status_code=404, detail="Queue item not found")
     return item
 
@@ -418,18 +461,15 @@ async def get_queue_item(item_id: str):
 @app.post("/queue/{item_id}/read")
 async def mark_queue_item_read(
     item_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Mark a queue item as read."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     item = await db.get_queue_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
 
     if item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your queue item")
+        raise HTTPException(status_code=404, detail="Queue item not found")
 
     await db.mark_queue_item_read(item_id)
 
@@ -442,12 +482,9 @@ async def mark_queue_item_read(
 
 @app.post("/queue/read-all")
 async def mark_all_queue_items_read(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Mark all queue items as read for the user."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     await db.mark_all_queue_items_read(user_id)
 
     # Notify SSE clients
@@ -460,18 +497,15 @@ async def mark_all_queue_items_read(
 async def respond_to_queue_item(
     item_id: str,
     response: QueueItemResponse,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Respond to a queue item."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     item = await db.get_queue_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
 
     if item.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your queue item")
+        raise HTTPException(status_code=404, detail="Queue item not found")
 
     # Mark as read when responding
     await db.mark_queue_item_read(item_id)
@@ -506,22 +540,19 @@ async def respond_to_queue_item(
 
 @app.get("/projects", response_model=list[Project])
 async def list_projects(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
     limit: int = 20,
 ):
     """List user's projects ordered by last used."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     projects = await db.list_projects(user_id=user_id, limit=limit)
     return projects
 
 
 @app.get("/projects/{project_id}", response_model=Project)
-async def get_project(project_id: str):
+async def get_project(project_id: str, user_id: str = Depends(current_user)):
     """Get a project by ID."""
     project = await db.get_project(project_id)
-    if not project:
+    if not project or project.user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
@@ -538,14 +569,11 @@ class ProjectDetail(BaseModel):
 @app.get("/projects/{project_id}/detail", response_model=ProjectDetail)
 async def get_project_detail(
     project_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Get project with GitHub data (PRs, commits, sessions)."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     project = await db.get_project(project_id)
-    if not project:
+    if not project or project.user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Fetch GitHub data in parallel
@@ -566,10 +594,12 @@ async def get_project_detail(
 
 
 @app.post("/projects/{project_id}/refresh")
-async def refresh_project_metadata(project_id: str):
+async def refresh_project_metadata(
+    project_id: str, user_id: str = Depends(current_user)
+):
     """Force refresh GitHub metadata for a project."""
     project = await db.get_project(project_id)
-    if not project:
+    if not project or project.user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Fetch fresh metadata from GitHub
@@ -590,13 +620,10 @@ async def refresh_project_metadata(project_id: str):
 
 @app.get("/sessions", response_model=list[Session])
 async def list_sessions(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
     status: str | None = None,
 ):
     """List user's sessions."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     session_status = SessionStatus(status) if status else None
     sessions = await db.list_sessions(user_id=user_id, status=session_status)
     if sessions:
@@ -634,13 +661,10 @@ async def _get_next_session_color(user_id: str) -> str:
 @app.post("/sessions", response_model=Session)
 async def create_session(
     request: SessionCreate,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Create a new session with its own conversation."""
     import uuid
-
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
 
     # Ensure main thread exists
     main_thread_id = get_or_start_main_thread(user_id)
@@ -679,10 +703,10 @@ async def create_session(
 
 
 @app.get("/sessions/{session_id}", response_model=Session)
-async def get_session(session_id: str):
+async def get_session(session_id: str, user_id: str = Depends(current_user)):
     """Get a session by ID."""
     session = await db.get_session(session_id)
-    if not session:
+    if not session or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
@@ -697,10 +721,12 @@ class SessionConversationResponse(BaseModel):
 @app.get(
     "/sessions/{session_id}/conversation", response_model=SessionConversationResponse
 )
-async def get_session_conversation(session_id: str):
+async def get_session_conversation(
+    session_id: str, user_id: str = Depends(current_user)
+):
     """Get a session's conversation messages."""
     session = await db.get_session(session_id)
-    if not session:
+    if not session or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
     from mainloop.runtime import native_sessions
@@ -715,14 +741,12 @@ async def get_session_conversation(session_id: str):
 
 @app.get("/sessions/{session_id}/native", response_model=NativeSessionInfo)
 async def get_session_native(
-    session_id: str, user_id: str = Header(alias="X-User-ID", default=None)
+    session_id: str, user_id: str = Depends(current_user)
 ):
-    """Identity strip for a session bound to a native agent in Substrate."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
+    """Identity strip for a session bound to a native agent in kagent."""
     owner = await db.get_session(session_id)
-    if owner is not None and owner.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
+    if owner is None or owner.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
     from mainloop.runtime import native_sessions
 
     info = await native_sessions.identity(session_id)
@@ -743,19 +767,16 @@ class SessionMessageRequest(BaseModel):
 async def send_session_message(
     session_id: str,
     request: SessionMessageRequest,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Send a message to a session's conversation."""
-
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
 
     session = await db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
+        raise HTTPException(status_code=404, detail="Session not found")
 
     from mainloop.runtime import native_sessions
 
@@ -779,18 +800,15 @@ FINISHED_STATUSES = frozenset(
 @app.post("/sessions/{session_id}/cancel")
 async def cancel_session(
     session_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Cancel a running session."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     session = await db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
+        raise HTTPException(status_code=404, detail="Session not found")
 
     if session.status in FINISHED_STATUSES:
         return {"status": session.status.value, "agent": "not_running"}
@@ -809,16 +827,50 @@ async def cancel_session(
     return {"status": "cancelled", "agent": agent}
 
 
+@app.post("/sessions/{session_id}/stop-turn")
+async def stop_session_turn(
+    session_id: str,
+    user_id: str = Depends(current_user),
+):
+    """Stop the open turn of a session (the main thread included) without ending the session.
+
+    ``status`` is ``stopped``, ``finished`` (the turn ended on its own first) or ``no_open_turn``.
+    A kagent error is returned as 502 and leaves the delivery as it was.
+    """
+    session = await db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from mainloop.runtime import native_sessions
+    from mainloop.runtime.kagent_client import KagentError
+
+    if not await native_sessions.get_binding(session_id):
+        raise HTTPException(
+            status_code=409, detail="Session has no native agent binding"
+        )
+    try:
+        status = await native_sessions.stop_turn(session_id)
+    except native_sessions.StopUnconfirmed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KagentError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not stop the turn: {exc}"
+        ) from exc
+
+    return {"status": status}
+
+
 @app.post("/sessions/archive-finished")
 async def archive_finished_sessions(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Clear every finished session (done, failed, cancelled) from the list.
 
     Rows are kept for audit; sessions still running or waiting are left alone.
     """
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
     archived = await db.archive_sessions(user_id)
     return {"archived": archived}
 
@@ -826,17 +878,14 @@ async def archive_finished_sessions(
 @app.post("/sessions/{session_id}/archive")
 async def archive_session(
     session_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Clear one finished session from the list. A live one must be cancelled first."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     session = await db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not your session")
+        raise HTTPException(status_code=404, detail="Session not found")
     if session.status not in FINISHED_STATUSES:
         raise HTTPException(
             status_code=409,
@@ -852,13 +901,10 @@ async def archive_session(
 
 @app.get("/notifications", response_model=list[SessionNotification])
 async def list_notifications(
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
     unread_only: bool = True,
 ):
     """List session notifications for the user."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
     notifications = await db.list_session_notifications(
         user_id=user_id, unread_only=unread_only
     )
@@ -868,13 +914,11 @@ async def list_notifications(
 @app.post("/notifications/{notification_id}/dismiss")
 async def dismiss_notification(
     notification_id: str,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Dismiss (delete) a notification."""
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
-
-    await db.dismiss_session_notification(notification_id)
+    if not await db.dismiss_session_notification(notification_id, user_id):
+        raise HTTPException(status_code=404, detail="Notification not found")
     return {"status": "ok"}
 
 
@@ -898,7 +942,7 @@ class SeedSessionRequest(BaseModel):
 @app.post("/internal/test/seed-session")
 async def seed_session_for_testing(
     request: SeedSessionRequest,
-    user_id: str = Header(alias="X-User-ID", default=None),
+    user_id: str = Depends(current_user),
 ):
     """Create a session in a specific state for E2E testing.
 
@@ -912,8 +956,6 @@ async def seed_session_for_testing(
     from uuid import uuid4
 
     # Get or create a test main thread
-    if not user_id:
-        user_id = get_user_id_from_cf_header()
     thread = await db.get_main_thread_by_user(user_id)
     if not thread:
         # Create test thread directly (no workflow needed for tests)

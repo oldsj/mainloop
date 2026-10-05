@@ -1,43 +1,18 @@
-# Agent credentials and sign-in
+# Agent credentials
 
-Mainloop owns one credential set per account and provider. Real Codex `auth.json` and Claude
-tokens are stored in pre-created Kubernetes Secrets. The backend may seed those Secrets from
-configured file paths (`SUBSTRATE_CODEX_AUTH_PATH` and `SUBSTRATE_CLAUDE_TOKEN_PATH`); file
-contents are never exposed through the API or logs. Seeding applies only to an existing Secret
-whose data map is empty, the uninitialized state, and subsequent reads leave the seeded value
-alone. A missing Secret is a deployment error; a non-empty rejected or expired credential is
-reported as such and is never silently replaced from a file. The owner must complete sign-in to
-replace rejected or expired data. The egress credential provider consumes the Secret's
-`injection-value` key.
-
-## Actor boundary
-
-Actors do not receive real provider credentials. Codex actors get a synthetic `auth.json` with
-inert JWTs, an empty refresh token, a recent `last_refresh`, and the account ID. Claude actors
-get a synthetic CLI token. The egress provider injects the current real token on approved
-provider requests. The backend checks the Codex access JWT expiry and disables injection when
-it is within five minutes of expiry. It does not implement a refresh-token exchange because the
-request payload and rotation behavior have not been verified.
+Native agents authenticate to their provider through the kagent installation: the Agent's
+ModelConfig holds the provider credential, and Mainloop neither stores nor injects it. Mainloop
+has no credential broker, seeding, or sign-in flow.
 
 ## Attention and recovery
 
-The native turn path no longer checks credentials or raises a sign-in attention item: turns go to kagent, and provider authentication failures surface as a failed task. Surfacing credential health from the kagent ModelConfig condition is a later change. A failed turn is not replayed automatically.
+The native turn path does not check credentials or raise a sign-in attention item: turns go to
+kagent, and a provider authentication failure surfaces as a failed task. A failed turn is not
+replayed automatically. Surfacing credential health from the kagent ModelConfig condition is a
+later change.
 
-From the workspace page, the owner can start a provider sign-in job. The control-side Job runs
-`codex login --device-auth` or `claude setup-token`, displays a filtered HTTPS device challenge
-when the CLI provides one, and sends the result to a short-lived authenticated callback. The
-broker validates the result and replaces the provider Secret data. Real credentials are kept
-out of job logs, challenge responses, and browser responses.
+## Tool access
 
-## Implementation limits and evidence
-
-Broker and runner behavior is covered by fake-backed tests. The Kubernetes Job path is not live
-verified. Its image must contain the matching native CLI binaries and
-`/usr/local/bin/mainloop-reauth`, and must be selected with `SUBSTRATE_REAUTH_JOB_IMAGE`. The
-credential egress provider remains a separate Substrate deployment contract; this spec does not
-claim that publishing the Secret key alone deploys or configures that provider. No real
-credentials are included in tests or fixtures.
-
-The native CLIs have not been live tested with the new Claude placeholder token. Re-auth job
-state and callback authorization are held in backend memory; restarting the backend during a
-sign-in attempt requires the owner to start that attempt again.
+The `mainloop` MCP server each native agent uses is authenticated per binding with a token whose
+hash Mainloop keeps on the binding; terminal or archived bindings lose tool access. See
+`docs/architecture.md`.

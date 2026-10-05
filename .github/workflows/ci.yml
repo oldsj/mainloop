@@ -15,6 +15,41 @@ permissions:
   actions: read
 
 jobs:
+  backend-tests:
+    name: Backend unit and PostgreSQL tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mainloop
+          POSTGRES_PASSWORD: mainloop-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mainloop -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:mainloop-ci-only@localhost:5432/postgres
+      AGENT_TOKEN_KEY: mainloop-ci-fixture-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.34.1
+      - name: Install locked backend dependencies
+        working-directory: backend
+        run: uv sync --frozen --python 3.13
+      - name: Run offline fixtures and scratch PostgreSQL tests
+        working-directory: backend
+        run: uv run --no-sync python -m unittest discover -s tests -t . -v
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

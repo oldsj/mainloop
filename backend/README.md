@@ -1,6 +1,6 @@
 # mainloop-backend
 
-FastAPI control plane for native-agent sessions and Substrate workspaces.
+FastAPI control plane for native-agent sessions and kagent workspaces.
 
 ## Development
 
@@ -17,7 +17,10 @@ make backend-dev
 
 ## Environment Variables
 
-See `.env.example` for the Substrate router, actor bindings, lifecycle settings, and database environment variables. Provider credentials are held by the configured actors, not by the backend.
+See `.env.example` for kagent Agents, preview routing, owner identity and token-key settings.
+Database connections use `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` and `DB_PASSWORD`.
+Provider credentials belong to the kagent installation. Outside development, `AGENT_TOKEN_KEY`
+is required at startup for both REST and MCP processes.
 
 ## API Documentation
 

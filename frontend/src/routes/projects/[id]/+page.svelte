@@ -72,15 +72,7 @@
     try {
       const workspace = await api.createWorkspace(
         project.id,
-        branch.trim() || project.default_branch,
-        {
-          image: 'node:22-bookworm',
-          devcontainer_ref: null,
-          actor_template: null,
-          services: [],
-          ports: [],
-          idle_timeout_minutes: 30
-        }
+        branch.trim() || project.default_branch
       );
       await goto(`/workspaces/${workspace.workspace_id}`);
     } catch (error) {

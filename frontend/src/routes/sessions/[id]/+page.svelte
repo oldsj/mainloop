@@ -16,6 +16,7 @@
   let error = $state<string | null>(null);
   // The backend couldn't be reached (as opposed to the session not existing): retried on recovery.
   let unreachable = $state(false);
+  let stoppingId = $state<string | null>(null);
 
   // The sessions store is kept current by SSE; the page's own fetch only gets it started.
   const live = $derived($sessions.sessions.find((s) => s.id === sessionId));
@@ -75,6 +76,26 @@
     session?.status === 'completed' || session?.status === 'failed' || session?.status === 'cancelled'
   );
 
+  async function handleStopTurn() {
+    if (!session || stoppingId === session.id) return;
+    const id = session.id;
+    stoppingId = id;
+    actionNotice = null;
+    try {
+      await api.stopTurn(id);
+      if (id === sessionId) await loadSession(id);
+    } catch (e) {
+      if (id === sessionId) {
+        actionNotice = {
+          kind: 'error',
+          text: e instanceof Error ? e.message : 'Could not confirm the turn stopped. Refresh before retrying.'
+        };
+      }
+    } finally {
+      if (stoppingId === id) stoppingId = null;
+    }
+  }
+
   async function handleCancel() {
     if (!session) return;
     if (!confirm('Cancel this session? Its agent is stopped.')) return;
@@ -124,7 +145,7 @@
 {:else}
   <div class="flex h-full flex-col bg-term-bg">
     <!-- Header -->
-    <div class="flex items-center justify-between gap-3 border-b border-term-border p-4">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-term-border p-4">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-3">
           <a href="/" class="text-term-fg-muted hover:text-term-accent" aria-label="Back">
@@ -150,6 +171,18 @@
                 : 'text-term-yellow'}" data-testid="session-status">
           [{statusLabel(session.status)}]
         </span>
+        {#if !session.archived_at && session.status !== 'failed' && session.status !== 'cancelled'}
+          <button
+            type="button"
+            onclick={handleStopTurn}
+            disabled={stoppingId === session.id || $connection.status === 'offline'}
+            class="min-h-11 border border-term-border px-3 py-1 text-sm text-term-fg hover:border-term-red hover:text-term-red disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent"
+            data-testid="session-stop-turn"
+            title="Stop the current turn and keep this session available"
+          >
+            {stoppingId === session.id ? 'Stopping…' : 'Stop turn'}
+          </button>
+        {/if}
         {#if session.status === 'active' || session.status === 'pending' || session.status === 'waiting_on_user'}
           <button
             type="button"

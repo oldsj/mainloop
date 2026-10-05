@@ -206,6 +206,33 @@
     }
   }
 
+  let stopping = $state(false);
+
+  // Stop the open turn (a parked or runaway one) without ending the session; the next message
+  // starts a fresh turn. A failure leaves the turn running, so say so.
+  async function stopMainThreadTurn() {
+    const sessionId = mainThread?.session_id;
+    if (!sessionId || stopping) return;
+    stopping = true;
+    sendError = null;
+    try {
+      await api.stopTurn(sessionId);
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : 'Could not stop the turn.';
+    }
+    try {
+      mainThread = await api.getMainThread();
+      if (mainThread.conversation_id) {
+        const { messages: fresh } = await api.getConversation(mainThread.conversation_id);
+        conversationStore.setMessages(fresh);
+      }
+    } catch (error) {
+      console.error('Main thread refresh failed:', error);
+    } finally {
+      stopping = false;
+    }
+  }
+
   async function pollNativeReply(conversationId: string) {
     conversationStore.setLoading(true);
     for (let i = 0; i < 180; i++) {
@@ -245,7 +272,7 @@
 
 <div class="flex h-full min-h-0 flex-col">
   {#if native && mainThread}
-    <MainThreadHeader info={mainThread} />
+    <MainThreadHeader info={mainThread} onStop={stopMainThreadTurn} {stopping} />
   {/if}
 
   <!-- Always show main thread. Native mode: child sessions live in the side list, not inline. -->

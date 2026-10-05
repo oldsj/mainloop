@@ -1,0 +1,71 @@
+# Requires the fork's Harness API, installed ModelConfigs, worker pool, snapshot store and
+# mainloop-workspace-git Secret. Replace workload images with the exact reviewed fork builds.
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: claude-workspace-harness
+  namespace: kagent
+spec:
+  claude: {}
+  sessionIdleTTL: 0s
+  git:
+    origins: [github.com]
+    credentialSecretRef: {name: mainloop-workspace-git, key: authorization}
+  substrate:
+    snapshotPolicy: {location: 's3://ate-snapshots/kagent/', onQuiesce: Full}
+    workerPoolRef: {name: kagent-default}
+  workload:
+    image: kagent-claude-harness:kind
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: claude-workspace-template
+  namespace: kagent
+spec:
+  modelConfig: {name: claude-subscription-model}
+  systemPrompt: Work in the supplied repository and follow the owner's instructions.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: claude-workspace
+  namespace: kagent
+spec:
+  harnessRef: {name: claude-workspace-harness}
+  templateRef: {name: claude-workspace-template}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: codex-workspace-harness
+  namespace: kagent
+spec:
+  codex: {}
+  sessionIdleTTL: 0s
+  git:
+    origins: [github.com]
+    credentialSecretRef: {name: mainloop-workspace-git, key: authorization}
+  substrate:
+    snapshotPolicy: {location: 's3://ate-snapshots/kagent/', onQuiesce: Full}
+    workerPoolRef: {name: kagent-default}
+  workload:
+    image: kagent-codex-harness:kind
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: codex-workspace-template
+  namespace: kagent
+spec:
+  modelConfig: {name: codex-subscription-model}
+  systemPrompt: Work in the supplied repository and follow the owner's instructions.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: codex-workspace
+  namespace: kagent
+spec:
+  harnessRef: {name: codex-workspace-harness}
+  templateRef: {name: codex-workspace-template}

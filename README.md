@@ -37,16 +37,14 @@ You (phone/laptop)
 - **Sessions**: Native Claude Code or Codex work with their own conversations; appear as colored threads in your timeline
 - **Notifications**: Slack-style thread replies notify you when sessions need attention or complete
 - **Persistence**: Mainloop stores conversations, delivery records, and workspace lifecycle state in PostgreSQL; native history remains with the provider CLI in its kagent Session
-- **Runtime isolation**: Substrate workspaces use gVisor actors. The pinned fork honors the
-  agent image's non-root UID `10001`; microVM isolation is deferred.
+- **Workspaces**: Each branch workspace is a kagent Session with its own git checkout; previews and idle suspension are described in [Workspaces](docs/specs/workspaces.md)
 
 ## Quick Start
 
 ```bash
 # Copy example environment file and configure
 cp .env.example .env
-# Set the Substrate router, actor bindings, and shim Secret names.
-# Keep provider credentials in Mainloop's configured control-plane Secrets; actors receive synthetic placeholders only.
+# Set the kagent gateway address and, for previews, the Substrate router address.
 
 # Start all services
 make dev
@@ -120,7 +118,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 
 **Guides**:
 
-- [Architecture](docs/architecture.md) - Substrate workspaces, delivery, previews, and credentials
+- [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
 ## License
@@ -148,11 +146,24 @@ never expose the MCP Service outside the cluster.
 The base includes the dedicated MCP container, Service and ingress policy. Cross-namespace
 bootstrap resources are separately rendered with `k8s/integrations/kagent`: the empty token
 Secret, name-scoped Role/RoleBinding, and RemoteMCPServer. Configure GitOps to preserve the
-Secret's runtime-managed data. Each native AgentTemplate must bind that RemoteMCPServer.
-Configure `KAGENT_MAIN_AGENT` (default `mainloop-main`) as a dedicated Claude Agent whose
-Harness has `sessionIdleTTL: 0s`; child agents retain their own TTLs. Agent templates and
-harnesses remain owned by the kagent installation. Gateway port 8083 must admit only Mainloop,
-and TaskStore must admit only actors, using installation-specific policies.
+Secret's runtime-managed data. Main and child AgentTemplates must bind that RemoteMCPServer.
+Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
+remain owned by the kagent installation.
+
+| Setting                                                       | Runs                                           | Harness requirements                                                                                  |
+| ------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `KAGENT_MAIN_AGENT` (`mainloop-main`)                         | the main thread                                | `sessionIdleTTL: 0s`                                                                                  |
+| `KAGENT_WORKSPACE_CLAUDE_AGENT` / `_CODEX_AGENT`              | workspaces and sessions the owner starts       | `sessionIdleTTL: 0s`, `git.origins` (the repository hosts), `snapshotPolicy.onQuiesce: Full`          |
+| `KAGENT_CLAUDE_AGENT` / `KAGENT_CODEX_AGENT`                  | child agents the main thread delegates to      | default TTL and snapshot scope                                                                        |
+
+A workspace needs its own Agents because kagent measures idle time from the last A2A event
+(previews and `ResumeSession` do not count) and deletes the Session and its actor on expiry,
+along with uncommitted and unpushed work. `onQuiesce: Full` keeps files and the dev server across
+a suspend, which previews need, but costs a full snapshot at every quiesce, which children should
+not pay. Mainloop parks idle compute itself (`SuspendSession`); archiving or deleting ends the
+Session. Main and child templates bind the `mainloop` RemoteMCPServer. Standalone workspace Agents
+have no Mainloop tool identity and do not bind that server. Gateway port 8083 must admit only
+Mainloop, and TaskStore must admit only actors, using installation-specific policies.
 
 The supported gateway is stock Substrate v0.3.0-alpha3 using agentgateway revision
 `50999825cb55904801f7fd6b18b865179d0d50c4`, image digest
@@ -165,12 +176,18 @@ proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable 
 other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
 
 The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
-isolation on that pinned stock dataplane. Joint Mainloop/native-agent MCP proof and blocked
-connection/CNI verification remain pending. The Secret holds the complete `Bearer ml_…` header
-value; NetworkPolicy remains required even though the gateway proof passed.
+isolation on that pinned stock dataplane. The joint proof (a native agent calling the Mainloop MCP
+server through the gateway, and blocked connections) passed on a Cilium cluster; the Kind
+overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
+policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
+remains required.
 
 Slice a2 requires a **fresh database**. There is no supported upgrade from earlier slices or
 credential-less kagent bindings. Reset dev/spike data before using this channel. Main and child
 Sessions start with credential references; the main thread uses its dedicated main Agent.
 Earlier native session history is not carried into a2. Mainloop does not migrate or reuse
 pre-a2 sessions.
+
+For a reproducible kagent spike stack, see the [tracked Kind overlay](k8s/apps/mainloop/overlays/kind/README.md).
+It includes dedicated workspace Agents and fixed frontend/backend NodePorts, with credential
+references and explicit installation prerequisites.

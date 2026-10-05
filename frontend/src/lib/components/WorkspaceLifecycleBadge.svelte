@@ -3,13 +3,7 @@
 
   let { workspace }: { workspace: WorkspaceLifecycle } = $props();
 
-  const label = $derived(
-    workspace.observed_state === 'suspended'
-      ? workspace.snapshot_ref
-        ? 'PARKED'
-        : 'SUSPENDED · SNAPSHOT UNKNOWN'
-      : workspace.observed_state.toUpperCase()
-  );
+  const label = $derived(workspace.observed_state.toUpperCase());
 
   const color = $derived(
     workspace.observed_state === 'running'
@@ -21,11 +15,7 @@
           : 'border-term-yellow/50 text-term-yellow'
   );
 
-  const detail = $derived(
-    workspace.conditions.find((condition) => condition.type === 'ControlOperation')?.message ??
-      workspace.conditions.find((condition) => condition.type === 'Available')?.message ??
-      `Desired ${workspace.desired_state}; observed ${workspace.observed_state}.`
-  );
+  const detail = $derived(workspace.detail ?? `Workspace ${workspace.observed_state}.`);
 </script>
 
 <span

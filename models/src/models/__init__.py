@@ -15,7 +15,6 @@ from models.native_agent import (
     NativeStatus,
     ProviderExtension,
     ReconciliationEvidence,
-    WorkspaceBinding,
 )
 from models.session import (
     NativeDeliveryInfo,
@@ -39,16 +38,11 @@ from models.workflow import (
 )
 from models.workspace import (
     WorkspaceAgentKind,
-    WorkspaceCondition,
-    WorkspaceConditionStatus,
-    WorkspaceDesiredState,
     WorkspaceDev,
     WorkspaceLifecycle,
     WorkspaceManifest,
     WorkspaceObservedState,
     WorkspacePort,
-    WorkspaceService,
-    WorkspaceTransition,
 )
 
 __all__ = [
@@ -89,16 +83,10 @@ __all__ += [
     "NativeStatus",
     "ProviderExtension",
     "ReconciliationEvidence",
-    "WorkspaceBinding",
     "WorkspaceAgentKind",
-    "WorkspaceCondition",
-    "WorkspaceConditionStatus",
-    "WorkspaceDesiredState",
     "WorkspaceDev",
     "WorkspaceLifecycle",
     "WorkspaceManifest",
     "WorkspaceObservedState",
     "WorkspacePort",
-    "WorkspaceService",
-    "WorkspaceTransition",
 ]

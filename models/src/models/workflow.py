@@ -43,7 +43,7 @@ class MainThread(BaseModel):
     """Represents a user's main conversation thread (durable workflow)."""
 
     id: str = Field(default_factory=_uuid, description="Unique thread ID")
-    user_id: str = Field(..., description="User ID from Cloudflare Access")
+    user_id: str = Field(..., description="Owner ID (the single configured owner)")
     workflow_run_id: str | None = Field(None, description="Absurd workflow run ID")
     status: Literal["active", "paused", "error"] = Field(
         default="active", description="Thread status"
