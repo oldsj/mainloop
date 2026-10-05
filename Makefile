@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel deploy deploy-loop deploy-loop-all deploy-backend deploy-frontend-k8s deploy-manifests prod-reset kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -109,65 +109,10 @@ push-all-parallel: build-all-parallel ## Build and push all images in parallel
 	wait
 	@echo "All pushes complete"
 
-# Deployment
-deploy: push-all-parallel ## Full deployment to k8s (parallel builds + pushes)
-	@echo "Applying Kubernetes manifests..."
-	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
-	@echo "Restarting Kubernetes deployments in parallel..."
-	@kubectl rollout restart deployment/mainloop-backend -n mainloop & \
-	kubectl rollout restart deployment/mainloop-frontend -n mainloop & \
-	wait
-	@echo "Rollouts triggered"
-
-deploy-loop: ## Pull and deploy every 10 seconds
-	@echo "Starting deploy loop (Ctrl+C to stop)..."
-	@while true; do \
-		git pull && $(MAKE) deploy; \
-		sleep 10; \
-	done
-
-deploy-loop-all: ## Watch all and redeploy everything (old behavior)
-	watchexec --poll 1000 -w backend -w frontend/src -w k8s -w models \
-		-e py,ts,svelte,yaml,toml,Dockerfile \
-		-i 'test*' -i '*_test.py' -i 'tests/' -i '__pycache__/' -i '.pytest_cache/' -i 'scripts/' \
-		--on-busy-update restart \
-		-- $(MAKE) deploy || true
-
-# Selective deploy targets (faster - skip kubectl apply, just build+push+restart)
-deploy-backend: ## Build, push, and restart backend only
-	docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
-	docker push $(BACKEND_IMAGE)
-	kubectl rollout restart deployment/mainloop-backend -n mainloop
-
-deploy-frontend-k8s: ## Build, push, and restart frontend only (k8s version)
-	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
-	docker push $(FRONTEND_IMAGE)
-	kubectl rollout restart deployment/mainloop-frontend -n mainloop
-
-deploy-manifests: ## Apply k8s manifests only (no image builds)
-	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
-
-PROD_CONTEXT ?= admin@internal-01
-
-prod-reset: ## Reset prod database + restart backend
-	@echo "=== Using context: $(PROD_CONTEXT) ==="
-	@echo "=== Deleting CNPG Database CR ==="
-	kubectl --context $(PROD_CONTEXT) delete database mainloop-db-database -n mainloop --wait=true
-	@echo "=== Recreating Database CR ==="
-	kubectl --context $(PROD_CONTEXT) apply -k k8s/apps/mainloop/overlays/prod --server-side --force-conflicts
-	@echo "=== Waiting for database to be ready ==="
-	@until kubectl --context $(PROD_CONTEXT) get database mainloop-db-database -n mainloop -o jsonpath='{.status.applied}' 2>/dev/null | grep -q true; do sleep 1; done
-	@echo "=== Restarting backend to reinitialize DBOS ==="
-	kubectl --context $(PROD_CONTEXT) rollout restart deployment/mainloop-backend -n mainloop
-	kubectl --context $(PROD_CONTEXT) rollout status deployment/mainloop-backend -n mainloop --timeout=60s
-	@echo "=== Reset complete ==="
-
-# K8s commands (for local testing before moving to infrastructure repo)
-k8s-apply: ## Apply K8s manifests locally
-	kubectl apply -k k8s/apps/mainloop/overlays/prod --server-side
-
-k8s-delete: ## Delete K8s resources
-	kubectl delete -k k8s/apps/mainloop/overlays/prod
+# Production is GitOps-only: Argo CD applies the prod overlay from Git and the images
+# are pinned by digest in the deployment repository. There are no targets that apply to
+# or restart anything in a production cluster. Build and push images with the
+# build-*/push-* targets above, then record the digests in the deployment repository.
 
 # Kind (local Kubernetes testing)
 KIND_CLUSTER_NAME ?= mainloop-test
