@@ -1,0 +1,52 @@
+# REST (backend) and MCP share one Deployment and one image, and both initialise
+# the schema, so both get the same explicit configuration.
+#
+# envFrom has no merge key, so listing it here replaces the base list: the
+# whole mainloop-secrets Secret is no longer imported. env is merged by name.
+#
+# One replica runs DBOS, so replace pods instead of surging a second one, and size the MCP
+# container for its small footprint (the base requests are for the REST container).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: backend
+          envFrom: &envFrom
+            - configMapRef:
+                name: mainloop-config
+            # Site values: FRONTEND_DOMAIN, API_DOMAIN, MAINLOOP_OWNER_ID, SUBSTRATE_PREVIEW_BASE_URL
+            - configMapRef:
+                name: mainloop-site
+          env: &env
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-pg-app
+                  key: password
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: agent-token-key
+        - name: mcp
+          envFrom: *envFrom
+          env: *env
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi

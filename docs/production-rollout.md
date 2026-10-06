@@ -1,0 +1,94 @@
+# Production deployment
+
+`k8s/apps/mainloop/overlays/prod` is a generic, single-owner production overlay: the
+base plus a CloudNativePG database, with REST and MCP configured explicitly. It
+contains no domains, gateway wiring, image digests or credential sources. The
+deployment repository supplies those (see [Site contract](#site-contract)), so the
+same overlay serves any cluster that provides the prerequisites.
+
+Native sessions run as kagent Harness Agents on Substrate, so the cluster needs kagent
+and Substrate before Mainloop can serve a turn. The overlay does not install either.
+
+## What the overlay renders
+
+| Resource                         | Notes                                                                                                                                                                                                                               |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Base                             | Namespace, ServiceAccount, backend (REST `:8000` + MCP `:8002` containers), frontend, Services, `mainloop-config`, `mainloop-backend-ingress`                                                                                       |
+| `Cluster/mainloop-pg`            | Fresh single-instance CNPG database on the cluster's default storage class. The backend connects to the `mainloop-pg-rw` Service directly; there is no pooler, so DBOS `LISTEN`/`NOTIFY` sessions cannot be starved by a pool limit |
+| `mainloop-config` patch          | DB host (`mainloop-pg-rw`), `KAGENT_*` Agent names and gateway URL, `SUBSTRATE_ROUTER_ADDRESS`, `DEV_MODE`/`IS_TEST_ENV` false. Drops the example `FRONTEND_DOMAIN`                                                                 |
+| Backend patch                    | Both containers read `mainloop-config` and `mainloop-site` only (no whole-Secret import) and set `DB_USER`/`DB_PASSWORD`/`AGENT_TOKEN_KEY` explicitly                                                                               |
+| Backend Deployment               | `strategy: Recreate` (one DBOS replica; no surge pod needed), and the `mcp` container requests 100m / 256Mi instead of the REST container's base values                                                                             |
+| Frontend patch                   | `ORIGIN` from `mainloop-site`                                                                                                                                                                                                       |
+| `mainloop-backend-ingress` patch | Ingress list replaced: only `ate-system` `atenet-egress` reaches `:8002`                                                                                                                                                            |
+
+There is no replica hold, archive, backup or staged-promotion machinery. The database
+is a new Cluster; a different name from any earlier Cluster means an old data volume is
+never reattached.
+
+## Site contract
+
+The overlay needs these objects in the `mainloop` namespace. Any deployment can
+provide them; the Argo composition for this cluster lives in the infrastructure
+repository.
+
+| Object                    | Keys                                                                                                  | Used for                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ConfigMap `mainloop-site` | `FRONTEND_DOMAIN`, `API_DOMAIN`, `FRONTEND_ORIGIN`, `MAINLOOP_OWNER_ID`, `SUBSTRATE_PREVIEW_BASE_URL` | Backend CORS, Host guard and owner scoping; the preview host (`<port>--<workspace>--preview.<base host>`); the frontend's `ORIGIN`                                                                                                                                                                                   |
+| Secret `mainloop-secrets` | `github-token`, `agent-token-key`                                                                     | Backend GitHub access; HMAC key for per-binding agent tokens (both listeners need it; keep it stable across restarts)                                                                                                                                                                                                |
+| Secret `mainloop-pg-app`  | `username`, `password`                                                                                | Generated by CNPG                                                                                                                                                                                                                                                                                                    |
+| Secret `ghcr-secret`      | dockerconfigjson                                                                                      | Image pulls                                                                                                                                                                                                                                                                                                          |
+| Gateway routes            | frontend `:3000`, API `:8000`, wildcard preview host `:8000`                                          | Never `:8002`. The preview wildcard must match exactly one label under the base host: with base `https://preview.example.test`, previews are `<port>--<workspace>--preview.preview.example.test`, so route and certify `*.preview.example.test`. Keep it off any wildcard that also covers the frontend or API hosts |
+| NetworkPolicy             | gateway pods to backend `:8000`                                                                       | NetworkPolicies are additive; the gateway's labels belong to the cluster                                                                                                                                                                                                                                             |
+| Images                    | `ghcr.io/oldsj/mainloop-backend`, `ghcr.io/oldsj/mainloop-frontend`                                   | Pin by digest. CI builds but does not publish them                                                                                                                                                                                                                                                                   |
+
+The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime
+`ORIGIN` does not change it. Build it for the deployment's API domain.
+
+Cross-namespace pieces are owned by the cluster repository, not this overlay: the
+kagent Agents named in `mainloop-config`, the Role that lets `mainloop-backend` update
+`kagent/mainloop-agent-tokens`, the MCP `RemoteMCPServer` (`k8s/integrations/kagent`
+is for Kind only), and policies that let the backend reach kagent `:8083` and the
+Substrate router `:8081`.
+
+## Production changes are GitOps-only
+
+Argo CD applies this overlay (with the site layer) from Git. The Makefile has no target
+that applies, restarts or resets anything in a production cluster; the former `deploy*`,
+`k8s-apply`, `k8s-delete` and `prod-reset` targets are removed. Build images with
+`make build-*` / `make push-*`, pin the digests in the deployment repository, and let
+Argo roll them out. Kind and `make dev` flows are unchanged.
+
+## Network boundary and preview risk
+
+- Mainloop does no per-request authentication. Reachability (the tailnet and the
+  gateway) is the access control, and `MAINLOOP_OWNER_ID` scopes workspaces and previews.
+  Do not trust `X-User-ID`.
+- Backend ingress is two additive policies: the actor egress proxy to `:8002` (this
+  overlay) and the gateway to `:8000` (the cluster repository). Actors reach MCP only
+  through the credential-injecting egress path. The frontend does not call the backend
+  server-side, so it has no grant.
+- Previews run agent-controlled code on a host that shares a registrable domain with the
+  API. This is accepted for a single owner and is not a multi-user boundary. The backend's
+  unknown-Host 404 (except `/health`), foreign-Origin write rejection and owner scoping
+  are the controls. Verify them through the real gateway before relying on them, together
+  with wildcard DNS and certificate coverage and WebSocket upgrades.
+- Any `NetworkPolicy` evidence needs an allowed control next to each blocked probe, and
+  must consider every policy selecting the destination, including Cilium policies.
+
+## Database
+
+The schema is created and migrated by the backend at startup (REST and MCP both run it).
+There is no backup or restore automation here. `Cluster` PVCs follow the storage
+class's reclaim policy. To start over, delete the `mainloop-pg` Cluster through GitOps
+(removing it from the render) and let CNPG create a new one; the backend recreates the
+schema. Native session state lives in kagent, not here.
+
+## Verification
+
+```sh
+kubectl kustomize k8s/apps/mainloop/overlays/prod
+```
+
+Check that the render has no `$patch` directive and that each container's `envFrom`
+lists only `mainloop-config` and `mainloop-site`. A repository-only render does not
+include the site objects above; validate the composed Application on the target cluster.

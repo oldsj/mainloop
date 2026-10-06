@@ -1,21 +1,20 @@
+# Fresh CloudNativePG cluster. CNPG generates the application credentials in
+# Secret mainloop-pg-app (keys username, password). The backend reads them from there.
+# The backend connects to the rw Service directly: one instance, one client app, and no
+# pooler whose pool could stall DBOS LISTEN/NOTIFY sessions.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: mainloop-db
+  name: mainloop-pg
   namespace: mainloop
 spec:
   instances: 1
-
   storage:
     size: 10Gi
-
-  # Bootstrap: create initial database and owner
   bootstrap:
     initdb:
       database: mainloop
       owner: mainloop
-
-  # Resource limits for home lab
   resources:
     requests:
       cpu: 100m
@@ -23,38 +22,3 @@ spec:
     limits:
       cpu: '1'
       memory: 1Gi
-
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: mainloop-db-database
-  namespace: mainloop
-spec:
-  name: mainloop
-  owner: mainloop
-  cluster:
-    name: mainloop-db
-  extensions:
-    - name: vector
-
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Pooler
-metadata:
-  name: mainloop-db-pooler
-  namespace: mainloop
-spec:
-  cluster:
-    name: mainloop-db
-  instances: 1
-  type: rw
-
-  pgbouncer:
-    poolMode: session
-    parameters:
-      max_client_conn: '100'
-      default_pool_size: '10'
-      # Disable query_wait_timeout (default 120s) because DBOS notification
-      # listener holds connections waiting for LISTEN/NOTIFY indefinitely
-      query_wait_timeout: '0'

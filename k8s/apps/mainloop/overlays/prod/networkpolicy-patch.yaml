@@ -1,0 +1,18 @@
+# NetworkPolicies are additive, so replace the base list instead of appending.
+# Only the actor egress proxy may reach the MCP listener. The browser reaches
+# the API through the gateway, and the deployment repository adds that peer as a
+# separate policy, because the gateway's labels are specific to the cluster.
+# The frontend makes no server-side calls to the backend.
+- op: replace
+  path: /spec/ingress
+  value:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8002

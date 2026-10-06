@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  DB_HOST: mainloop-pg-rw.mainloop.svc.cluster.local
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  # Domains come from the site ConfigMap (mainloop-site), not from this base value.
+  FRONTEND_DOMAIN: null
+  FRONTEND_SCHEME: https
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop,mainloop-backend.mainloop.svc,mainloop-backend.mainloop.svc.cluster.local
+  DEV_MODE: 'false'
+  IS_TEST_ENV: 'false'
+  KAGENT_GATEWAY_URL: http://kagent-controller.kagent.svc.cluster.local:8083
+  KAGENT_USER_ID: mainloop
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: mainloop-main
+  KAGENT_CLAUDE_AGENT: claude-subscription
+  KAGENT_CODEX_AGENT: codex-subscription-https
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace
+  SUBSTRATE_ROUTER_ADDRESS: http://atenet-router.ate-system.svc.cluster.local:8081
