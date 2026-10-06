@@ -77,9 +77,19 @@ async def _cleanup(binding_id: str):
 
     try:
         await credentials.remove(binding_id)
-    except Exception:
+    except Exception as exc:
         # Auth is already revoked. Do not lose a report or cancellation to a Kubernetes outage.
-        logger.warning("agent credential cleanup pending for binding %s", binding_id)
+        logger.warning(
+            "reconcile step failed: step=credential_cleanup session_id=%s error_class=%s",
+            binding_id,
+            type(exc).__name__,
+            extra={
+                "event": "reconcile_step_failed",
+                "step": "credential_cleanup",
+                "session_id": binding_id,
+                "error_class": type(exc).__name__,
+            },
+        )
         return
     async with db.connection() as conn:
         await conn.execute(
@@ -96,4 +106,18 @@ async def reconcile_cleanup():
             "SELECT session_id FROM native_bindings WHERE credential_cleanup_pending=TRUE"
         )
     for row in rows:
-        await _cleanup(row["session_id"])
+        try:
+            await _cleanup(row["session_id"])
+        except Exception as exc:
+            logger.error(
+                "reconcile step failed: step=credential_cleanup session_id=%s error_class=%s",
+                row["session_id"],
+                type(exc).__name__,
+                exc_info=exc,
+                extra={
+                    "event": "reconcile_step_failed",
+                    "step": "credential_cleanup",
+                    "session_id": row["session_id"],
+                    "error_class": type(exc).__name__,
+                },
+            )

@@ -22,7 +22,7 @@ class Conversation(BaseModel):
     """A conversation thread."""
 
     id: str = Field(..., description="Unique conversation ID")
-    user_id: str = Field(..., description="User ID from Cloudflare Access")
+    user_id: str = Field(..., description="Owner ID (the single configured owner)")
     title: str | None = Field(None, description="Conversation title")
     summary: str | None = Field(None, description="Compacted summary of older messages")
     summarized_through_id: str | None = Field(

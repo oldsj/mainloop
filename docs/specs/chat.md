@@ -31,7 +31,8 @@ the main thread manages topics, pending intent and its child tree; children can 
 and policy failures return tool errors. Terminal and archived bindings cannot authenticate.
 The dedicated MCP origin exposes only `/mcp`. REST remains unauthenticated and relies on the
 required NetworkPolicy isolation documented in the architecture guide. The channel is
-implemented with fake verification; joint gateway verification remains pending.
+implemented with fake-backed tests; the joint gateway proof (native agent to MCP through the gateway,
+blocked connections) passed on a Cilium cluster and needs a NetworkPolicy-enforcing CNI to repeat.
 
 ## Initial installation and history boundary
 

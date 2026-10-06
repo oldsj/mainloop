@@ -10,3 +10,6 @@ data:
   DB_PORT: '5432'
   DB_NAME: mainloop
   FRONTEND_DOMAIN: localhost:3000
+  FRONTEND_SCHEME: http
+  DEV_MODE: 'true'
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop,mainloop-backend.mainloop.svc.cluster.local

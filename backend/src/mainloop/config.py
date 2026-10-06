@@ -1,21 +1,9 @@
 """Configuration management."""
 
-import hashlib
-from typing import Literal
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-class SubstrateActorBinding(BaseModel):
-    """Deployment-provided route and token Secret for one pre-created actor."""
-
-    atespace: str
-    actor: str
-    shim_token_secret_name: str
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class Settings(BaseSettings):
@@ -35,47 +23,32 @@ class Settings(BaseSettings):
         encoded_password = quote_plus(self.db_password)
         return f"postgresql://{self.db_user}:{encoded_password}@{self.db_host}:{self.db_port}/{self.db_name}"
 
-    # Native sessions connect to pre-created Substrate actors through the CONNECT router.
+    # The single owner: the identity of every request that reaches Mainloop. Mainloop is reached
+    # only over the tailnet (and, in the cluster, through its NetworkPolicy), so there is no
+    # per-request authentication. Workspaces and previews are scoped to this id.
+    owner_id: str = Field("local-dev-user", validation_alias="MAINLOOP_OWNER_ID")
+
+    @field_validator("owner_id")
+    @classmethod
+    def _owner_id_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("MAINLOOP_OWNER_ID must not be blank")
+        return value
+
+    # Workspace previews reach a dev server in the kagent harness through the Substrate router
+    # (``CONNECT actor-upstream:<port>``, the target actor named by the ``ate-target-actor``
+    # header). The router has no authentication; owner scoping happens in Mainloop.
     substrate_router_address: str = (
         "http://atenet-router.ate-system.svc.cluster.local:8081"
     )
-    substrate_shim_secret_namespace: str = "mainloop-shim-secrets"
-    substrate_credential_secret_namespace: str = "mainloop-control"
-    substrate_credential_secret_prefix: str = "mainloop-credential"
-    substrate_credential_account: str = "owner"
-    substrate_credential_owner_user_id: str = "local-dev-user"
-    substrate_codex_auth_path: str = ""
-    substrate_claude_token_path: str = ""
-    substrate_shim_secret_prefix: str = Field(
-        default="mainloop-shim",
-        min_length=1,
-        max_length=40,
-        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
-    )
-    substrate_actor_bindings: dict[
-        Literal["claude", "codex"], SubstrateActorBinding
-    ] = Field(default_factory=dict)
-    substrate_resume_timeout_seconds: float = 120.0
-
-    def shim_token_secret_name(self, atespace: str, actor: str) -> str:
-        """Return the configured, stable Kubernetes Secret name for an actor shim token."""
-        suffix = hashlib.sha256(f"{atespace}/{actor}".encode()).hexdigest()[:16]
-        return f"{self.substrate_shim_secret_prefix}-{suffix}"
-
-    # Substrate actor lifecycle control. Empty kubeconfig/context falls back to ambient config.
-    substrate_kubeconfig: str = ""
-    substrate_context: str = ""
-    substrate_endpoint: str = ""
-    substrate_token_file: str = ""
-    substrate_atespace: str = "mainloop-workspaces"
-    substrate_actor_template: str = "mainloop-workspace"
-    substrate_cli: str = "kubectl-ate"
-    substrate_preview_base_url: str = "http://preview.localhost:8001"
+    # The domain previews are served under: a preview URL is
+    # ``<scheme>://<port>--<workspace>--preview.<this host>[:<this port>]``. It must be one DNS
+    # label below a wildcard-certificate domain (``*.<this host>``).
+    substrate_preview_base_url: str = "http://localhost:8001"
     substrate_preview_connect_timeout_seconds: float = 5.0
-    substrate_reauth_job_image: str = ""
-    substrate_reauth_job_namespace: str = "mainloop-control"
-    substrate_reauth_callback_url: str = "http://mainloop-backend:8000/internal/reauth"
-    substrate_reauth_timeout_seconds: int = 1800
+    # kagent runs each Session in an actor in this atespace, named ``session-<Session id>``.
+    kagent_actor_atespace: str = "kagent"
 
     # kagent: native Claude and Codex sessions run as kagent Agents behind one gateway
     # (SessionService over grpc-web and A2A JSON-RPC). Mainloop acts as a fixed service identity.
@@ -85,20 +58,33 @@ class Settings(BaseSettings):
     kagent_user_id: str = "mainloop"
     kagent_namespace: str = "kagent"
     kagent_main_agent: str = "mainloop-main"
+    # Child agents (delegated by the main thread) run on these.
     kagent_claude_agent: str = "claude-subscription"
     kagent_codex_agent: str = "codex-subscription-https"
+    # Sessions the owner starts, and every workspace, run on these instead. A workspace holds
+    # uncommitted and unpushed work, so its Harness must never expire the Session
+    # (``sessionIdleTTL: 0s``), must allow ``git.origins`` and must snapshot with
+    # ``snapshotPolicy.onQuiesce: Full`` (previews and wake). Children keep the default TTL and
+    # snapshot scope. See docs/architecture.md.
+    kagent_workspace_claude_agent: str = "claude-workspace"
+    kagent_workspace_codex_agent: str = "codex-workspace"
     kagent_request_timeout_seconds: float = 30.0
     kagent_turn_timeout_seconds: float = 1800.0
     kagent_session_ready_timeout_seconds: float = 120.0
     # "Send not accepted" is retried with the identical message for at most this long.
     kagent_send_retry_budget_seconds: float = 30.0
+    # A workspace with no preview traffic and no open turn for its idle timeout is suspended.
+    # The check runs this often.
+    workspace_idle_check_seconds: float = 60.0
 
     # Native main thread (context model).
     main_carry_over_messages: int = 6
     native_child_kinds: str = "claude,codex"
-    agent_token_key: str = (
-        ""  # HMAC key for per-binding agent tokens (falls back to DB password)
-    )
+    # HMAC key for per-binding agent tokens. Required unless ``dev_mode`` (or ``is_test_env``) is
+    # set, where it falls back to the DB password.
+    agent_token_key: str = ""
+    # Local development: relaxes startup requirements such as ``AGENT_TOKEN_KEY``.
+    dev_mode: bool = False
 
     # GitHub
     github_token: str = ""
@@ -107,15 +93,47 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     frontend_domain: str = "mainloop.example.com"  # Frontend domain for CORS
+    # Scheme of the frontend origin (CORS and the cross-origin write guard). A Kind or local
+    # deployment served over plain HTTP sets ``http``.
+    frontend_scheme: str = "https"
+    # The API's own domain, when it differs from the frontend's.
+    api_domain: str = ""
+    # The API answers only to these Host names, plus the frontend and API domains, loopback and
+    # the preview hosts. Comma-separated, without ports (any port is accepted): the names callers
+    # use to reach the API, for example its in-cluster Service names.
+    api_hosts: str = Field("", validation_alias="MAINLOOP_API_HOSTS")
 
     @computed_field
     @property
     def frontend_origin(self) -> str:
-        """Construct frontend origin URL from domain."""
-        return f"https://{self.frontend_domain}"
+        """Construct frontend origin URL from scheme and domain."""
+        return f"{self.frontend_scheme}://{self.frontend_domain}"
+
+    @property
+    def allowed_api_hosts(self) -> frozenset[str]:
+        """Return the lower-case host names the API serves (not preview hosts)."""
+        names = [self.frontend_domain, self.api_domain, *self.api_hosts.split(",")]
+        hosts = set()
+        for name in names:
+            if not name.strip():
+                continue
+            # FRONTEND_DOMAIN may include its development port; the Host guard compares
+            # hostnames, while CORS retains the full frontend origin.
+            try:
+                hostname = urlsplit(f"//{name.strip()}").hostname
+            except ValueError:
+                continue
+            if hostname:
+                hosts.add(hostname.lower().rstrip("."))
+        return frozenset(hosts)
 
     # Test environment flag (enables test-only endpoints)
     is_test_env: bool = False
+
+    @property
+    def is_dev(self) -> bool:
+        """Return whether this is a development or test deployment."""
+        return self.dev_mode or self.is_test_env
 
     # Mock GitHub for testing without real GitHub API
     use_mock_github: bool = False

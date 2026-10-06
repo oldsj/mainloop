@@ -17,7 +17,7 @@
     try {
       const session = await api.createSession({
         title: title.trim() || `${kind} session`,
-        description: `Native ${kind} agent in a Substrate workspace`,
+        description: `Native ${kind} agent session`,
         prompt: prompt.trim(),
         agent_kind: kind
       });

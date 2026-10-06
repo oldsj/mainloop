@@ -31,7 +31,6 @@ from typing import Any
 
 from mainloop.config import settings
 from mainloop.db import db
-from mainloop.runtime import workspace_adapter
 from mainloop.runtime.agent_identity import hash_token, token_for
 from mainloop.runtime.kagent_client import (
     A2AError,
@@ -44,6 +43,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SendNotAccepted,
     SessionError,
+    SessionWorkspace,
     StreamEvent,
     TaskNotFound,
     TaskProjection,
@@ -65,6 +65,9 @@ OPEN_STATES = ("recorded", "sending", "delivered")
 _RESOLVABLE = ("sending", "delivered", "uncertain")
 # Ended by the user or by failure. Agent activity never moves a session out of these.
 ENDED_STATUSES = frozenset({SessionStatus.CANCELLED, SessionStatus.FAILED})
+
+# The conversation note written when a turn ends as ``cancelled``.
+TURN_STOPPED_NOTE = "This turn was stopped before it finished."
 
 _locks: dict[str, asyncio.Lock] = {}
 # Deliveries this process is currently reading a stream for; sync leaves them to the stream.
@@ -128,13 +131,27 @@ async def close_client() -> None:
 
 
 def agent_name(kind: str, role: str = "agent") -> str:
-    """Return the kagent Agent that runs a native agent kind."""
+    """Return the kagent Agent that runs a native agent kind.
+
+    The main thread has its own Agent. A session the owner starts (role ``agent``, which includes
+    every workspace) runs on a workspace Agent, whose Harness never expires the Session; a child
+    runs on the shorter-lived default Agent.
+    """
     if role == "main":
         return settings.kagent_main_agent
+    workspace = role == "agent"
     if kind == "claude":
-        return settings.kagent_claude_agent
+        return (
+            settings.kagent_workspace_claude_agent
+            if workspace
+            else settings.kagent_claude_agent
+        )
     if kind == "codex":
-        return settings.kagent_codex_agent
+        return (
+            settings.kagent_workspace_codex_agent
+            if workspace
+            else settings.kagent_codex_agent
+        )
     raise ValueError(f"no kagent Agent is configured for native agent {kind}")
 
 
@@ -245,63 +262,75 @@ class Ledger:
                 session_id,
             )
 
-    async def record_message(
-        self,
-        *,
-        session_id: str,
-        conversation_id: str,
-        text: str,
-        state: str,
-        source: str,
-    ) -> str:
-        """Record the message and delivery under the workspace lock used by suspension."""
-        async with db.connection() as conn:
-            async with conn.transaction():
-                binding = await conn.fetchrow(
-                    """SELECT workspace_id,desired_state FROM workspace_bindings
-                       WHERE workspace_id=$1 FOR UPDATE""",
-                    session_id,
-                )
-                if binding and binding.get("desired_state") == "deleting":
-                    raise ValueError(
-                        "The workspace is being deleted; start another workspace."
-                    )
-                lifecycle = (
-                    await conn.fetchrow(
-                        """SELECT desired_state, observed_state FROM workspace_lifecycles
-                           WHERE workspace_id=$1""",
-                        session_id,
-                    )
-                    if binding
-                    else None
-                )
-                if lifecycle and (
-                    lifecycle["desired_state"] == "suspended"
-                    or lifecycle["observed_state"] in {"suspending", "suspended"}
-                ):
-                    raise ValueError(
-                        "The workspace is suspending or suspended; resume it before sending a message."
-                    )
+    @staticmethod
+    async def _lock_deliveries(conn, session_id: str) -> None:
+        """Serialise changes that open a delivery, across processes, until the transaction ends.
 
-                message = await db.create_message(
-                    conversation_id=conversation_id,
-                    role="user",
-                    content=text,
-                    conn=conn,
-                )
-                await conn.execute(
-                    "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
-                    message.id,
-                    session_id,
-                    state,
-                    source,
-                )
-                if binding:
-                    await conn.execute(
-                        "UPDATE workspace_lifecycles SET last_activity_at=NOW(), updated_at=NOW() WHERE workspace_id=$1",
-                        session_id,
-                    )
+        The REST and MCP containers both write the ledger, so the one-open-turn rule cannot rest
+        on the in-process lock. This is a database lock only; it is never held across a call to
+        kagent.
+        """
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext($1))",
+            f"native-deliveries:{session_id}",
+        )
+
+    @staticmethod
+    async def _insert_message(
+        conn, session_id, conversation_id, text, state, source
+    ) -> str:
+        message = await db.create_message(
+            conversation_id=conversation_id, role="user", content=text, conn=conn
+        )
+        await conn.execute(
+            "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
+            message.id,
+            session_id,
+            state,
+            source,
+        )
         return message.id
+
+    async def record_submission(
+        self, *, session_id: str, conversation_id: str, text: str, source: str
+    ) -> tuple[str, str]:
+        """Record a message as ``recorded`` (nothing open) or ``queued`` (a turn is open).
+
+        The open-turn check and the insert are one transaction under a per-session advisory
+        lock, so two writers in different processes cannot both find the session idle. A ``user``
+        or ``brief`` message that finds a turn open is refused with ``ValueError``; a ``report``
+        is queued. An ``uncertain`` delivery does not block: the owner decides whether to resend.
+
+        After the owner stopped a turn the queue is held: a ``report`` is queued although nothing
+        is open, and the owner's next ``user`` message releases the hold and goes first. The queued
+        messages then follow it, one turn at a time.
+        """
+        async with db.connection() as conn, conn.transaction():
+            await self._lock_deliveries(conn, session_id)
+            busy = await conn.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM native_deliveries
+                   WHERE session_id=$1 AND state = ANY($2))""",
+                session_id,
+                list(OPEN_STATES),
+            )
+            if busy and source in ("user", "brief"):
+                raise ValueError(
+                    "A previous message is still in flight; wait for its reply before sending another."
+                )
+            held = await conn.fetchval(
+                "SELECT queue_held FROM native_bindings WHERE session_id=$1", session_id
+            )
+            if source == "user" and held:
+                await conn.execute(
+                    "UPDATE native_bindings SET queue_held=FALSE WHERE session_id=$1",
+                    session_id,
+                )
+                held = False
+            state = "queued" if busy or held else "recorded"
+            message_id = await self._insert_message(
+                conn, session_id, conversation_id, text, state, source
+            )
+        return message_id, state
 
     async def delivery_state(self, message_id: str) -> str | None:
         async with db.connection() as conn:
@@ -328,27 +357,52 @@ class Ledger:
                 list(OPEN_STATES),
             )
 
-    async def set_delivery(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        task_id: str | None = None,
-        evidence_ref: str | None = None,
-        detail: str | None = None,
-    ) -> None:
+    async def active_count(self, session_id: str) -> int:
+        """Deliveries that are, or are about to be, a turn: open ones and those queued behind.
+
+        Messages held after a stop are not about to be a turn, so they do not count."""
+        async with db.connection() as conn:
+            return await conn.fetchval(
+                """SELECT count(*) FROM native_deliveries d WHERE d.session_id=$1
+                   AND (d.state = ANY($2)
+                        OR (d.state='queued' AND NOT COALESCE(
+                            (SELECT queue_held FROM native_bindings WHERE session_id=$1), FALSE)))""",
+                session_id,
+                list(OPEN_STATES),
+            )
+
+    async def get_workspace(
+        self, session_id: str, *, conn=None
+    ) -> SessionWorkspace | None:
+        """Return the Session ``workspace`` of a branch workspace; None for any other session."""
+        query = "SELECT repo, ref, branch, depth FROM workspaces WHERE session_id=$1"
+        if conn is None:
+            async with db.connection() as connection:
+                row = await connection.fetchrow(query, session_id)
+        else:
+            row = await conn.fetchrow(query, session_id)
+        if row is None:
+            return None
+        return SessionWorkspace(
+            repo=row["repo"], ref=row["ref"], branch=row["branch"], depth=row["depth"]
+        )
+
+    async def undeleted_archived(self) -> list[dict]:
+        """Return archived sessions whose kagent Session kagent has not confirmed deleted."""
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT b.session_id FROM native_bindings b
+                   JOIN sessions s ON s.id=b.session_id
+                   WHERE s.archived_at IS NOT NULL AND b.kagent_session_id IS NOT NULL
+                     AND b.kagent_deleted_at IS NULL"""
+            )
+        return [dict(r) for r in rows]
+
+    async def mark_kagent_deleted(self, session_id: str) -> None:
         async with db.connection() as conn:
             await conn.execute(
-                """UPDATE native_deliveries SET state=$2, task_id=COALESCE($3, task_id),
-                   evidence_ref=COALESCE($4, evidence_ref),
-                   detail=CASE WHEN $2 IN ('delivered', 'completed') THEN $5 ELSE COALESCE($5, detail) END,
-                   updated_at=NOW()
-                   WHERE message_id=$1""",
-                message_id,
-                state,
-                task_id,
-                evidence_ref,
-                detail,
+                "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+                session_id,
             )
 
     async def transition(
@@ -363,6 +417,24 @@ class Ledger:
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
         async with db.connection() as conn, conn.transaction():
+            if state in OPEN_STATES:
+                session_id = await conn.fetchval(
+                    "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                    message_id,
+                )
+                if session_id is None:
+                    return False
+                await self._lock_deliveries(conn, session_id)
+                if await conn.fetchval(
+                    """SELECT EXISTS(SELECT 1 FROM native_deliveries
+                       WHERE session_id=$1 AND message_id<>$2 AND state = ANY($3))""",
+                    session_id,
+                    message_id,
+                    list(OPEN_STATES),
+                ):
+                    # A late receipt for an uncertain delivery must not reopen it alongside
+                    # the owner's newer turn. It stays observable and is never resent.
+                    return False
             if state == "sending":
                 # Serialize the send claim with durable startup disposal intent.
                 binding = await conn.fetchrow(
@@ -388,8 +460,84 @@ class Ledger:
             )
         return row is not None
 
+    async def settle_cancelled(
+        self,
+        message_id: str,
+        *,
+        from_states: tuple[str, ...],
+        conversation_id: str,
+        note_id: str,
+        note: str,
+        task_id: str | None = None,
+        detail: str | None = None,
+        partial: str | None = None,
+    ) -> bool:
+        """Move a delivery to the terminal ``cancelled`` state and write the conversation note, in
+        one transaction. True when this call moved it; false (nothing written) when the delivery
+        was no longer in ``from_states``. The note id is deterministic, so a replay adds nothing.
+        """
+        async with db.connection() as conn, conn.transaction():
+            session_id = await conn.fetchval(
+                "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                message_id,
+            )
+            if session_id is None:
+                return False
+            # Settle and hold under the same lock as submission/promotion. A stream in the
+            # MCP process may observe cancellation before the REST stop request returns.
+            await self._lock_deliveries(conn, session_id)
+            moved = await conn.fetchval(
+                """UPDATE native_deliveries SET state='cancelled', task_id=COALESCE($2, task_id),
+                   evidence_ref=COALESCE($3, evidence_ref), detail=$4, updated_at=NOW()
+                   WHERE message_id=$1 AND state = ANY($5) RETURNING message_id""",
+                message_id,
+                task_id,
+                f"a2a:task/{task_id}" if task_id else None,
+                detail,
+                list(from_states),
+            )
+            if moved is None:
+                return False
+            await conn.execute(
+                "UPDATE native_bindings SET queue_held=TRUE WHERE session_id=$1",
+                session_id,
+            )
+            saved = await conn.fetchval(
+                "SELECT partial_text FROM native_deliveries WHERE message_id=$1",
+                message_id,
+            )
+            note = stopped_message(partial or saved) if partial or saved else note
+            await conn.execute(
+                """INSERT INTO messages (id, conversation_id, role, content, created_at)
+                   VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING""",
+                note_id,
+                conversation_id,
+                note,
+            )
+            await conn.execute(
+                "UPDATE conversations SET updated_at=NOW() WHERE id=$1", conversation_id
+            )
+        return True
+
+    async def remember_partial(self, message_id: str, text: str) -> None:
+        """Keep observed text even when CancelTask/GetTask later omit their artifacts."""
+        if not text:
+            return
+        async with db.connection() as conn:
+            await conn.execute(
+                """UPDATE native_deliveries SET partial_text=$2
+                   WHERE message_id=$1 AND state = ANY($3)""",
+                message_id,
+                text,
+                list(_RESOLVABLE),
+            )
+
     async def remember_child_start_failure(self, session_id: str, reason: str) -> bool:
-        """Disposal intent wins only before any process claims the initial brief."""
+        """Disposal intent wins only before any process claims the initial brief.
+
+        A delivery that reached kagent (it has a task) is a claim whatever state it ended in: a
+        first turn the owner stopped is ``cancelled`` with a task and ``turns`` still 0.
+        """
         async with db.connection() as conn, conn.transaction():
             binding = await conn.fetchrow(
                 "SELECT role, turns FROM native_bindings WHERE session_id=$1 FOR UPDATE",
@@ -399,7 +547,8 @@ class Ledger:
                 return False
             claimed = await conn.fetchval(
                 """SELECT EXISTS(SELECT 1 FROM native_deliveries WHERE session_id=$1
-                   AND state IN ('sending','delivered','completed','uncertain'))""",
+                   AND (state IN ('sending','delivered','completed','uncertain')
+                        OR task_id IS NOT NULL))""",
                 session_id,
             )
             if claimed:
@@ -432,15 +581,18 @@ class Ledger:
         return [dict(r) for r in rows]
 
     async def promote_queued(self, session_id: str) -> tuple[str, str] | None:
-        """Mark the oldest queued delivery ``recorded`` if (and only if) nothing is open. Atomic in
-        SQL, and serialised with ``submit_message`` by the per-session lock."""
-        async with db.connection() as conn:
+        """Mark the oldest queued delivery ``recorded`` if (and only if) nothing is open. Takes the
+        same advisory lock as ``record_submission``, so a submission cannot slip in between. Nothing
+        is promoted while the queue is held after a stop."""
+        async with db.connection() as conn, conn.transaction():
+            await self._lock_deliveries(conn, session_id)
             row = await conn.fetchrow(
                 """UPDATE native_deliveries SET state='recorded', updated_at=NOW()
                    WHERE message_id = (SELECT message_id FROM native_deliveries
                                        WHERE session_id=$1 AND state='queued' ORDER BY created_at LIMIT 1)
                      AND state='queued'
                      AND NOT EXISTS (SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))
+                     AND NOT COALESCE((SELECT queue_held FROM native_bindings WHERE session_id=$1), FALSE)
                    RETURNING message_id""",
                 session_id,
                 list(OPEN_STATES),
@@ -485,9 +637,11 @@ class Ledger:
     async def sessions_with_open_work(self) -> list[str]:
         async with db.connection() as conn:
             rows = await conn.fetch(
-                """SELECT DISTINCT session_id FROM native_deliveries
-                   WHERE state IN ('recorded','sending','delivered','queued')
-                      OR (state='uncertain' AND updated_at > NOW() - INTERVAL '30 minutes')"""
+                """SELECT DISTINCT d.session_id FROM native_deliveries d
+                   WHERE d.state IN ('recorded','sending','delivered')
+                      OR (d.state='queued' AND NOT COALESCE(
+                          (SELECT queue_held FROM native_bindings WHERE session_id=d.session_id), FALSE))
+                      OR (d.state='uncertain' AND d.updated_at > NOW() - INTERVAL '30 minutes')"""
             )
         return [r["session_id"] for r in rows]
 
@@ -545,27 +699,21 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
     ``queued`` delivery is sent by ``sync`` once the agent is idle.
     """
     session = await db.get_session(session_id)
-    # Branch workspace turns touch and wake their actor before the delivery is recorded. Sessions
-    # without a workspace binding have nothing to wake.
-    if await workspace_adapter.get_workspace(session_id) is not None:
-        await workspace_adapter.touch_workspace(session_id, reason="turn")
     if source == "user" and session.status in ENDED_STATUSES:
         raise ValueError(f"This session is {session.status.value}; start a new one.")
-    # The in-flight check and the ledger insert are one critical section (per session), so two
-    # concurrent submissions cannot both see an idle agent and interleave in one task.
+    # The in-process lock orders this with delivery, suspend and delete in this process. The
+    # one-open-turn rule itself is enforced in PostgreSQL by ``record_submission`` (the MCP
+    # container is a second writer).
     async with _lock(session_id):
-        busy = await ledger.open_count(session_id)
-        # An 'uncertain' delivery does not block: the user decides whether to send again.
-        if busy and source in ("user", "brief"):
-            raise ValueError(
-                "A previous message is still in flight; wait for its reply before sending another."
-            )
-        state = "queued" if busy else "recorded"
-        message_id = await ledger.record_message(
+        # Archiving revokes the session's token and deletes its kagent Session (under this lock,
+        # once no turn is open), so a message recorded after the archive could never be sent.
+        # Read again here: the archive may have landed since the read above.
+        if source == "user" and (await db.get_session(session_id)).archived_at:
+            raise ValueError("This session is archived; start a new one.")
+        message_id, state = await ledger.record_submission(
             session_id=session_id,
             conversation_id=session.conversation_id,
             text=text,
-            state=state,
             source=source,
         )
     if state == "recorded":
@@ -702,10 +850,13 @@ async def _create_bound_session(binding: dict) -> KagentSession:
             if binding.get("child_start_failure"):
                 raise ChildStartPending(str(exc)) from exc
             raise
+    # The workspace is read from its one stored copy on every create, so a replacement Session
+    # resends exactly what the first one got (kagent rejects a changed workspace under one id).
     return await get_client().create_session(
         agent_ref(binding["kind"], binding["role"]),
         request_id=_request_id(binding),
         credentials=refs,
+        workspace=await ledger.get_workspace(binding["session_id"]),
     )
 
 
@@ -894,9 +1045,13 @@ async def _consume(
     """
     proj = TaskProjection()
     recorded = False
+    saved_text = ""
     try:
         async for event in events:
             proj.apply(event)
+            if proj.text and proj.text != saved_text:
+                await ledger.remember_partial(message_id, proj.text)
+                saved_text = proj.text
             if proj.task_id and not recorded:
                 recorded = True
                 await ledger.transition(
@@ -1014,6 +1169,49 @@ async def _resolve(
     return None
 
 
+def _stop_note_id(message_id: str) -> str:
+    return str(uuid.uuid5(_NS, f"turn-cancelled:{message_id}"))
+
+
+def stopped_message(partial: str | None) -> str:
+    """Return the conversation message of a stopped turn: the partial reply, then the stop note.
+
+    The note is always the last paragraph, so a client can show the text above it marked as stopped.
+    """
+    partial = (partial or "").strip()
+    return f"{partial}\n\n{TURN_STOPPED_NOTE}" if partial else TURN_STOPPED_NOTE
+
+
+async def _settle_cancelled(
+    session_id: str,
+    message_id: str,
+    task_id: str | None,
+    *,
+    from_states: tuple[str, ...],
+    detail: str,
+    partial: str | None = None,
+) -> bool:
+    """Close a delivery as ``cancelled`` with its conversation note, atomically. True when this
+    call did it (and so announces it); false when the delivery had already left ``from_states``.
+    ``partial`` is the reply streamed before the stop; it is kept above the note.
+    """
+    session = await db.get_session(session_id)
+    note_id = _stop_note_id(message_id)
+    moved = await ledger.settle_cancelled(
+        message_id,
+        from_states=from_states,
+        conversation_id=session.conversation_id,
+        note_id=note_id,
+        note=TURN_STOPPED_NOTE,
+        task_id=task_id,
+        detail=detail,
+        partial=partial,
+    )
+    if moved:
+        await notify_session_message(session.user_id, session_id, note_id, "assistant")
+    return moved
+
+
 async def _finalize(
     session_id: str, message_id: str, proj: TaskProjection
 ) -> str | None:
@@ -1022,10 +1220,20 @@ async def _finalize(
     Returns the reply when the task completed (for the child fallback report).
     """
     state = proj.normalised_state
+    if state == "canceled":
+        # Whoever observes the cancellation first (a stop, the stream, a sync) settles it the
+        # same way; the others find the delivery already terminal. The partial reply is kept.
+        await _settle_cancelled(
+            session_id,
+            message_id,
+            proj.task_id,
+            from_states=_RESOLVABLE,
+            detail="task was cancelled",
+            partial=proj.text,
+        )
+        return None
     if state == "completed":
         new_state, detail = "completed", None
-    elif state == "canceled":
-        new_state, detail = "failed", "task was cancelled"
     else:
         new_state = "failed"
         detail = f"task {state}: {proj.failure_text}".rstrip(": ")
@@ -1205,6 +1413,135 @@ async def _follow(
     await _after(session_id, reply)
 
 
+class StopUnconfirmed(Exception):
+    """kagent did not confirm the stop. The ledger was not touched; it is safe to try again."""
+
+
+async def stop_turn(session_id: str) -> str:
+    """Stop the open turn with CancelTask, keeping the session and its kagent Session.
+
+    The delivery ends as ``cancelled`` (one transaction with the conversation note) only after
+    kagent returned the task cancelled; nothing is written before that, so a kagent error leaves
+    the ledger as it was (the error propagates). The next message is a new task on the same
+    Session. Returns ``stopped``, ``finished`` (the turn completed or failed before the cancel
+    reached it, and was recorded as that) or ``no_open_turn``. The partial reply is kept above the
+    stop note, and messages queued behind the turn wait for the owner's next message. Raises :class:`StopUnconfirmed`
+    when kagent shows no task for a send in flight yet, or leaves the task running.
+    """
+    reply: str | None = None
+    async with _lock(session_id):
+        binding = await get_binding(session_id)
+        if binding is None:
+            raise ValueError("Session has no native agent binding")
+        outcome = "no_open_turn"
+        # Stop only the turn this request observed. Another process may accept the owner's
+        # next message after cancellation commits; this stop must never cancel that new turn.
+        open_now = [
+            d for d in await ledger.deliveries(session_id) if d["state"] in OPEN_STATES
+        ]
+        for delivery in open_now:
+            result, finished_reply = await _stop_delivery(session_id, binding, delivery)
+            reply = finished_reply or reply
+            if outcome != "stopped":
+                outcome = result
+    # Outside the lock, as after any turn: status and the child fallback report. The queue stays
+    # held, so no queued delivery starts a turn here.
+    await _after(session_id, reply)
+    return outcome
+
+
+async def _stop_delivery(
+    session_id: str, binding: dict, delivery: dict, *, retried: bool = False
+) -> tuple[str, str | None]:
+    message_id = delivery["message_id"]
+    if delivery["state"] == "recorded":
+        # kagent never saw it: there is no task to cancel.
+        moved = await _settle_cancelled(
+            session_id,
+            message_id,
+            None,
+            from_states=("recorded",),
+            detail="stopped by user before it was sent",
+        )
+        if not moved and not retried:
+            # Another writer (the MCP container) may have claimed it to ``sending`` after this
+            # stop read it, so kagent can now hold a task for it. Re-read and stop it as the
+            # in-flight turn it has become, once; reporting ``finished`` would leave it running.
+            current = next(
+                (
+                    d
+                    for d in await ledger.deliveries(session_id)
+                    if d["message_id"] == message_id
+                ),
+                None,
+            )
+            if current is not None and current["state"] in ("sending", "delivered"):
+                fresh = await get_binding(session_id) or binding
+                return await _stop_delivery(session_id, fresh, current, retried=True)
+        return await _stop_result(message_id), None
+    if binding["kagent_session_id"] is None:
+        raise StopUnconfirmed(
+            "The agent session is not ready, so the turn cannot be stopped."
+        )
+    agent = agent_ref(binding["kind"], binding["role"])
+    client = get_client()
+    task_id = delivery["task_id"]
+    if task_id is None:
+        task = await client.find_task_for_message(
+            agent, binding["kagent_session_id"], message_id
+        )
+        if task is None:
+            raise StopUnconfirmed(
+                "The message was just sent and kagent shows no task for it yet; try again."
+            )
+        task_id = task.id
+    task = await client.cancel_task(agent, task_id)
+    proj = TaskProjection()
+    proj.replace(task)
+    if proj.normalised_state == "canceled":
+        await _settle_cancelled(
+            session_id,
+            message_id,
+            task_id,
+            from_states=OPEN_STATES,
+            detail="stopped by user",
+            partial=await _partial_reply(client, agent, task_id, proj),
+        )
+        return await _stop_result(message_id), None
+    if proj.terminal:
+        # The turn ended first (kagent returns a finished task unchanged): record how it ended.
+        return "finished", await _finalize(session_id, message_id, proj)
+    raise StopUnconfirmed(
+        f"kagent still shows the task as {proj.normalised_state or 'unknown'} after the cancel."
+    )
+
+
+async def _partial_reply(
+    client: KagentClient, agent: AgentRef, task_id: str, proj: TaskProjection
+) -> str:
+    """Return the reply streamed before a stop: from the cancel response, else the task read
+    again (a cancel response may leave the artifacts out). A failed read keeps nothing.
+    """
+    if proj.text:
+        return proj.text
+    try:
+        again = TaskProjection()
+        again.replace(await client.get_task(agent, task_id))
+        return again.text
+    except KagentError:
+        return ""
+
+
+async def _stop_result(message_id: str) -> str:
+    """Report ``stopped`` when the delivery is cancelled (by this call or by a concurrent
+    observer of the same cancellation), otherwise ``finished``."""
+    return (
+        "stopped"
+        if await ledger.delivery_state(message_id) == "cancelled"
+        else "finished"
+    )
+
+
 async def cancel(session_id: str) -> str:
     """End a native session: cancel its open tasks and close its open deliveries.
 
@@ -1249,23 +1586,108 @@ async def cancel(session_id: str) -> str:
         return outcome
 
 
+async def delete_kagent_session(session_id: str) -> bool:
+    """Delete the kagent Session of an archived (or deleted) session. True once kagent confirmed.
+
+    Not confirmed (kagent unreachable, outcome unknown) leaves ``kagent_deleted_at`` unset, and
+    ``reconcile_archived_deletes`` retries; DeleteSession is idempotent. A Session kagent no
+    longer knows counts as deleted. A turn open or queued (a message recorded just before the
+    archive) is not cut off: nothing is deleted and False is returned, so the same retry deletes
+    the Session once the turn has settled. ``submit_message`` takes this lock too, and refuses
+    an archived session, so no turn can start after this check.
+    """
+    async with _lock(session_id):
+        binding = await get_binding(session_id)
+        if binding is None or binding["kagent_session_id"] is None:
+            return True
+        if await ledger.active_count(session_id):
+            logger.info("kagent delete of %s waits for its open turn", session_id)
+            return False
+        try:
+            await get_client().delete_session(binding["kagent_session_id"])
+        except SessionError as exc:
+            if exc.grpc_status != 5:  # NOT_FOUND: already gone
+                _log_step_failure("archived_delete", session_id, exc)
+                return False
+        except KagentError as exc:
+            _log_step_failure("archived_delete", session_id, exc)
+            return False
+        await ledger.mark_kagent_deleted(session_id)
+        return True
+
+
+async def reconcile_archived_deletes() -> None:
+    for row in await ledger.undeleted_archived():
+        sid = row["session_id"]
+        await _reconcile_step(
+            "archived_delete", lambda sid=sid: delete_kagent_session(sid), sid
+        )
+
+
+def _log_step_failure(step: str, session_id: str | None, exc: BaseException) -> None:
+    """Log one structured event for a failed reconcile step."""
+    logger.error(
+        "reconcile step failed: step=%s session_id=%s error_class=%s",
+        step,
+        session_id or "-",
+        type(exc).__name__,
+        exc_info=exc,
+        extra={
+            "event": "reconcile_step_failed",
+            "step": step,
+            "session_id": session_id or "-",
+            "error_class": type(exc).__name__,
+        },
+    )
+
+
+async def _reconcile_step(step: str, run, session_id: str | None = None) -> None:
+    """Run one reconcile step; a failure is logged and never stops the steps after it."""
+    try:
+        await run()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log_step_failure(step, session_id, exc)
+
+
+async def reconcile_once(*, sweep: bool) -> None:
+    """Run one reconcile pass.
+
+    Every step has its own ``try``: one session's failed sync, or a failing sweep step, must not
+    starve the others. ``sweep`` adds the slower housekeeping steps.
+    """
+    sids: list[str] = []
+
+    async def list_open() -> None:
+        sids.extend(await ledger.sessions_with_open_work())
+
+    await _reconcile_step("list_open_work", list_open)
+    for sid in sids:
+        await _reconcile_step("sync", lambda sid=sid: sync(sid), sid)
+    if not sweep:
+        return
+    from mainloop.runtime import workspaces
+    from mainloop.runtime.agent_credentials import reconcile_cleanup
+
+    await _reconcile_step("credential_cleanup", reconcile_cleanup)
+    await _reconcile_step("archived_deletes", reconcile_archived_deletes)
+    await _reconcile_step("suspend_idle", workspaces.suspend_idle)
+
+
 async def reconcile_loop(interval: float = 3.0) -> None:
     """Background mirror for sessions with open work, so replies and reports do not depend on a
     browser polling."""
     next_idle_check = 0.0
     while True:
+        loop = asyncio.get_running_loop()
+        due = loop.time() >= next_idle_check
         try:
-            for sid in await ledger.sessions_with_open_work():
-                await sync(sid)
-            loop = asyncio.get_running_loop()
-            if loop.time() >= next_idle_check:
-                from mainloop.runtime.agent_credentials import reconcile_cleanup
-
-                await reconcile_cleanup()
-                await workspace_adapter.suspend_idle_workspaces()
-                next_idle_check = loop.time() + 60.0
+            await reconcile_once(sweep=due)
         except Exception:
             logger.exception("reconcile loop iteration failed")
+        if due:
+            next_idle_check = loop.time() + settings.workspace_idle_check_seconds
         await asyncio.sleep(interval)
 
 
@@ -1311,7 +1733,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         session_state=state,
         model=binding["model"],
         turns=binding["turns"],
-        turn_in_flight=any(d.state in (*OPEN_STATES, "queued") for d in deliveries),
+        turn_in_flight=any(d.state in OPEN_STATES for d in deliveries),
         deliveries=deliveries,
         note=note,
     )

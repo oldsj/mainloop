@@ -7,8 +7,8 @@ the database afterwards, so nothing in the target server's existing databases is
     MAINLOOP_TEST_DATABASE_URL=postgresql://user:pass@host:5432/postgres \
         uv run python -m unittest tests.runtime.test_postgres_ledger
 
-The kagent gateway and the Substrate provisioner are faked; only the ledger, binding, delegation,
-workspace and reconcile SQL runs for real. Kubernetes credential deletion is faked.
+The kagent gateway is faked; only the ledger, binding, delegation, workspace and reconcile SQL
+runs for real. Kubernetes credential deletion is faked.
 """
 
 from __future__ import annotations
@@ -18,29 +18,41 @@ import json
 import os
 import unittest
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
-from fastapi import HTTPException
+import httpx
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.postgres import MIGRATION_SQL, SCHEMA_SQL
 from mainloop.runtime import native_sessions as ns
-from mainloop.runtime import workspace_adapter, workspace_api
-from mainloop.runtime.actor_provisioner import (
-    FakeActorProvisioner,
-    set_actor_provisioner,
-)
+from mainloop.runtime import preview_proxy, workspaces
 from mainloop.runtime.delegation import (
     INBOX,
     PgStore,
     ensure_main_session,
     render_for_binding,
 )
+from mainloop.runtime.kagent_client import (
+    KagentClient,
+    KagentError,
+    RuntimeOperation,
+    RuntimeState,
+    SessionError,
+    SessionWorkspace,
+    Unreachable,
+)
+from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
 
-from models import SessionStatus, WorkspaceAgentKind, WorkspaceDev, WorkspaceManifest
+from models import (
+    SessionStatus,
+    WorkspaceAgentKind,
+    WorkspaceDev,
+    WorkspaceManifest,
+    WorkspacePort,
+)
 
 TEST_URL = os.environ.get("MAINLOOP_TEST_DATABASE_URL")
 
@@ -66,6 +78,24 @@ async def _init_schema(url: str) -> None:
         await conn.execute(MIGRATION_SQL)
     finally:
         await conn.close()
+
+
+async def _column_count(url: str, table: str, column: str) -> int:
+    conn = await asyncpg.connect(url)
+    try:
+        return await conn.fetchval(
+            "SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name=$2",
+            table,
+            column,
+        )
+    finally:
+        await conn.close()
+
+
+async def _expect_column_missing(url: str) -> None:
+    """Check that the scratch database is in the old shape before it is migrated."""
+    if await _column_count(url, "native_bindings", "kagent_deleted_at"):
+        raise AssertionError("kagent_deleted_at should be absent from the old schema")
 
 
 @unittest.skipUnless(TEST_URL, "set MAINLOOP_TEST_DATABASE_URL to run Postgres tests")
@@ -188,6 +218,7 @@ class SchemaTests(PostgresTestCase):
                 "standing_hash",
                 "turns",
                 "reported_at",
+                "queue_held",
             },
             "native_deliveries": {
                 "message_id",
@@ -197,6 +228,7 @@ class SchemaTests(PostgresTestCase):
                 "evidence_ref",
                 "detail",
                 "source",
+                "partial_text",
             },
         }.items():
             columns = {
@@ -434,16 +466,141 @@ class BindingTests(PostgresTestCase):
             )
 
 
-class LedgerTests(PostgresTestCase):
-    async def test_record_message_writes_message_and_delivery(self):
+class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
+    """The REST and MCP containers both write the ledger: the database must hold the rule."""
+
+    async def submit(self, sid, cid, source, text="x"):
+        return await ns.ledger.record_submission(
+            session_id=sid, conversation_id=cid, text=text, source=source
+        )
+
+    async def states(self, sid):
+        rows = await self.pool.fetch(
+            "SELECT state FROM native_deliveries WHERE session_id=$1 ORDER BY created_at",
+            sid,
+        )
+        return sorted(r["state"] for r in rows)
+
+    async def test_concurrent_submissions_open_exactly_one_turn(self):
         sid, cid = await self.bound_session()
-        message_id = await ns.ledger.record_message(
+        results = await asyncio.gather(
+            *(self.submit(sid, cid, "report", f"r{i}") for i in range(6))
+        )
+        self.assertEqual(sorted(state for _, state in results).count("recorded"), 1)
+        self.assertEqual(await self.states(sid), ["queued"] * 5 + ["recorded"])
+
+    async def test_concurrent_user_messages_one_wins_the_rest_are_refused(self):
+        sid, cid = await self.bound_session()
+        results = await asyncio.gather(
+            *(self.submit(sid, cid, "user", f"u{i}") for i in range(6)),
+            return_exceptions=True,
+        )
+        refused = [r for r in results if isinstance(r, ValueError)]
+        self.assertEqual(len(refused), 5)
+        self.assertEqual(await self.states(sid), ["recorded"])
+        # Refused messages leave no message row behind either.
+        count = await self.pool.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id=$1", cid
+        )
+        self.assertEqual(count, 1)
+
+    async def test_rest_user_and_mcp_report_share_the_same_admission_lock(self):
+        sid, cid = await self.bound_session()
+        user, report = await asyncio.gather(
+            self.submit(sid, cid, "user", "owner message"),
+            self.submit(sid, cid, "report", "child report"),
+            return_exceptions=True,
+        )
+        self.assertIsInstance(report, tuple)
+        if isinstance(user, ValueError):
+            self.assertEqual(report[1], "recorded")
+        else:
+            self.assertIsInstance(user, tuple)
+            self.assertEqual((user[1], report[1]), ("recorded", "queued"))
+        self.assertEqual(await ns.ledger.open_count(sid), 1)
+
+    async def test_a_submission_waits_for_the_session_lock_held_by_another_connection(
+        self,
+    ):
+        sid, cid = await self.bound_session()
+        async with self.pool.acquire() as other, other.transaction():
+            await ns.Ledger._lock_deliveries(other, sid)
+            pending = asyncio.ensure_future(self.submit(sid, cid, "user"))
+            await asyncio.sleep(0.3)
+            self.assertFalse(pending.done(), "the submission did not wait for the lock")
+            # Another process opens a turn while holding the lock; the submission sees it.
+            await other.execute(
+                "INSERT INTO messages (id, conversation_id, role, content) VALUES ('m-other',$1,'user','a')",
+                cid,
+            )
+            await other.execute(
+                "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ('m-other',$1,'recorded','user')",
+                sid,
+            )
+        with self.assertRaisesRegex(ValueError, "still in flight"):
+            await pending
+        self.assertEqual(await self.states(sid), ["recorded"])
+
+    async def test_a_submission_in_another_session_is_not_blocked(self):
+        a, acid = await self.bound_session()
+        b, bcid = await self.bound_session()
+        async with self.pool.acquire() as other, other.transaction():
+            await ns.Ledger._lock_deliveries(other, a)
+            _, state = await asyncio.wait_for(self.submit(b, bcid, "user"), 2)
+        self.assertEqual(state, "recorded")
+
+    async def test_promotion_and_submission_cannot_both_open_a_turn(self):
+        sid, cid = await self.bound_session()
+        queued = await self.delivery(sid, cid, "queued", source="report")
+        for _ in range(5):
+            await self.pool.execute(
+                "UPDATE native_deliveries SET state='queued' WHERE message_id=$1",
+                queued,
+            )
+            await self.pool.execute(
+                "DELETE FROM native_deliveries WHERE session_id=$1 AND message_id<>$2",
+                sid,
+                queued,
+            )
+            await asyncio.gather(
+                ns.ledger.promote_queued(sid), self.submit(sid, cid, "report")
+            )
+            open_turns = await self.pool.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND state = ANY($2)",
+                sid,
+                list(ns.OPEN_STATES),
+            )
+            self.assertEqual(open_turns, 1)
+
+    async def test_late_receipt_cannot_reopen_uncertain_work_alongside_a_new_turn(self):
+        sid, cid = await self.bound_session()
+        old = await self.delivery(sid, cid, "uncertain")
+        await self.submit(sid, cid, "user")
+        self.assertFalse(
+            await ns.ledger.transition(
+                old, "delivered", from_states=ns._RESOLVABLE, task_id="late-task"
+            )
+        )
+        self.assertEqual(await self.state_of(old), "uncertain")
+        self.assertEqual(await ns.ledger.open_count(sid), 1)
+        # Its terminal outcome can still be recorded without replaying it.
+        self.assertTrue(
+            await ns.ledger.transition(
+                old, "completed", from_states=ns._RESOLVABLE, task_id="late-task"
+            )
+        )
+
+
+class LedgerTests(PostgresTestCase):
+    async def test_record_submission_writes_message_and_delivery(self):
+        sid, cid = await self.bound_session()
+        message_id, state = await ns.ledger.record_submission(
             session_id=sid,
             conversation_id=cid,
             text="hello",
-            state="recorded",
             source="user",
         )
+        self.assertEqual(state, "recorded")
         row = await self.pool.fetchrow(
             "SELECT * FROM native_deliveries WHERE message_id=$1", message_id
         )
@@ -459,104 +616,6 @@ class LedgerTests(PostgresTestCase):
             (message["role"], message["content"], message["conversation_id"]),
             ("user", "hello", cid),
         )
-
-    async def test_record_message_is_blocked_by_the_workspace_suspend_fence(self):
-        workspace_id = await self.workspace()
-        cid = await self.pool.fetchval(
-            "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
-        )
-
-        async def send() -> str:
-            return await ns.ledger.record_message(
-                session_id=workspace_id,
-                conversation_id=cid,
-                text="x",
-                state="recorded",
-                source="user",
-            )
-
-        before = await self.pool.fetchval(
-            "SELECT last_activity_at FROM workspace_lifecycles WHERE workspace_id=$1",
-            workspace_id,
-        )
-        await self.pool.execute(
-            "UPDATE workspace_lifecycles SET last_activity_at=NOW() - INTERVAL '1 hour' WHERE workspace_id=$1",
-            workspace_id,
-        )
-        await send()
-        touched = await self.pool.fetchval(
-            "SELECT last_activity_at FROM workspace_lifecycles WHERE workspace_id=$1",
-            workspace_id,
-        )
-        self.assertGreater(touched, before - timedelta(minutes=1))
-
-        for desired, observed in (
-            ("suspended", "running"),
-            ("running", "suspending"),
-            ("running", "suspended"),
-        ):
-            await self.pool.execute(
-                "UPDATE workspace_lifecycles SET desired_state=$2, observed_state=$3 WHERE workspace_id=$1",
-                workspace_id,
-                desired,
-                observed,
-            )
-            with self.assertRaisesRegex(ValueError, "suspending or suspended"):
-                await send()
-
-        await self.pool.execute(
-            "UPDATE workspace_lifecycles SET desired_state='running', observed_state='running' WHERE workspace_id=$1",
-            workspace_id,
-        )
-        await self.pool.execute(
-            "UPDATE workspace_bindings SET desired_state='deleting' WHERE workspace_id=$1",
-            workspace_id,
-        )
-        with self.assertRaisesRegex(ValueError, "being deleted"):
-            await send()
-        # The refused sends left no half-written rows.
-        self.assertEqual(
-            await self.pool.fetchval(
-                "SELECT count(*) FROM native_deliveries WHERE session_id=$1",
-                workspace_id,
-            ),
-            1,
-        )
-
-    async def test_suspend_fence_serialises_with_a_concurrent_suspension(self):
-        """The ``FOR UPDATE`` on the binding row makes a send wait for a suspension in flight."""
-        workspace_id = await self.workspace()
-        cid = await self.pool.fetchval(
-            "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
-        )
-        holder = await self.pool.acquire()
-        try:
-            tx = holder.transaction()
-            await tx.start()
-            await holder.fetchrow(
-                "SELECT workspace_id FROM workspace_bindings WHERE workspace_id=$1 FOR UPDATE",
-                workspace_id,
-            )
-            send = asyncio.ensure_future(
-                ns.ledger.record_message(
-                    session_id=workspace_id,
-                    conversation_id=cid,
-                    text="x",
-                    state="recorded",
-                    source="user",
-                )
-            )
-            await asyncio.sleep(0.3)
-            self.assertFalse(send.done(), "the send must wait for the binding lock")
-            await holder.execute(
-                "UPDATE workspace_lifecycles SET desired_state='suspended' WHERE workspace_id=$1",
-                workspace_id,
-            )
-            await tx.commit()
-        finally:
-            await self.pool.release(holder)
-        with self.assertRaisesRegex(ValueError, "suspending or suspended"):
-            await send
 
     async def test_open_count_and_resolvable_deliveries(self):
         sid, cid = await self.bound_session()
@@ -585,10 +644,12 @@ class LedgerTests(PostgresTestCase):
             [(first, "one"), (second, "two")],
         )
 
-    async def test_set_delivery_and_transition_coalesce_and_gate(self):
+    async def test_transition_coalesces_and_gates(self):
         sid, cid = await self.bound_session()
         mid = await self.delivery(sid, cid, "recorded")
-        await ns.ledger.set_delivery(mid, "sending", detail="d")
+        await ns.ledger.transition(
+            mid, "sending", from_states=("recorded",), detail="d"
+        )
         row = await self.pool.fetchrow(
             "SELECT * FROM native_deliveries WHERE message_id=$1", mid
         )
@@ -737,6 +798,153 @@ class LedgerTests(PostgresTestCase):
         self.assertEqual(await ns.ledger.fail_open(sid, "again"), [])
         self.assertEqual(await ns.ledger.open_count(sid), 0)
 
+    async def settle(self, mid: str, cid: str, **kw) -> bool:
+        return await ns.ledger.settle_cancelled(
+            mid,
+            from_states=kw.pop("from_states", ns.OPEN_STATES),
+            conversation_id=cid,
+            note_id=ns._stop_note_id(mid),
+            note=ns.TURN_STOPPED_NOTE,
+            **kw,
+        )
+
+    async def notes(self, cid: str) -> list[str]:
+        return [
+            r["content"]
+            for r in await self.pool.fetch(
+                "SELECT content FROM messages WHERE conversation_id=$1 AND role='assistant'",
+                cid,
+            )
+        ]
+
+    async def test_settle_cancelled_writes_the_state_and_the_note_together_once(self):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "delivered")
+        before = await self.pool.fetchval(
+            "SELECT updated_at FROM conversations WHERE id=$1", cid
+        )
+        self.assertTrue(await self.settle(mid, cid, task_id="t1", detail="stopped"))
+        row = await self.pool.fetchrow(
+            "SELECT * FROM native_deliveries WHERE message_id=$1", mid
+        )
+        self.assertEqual(
+            (row["state"], row["task_id"], row["evidence_ref"], row["detail"]),
+            ("cancelled", "t1", "a2a:task/t1", "stopped"),
+        )
+        self.assertEqual(await self.notes(cid), [ns.TURN_STOPPED_NOTE])
+        self.assertGreater(
+            await self.pool.fetchval(
+                "SELECT updated_at FROM conversations WHERE id=$1", cid
+            ),
+            before,
+        )
+        # Terminal: a replay moves nothing and writes nothing, and nothing is open.
+        self.assertFalse(await self.settle(mid, cid, task_id="t1"))
+        self.assertEqual(await self.notes(cid), [ns.TURN_STOPPED_NOTE])
+        self.assertEqual(await ns.ledger.open_count(sid), 0)
+        self.assertNotIn(sid, await ns.ledger.sessions_with_open_work())
+
+    async def test_settle_cancelled_leaves_a_delivery_outside_from_states_alone(self):
+        sid, cid = await self.bound_session()
+        for state in ("completed", "failed", "uncertain", "queued"):
+            mid = await self.delivery(sid, cid, state)
+            self.assertFalse(await self.settle(mid, cid))
+            self.assertEqual(await self.state_of(mid), state)
+        self.assertEqual(await self.notes(cid), [])
+
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
+            )
+        )
+
+    async def test_settle_cancelled_rolls_back_the_state_when_the_note_fails(self):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "delivered")
+        with self.assertRaises(asyncpg.ForeignKeyViolationError):
+            await self.settle(mid, "no-such-conversation", task_id="t1")
+        row = await self.pool.fetchrow(
+            "SELECT state, task_id, detail FROM native_deliveries WHERE message_id=$1",
+            mid,
+        )
+        self.assertEqual(
+            (row["state"], row["task_id"], row["detail"]), ("delivered", None, None)
+        )
+        self.assertEqual(await self.notes(cid), [])
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT queue_held FROM native_bindings WHERE session_id=$1", sid
+            )
+        )
+
+    async def test_two_concurrent_settles_produce_one_state_change_and_one_note(self):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "delivered")
+        results = await asyncio.gather(*(self.settle(mid, cid) for _ in range(4)))
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(await self.state_of(mid), "cancelled")
+        self.assertEqual(await self.notes(cid), [ns.TURN_STOPPED_NOTE])
+
+    async def test_cancellation_holds_queue_atomically_against_another_writer(self):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "delivered")
+        queued = await self.delivery(sid, cid, "queued", source="report")
+        stopped, promoted, report = await asyncio.gather(
+            self.settle(mid, cid),
+            ns.ledger.promote_queued(sid),
+            ns.ledger.record_submission(
+                session_id=sid, conversation_id=cid, text="late report", source="report"
+            ),
+        )
+        self.assertTrue(stopped)
+        self.assertIsNone(promoted)
+        self.assertEqual(report[1], "queued")
+        self.assertEqual(await self.state_of(queued), "queued")
+        self.assertEqual(await ns.ledger.active_count(sid), 0)
+        self.assertNotIn(sid, await ns.ledger.sessions_with_open_work())
+        # A new Ledger models another process after a restart; the hold is durable.
+        restarted = ns.Ledger()
+        self.assertIsNone(await restarted.promote_queued(sid))
+        user, state = await restarted.record_submission(
+            session_id=sid, conversation_id=cid, text="continue", source="user"
+        )
+        self.assertEqual(state, "recorded")
+        self.assertIsNone(await restarted.promote_queued(sid))
+        await restarted.transition(user, "completed", from_states=("recorded",))
+        self.assertIsNotNone(await restarted.promote_queued(sid))
+
+    async def test_cancel_keeps_durable_partial_when_the_response_has_no_artifacts(
+        self,
+    ):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "delivered")
+        await ns.ledger.remember_partial(mid, "An unfinished answer")
+        await self.settle(mid, cid)
+        self.assertEqual(
+            await self.notes(cid), [ns.stopped_message("An unfinished answer")]
+        )
+        await ns.ledger.remember_partial(mid, "late stream")
+        self.assertEqual(
+            await self.notes(cid), [ns.stopped_message("An unfinished answer")]
+        )
+
+    async def test_cancel_racing_completion_ends_in_exactly_one_terminal_state(self):
+        for _ in range(10):
+            sid, cid = await self.bound_session()
+            mid = await self.delivery(sid, cid, "delivered")
+            cancelled, completed = await asyncio.gather(
+                self.settle(mid, cid),
+                ns.ledger.transition(
+                    mid, "completed", from_states=ns._RESOLVABLE, task_id="t1"
+                ),
+            )
+            self.assertNotEqual(cancelled, completed)  # exactly one won
+            state = await self.state_of(mid)
+            self.assertEqual(state, "cancelled" if cancelled else "completed")
+            self.assertEqual(
+                await self.notes(cid), [ns.TURN_STOPPED_NOTE] if cancelled else []
+            )
+
     async def test_mirror_reply_is_idempotent_on_the_message_id(self):
         sid, cid = await self.bound_session()
         reply_id = str(uuid.uuid4())
@@ -783,16 +991,15 @@ class LedgerTests(PostgresTestCase):
         self.assertTrue(info.note.startswith("delivery unknown"))
         self.assertIsNone(await ns.identity("missing"))
 
-    async def workspace(self, *, idle_minutes: int = 30) -> str:
-        return await _create_workspace(self, idle_minutes=idle_minutes)
 
-
-async def _create_workspace(case: PostgresTestCase, *, idle_minutes: int = 30) -> str:
-    """Seed an existing Substrate-era branch workspace (``POST /workspaces`` now refuses new ones).
-
-    Writes the rows the old create route wrote, registers its actor with a fake provisioner and
-    records the observation, so the routes that still serve existing workspaces can be tested.
-    """
+async def _create_workspace(
+    case: PostgresTestCase,
+    *,
+    idle_minutes: int = 30,
+    kagent_session_id: str | None = "ctx-1",
+    ports: tuple[WorkspacePort, ...] = (WorkspacePort(name="web", number=5173),),
+) -> str:
+    """Seed a branch workspace as ``workspaces.create`` stores it, without calling kagent."""
     project_id = f"proj-{uuid.uuid4().hex[:8]}"
     await case.pool.execute(
         """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
@@ -801,21 +1008,14 @@ async def _create_workspace(case: PostgresTestCase, *, idle_minutes: int = 30) -
         case.user,
         f"o/{project_id}",
     )
-    provisioner = FakeActorProvisioner()
-    set_actor_provisioner(provisioner)
-    case.addCleanup(set_actor_provisioner, None)
     workspace_id = str(uuid.uuid4())
     branch = f"b-{uuid.uuid4().hex[:6]}"
-    actor_name = f"ml-{workspace_id[:16]}"
-    atespace = settings.substrate_atespace
-    secret = settings.shim_token_secret_name(atespace, actor_name)
-    template = settings.substrate_actor_template
     manifest = WorkspaceManifest(
         repo_url="https://github.com/example/repo",
+        ref="main",
         branch=branch,
-        agent_kinds=(WorkspaceAgentKind.CLAUDE,),
-        resource_class="default",
-        dev=WorkspaceDev(image="example/dev:1", idle_timeout_minutes=idle_minutes),
+        agent_kind=WorkspaceAgentKind.CLAUDE,
+        dev=WorkspaceDev(ports=ports, idle_timeout_minutes=idle_minutes),
     )
     thread_id = await case.thread()
     conversation_id = str(uuid.uuid4())
@@ -841,40 +1041,28 @@ async def _create_workspace(case: PostgresTestCase, *, idle_minutes: int = 30) -
                 "Development workspace",
                 conversation_id,
                 now,
-                "https://github.com/example/repo",
+                manifest.repo_url,
                 project_id,
                 branch,
+                manifest.ref,
+            )
+            await conn.execute(
+                """INSERT INTO workspaces
+                   (session_id,repo,ref,branch,depth,ports,idle_timeout_minutes,created_at)
+                   VALUES ($1,$2,$3,$4,0,$5::jsonb,$6,$7)""",
+                workspace_id,
+                manifest.repo_url,
+                manifest.ref,
                 branch,
-            )
-            await conn.execute(
-                """INSERT INTO workspace_bindings
-                   (workspace_id,atespace,actor_name,actor_template,
-                    shim_token_secret_name,observed_state,desired_state,created_at,updated_at)
-                   VALUES ($1,$2,$3,$4,$5,'unknown','active',$6,$6)""",
-                workspace_id,
-                atespace,
-                actor_name,
-                template,
-                secret,
-                now,
-            )
-            await conn.execute(
-                """INSERT INTO workspace_lifecycles
-                   (workspace_id,desired_state,observed_state,manifest,conditions,
-                    last_activity_at,updated_at)
-                   VALUES ($1,'running','unknown',$2::jsonb,'[]'::jsonb,$3,$3)""",
-                workspace_id,
-                json.dumps(manifest.model_dump(mode="json")),
+                json.dumps([p.model_dump(mode="json") for p in ports]),
+                idle_minutes,
                 now,
             )
             await ns.create_binding(workspace_id, "claude", conn=conn)
-    provisioned = await provisioner.create(
-        atespace=atespace,
-        actor_name=actor_name,
-        template=template,
-        shim_token_secret_name=secret,
-    )
-    await workspace_adapter._record_observation(workspace_id, actor=provisioned.actor)
+    if kagent_session_id:
+        await ns.ledger.update_binding(
+            workspace_id, kagent_session_id=kagent_session_id
+        )
     return workspace_id
 
 
@@ -1248,62 +1436,169 @@ class DelegationTests(PostgresTestCase):
         self.assertEqual(await self.state_of(queued), "recorded")
 
 
-class WorkspaceTests(PostgresTestCase):
-    async def test_create_is_refused_and_writes_nothing(self):
-        with self.assertRaises(HTTPException) as raised:
-            await workspace_api.create_workspace()
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(
-            await self.pool.fetchval(
-                "SELECT count(*) FROM workspace_bindings b JOIN sessions s"
-                " ON s.id=b.workspace_id WHERE s.user_id=$1",
-                self.user,
-            ),
-            0,
+class KagentFakeCase(PostgresTestCase):
+    """A scratch database plus ``ns``'s kagent client pointed at a fake gateway."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.fake = FakeKagent()
+        http = httpx.AsyncClient(
+            transport=self.fake.transport(), base_url="http://kagent.test"
         )
+        self._saved_client = ns._client
+        ns._client = KagentClient("http://kagent.test", user_id="mainloop", client=http)
+        ns._locks.clear()
 
-    async def test_a_seeded_workspace_has_its_native_binding_and_lifecycle(self):
-        workspace_id = await _create_workspace(self)
-        binding = await ns.get_binding(workspace_id)
-        self.assertEqual((binding["kind"], binding["role"]), ("claude", "agent"))
-        lifecycle = await workspace_adapter.ensure_workspace_lifecycle(workspace_id)
-        self.assertEqual(lifecycle.workspace_id, workspace_id)
+    async def asyncTearDown(self):
+        await ns.close_client()
+        ns._client = self._saved_client
+        await super().asyncTearDown()
 
-    async def test_delete_removes_native_rows_and_the_session(self):
-        workspace_id = await _create_workspace(self)
-        cid = await self.pool.fetchval(
+    async def cid(self, workspace_id: str) -> str:
+        return await self.pool.fetchval(
             "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
         )
-        mid = await self.delivery(workspace_id, cid, "completed")
+
+
+class WorkspaceTests(KagentFakeCase):
+    async def test_create_stores_the_rows_and_sends_the_workspace_to_kagent(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
         await self.pool.execute(
-            "UPDATE native_bindings SET kagent_session_id='ctx', turns=3 WHERE session_id=$1",
-            workspace_id,
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+            project_id,
+            self.user,
+            f"o/{project_id}",
         )
-        with patch.object(workspace_api, "_publish", new=AsyncMock()):
-            response = await workspace_api.delete_workspace(
-                workspace_id, user_id=self.user
-            )
-        self.assertEqual(response.status_code, 204)
-        for table, query in (
-            (
-                "native_deliveries",
-                "SELECT count(*) FROM native_deliveries WHERE session_id=$1",
+        manifest = WorkspaceManifest(
+            repo_url="https://github.com/example/repo",
+            ref="main",
+            branch="feature/x",
+            depth=1,
+            dev=WorkspaceDev(ports=(WorkspacePort(name="web", number=5173),)),
+        )
+        lifecycle = await workspaces.create(self.user, project_id, manifest)
+        wid = lifecycle.workspace_id
+        self.assertEqual(
+            self.fake.created_workspaces(),
+            [
+                SessionWorkspace(
+                    repo="https://github.com/example/repo",
+                    ref="main",
+                    branch="feature/x",
+                    depth=1,
+                )
+            ],
+        )
+        binding = await ns.get_binding(wid)
+        self.assertEqual(binding["kagent_session_id"], CONTEXT_ID)
+        self.assertEqual(lifecycle.manifest, manifest)
+        self.assertEqual(lifecycle.observed_state.value, "running")
+        # The stored copy is what a replacement Session resends.
+        self.assertEqual(
+            await ns.ledger.get_workspace(wid),
+            SessionWorkspace(
+                repo="https://github.com/example/repo",
+                ref="main",
+                branch="feature/x",
+                depth=1,
             ),
-            (
-                "native_bindings",
-                "SELECT count(*) FROM native_bindings WHERE session_id=$1",
-            ),
-            (
-                "workspace_lifecycles",
-                "SELECT count(*) FROM workspace_lifecycles WHERE workspace_id=$1",
-            ),
-            (
-                "workspace_bindings",
-                "SELECT count(*) FROM workspace_bindings WHERE workspace_id=$1",
-            ),
-            ("sessions", "SELECT count(*) FROM sessions WHERE id=$1"),
+        )
+        self.assertEqual(
+            [
+                w["session_id"]
+                for w in await self.pool.fetch(
+                    "SELECT session_id FROM workspaces WHERE session_id=$1", wid
+                )
+            ],
+            [wid],
+        )
+
+    async def test_a_create_kagent_rejects_leaves_nothing_behind(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+            project_id,
+            self.user,
+            f"o/{project_id}",
+        )
+        manifest = WorkspaceManifest(
+            repo_url="https://github.com/example/repo", branch="feature/x"
+        )
+        with patch.object(
+            ns.get_client(),
+            "create_session",
+            AsyncMock(side_effect=SessionError("origin not allowed", grpc_status=3)),
         ):
-            self.assertEqual(await self.pool.fetchval(query, workspace_id), 0, table)
+            with self.assertRaises(workspaces.WorkspaceRejected):
+                await workspaces.create(self.user, project_id, manifest)
+        for query in (
+            "SELECT count(*) FROM workspaces w JOIN sessions s ON s.id=w.session_id WHERE s.user_id=$1",
+            "SELECT count(*) FROM sessions WHERE user_id=$1 AND project_id IS NOT NULL",
+        ):
+            self.assertEqual(await self.pool.fetchval(query, self.user), 0, query)
+
+    async def test_a_create_with_an_unknown_outcome_keeps_the_rows_and_refresh_retries(
+        self,
+    ):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+            project_id,
+            self.user,
+            f"o/{project_id}",
+        )
+        manifest = WorkspaceManifest(
+            repo_url="https://github.com/example/repo", branch="feature/x"
+        )
+        with patch.object(
+            ns.get_client(),
+            "create_session",
+            AsyncMock(side_effect=Unreachable("down")),
+        ):
+            lifecycle = await workspaces.create(self.user, project_id, manifest)
+        self.assertEqual(lifecycle.observed_state.value, "unknown")
+        wid = lifecycle.workspace_id
+        self.assertIsNone((await ns.get_binding(wid))["kagent_session_id"])
+        refreshed = await workspaces.refresh(wid, self.user)
+        self.assertEqual(refreshed.observed_state.value, "running")
+        self.assertEqual((await ns.get_binding(wid))["kagent_session_id"], CONTEXT_ID)
+
+    async def test_the_lifecycle_is_owner_scoped_and_reports_last_activity(self):
+        wid = await _create_workspace(self)
+        self.fake.sessions["ctx-1"] = (RuntimeState.SUSPENDED, RuntimeOperation.NONE)
+        lifecycle = await workspaces.get(wid, self.user)
+        self.assertEqual(lifecycle.observed_state.value, "suspended")
+        self.assertEqual(
+            [w.workspace_id for w in await workspaces.list_for(self.user)], [wid]
+        )
+        with self.assertRaises(workspaces.WorkspaceNotFound):
+            await workspaces.get(wid, "someone-else")
+        self.assertEqual(await workspaces.list_for("someone-else"), [])
+        # A delivery newer than the workspace counts as activity.
+        before = lifecycle.last_activity_at
+        await self.delivery(wid, await self.cid(wid), "completed")
+        after = (await workspaces.get(wid, self.user)).last_activity_at
+        self.assertGreaterEqual(after, before)
+
+    async def test_delete_removes_native_rows_and_the_session_after_kagent_confirms(
+        self,
+    ):
+        wid = await _create_workspace(self)
+        self.fake.sessions["ctx-1"] = (RuntimeState.READY, RuntimeOperation.NONE)
+        cid = await self.cid(wid)
+        mid = await self.delivery(wid, cid, "completed")
+        await workspaces.delete(wid, self.user)
+        self.assertEqual(self.fake.sessions["ctx-1"][0], RuntimeState.DELETED)
+        for query in (
+            "SELECT count(*) FROM native_deliveries WHERE session_id=$1",
+            "SELECT count(*) FROM native_bindings WHERE session_id=$1",
+            "SELECT count(*) FROM workspaces WHERE session_id=$1",
+            "SELECT count(*) FROM sessions WHERE id=$1",
+        ):
+            self.assertEqual(await self.pool.fetchval(query, wid), 0, query)
         self.assertEqual(
             await self.pool.fetchval("SELECT count(*) FROM messages WHERE id=$1", mid),
             0,
@@ -1316,88 +1611,360 @@ class WorkspaceTests(PostgresTestCase):
         )
 
     async def test_delete_is_refused_while_a_delivery_is_open(self):
-        workspace_id = await _create_workspace(self)
-        cid = await self.pool.fetchval(
-            "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
+        wid = await _create_workspace(self)
+        await self.delivery(wid, await self.cid(wid), "sending")
+        with self.assertRaises(workspaces.WorkspaceConflict):
+            await workspaces.delete(wid, self.user)
+        self.assertIsNotNone(await ns.get_binding(wid))
+        self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+
+    async def test_delete_keeps_the_rows_when_kagent_does_not_confirm(self):
+        wid = await _create_workspace(self)
+        with patch.object(
+            ns.get_client(), "delete_session", AsyncMock(side_effect=Unreachable("x"))
+        ):
+            with self.assertRaises(workspaces.WorkspaceUnconfirmed):
+                await workspaces.delete(wid, self.user)
+        self.assertIsNotNone(await ns.get_binding(wid))
+
+    async def test_archive_deletes_the_kagent_session_and_a_failed_delete_is_retried(
+        self,
+    ):
+        wid = await _create_workspace(self)
+        self.fake.sessions["ctx-1"] = (RuntimeState.READY, RuntimeOperation.NONE)
+        # Only finished sessions can be archived.
+        await self.pool.execute(
+            "UPDATE sessions SET status='completed' WHERE id=$1", wid
         )
-        await self.delivery(workspace_id, cid, "sending")
-        with self.assertRaises(HTTPException) as caught:
-            await workspace_api.delete_workspace(workspace_id, user_id=self.user)
-        self.assertEqual(caught.exception.status_code, 409)
+        with patch.object(
+            ns.get_client(), "delete_session", AsyncMock(side_effect=Unreachable("x"))
+        ):
+            await db.archive_sessions(self.user, session_ids=[wid])
+        self.assertIsNone(
+            (
+                await self.pool.fetchrow(
+                    "SELECT kagent_deleted_at FROM native_bindings WHERE session_id=$1",
+                    wid,
+                )
+            )["kagent_deleted_at"]
+        )
         self.assertEqual(
+            [r["session_id"] for r in await ns.ledger.undeleted_archived()], [wid]
+        )
+        await ns.reconcile_archived_deletes()
+        self.assertEqual(self.fake.sessions["ctx-1"][0], RuntimeState.DELETED)
+        self.assertEqual(await ns.ledger.undeleted_archived(), [])
+
+    async def test_preview_target_is_owner_scoped_and_uses_the_stored_ports(self):
+        wid = await _create_workspace(self)
+        target = await preview_proxy._resolve_target(wid, self.user)
+        self.assertEqual((target.actor, target.ports), ("session-ctx-1", {5173: "web"}))
+        self.assertIsNone(await preview_proxy._resolve_target(wid, "someone-else"))
+        self.assertIsNone(await preview_proxy._resolve_target("missing", self.user))
+
+    async def test_preview_has_no_target_before_kagent_created_the_session(self):
+        wid = await _create_workspace(self, kagent_session_id=None)
+        self.assertIsNone(await preview_proxy._resolve_target(wid, self.user))
+
+    async def test_preview_traffic_restarts_the_idle_clock(self):
+        wid = await _create_workspace(self)
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+            wid,
+        )
+        old = (await workspaces.get(wid, self.user)).last_activity_at
+        await workspaces.touch(wid)
+        self.assertGreater((await workspaces.get(wid, self.user)).last_activity_at, old)
+
+    async def test_idle_selection(self):
+        idle = await _create_workspace(self, idle_minutes=5, kagent_session_id="ctx-i")
+        recent = await _create_workspace(
+            self, idle_minutes=5, kagent_session_id="ctx-r"
+        )
+        young = await _create_workspace(
+            self, idle_minutes=120, kagent_session_id="ctx-y"
+        )
+        nothing = await _create_workspace(self, idle_minutes=5, kagent_session_id=None)
+        for wid in (idle, recent, young, nothing):
+            await self.pool.execute(
+                "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+                wid,
+            )
+        await self.pool.execute(
+            "UPDATE workspaces SET last_active_at=NOW() WHERE session_id=$1", recent
+        )
+        asked: list[str] = []
+
+        async def idle_suspend(session_id, kagent_session_id):
+            asked.append(session_id)
+            return True
+
+        with (
+            patch.object(workspaces, "_idle_suspend", idle_suspend),
+            patch.object(workspaces, "publish", AsyncMock()),
+        ):
+            suspended = await workspaces.suspend_idle()
+            self.assertEqual(set(suspended) & {idle, recent, young, nothing}, {idle})
+            # Suspended and quiet since: not asked again.
+            asked.clear()
+            await workspaces.suspend_idle()
+            self.assertNotIn(idle, asked)
+            # A resume (activity newer than the idle suspend) makes it a candidate again.
+            await self.pool.execute(
+                "UPDATE workspaces SET last_active_at=NOW() - INTERVAL '10 minutes',"
+                " idle_suspended_at=NOW() - INTERVAL '20 minutes' WHERE session_id=$1",
+                idle,
+            )
+            await workspaces.suspend_idle()
+            self.assertIn(idle, asked)
+
+    async def test_the_main_thread_never_idles_out(self):
+        main = await ensure_main_session(self.user)
+        await ns.ledger.update_binding(main["session_id"], kagent_session_id="ctx-main")
+        # No workspace row: not a candidate. Even given one, the role keeps it out.
+        wid = await _create_workspace(self, idle_minutes=5, kagent_session_id="ctx-m2")
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+            wid,
+        )
+        await self.pool.execute(
+            "UPDATE native_bindings SET role='main' WHERE session_id=$1", wid
+        )
+        asked: list[str] = []
+
+        async def idle_suspend(session_id, kagent_session_id):
+            asked.append(session_id)
+            return True
+
+        with (
+            patch.object(workspaces, "_idle_suspend", idle_suspend),
+            patch.object(workspaces, "publish", AsyncMock()),
+        ):
+            await workspaces.suspend_idle()
+        self.assertNotIn(main["session_id"], asked)
+        self.assertNotIn(wid, asked)
+        with patch.object(ns, "get_client") as client:
+            with self.assertRaises(workspaces.WorkspaceConflict):
+                await workspaces.suspend_if_quiet(wid)
+            client.assert_not_called()
+
+    async def test_idle_check_rereads_activity_under_the_lock(self):
+        wid = await _create_workspace(self, idle_minutes=5, kagent_session_id="ctx-r1")
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+            wid,
+        )
+        self.fake.sessions["ctx-r1"] = (RuntimeState.READY, RuntimeOperation.NONE)
+        self.assertTrue(await workspaces._is_idle(wid))
+        real = ns._live_session
+
+        async def preview_lands_after_the_select(kagent_session_id):
+            if kagent_session_id == "ctx-r1":
+                await workspaces.touch(wid)
+            return await real(kagent_session_id)
+
+        def suspends() -> list[bytes]:
+            return [
+                c for c in self.fake.session_calls("SuspendSession") if b"ctx-r1" in c
+            ]
+
+        with (
+            patch.object(ns, "_live_session", preview_lands_after_the_select),
+            patch.object(workspaces, "publish", AsyncMock()),
+        ):
+            suspended = await workspaces.suspend_idle()
+        self.assertNotIn(wid, suspended)
+        self.assertEqual(suspends(), [])
+        self.assertFalse(await workspaces._is_idle(wid))
+        self.assertIsNone(
             await self.pool.fetchval(
-                "SELECT desired_state FROM workspace_bindings WHERE workspace_id=$1",
-                workspace_id,
+                "SELECT idle_suspended_at FROM workspaces WHERE session_id=$1", wid
             ),
-            "active",
+            "a refused idle suspend must not restart the debounce",
         )
+        # Quiet again: the next pass suspends it.
+        await self.pool.execute(
+            "UPDATE workspaces SET last_active_at=NOW() - INTERVAL '10 minutes' WHERE session_id=$1",
+            wid,
+        )
+        with patch.object(workspaces, "publish", AsyncMock()):
+            self.assertIn(wid, await workspaces.suspend_idle())
+        self.assertEqual(len(suspends()), 1)
+
+    async def test_a_recent_delivery_counts_as_activity_for_idle_out(self):
+        wid = await _create_workspace(self, idle_minutes=5)
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+            wid,
+        )
+        await self.delivery(wid, await self.cid(wid), "completed")
+        asked: list[str] = []
+
+        async def idle_suspend(session_id, kagent_session_id):
+            asked.append(session_id)
+            return False
+
+        with patch.object(workspaces, "_idle_suspend", idle_suspend):
+            await workspaces.suspend_idle()
+        self.assertNotIn(wid, asked)
+
+
+class DatabaseFromBeforeTheKagentWorkspacesTests(KagentFakeCase):
+    """A database created before ``native_bindings.kagent_deleted_at`` existed.
+
+    ``CREATE TABLE IF NOT EXISTS`` leaves such a table alone, so the column has to come from an
+    ``ALTER`` in the schema. The paths that read it are exercised: workspace reads, reconcile and
+    idle-out, and archive.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        asyncio.run(
+            _admin(cls.url, "ALTER TABLE native_bindings DROP COLUMN kagent_deleted_at")
+        )
+        asyncio.run(_expect_column_missing(cls.url))
+        asyncio.run(_init_schema(cls.url))  # what Database.connect runs at startup
+
+    def test_the_column_is_added_and_the_schema_can_be_applied_again(self):
+        asyncio.run(_init_schema(self.url))
         self.assertEqual(
-            await self.pool.fetchval(
-                "SELECT count(*) FROM native_bindings WHERE session_id=$1", workspace_id
+            asyncio.run(
+                _column_count(self.url, "native_bindings", "kagent_deleted_at")
             ),
             1,
         )
 
-    async def test_delete_rolls_back_to_the_previous_state_when_the_actor_delete_fails(
-        self,
-    ):
-        workspace_id = await _create_workspace(self)
-        provisioner = FakeActorProvisioner()
-        provisioner.delete = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
-        set_actor_provisioner(provisioner)
-        with self.assertRaises(HTTPException) as caught:
-            await workspace_api.delete_workspace(workspace_id, user_id=self.user)
-        self.assertEqual(caught.exception.status_code, 502)
+    async def test_workspace_reads_work(self):
+        wid = await _create_workspace(self)
+        self.assertEqual((await workspaces.get(wid, self.user)).workspace_id, wid)
         self.assertEqual(
+            [w.workspace_id for w in await workspaces.list_for(self.user)], [wid]
+        )
+        self.assertIsNotNone(await preview_proxy._resolve_target(wid, self.user))
+
+    async def test_reconcile_and_idle_out_work(self):
+        wid = await _create_workspace(self, idle_minutes=5, kagent_session_id="ctx-old")
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
+            wid,
+        )
+        self.fake.sessions["ctx-old"] = (RuntimeState.READY, RuntimeOperation.NONE)
+        await ns.reconcile_archived_deletes()
+        with patch.object(workspaces, "publish", AsyncMock()):
+            self.assertIn(wid, await workspaces.suspend_idle())
+        self.assertEqual(self.fake.sessions["ctx-old"][0], RuntimeState.SUSPENDED)
+
+    async def test_archive_deletes_the_kagent_session(self):
+        wid = await _create_workspace(self, kagent_session_id="ctx-arch")
+        self.fake.sessions["ctx-arch"] = (RuntimeState.READY, RuntimeOperation.NONE)
+        await self.pool.execute(
+            "UPDATE sessions SET status='completed' WHERE id=$1", wid
+        )
+        await db.archive_sessions(self.user, session_ids=[wid])
+        self.assertEqual(self.fake.sessions["ctx-arch"][0], RuntimeState.DELETED)
+        self.assertIsNotNone(
             await self.pool.fetchval(
-                "SELECT desired_state FROM workspace_bindings WHERE workspace_id=$1",
-                workspace_id,
-            ),
-            "active",
+                "SELECT kagent_deleted_at FROM native_bindings WHERE session_id=$1", wid
+            )
         )
-        self.assertIsNotNone(await ns.get_binding(workspace_id))
 
-    async def test_adapter_delivery_states_and_idle_selection(self):
-        workspace_id = await _create_workspace(self, idle_minutes=5)
-        cid = await self.pool.fetchval(
-            "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
+
+class StopTurnTests(PostgresTestCase):
+    """``stop_turn`` over the real ledger SQL and a fake kagent."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.fake = FakeKagent()
+        http = httpx.AsyncClient(
+            transport=self.fake.transport(), base_url="http://kagent.test"
         )
-        self.assertEqual(await workspace_adapter._delivery_states(workspace_id), set())
-        await self.delivery(workspace_id, cid, "uncertain")
-        await self.delivery(workspace_id, cid, "completed")
+        self._saved_client = ns._client
+        ns._client = KagentClient("http://kagent.test", user_id="mainloop", client=http)
+        ns._locks.clear()
+        ns._streaming.clear()
+
+    async def asyncTearDown(self):
+        await asyncio.gather(*ns._tasks, return_exceptions=True)
+        await ns.close_client()
+        ns._client = self._saved_client
+        await super().asyncTearDown()
+
+    async def send(self, sid: str, text: str = "hello") -> str:
+        mid = await ns.submit_message(sid, text)
+        while ns._tasks:
+            await asyncio.gather(*list(ns._tasks), return_exceptions=True)
+        return mid
+
+    async def rows(self, cid: str) -> list[tuple[str, str]]:
+        return [
+            (r["role"], r["content"])
+            for r in await self.pool.fetch(
+                "SELECT role, content FROM messages WHERE conversation_id=$1 ORDER BY created_at",
+                cid,
+            )
+        ]
+
+    async def test_stop_keeps_the_session_and_the_next_message_is_a_fresh_turn(self):
+        sid, cid = await self.bound_session()
+        self.fake.send_script = ["cut"]
+        first = await self.send(sid)
+        self.assertEqual(await self.state_of(first), "delivered")
+        info = await ns.identity(sid)
+        self.assertTrue(info.turn_in_flight)
+
+        self.assertEqual(await ns.stop_turn(sid), "stopped")
+
+        self.assertEqual(await self.state_of(first), "cancelled")
         self.assertEqual(
-            await workspace_adapter._delivery_states(workspace_id), {"uncertain"}
+            await self.pool.fetchval("SELECT status FROM sessions WHERE id=$1", sid),
+            "waiting_on_user",
         )
-        async with db.connection() as conn:
-            self.assertEqual(
-                await workspace_adapter._delivery_states(workspace_id, conn=conn),
-                {"uncertain"},
-            )
+        self.assertFalse((await ns.identity(sid)).turn_in_flight)
+        self.assertIn(("assistant", ns.stopped_message("ok")), await self.rows(cid))
+        self.assertEqual(await ns.stop_turn(sid), "no_open_turn")
+        binding = await ns.get_binding(sid)
+        self.assertEqual(binding["kagent_session_id"], CONTEXT_ID)
 
-        await self.pool.execute(
-            "UPDATE workspace_lifecycles SET desired_state='running', observed_state='running',"
-            " last_activity_at=NOW() - INTERVAL '1 hour' WHERE workspace_id=$1",
-            workspace_id,
+        second = await self.send(sid, "again")
+        self.assertEqual(await self.state_of(second), "completed")
+        sent = self.fake.rpc_calls("SendStreamingMessage")[-1]["params"]["message"]
+        self.assertEqual(sent["contextId"], CONTEXT_ID)
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+
+    async def test_a_kagent_error_changes_nothing_in_the_database(self):
+        sid, cid = await self.bound_session()
+        self.fake.send_script = ["cut"]
+        first = await self.send(sid)
+        snapshot = (
+            await self.pool.fetchrow(
+                "SELECT * FROM native_deliveries WHERE message_id=$1", first
+            ),
+            await self.rows(cid),
         )
-        await self.pool.execute(
-            "UPDATE native_deliveries SET created_at=NOW() - INTERVAL '1 hour' WHERE session_id=$1",
-            workspace_id,
+        self.fake.cancel_task_fails = True
+        with self.assertRaises(KagentError):
+            await ns.stop_turn(sid)
+        self.assertEqual(
+            (
+                await self.pool.fetchrow(
+                    "SELECT * FROM native_deliveries WHERE message_id=$1", first
+                ),
+                await self.rows(cid),
+            ),
+            snapshot,
         )
-        with patch.object(
-            workspace_adapter,
-            "suspend_workspace_if_idle",
-            new=AsyncMock(return_value=None),
-        ) as suspend:
-            await workspace_adapter.suspend_idle_workspaces()
-            self.assertIn(workspace_id, [c.args[0] for c in suspend.await_args_list])
-            # A recent delivery counts as activity (the LATERAL over native_deliveries).
-            await self.pool.execute(
-                "UPDATE native_deliveries SET created_at=NOW() WHERE session_id=$1",
-                workspace_id,
-            )
-            suspend.reset_mock()
-            await workspace_adapter.suspend_idle_workspaces()
-            self.assertNotIn(workspace_id, [c.args[0] for c in suspend.await_args_list])
+        self.assertEqual(await self.state_of(first), "delivered")
+
+    async def test_stop_that_loses_to_completion_records_completed_with_the_reply(self):
+        sid, cid = await self.bound_session()
+        self.fake.send_script = ["cut"]
+        first = await self.send(sid)
+        self.fake.tasks["task-fixture-1"]["status"] = {"state": "TASK_STATE_COMPLETED"}
+        self.assertEqual(await ns.stop_turn(sid), "finished")
+        self.assertEqual(await self.state_of(first), "completed")
+        self.assertNotIn(("assistant", ns.TURN_STOPPED_NOTE), await self.rows(cid))
 
 
 class ReconcileTests(PostgresTestCase):
@@ -1420,9 +1987,7 @@ class ReconcileTests(PostgresTestCase):
         with (
             patch.object(ns, "sync", new=sync),
             patch.object(
-                workspace_adapter,
-                "suspend_idle_workspaces",
-                new=AsyncMock(return_value=0),
+                workspaces, "suspend_idle", new=AsyncMock(return_value=[])
             ) as idle,
             patch.object(ns.asyncio, "sleep", new=sleep),
         ):
@@ -1474,7 +2039,7 @@ class ApiQueryTests(PostgresTestCase):
             topic_id=topic["id"],
         )
         with patch.object(ns, "sync", new=AsyncMock()) as sync:
-            response = await api.get_conversation(cid)
+            response = await api.get_conversation(cid, user_id=self.user)
         sync.assert_awaited_once_with(main["session_id"])
         self.assertEqual(response.conversation.id, cid)
 
@@ -1483,17 +2048,6 @@ class ApiQueryTests(PostgresTestCase):
         }
         self.assertEqual(sessions[child_id].parent_session_id, main["session_id"])
         self.assertEqual(sessions[child_id].topic, "alpha")
-
-    async def test_preview_target_resolves_the_agent_kind(self):
-        from mainloop.runtime import preview_proxy
-
-        workspace_id = await _create_workspace(self)
-        target = await preview_proxy._resolve_target(workspace_id, self.user)
-        self.assertIsNotNone(target)
-        self.assertIsNone(
-            await preview_proxy._resolve_target(workspace_id, "someone-else")
-        )
-        self.assertIsNone(await preview_proxy._resolve_target("missing", self.user))
 
 
 if __name__ == "__main__":

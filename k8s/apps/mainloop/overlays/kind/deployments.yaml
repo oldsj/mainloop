@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-backend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      imagePullSecrets: null
+      containers:
+        - name: backend
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: AGENT_TOKEN_KEY
+        - name: mcp
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: AGENT_TOKEN_KEY
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      imagePullSecrets: null
+      containers:
+        - name: frontend
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ORIGIN
+              value: https://mainloop.example.ts.net

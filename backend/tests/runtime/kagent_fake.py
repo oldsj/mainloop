@@ -13,9 +13,11 @@ import httpx
 from mainloop.runtime.kagent_client import (
     RuntimeOperation,
     RuntimeState,
+    SessionWorkspace,
     _field_bytes,
     _field_str,
     _varint,
+    decode_fields,
     grpc_web_frame,
 )
 
@@ -42,6 +44,7 @@ def session_message(
     session_id: str,
     state: RuntimeState = RuntimeState.READY,
     operation: RuntimeOperation = RuntimeOperation.NONE,
+    workspace: bytes = b"",
 ) -> bytes:
     session = (
         _field_str(1, session_id)
@@ -50,6 +53,7 @@ def session_message(
         + _varint(8 << 3)
         + _varint(int(operation))
         + _field_str(14, session_id)
+        + (_field_bytes(16, workspace) if workspace else b"")
     )
     return _field_bytes(1, session)
 
@@ -95,12 +99,19 @@ class FakeKagent:
         self.send_script: list[str] = []
         self.sessions: dict[str, tuple[RuntimeState, RuntimeOperation]] = {}
         self.created_request_ids: dict[str, str] = {}
+        # Workspace bytes (CreateSession field 6) persisted per Session id, as kagent does.
+        self.workspaces: dict[str, bytes] = {}
         self.tasks: dict[str, dict] = {}
         self.accepted_message_ids: list[str] = []
         self.subscribe_events: list[str] | None = None
         self.cut_after = 2
         self.list_tasks_fails = False
+        # CancelTask answers HTTP 503, or returns the task still running.
+        self.cancel_task_fails = False
+        self.cancel_task_ignored = False
         self.default_page_size = 50
+        # ListSessions page size (0 = everything in one page).
+        self.list_page_size = 0
         # Ids handed to the next CreateSession calls with a new request id (then CONTEXT_ID).
         self.next_session_ids: list[str] = []
 
@@ -120,6 +131,14 @@ class FakeKagent:
             for _, path, body in self.requests
             if path.endswith("/" + method) and isinstance(body, bytes)
         ]
+
+    def created_workspaces(self) -> list[SessionWorkspace | None]:
+        """Return the workspace carried by each CreateSession call, in order."""
+        out: list[SessionWorkspace | None] = []
+        for message in self.session_calls("CreateSession"):
+            raw = decode_fields(message).get(6, [b""])[0]
+            out.append(SessionWorkspace.decode(raw) if raw else None)
+        return out
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -160,10 +179,12 @@ class FakeKagent:
                 },
             )
         if method == "CancelTask":
+            if self.cancel_task_fails:
+                return httpx.Response(503)
             task = self.tasks.get(body["params"]["id"])
             if task is None:
                 return httpx.Response(200, json=fixture_json("task-not-found.json"))
-            if not task["status"]["state"].endswith(
+            if not self.cancel_task_ignored and not task["status"]["state"].endswith(
                 ("COMPLETED", "CANCELED", "FAILED")
             ):
                 task["status"]["state"] = "TASK_STATE_CANCELED"
@@ -196,8 +217,6 @@ class FakeKagent:
         frame = request.content
         message = frame[5:]
         self.requests.append((request.method, path, message))
-        from mainloop.runtime.kagent_client import decode_fields
-
         fields = decode_fields(message)
         if method == "CreateSession":
             request_id = fields[3][0].decode()
@@ -215,13 +234,28 @@ class FakeKagent:
                     if self.next_session_ids
                     else CONTEXT_ID
                 )
+            workspace = fields.get(6, [b""])[0]
             session_id = self.created_request_ids.setdefault(request_id, known)
+            if (
+                session_id in self.workspaces
+                and self.workspaces[session_id] != workspace
+            ):
+                return grpc_response(
+                    None, status=6, detail="workspace differs for this request_id"
+                )
+            self.workspaces.setdefault(session_id, workspace)
             self.sessions.setdefault(
                 session_id, (RuntimeState.READY, RuntimeOperation.NONE)
             )
             return grpc_response(
-                session_message(session_id, *self.sessions[session_id])
+                session_message(
+                    session_id,
+                    *self.sessions[session_id],
+                    workspace=self.workspaces[session_id],
+                )
             )
+        if method == "ListSessions":
+            return self._list_sessions(fields)
         session_id = fields[1][0].decode()
         if session_id not in self.sessions:
             return grpc_response(None, status=5, detail="session not found")
@@ -233,7 +267,29 @@ class FakeKagent:
         elif method == "DeleteSession":
             self.sessions[session_id] = (RuntimeState.DELETED, RuntimeOperation.NONE)
         state, op = self.sessions[session_id]
-        return grpc_response(session_message(session_id, state, op))
+        return grpc_response(
+            session_message(
+                session_id, state, op, workspace=self.workspaces.get(session_id, b"")
+            )
+        )
+
+    def _list_sessions(self, fields: dict) -> httpx.Response:
+        """ListSessions as kagent serves it: ids in order, ``list_page_size`` per page, and a
+        ``next_page_token`` (the offset) while more remain."""
+        page = decode_fields(fields[3][0]) if 3 in fields else {}
+        start = int(page[2][0].decode()) if 2 in page else 0
+        ids = sorted(self.sessions)
+        size = self.list_page_size or len(ids) or 1
+        chosen = ids[start : start + size]
+        body = b"".join(
+            session_message(
+                sid, *self.sessions[sid], workspace=self.workspaces.get(sid, b"")
+            )
+            for sid in chosen
+        )
+        if start + size < len(ids):
+            body += _field_bytes(2, _field_str(1, str(start + size)))
+        return grpc_response(body or None)
 
     def _send(self, body: dict) -> httpx.Response:
         message = body["params"]["message"]

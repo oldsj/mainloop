@@ -173,6 +173,8 @@ CREATE TABLE IF NOT EXISTS native_bindings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     credential_cleanup_pending BOOLEAN NOT NULL DEFAULT FALSE,
     child_start_failure TEXT,
+    kagent_deleted_at TIMESTAMPTZ,  -- set once kagent confirmed DeleteSession for an archived session
+    queue_held BOOLEAN NOT NULL DEFAULT FALSE,  -- the owner stopped a turn: queued messages wait for their next message
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Delivery ledger: one row per message; the A2A task is the receipt
@@ -183,6 +185,7 @@ CREATE TABLE IF NOT EXISTS native_deliveries (
     task_id TEXT,
     evidence_ref TEXT,
     detail TEXT,
+    partial_text TEXT,          -- last observed streamed reply; retained if cancellation omits artifacts
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -199,6 +202,9 @@ ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS reported_at TIMESTAMPTZ;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_session_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_request_id TEXT;
 ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS task_id TEXT;
+ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS partial_text TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_deleted_at TIMESTAMPTZ;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS queue_held BOOLEAN NOT NULL DEFAULT FALSE;
 -- The Substrate journal transport is gone: its cursors, lineage and events have no meaning on kagent.
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS agent_name;
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS native_session_id;
@@ -244,51 +250,24 @@ ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFA
 CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(token_hash) WHERE token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
 
--- Substrate workspace-runtime adapter: durable mapping from a Mainloop session to a Substrate
--- actor. Separate from native_bindings (native-agent session identity) because a
--- session's workspace runtime is a distinct concept -- see ROADMAP.md "Workspace platform".
--- One actor per session (workspace_id = session_id) replaces the fixed workspace pod for
--- Substrate-backed sessions. ownership_generation fences resume/suspend/revert the same way
--- native_bindings.generation fences native sends: a stale caller's mutation is rejected, and a
--- retry re-inspects the actor and this row rather than creating a second one.
-CREATE TABLE IF NOT EXISTS workspace_bindings (
-    workspace_id TEXT PRIMARY KEY REFERENCES sessions(id),
-    provider TEXT NOT NULL DEFAULT 'substrate',
-    atespace TEXT NOT NULL,
-    actor_name TEXT NOT NULL,
-    actor_template TEXT NOT NULL,
-    shim_token_secret_name TEXT,
-    native_session_id TEXT,
-    preview_route TEXT,
-    runtime_endpoint TEXT,
-    observed_state TEXT NOT NULL DEFAULT 'unknown',
-    observed_at TIMESTAMPTZ,
-    external_snapshot_uri TEXT,
-    ownership_generation INTEGER NOT NULL DEFAULT 1,
-    desired_state TEXT NOT NULL DEFAULT 'active',
-    last_error TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (atespace, actor_name)
+-- Branch workspaces: the repository kagent clones into the harness when it creates the Session.
+-- repo/ref/branch/depth are the CreateSession `workspace` and never change, so a replacement
+-- Session resends them unchanged. last_active_at is the last preview request or user resume and
+-- feeds the idle debounce; idle_suspended_at is when the idle check last suspended the Session
+-- (the workspace is a candidate again only after newer activity). ports are the dev server ports
+-- the preview URL may reach.
+CREATE TABLE IF NOT EXISTS workspaces (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    ref TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    depth INTEGER NOT NULL DEFAULT 0,
+    ports JSONB NOT NULL DEFAULT '[]'::jsonb,
+    idle_timeout_minutes INTEGER NOT NULL DEFAULT 30,
+    last_active_at TIMESTAMPTZ,
+    idle_suspended_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- Workspace lifecycle belongs to the workspace, separate from task/session, agent and delivery
--- state. The manifest is declarative intent; only actor observations establish runtime state.
-CREATE TABLE IF NOT EXISTS workspace_lifecycles (
-    workspace_id TEXT PRIMARY KEY REFERENCES workspace_bindings(workspace_id) ON DELETE CASCADE,
-    desired_state TEXT NOT NULL DEFAULT 'running',
-    observed_state TEXT NOT NULL DEFAULT 'unknown',
-    manifest JSONB NOT NULL,
-    conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
-    last_transition JSONB,
-    operation_id TEXT,
-    snapshot_ref TEXT,
-    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE workspace_bindings ADD COLUMN IF NOT EXISTS shim_token_secret_name TEXT;
-ALTER TABLE workspace_lifecycles ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (
@@ -1509,9 +1488,11 @@ class Database:
                 parent_session_id,
             )
         from mainloop.runtime.agent_credentials import revoke
+        from mainloop.runtime.native_sessions import delete_kagent_session
 
         for row in rows:
             await revoke(row["id"])
+            await delete_kagent_session(row["id"])
         return [r["id"] for r in rows]
 
     async def update_session(
@@ -1762,15 +1743,19 @@ class Database:
                 notification_id,
             )
 
-    async def dismiss_session_notification(self, notification_id: str) -> None:
-        """Delete a session notification (dismiss)."""
+    async def dismiss_session_notification(
+        self, notification_id: str, user_id: str
+    ) -> bool:
+        """Delete one of the user's session notifications; False if it is not theirs or is gone."""
         if not self._pool:
-            return
+            return False
         async with self.connection() as conn:
-            await conn.execute(
-                "DELETE FROM session_notifications WHERE id = $1",
+            result = await conn.execute(
+                "DELETE FROM session_notifications WHERE id = $1 AND user_id = $2",
                 notification_id,
+                user_id,
             )
+        return result.endswith(" 1")
 
     def _row_to_session_notification(self, row: asyncpg.Record) -> SessionNotification:
         return SessionNotification(

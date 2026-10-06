@@ -157,6 +157,9 @@ def create_app(service: AgentService | None = None):
     @asynccontextmanager
     async def lifespan(app):
         if managed:
+            from mainloop.runtime.agent_identity import require_token_key
+
+            require_token_key()
             await db.connect()
         try:
             async with server.session_manager.run():

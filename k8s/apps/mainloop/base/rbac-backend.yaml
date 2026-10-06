@@ -3,25 +3,3 @@ kind: ServiceAccount
 metadata:
   name: mainloop-backend
   namespace: mainloop
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: mainloop-backend-secret-reader
-rules:
-  - apiGroups: ['']
-    resources: [secrets]
-    verbs: [get]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: mainloop-backend-secret-reader
-subjects:
-  - kind: ServiceAccount
-    name: mainloop-backend
-    namespace: mainloop
-roleRef:
-  kind: ClusterRole
-  name: mainloop-backend-secret-reader
-  apiGroup: rbac.authorization.k8s.io

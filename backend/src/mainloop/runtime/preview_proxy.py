@@ -1,4 +1,25 @@
-"""Owner-scoped wildcard preview proxy through the Substrate router CONNECT tunnel."""
+"""Owner-scoped wildcard preview proxy to a dev server port in a kagent harness.
+
+The path is the Substrate router's ``CONNECT actor-upstream:<port>`` with the
+``ate-target-actor: <atespace>/<actor>`` header; a kagent Session runs in actor
+``session-<Session id>`` of the ``kagent`` atespace. The router does no authentication, so
+the owner check and the port allow-list are here. A request to a suspended harness wakes it.
+Every request for a declared port restarts the workspace's idle debounce (see
+``workspaces.suspend_idle``); a refused request does not.
+
+Mainloop has one configured owner (``current_user()``, which reads ``settings.owner_id``) and is reached only over the tailnet,
+so previews carry no per-request identity: the workspace must belong to that owner.
+
+Origin boundary. The agent writes the page a preview serves, and a browser on that page can send
+a request to any other preview host or to the API. Before any lookup, touch, wake or router
+connect, an unsafe HTTP method (anything but GET, HEAD, OPTIONS) and every WebSocket handshake
+must carry no `Origin` header or the preview's own origin (the base URL's scheme and the
+request's `Host`). A foreign origin, a sibling `*.<domain>` preview, and `null` are refused
+(`403`, WebSocket close `4403`), so the dev server never sees them. A request with no `Origin`
+is allowed: browsers always send one on a cross-origin write or WebSocket handshake, so only a
+non-browser client (curl, a script) omits it, and it is not a page that can be forged into
+sending the request. GET, HEAD and OPTIONS navigation is not affected.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +29,6 @@ import contextlib
 import hashlib
 import http.client
 import io
-import json
 import logging
 import os
 import re
@@ -20,21 +40,22 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from mainloop.config import settings
-from mainloop.db import db
-from mainloop.runtime import workspace_adapter
-from mainloop.runtime.substrate_workspace import SubstrateWorkspace
+from mainloop.identity import current_user
+from mainloop.runtime import workspaces
 
 _WORKSPACE_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_PORT_LABEL = re.compile(
-    r"^(?P<port>[1-9][0-9]{0,4})--(?P<workspace>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$"
+# One DNS label directly under the preview domain: `<port>--<workspace>--preview`.
+_PREVIEW_LABEL = re.compile(
+    r"^(?P<port>[1-9][0-9]{0,4})--(?P<workspace>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)--preview$"
 )
+_MAX_DNS_LABEL = 63
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024 * 1024
 _PREVIEW_TOUCH_INTERVAL_SECONDS = 20.0
 _RESPONSE_READ_BLOCK_BYTES = 64 * 1024
-_SHIM_PORT = 8090
 _LOGGER = logging.getLogger(__name__)
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _ACTIVE_PREVIEW_LEASES: dict[str, tuple[asyncio.Task[None], int]] = {}
 _HOP_HEADERS = {
     "connection",
@@ -47,12 +68,29 @@ _HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+# Not forwarded to the agent's dev server: credentials, and what the owner's tailnet gateway or
+# proxy adds about who and where the owner is. The agent writes the page and runs the server, so
+# anything forwarded is visible to it. A denylist rather than an allowlist because apps send
+# their own headers (CSRF tokens, ``X-Requested-With``, GraphQL and RPC clients) that an
+# allowlist would silently break.
 _PRIVATE_HEADERS = {
     "authorization",
     "cookie",
-    "cf-access-authenticated-user-email",
+    "forwarded",
+    "x-real-ip",
     "x-user-id",
 }
+_PRIVATE_HEADER_PREFIXES = ("tailscale-", "x-forwarded-")
+
+
+def _forwardable_header(name: str) -> bool:
+    """Whether a request header may reach the dev server (hop-by-hop ones never do)."""
+    name = name.lower()
+    return not (
+        name in _HOP_HEADERS
+        or name in _PRIVATE_HEADERS
+        or name.startswith(_PRIVATE_HEADER_PREFIXES)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,10 +105,7 @@ class PreviewTarget:
     user_id: str
     atespace: str
     actor: str
-    agent: str
-    shim_secret_name: str
-    manifest: dict
-    observed_state: str = "unknown"
+    ports: dict[int, str]
 
 
 class _PreviewPreForwardFailure(ConnectionError):
@@ -98,7 +133,11 @@ class _UpstreamHTTP:
 def parse_preview_host(
     host_header: str, base_url: str | None = None
 ) -> PreviewHost | None:
-    """Parse `<port>--<workspace>.<preview-domain>` without accepting path-like labels."""
+    """Parse `<port>--<workspace>--preview.<domain>` without accepting path-like labels.
+
+    The label sits directly under the base URL's host, so a wildcard certificate for that host
+    covers it. A nested label (`a.<port>--<workspace>--preview.<domain>`) is rejected.
+    """
     parsed_base = urlsplit(base_url or settings.substrate_preview_base_url)
     domain = parsed_base.hostname
     if not domain:
@@ -112,8 +151,8 @@ def parse_preview_host(
     if not hostname.endswith(suffix):
         return None
     label = hostname[: -len(suffix)]
-    match = _PORT_LABEL.fullmatch(label)
-    if not match:
+    match = _PREVIEW_LABEL.fullmatch(label)
+    if not match or len(label) > _MAX_DNS_LABEL:
         return None
     try:
         host_port = parsed_host.port
@@ -128,150 +167,78 @@ def parse_preview_host(
     return PreviewHost(port, workspace_id)
 
 
-def _secret_name_for_workspace(atespace: str, actor: str) -> str:
-    for binding in settings.substrate_actor_bindings.values():
-        if binding.atespace == atespace and binding.actor == actor:
-            return binding.shim_token_secret_name
-    return settings.shim_token_secret_name(atespace, actor)
+def _origin_refused(origin: str | None, host_header: str) -> bool:
+    """Whether a request's ``Origin`` is present and is not the preview's own origin."""
+    if origin is None:
+        return False
+    scheme = urlsplit(settings.substrate_preview_base_url).scheme.lower()
+    return origin.lower().rstrip("/") != f"{scheme}://{host_header.lower()}"
+
+
+def session_actor(kagent_session_id: str) -> str:
+    """Return the actor kagent runs a Session in."""
+    return f"session-{kagent_session_id}"
 
 
 async def _resolve_target(workspace_id: str, user_id: str) -> PreviewTarget | None:
-    async with db.connection() as conn:
-        row = await conn.fetchrow(
-            """SELECT b.*,
-                      s.user_id, l.manifest, l.observed_state AS lifecycle_state,
-                      n.kind AS agent_kind
-               FROM workspace_bindings b
-               JOIN sessions s ON s.id=b.workspace_id
-               LEFT JOIN workspace_lifecycles l ON l.workspace_id=b.workspace_id
-               LEFT JOIN native_bindings n ON n.session_id=b.workspace_id
-               WHERE b.workspace_id=$1""",
-            workspace_id,
-        )
-    if row is None or row["user_id"] != user_id:
+    row = await workspaces.preview_row(workspace_id, user_id)
+    if row is None:
         return None
-    record = dict(row)
-    manifest = record.get("manifest") or {}
-    if isinstance(manifest, str):
-        try:
-            manifest = json.loads(manifest)
-        except json.JSONDecodeError:
-            manifest = {}
-    if not isinstance(manifest, dict):
-        manifest = {}
-    atespace = record["atespace"]
-    actor = record["actor_name"]
     return PreviewTarget(
-        workspace_id=record["workspace_id"],
+        workspace_id=row["workspace_id"],
         user_id=user_id,
-        atespace=atespace,
-        actor=actor,
-        agent=(
-            record.get("agent_kind")
-            if record.get("agent_kind") in {"claude", "codex"}
-            else "claude"
-        ),
-        shim_secret_name=record.get("shim_token_secret_name")
-        or _secret_name_for_workspace(atespace, actor),
-        manifest=manifest,
-        observed_state=record.get("lifecycle_state")
-        or ("running" if record.get("observed_state") == "ready" else "unknown"),
+        atespace=settings.kagent_actor_atespace,
+        actor=session_actor(row["kagent_session_id"]),
+        ports=row["ports"],
     )
-
-
-def declared_ports(manifest: dict) -> dict[int, str]:
-    """Read only explicit HTTP preview ports from current and dev-section manifest shapes."""
-    declared: dict[int, str] = {}
-    candidates = [manifest.get("forwardPorts", []), manifest.get("ports", [])]
-    dev = manifest.get("dev")
-    if isinstance(dev, dict):
-        candidates.append(dev.get("ports", []))
-    for candidate in candidates:
-        if not isinstance(candidate, (list, tuple)):
-            continue
-        for item in candidate:
-            if isinstance(item, bool):
-                continue
-            if isinstance(item, int):
-                port, name = item, f"Port {item}"
-            elif isinstance(item, dict):
-                port = item.get("number", item.get("port"))
-                name = item.get("name")
-                if not isinstance(name, str) or not name.strip():
-                    name = f"Port {port}"
-            else:
-                continue
-            if (
-                isinstance(port, int)
-                and not isinstance(port, bool)
-                and 1 <= port <= 65535
-            ):
-                declared[port] = name
-    return declared
-
-
-async def _reported_ports(target: PreviewTarget) -> tuple[int, ...]:
-    workspace = SubstrateWorkspace(
-        atespace=target.atespace,
-        actor=target.actor,
-        agent=target.agent,
-        shim_token_secret_name=target.shim_secret_name,
-        timeout=settings.substrate_preview_connect_timeout_seconds,
-    )
-    try:
-        return tuple(
-            port for port in await workspace.listening_ports() if port != _SHIM_PORT
-        )
-    except Exception:
-        # Declared ports remain usable while the shim is waking or port discovery is unavailable.
-        return ()
 
 
 async def workspace_preview_ports(
     workspace_id: str, user_id: str
 ) -> list[dict[str, object]] | None:
+    """Return the owner's declared preview ports, or None when the workspace is not theirs."""
     target = await _resolve_target(workspace_id, user_id)
     if target is None:
         return None
-    ports = declared_ports(target.manifest)
-    if target.observed_state == "running":
-        for port in await _reported_ports(target):
-            ports.setdefault(port, f"Port {port}")
     return [
-        {"port": port, "name": ports[port], "url": preview_url(workspace_id, port)}
-        for port in sorted(ports)
+        {
+            "port": port,
+            "name": target.ports[port],
+            "url": preview_url(workspace_id, port),
+        }
+        for port in sorted(target.ports)
     ]
 
 
 def preview_url(workspace_id: str, port: int) -> str:
     base = urlsplit(settings.substrate_preview_base_url)
-    host = base.hostname or "preview.localhost"
-    netloc = f"{port}--{workspace_id}.{host}"
+    host = base.hostname or "localhost"
+    netloc = f"{port}--{workspace_id}--preview.{host}"
     if base.port is not None:
         netloc += f":{base.port}"
     return f"{base.scheme or 'http'}://{netloc}"
 
 
 async def _touch_preview(workspace_id: str) -> None:
-    await workspace_adapter.touch_workspace(workspace_id, reason="preview")
+    await workspaces.touch(workspace_id)
 
 
-def _preview_user_id(headers) -> str | None:
-    """Use only an explicitly trusted ingress identity or the Kind-only local identity."""
-    if os.environ.get("SUBSTRATE_PREVIEW_LOCAL_DEV_MODE", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }:
-        return "local-dev-user"
-    if os.environ.get("SUBSTRATE_PREVIEW_TRUSTED_INGRESS", "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-    }:
-        return None
-    value = headers.get("cf-access-authenticated-user-email", "").strip()
-    return value or None
+async def _wake_workspace(target: PreviewTarget) -> bool:
+    """Resume a suspended workspace through kagent before the router can wake it behind kagent's
+    back. False when it could not be resumed; the caller must not connect to the router.
+    """
+    try:
+        await workspaces.wake_for_preview(target.workspace_id, target.user_id)
+    except (
+        workspaces.WorkspaceNotFound,
+        workspaces.WorkspaceConflict,
+        workspaces.WorkspaceUnconfirmed,
+    ) as exc:
+        _LOGGER.warning(
+            "preview of workspace %s: resume failed (%s)", target.workspace_id, exc
+        )
+        return False
+    return True
 
 
 async def _keep_preview_awake(workspace_id: str) -> None:
@@ -361,7 +328,10 @@ def _connect_router(
         request_headers = [
             (name, value)
             for name, value in headers
-            if name.lower() not in _HOP_HEADERS | _PRIVATE_HEADERS | {"content-length"}
+            # The client's Host is replaced by the upstream one below; two Host headers make
+            # strict servers (Go net/http, h11) answer 400.
+            if _forwardable_header(name)
+            and name.lower() not in ("content-length", "host")
         ]
         request_headers.extend(
             [
@@ -499,17 +469,26 @@ def _waking_page() -> HTMLResponse:
 
 
 async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
-    user_id = _preview_user_id(request.headers)
-    if user_id is None:
-        return Response("Authentication required", status_code=401)
-    target = await _resolve_target(parsed.workspace_id, user_id)
+    if request.method not in _SAFE_METHODS and _origin_refused(
+        request.headers.get("origin"), request.headers.get("host", "")
+    ):
+        return Response(
+            "Cross-origin preview request refused",
+            status_code=403,
+            headers={"cache-control": "no-store"},
+        )
+    target = await _resolve_target(parsed.workspace_id, current_user())
     if target is None:
         return Response("Workspace not found", status_code=404)
+    if parsed.port not in target.ports:
+        return Response("Preview port is not declared", status_code=403)
     await _touch_preview(parsed.workspace_id)
-    allowed = set(declared_ports(target.manifest))
-    allowed.update(await _reported_ports(target))
-    if parsed.port not in allowed:
-        return Response("Preview port is not declared or listening", status_code=403)
+    if not await _wake_workspace(target):
+        return Response(
+            "Workspace could not be resumed",
+            status_code=502,
+            headers={"cache-control": "no-store"},
+        )
     chunks = bytearray()
     async for chunk in request.stream():
         chunks.extend(chunk)
@@ -704,19 +683,21 @@ async def _relay_websocket(
 
 
 async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
-    user_id = _preview_user_id(websocket.headers)
-    if user_id is None:
-        await websocket.close(code=4401, reason="Authentication required")
+    if _origin_refused(
+        websocket.headers.get("origin"), websocket.headers.get("host", "")
+    ):
+        await websocket.close(code=4403, reason="Cross-origin preview refused")
         return
-    target = await _resolve_target(parsed.workspace_id, user_id)
+    target = await _resolve_target(parsed.workspace_id, current_user())
     if target is None:
         await websocket.close(code=4404, reason="Workspace not found")
         return
-    await _touch_preview(parsed.workspace_id)
-    allowed = set(declared_ports(target.manifest))
-    allowed.update(await _reported_ports(target))
-    if parsed.port not in allowed:
+    if parsed.port not in target.ports:
         await websocket.close(code=4403, reason="Preview port is not available")
+        return
+    await _touch_preview(parsed.workspace_id)
+    if not await _wake_workspace(target):
+        await websocket.close(code=1013, reason="Workspace could not be resumed")
         return
 
     router = urlsplit(settings.substrate_router_address)
@@ -781,20 +762,16 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
                 handshake_headers.append(
                     ("Sec-WebSocket-Protocol", ", ".join(offered_protocols))
                 )
-            excluded = (
-                _HOP_HEADERS
-                | _PRIVATE_HEADERS
-                | {
-                    "host",
-                    "origin",
-                    "sec-websocket-key",
-                    "sec-websocket-version",
-                    "sec-websocket-protocol",
-                    "sec-websocket-extensions",
-                }
-            )
+            excluded = {
+                "host",
+                "origin",
+                "sec-websocket-key",
+                "sec-websocket-version",
+                "sec-websocket-protocol",
+                "sec-websocket-extensions",
+            }
             for name, value in websocket.headers.items():
-                if name.lower() not in excluded:
+                if _forwardable_header(name) and name.lower() not in excluded:
                     handshake_headers.append((name, value))
             wire = (
                 f"GET {path} HTTP/1.1\r\n"

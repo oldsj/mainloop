@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import http.client
 import io
-import os
 import socket
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -15,7 +14,9 @@ from mainloop.runtime import preview_proxy
 from starlette.requests import Request
 from starlette.websockets import WebSocket
 
-_PREVIEW_HOST = "5173--workspace-1.preview.localhost:8001"
+_PREVIEW_HOST = "5173--workspace-1--preview.localhost:8001"
+_OWNER = "the-owner"
+_REAL_WAKE_WORKSPACE = preview_proxy._wake_workspace
 
 
 def make_request(method: str, headers: dict[str, str], body: bytes = b"") -> Request:
@@ -86,96 +87,111 @@ async def _run_sync_in_test(function, *args, **kwargs):
 
 
 class PreviewProxyTests(unittest.TestCase):
-    def test_preview_host_requires_matching_domain_port_and_safe_labels(self):
-        base = "http://preview.localhost:8001"
-        parsed = preview_proxy.parse_preview_host(
-            "5173--workspace-1.preview.localhost:8001", base
+    def setUp(self):
+        # A running workspace: nothing to resume. The wake tests below replace this.
+        patcher = patch.object(
+            preview_proxy, "_wake_workspace", new=AsyncMock(return_value=True)
         )
-        self.assertEqual(parsed, preview_proxy.PreviewHost(5173, "workspace-1"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_preview_host_is_one_label_under_the_base_domain(self):
+        base = "http://localhost:8001"
+        for host, expected in (
+            ("5173--workspace-1--preview.localhost:8001", (5173, "workspace-1")),
+            ("5173--Workspace-1--PREVIEW.LOCALHOST:8001", (5173, "workspace-1")),
+            ("5173--workspace-1--preview.localhost.:8001", (5173, "workspace-1")),
+            ("3000--a--b--preview.localhost:8001", (3000, "a--b")),
+            (
+                "65535--11111111-2222-3333-4444-555555555555--preview.localhost:8001",
+                (65535, "11111111-2222-3333-4444-555555555555"),
+            ),
+        ):
+            with self.subTest(host=host):
+                self.assertEqual(
+                    preview_proxy.parse_preview_host(host, base),
+                    preview_proxy.PreviewHost(*expected),
+                )
+        wildcard = "https://example.test"
+        self.assertEqual(
+            preview_proxy.parse_preview_host(
+                "3000--workspace-1--preview.example.test", wildcard
+            ),
+            preview_proxy.PreviewHost(3000, "workspace-1"),
+        )
+
+    def test_malformed_preview_hosts_are_not_previews(self):
+        base = "http://localhost:8001"
         for invalid in (
-            "5173--workspace-1.example.test:8001",
-            "5173--workspace-1.preview.localhost:3000",
-            "65536--workspace-1.preview.localhost:8001",
-            "5173--bad-.preview.localhost:8001",
-            "5173--workspace-1.preview.localhost/path:8001",
+            "",
+            "localhost:8001",
+            "5173--workspace-1--preview.example.test:8001",
+            "5173--workspace-1--preview.localhost:3000",
+            "5173--workspace-1--preview.localhost",
+            "65536--workspace-1--preview.localhost:8001",
+            "0--workspace-1--preview.localhost:8001",
+            "05173--workspace-1--preview.localhost:8001",
+            "5173--bad---preview.localhost:8001",
+            "5173----preview.localhost:8001",
+            "5173--workspace-1.preview.localhost:8001",
+            "5173--workspace-1--other.localhost:8001",
+            "workspace-1--preview.localhost:8001",
+            "5173--workspace-1--preview.localhost/path:8001",
+            "5173--workspace_1--preview.localhost:8001",
+            f"5173--{'a' * 60}--preview.localhost:8001",
         ):
             with self.subTest(invalid=invalid):
                 self.assertIsNone(preview_proxy.parse_preview_host(invalid, base))
 
-    def test_manifest_port_formats_are_validated_and_deduplicated(self):
-        ports = preview_proxy.declared_ports(
-            {
-                "forwardPorts": [5173, "invalid", 70000, True],
-                "dev": {
-                    "ports": [
-                        {"name": "web", "number": 5173},
-                        {"name": "api", "port": 8000},
-                        {"port": 0},
-                    ]
-                },
-            }
-        )
-        self.assertEqual(ports, {5173: "web", 8000: "api"})
+    def test_a_nested_subdomain_is_rejected(self):
+        for base, valid in (
+            ("http://localhost:8001", "5173--workspace-1--preview.localhost:8001"),
+            ("https://example.test", "5173--workspace-1--preview.example.test"),
+        ):
+            self.assertIsNotNone(preview_proxy.parse_preview_host(valid, base))
+            for nested in (
+                f"evil.{valid}",
+                f"5173--workspace-1--preview.evil.{valid.split('--preview.')[1]}",
+                f"x.y.{valid}",
+            ):
+                with self.subTest(nested=nested):
+                    self.assertIsNone(preview_proxy.parse_preview_host(nested, base))
 
     def test_preview_url_uses_configured_wildcard_origin(self):
-        with patch.object(
-            settings, "substrate_preview_base_url", "http://preview.localhost:8001"
+        for base, expected in (
+            (
+                "http://localhost:8001",
+                "http://5173--workspace-1--preview.localhost:8001",
+            ),
+            ("https://example.test", "https://5173--workspace-1--preview.example.test"),
+            (
+                "https://example.test:8443",
+                "https://5173--workspace-1--preview.example.test:8443",
+            ),
         ):
-            self.assertEqual(
-                preview_proxy.preview_url("workspace-1", 5173),
-                "http://5173--workspace-1.preview.localhost:8001",
-            )
+            with self.subTest(base=base):
+                with patch.object(settings, "substrate_preview_base_url", base):
+                    url = preview_proxy.preview_url("workspace-1", 5173)
+                    self.assertEqual(url, expected)
+                    host = url.split("://", 1)[1]
+                    self.assertEqual(
+                        preview_proxy.parse_preview_host(host, base),
+                        preview_proxy.PreviewHost(5173, "workspace-1"),
+                    )
 
-    def test_dynamic_shim_secret_uses_configured_prefix_convention(self):
-        with patch.object(settings, "substrate_shim_secret_prefix", "test-shim"):
-            self.assertEqual(
-                preview_proxy._secret_name_for_workspace("fixture-space", "actor-1"),
-                settings.shim_token_secret_name("fixture-space", "actor-1"),
-            )
-
-    def test_preview_touch_calls_lifecycle_service(self):
+    def test_preview_traffic_restarts_the_idle_debounce(self):
         async def exercise():
             with patch.object(
-                preview_proxy.workspace_adapter,
-                "touch_workspace",
-                new=AsyncMock(),
+                preview_proxy.workspaces, "touch", new=AsyncMock()
             ) as touch:
                 await preview_proxy._touch_preview("workspace-1")
-            touch.assert_awaited_once_with("workspace-1", reason="preview")
+            touch.assert_awaited_once_with("workspace-1")
 
         asyncio.run(exercise())
 
-    def test_http_preview_requires_trusted_identity_and_ignores_forged_user_id(self):
-        async def exercise():
-            with patch.object(
-                preview_proxy, "_resolve_target", new_callable=AsyncMock
-            ) as resolve:
-                anonymous = await preview_proxy._preview_http(
-                    make_request("GET", {"host": _PREVIEW_HOST}),
-                    preview_proxy.PreviewHost(5173, "workspace-1"),
-                )
-                forged = await preview_proxy._preview_http(
-                    make_request(
-                        "GET",
-                        {"host": _PREVIEW_HOST, "x-user-id": "local-dev-user"},
-                    ),
-                    preview_proxy.PreviewHost(5173, "workspace-1"),
-                )
-
-            self.assertEqual(anonymous.status_code, 401)
-            self.assertEqual(forged.status_code, 401)
-            resolve.assert_not_awaited()
-
-        with patch.dict(
-            os.environ,
-            {
-                "SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "false",
-                "SUBSTRATE_PREVIEW_TRUSTED_INGRESS": "false",
-            },
-        ):
-            asyncio.run(exercise())
-
-    def test_http_preview_uses_trusted_identity_for_workspace_ownership(self):
+    def test_http_preview_checks_the_configured_owner_and_ignores_identity_headers(
+        self,
+    ):
         async def exercise():
             with patch.object(
                 preview_proxy, "_resolve_target", new=AsyncMock(return_value=None)
@@ -185,76 +201,448 @@ class PreviewProxyTests(unittest.TestCase):
                         "GET",
                         {
                             "host": _PREVIEW_HOST,
-                            "x-user-id": "workspace-owner",
-                            "cf-access-authenticated-user-email": "other-owner",
+                            "x-user-id": "someone-else",
+                            "cf-access-authenticated-user-email": "someone-else",
                         },
                     ),
                     preview_proxy.PreviewHost(5173, "workspace-1"),
                 )
 
             self.assertEqual(response.status_code, 404)
-            resolve.assert_awaited_once_with("workspace-1", "other-owner")
+            resolve.assert_awaited_once_with("workspace-1", _OWNER)
 
-        with patch.dict(
-            os.environ,
-            {
-                "SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "false",
-                "SUBSTRATE_PREVIEW_TRUSTED_INGRESS": "true",
-            },
-        ):
+        with patch.object(settings, "owner_id", _OWNER):
             asyncio.run(exercise())
 
-    def test_websocket_preview_requires_trusted_identity_and_checks_owner(self):
-        async def exercise_anonymous():
-            with patch.object(
-                preview_proxy, "_resolve_target", new_callable=AsyncMock
-            ) as resolve:
-                for headers in (
-                    {"host": _PREVIEW_HOST},
-                    {"host": _PREVIEW_HOST, "x-user-id": "local-dev-user"},
-                ):
-                    websocket, sent = make_websocket(headers)
-                    await preview_proxy._preview_websocket(
-                        websocket, preview_proxy.PreviewHost(5173, "workspace-1")
-                    )
-                    self.assertEqual(sent[0]["type"], "websocket.close")
-                    self.assertEqual(sent[0]["code"], 4401)
-                resolve.assert_not_awaited()
-
-        async def exercise_wrong_owner():
-            with patch.object(
-                preview_proxy, "_resolve_target", new=AsyncMock(return_value=None)
-            ) as resolve:
+    def test_websocket_preview_checks_the_configured_owner(self):
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=None)
+                ) as resolve,
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()) as touch,
+            ):
                 websocket, sent = make_websocket(
-                    {
-                        "host": _PREVIEW_HOST,
-                        "x-user-id": "workspace-owner",
-                        "cf-access-authenticated-user-email": "other-owner",
-                    }
+                    {"host": _PREVIEW_HOST, "x-user-id": "someone-else"}
                 )
                 await preview_proxy._preview_websocket(
                     websocket, preview_proxy.PreviewHost(5173, "workspace-1")
                 )
                 self.assertEqual(sent[0]["type"], "websocket.close")
                 self.assertEqual(sent[0]["code"], 4404)
-                resolve.assert_awaited_once_with("workspace-1", "other-owner")
+                resolve.assert_awaited_once_with("workspace-1", _OWNER)
+                touch.assert_not_awaited()
 
-        with patch.dict(
-            os.environ,
-            {
-                "SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "false",
-                "SUBSTRATE_PREVIEW_TRUSTED_INGRESS": "false",
-            },
-        ):
-            asyncio.run(exercise_anonymous())
-        with patch.dict(
-            os.environ,
-            {
-                "SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "false",
-                "SUBSTRATE_PREVIEW_TRUSTED_INGRESS": "true",
-            },
-        ):
-            asyncio.run(exercise_wrong_owner())
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_an_undeclared_port_is_refused_without_touching_the_idle_clock(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+        headers = {"host": _PREVIEW_HOST}
+
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
+                ),
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()) as touch,
+                patch.object(preview_proxy, "_connect_router") as connect,
+            ):
+                response = await preview_proxy._preview_http(
+                    make_request("GET", headers),
+                    preview_proxy.PreviewHost(9999, "workspace-1"),
+                )
+                self.assertEqual(response.status_code, 403)
+                websocket, sent = make_websocket(headers)
+                await preview_proxy._preview_websocket(
+                    websocket, preview_proxy.PreviewHost(9999, "workspace-1")
+                )
+                self.assertEqual(sent[0]["type"], "websocket.close")
+                self.assertEqual(sent[0]["code"], 4403)
+                connect.assert_not_called()
+                touch.assert_not_awaited()
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_a_declared_port_touches_the_idle_clock_once(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
+                ),
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()) as touch,
+                patch.object(
+                    preview_proxy,
+                    "_connect_router",
+                    side_effect=preview_proxy._PreviewForwardedFailure("fixture stop"),
+                ),
+                patch.object(preview_proxy.asyncio, "to_thread", new=_run_sync_in_test),
+            ):
+                await preview_proxy._preview_http(
+                    make_request("GET", {"host": _PREVIEW_HOST}),
+                    preview_proxy.PreviewHost(5173, "workspace-1"),
+                )
+                touch.assert_awaited_once_with("workspace-1")
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_a_declared_port_wakes_the_workspace_before_the_router_connect(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+        order: list[str] = []
+
+        async def wake(_target):
+            order.append("wake")
+            return True
+
+        def connect(*args, **kwargs):
+            order.append("connect")
+            raise preview_proxy._PreviewForwardedFailure("fixture stop")
+
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
+                ),
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                patch.object(preview_proxy, "_wake_workspace", new=wake),
+                patch.object(preview_proxy, "_connect_router", side_effect=connect),
+                patch.object(preview_proxy.asyncio, "to_thread", new=_run_sync_in_test),
+            ):
+                await preview_proxy._preview_http(
+                    make_request("GET", {"host": _PREVIEW_HOST}),
+                    preview_proxy.PreviewHost(5173, "workspace-1"),
+                )
+            self.assertEqual(order, ["wake", "connect"])
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_a_workspace_that_cannot_be_resumed_is_not_connected_to(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
+                ),
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                patch.object(
+                    preview_proxy, "_wake_workspace", new=AsyncMock(return_value=False)
+                ),
+                patch.object(preview_proxy, "_connect_router") as connect,
+            ):
+                response = await preview_proxy._preview_http(
+                    make_request("GET", {"host": _PREVIEW_HOST}),
+                    preview_proxy.PreviewHost(5173, "workspace-1"),
+                )
+                self.assertEqual(response.status_code, 502)
+                websocket, sent = make_websocket(
+                    {"host": _PREVIEW_HOST, "sec-websocket-key": "a2V5"}
+                )
+                with patch.object(
+                    preview_proxy.asyncio, "open_connection", new=AsyncMock()
+                ) as open_connection:
+                    await preview_proxy._preview_websocket(
+                        websocket, preview_proxy.PreviewHost(5173, "workspace-1")
+                    )
+                self.assertEqual(sent[0]["type"], "websocket.close")
+                self.assertEqual(sent[0]["code"], 1013)
+                connect.assert_not_called()
+                open_connection.assert_not_awaited()
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_a_websocket_wakes_the_workspace_before_the_router_connect(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+        order: list[str] = []
+
+        async def wake(_target):
+            order.append("wake")
+            return True
+
+        async def open_connection(*args, **kwargs):
+            order.append("connect")
+            raise ConnectionRefusedError("fixture stop")
+
+        async def exercise():
+            with (
+                patch.object(
+                    preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
+                ),
+                patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                patch.object(preview_proxy, "_wake_workspace", new=wake),
+                patch.object(
+                    preview_proxy.asyncio, "open_connection", new=open_connection
+                ),
+            ):
+                websocket, _ = make_websocket(
+                    {"host": _PREVIEW_HOST, "sec-websocket-key": "a2V5"}
+                )
+                await preview_proxy._preview_websocket(
+                    websocket, preview_proxy.PreviewHost(5173, "workspace-1")
+                )
+            self.assertEqual(order[0], "wake")
+            self.assertIn("connect", order)
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_refused_previews_do_not_wake_the_workspace(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+
+        async def exercise():
+            wake = AsyncMock(return_value=True)
+            for resolved, port in ((None, 5173), (target, 9999)):
+                with (
+                    patch.object(
+                        preview_proxy,
+                        "_resolve_target",
+                        new=AsyncMock(return_value=resolved),
+                    ),
+                    patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                    patch.object(preview_proxy, "_wake_workspace", new=wake),
+                ):
+                    await preview_proxy._preview_http(
+                        make_request("GET", {"host": _PREVIEW_HOST}),
+                        preview_proxy.PreviewHost(port, "workspace-1"),
+                    )
+                    websocket, _ = make_websocket({"host": _PREVIEW_HOST})
+                    await preview_proxy._preview_websocket(
+                        websocket, preview_proxy.PreviewHost(port, "workspace-1")
+                    )
+            wake.assert_not_awaited()
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_a_foreign_origin_is_refused_before_any_preview_action(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+        foreign = (
+            "http://evil.example",
+            "http://localhost:8001",  # the API's origin, not the preview's
+            "http://3000--workspace-2--preview.localhost:8001",  # a sibling preview
+            "http://preview.localhost:8001",  # the preview domain itself
+            "http://x.5173--workspace-1--preview.localhost:8001",
+            "https://5173--workspace-1--preview.localhost:8001",  # another scheme
+            "http://5173--workspace-1--preview.localhost:9",  # another port
+            "null",
+            "",
+        )
+
+        async def exercise():
+            resolve = AsyncMock(return_value=target)
+            touch = AsyncMock()
+            wake = AsyncMock(return_value=True)
+            connect = patch.object(preview_proxy, "_connect_router")
+            open_connection = AsyncMock()
+            with (
+                patch.object(preview_proxy, "_resolve_target", new=resolve),
+                patch.object(preview_proxy, "_touch_preview", new=touch),
+                patch.object(preview_proxy, "_wake_workspace", new=wake),
+                connect as connect_router,
+                patch.object(
+                    preview_proxy.asyncio, "open_connection", new=open_connection
+                ),
+            ):
+                for origin in foreign:
+                    for method in ("POST", "PUT", "PATCH", "DELETE"):
+                        with self.subTest(origin=origin, method=method):
+                            response = await preview_proxy._preview_http(
+                                make_request(
+                                    method,
+                                    {"host": _PREVIEW_HOST, "origin": origin},
+                                ),
+                                preview_proxy.PreviewHost(5173, "workspace-1"),
+                            )
+                            self.assertEqual(response.status_code, 403)
+                    with self.subTest(origin=origin, method="websocket"):
+                        websocket, sent = make_websocket(
+                            {
+                                "host": _PREVIEW_HOST,
+                                "origin": origin,
+                                "sec-websocket-key": "a2V5",
+                            }
+                        )
+                        await preview_proxy._preview_websocket(
+                            websocket, preview_proxy.PreviewHost(5173, "workspace-1")
+                        )
+                        self.assertEqual([m["type"] for m in sent], ["websocket.close"])
+                        self.assertEqual(sent[0]["code"], 4403)
+            resolve.assert_not_awaited()
+            touch.assert_not_awaited()
+            wake.assert_not_awaited()
+            connect_router.assert_not_called()
+            open_connection.assert_not_awaited()
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_the_previews_own_origin_and_no_origin_are_forwarded(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+        own = f"http://{_PREVIEW_HOST}"
+
+        async def exercise():
+            for origin in (own, own.upper(), own + "/", None):
+                headers = {"host": _PREVIEW_HOST}
+                if origin is not None:
+                    headers["origin"] = origin
+                with self.subTest(origin=origin, kind="http"):
+                    resolve = AsyncMock(return_value=target)
+                    connect = patch.object(
+                        preview_proxy,
+                        "_connect_router",
+                        side_effect=ConnectionRefusedError("fixture stop"),
+                    )
+                    with (
+                        patch.object(preview_proxy, "_resolve_target", new=resolve),
+                        patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                        connect as connect_router,
+                        patch.object(
+                            preview_proxy.asyncio, "to_thread", new=_run_sync_in_test
+                        ),
+                    ):
+                        response = await preview_proxy._preview_http(
+                            make_request("POST", headers, b"{}"),
+                            preview_proxy.PreviewHost(5173, "workspace-1"),
+                        )
+                    self.assertEqual(
+                        response.status_code, 502
+                    )  # got past the Origin gate
+                    resolve.assert_awaited_once()
+                    connect_router.assert_called_once()
+                with self.subTest(origin=origin, kind="websocket"):
+                    resolve = AsyncMock(return_value=target)
+                    open_connection = AsyncMock(
+                        side_effect=ConnectionRefusedError("fixture stop")
+                    )
+                    with (
+                        patch.object(preview_proxy, "_resolve_target", new=resolve),
+                        patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
+                        patch.object(
+                            preview_proxy.asyncio,
+                            "open_connection",
+                            new=open_connection,
+                        ),
+                    ):
+                        websocket, sent = make_websocket(
+                            {**headers, "sec-websocket-key": "a2V5"}
+                        )
+                        await preview_proxy._preview_websocket(
+                            websocket, preview_proxy.PreviewHost(5173, "workspace-1")
+                        )
+                    resolve.assert_awaited_once()
+                    open_connection.assert_awaited()
+                    self.assertNotEqual(sent[0].get("code"), 4403)
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_safe_methods_ignore_the_origin(self):
+        async def exercise():
+            for method in ("GET", "HEAD", "OPTIONS"):
+                with self.subTest(method=method):
+                    resolve = AsyncMock(return_value=None)
+                    with patch.object(preview_proxy, "_resolve_target", new=resolve):
+                        response = await preview_proxy._preview_http(
+                            make_request(
+                                method,
+                                {
+                                    "host": _PREVIEW_HOST,
+                                    "origin": "http://evil.example",
+                                },
+                            ),
+                            preview_proxy.PreviewHost(5173, "workspace-1"),
+                        )
+                    self.assertEqual(response.status_code, 404)  # resolved, not refused
+                    resolve.assert_awaited_once()
+
+        with patch.object(settings, "owner_id", _OWNER):
+            asyncio.run(exercise())
+
+    def test_wake_workspace_resumes_for_the_target_and_reports_failure(self):
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id=_OWNER,
+            atespace="kagent",
+            actor="session-sess-1",
+            ports={5173: "web"},
+        )
+
+        async def exercise():
+            real = _REAL_WAKE_WORKSPACE  # the class-level stub replaces the module name
+            with patch.object(
+                preview_proxy.workspaces,
+                "wake_for_preview",
+                new=AsyncMock(return_value=True),
+            ) as wake:
+                self.assertTrue(await real(target))
+                wake.assert_awaited_once_with("workspace-1", _OWNER)
+            for error in (
+                preview_proxy.workspaces.WorkspaceNotFound("gone"),
+                preview_proxy.workspaces.WorkspaceConflict("refused"),
+                preview_proxy.workspaces.WorkspaceUnconfirmed("unknown"),
+            ):
+                with patch.object(
+                    preview_proxy.workspaces,
+                    "wake_for_preview",
+                    new=AsyncMock(side_effect=error),
+                ):
+                    self.assertFalse(await real(target))
+
+        asyncio.run(exercise())
 
     def test_post_that_commits_then_disconnects_is_not_replayed(self):
         target = preview_proxy.PreviewTarget(
@@ -262,10 +650,7 @@ class PreviewProxyTests(unittest.TestCase):
             user_id="local-dev-user",
             atespace="fixture-space",
             actor="fixture-actor",
-            agent="claude",
-            shim_secret_name="shim" + "-fixture",
-            manifest={"dev": {"ports": [{"name": "web", "number": 5173}]}},
-            observed_state="running",
+            ports={5173: "web"},
         )
         committed: list[bytes] = []
 
@@ -316,9 +701,6 @@ class PreviewProxyTests(unittest.TestCase):
                 ),
                 patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
                 patch.object(
-                    preview_proxy, "_reported_ports", new=AsyncMock(return_value=())
-                ),
-                patch.object(
                     preview_proxy.socket,
                     "create_connection",
                     return_value=fake_upstream,
@@ -335,8 +717,7 @@ class PreviewProxyTests(unittest.TestCase):
                 )
             return response
 
-        with patch.dict(os.environ, {"SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "true"}):
-            response = asyncio.run(exercise())
+        response = asyncio.run(exercise())
         self.assertEqual(response.status_code, 502)
         self.assertIn(b"outcome is unknown", response.body)
         self.assertEqual(committed, [b"synthetic mutation"])
@@ -350,10 +731,7 @@ class PreviewProxyTests(unittest.TestCase):
             user_id="local-dev-user",
             atespace="fixture-space",
             actor="fixture-actor",
-            agent="claude",
-            shim_secret_name="shim" + "-fixture",
-            manifest={"dev": {"ports": [{"name": "web", "number": 5173}]}},
-            observed_state="running",
+            ports={5173: "web"},
         )
         headers = http.client.HTTPMessage()
         headers["Content-Length"] = "2"
@@ -379,9 +757,6 @@ class PreviewProxyTests(unittest.TestCase):
                     preview_proxy, "_resolve_target", new=AsyncMock(return_value=target)
                 ),
                 patch.object(preview_proxy, "_touch_preview", new=AsyncMock()),
-                patch.object(
-                    preview_proxy, "_reported_ports", new=AsyncMock(return_value=())
-                ),
                 patch.object(preview_proxy, "_connect_router", side_effect=connect),
             ):
                 response = await preview_proxy._preview_http(
@@ -391,8 +766,7 @@ class PreviewProxyTests(unittest.TestCase):
                 body = b"".join([chunk async for chunk in response.body_iterator])
             return response, body
 
-        with patch.dict(os.environ, {"SUBSTRATE_PREVIEW_LOCAL_DEV_MODE": "true"}):
-            response, body = asyncio.run(exercise())
+        response, body = asyncio.run(exercise())
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(body, b"ok")
@@ -529,9 +903,7 @@ class PreviewProxyTests(unittest.TestCase):
             user_id="owner",
             atespace="fixture-space",
             actor="fixture-actor",
-            agent="claude",
-            shim_secret_name="shim" + "-fixture",
-            manifest={},
+            ports={},
         )
         upstream_socket = FakeSocket()
         with (
@@ -557,6 +929,152 @@ class PreviewProxyTests(unittest.TestCase):
         upstream.close()
         self.assertTrue(upstream_socket.closed)
 
+    def test_gateway_and_credential_headers_are_not_forwarded_to_the_dev_server(self):
+        class FakeSocket:
+            def __init__(self):
+                self.reader = io.BytesIO(
+                    b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                )
+                self.sent: list[bytes] = []
+
+            def settimeout(self, _value):
+                pass
+
+            def makefile(self, _mode):
+                return self.reader
+
+            def sendall(self, payload):
+                self.sent.append(payload)
+
+            def close(self):
+                pass
+
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id="owner",
+            atespace="fixture-space",
+            actor="fixture-actor",
+            ports={},
+        )
+        sock = FakeSocket()
+        sent_headers = [
+            ("Accept", "text/html"),
+            ("X-CSRF-Token", "abc"),  # an app's own header still reaches the app
+            ("X-Requested-With", "fetch"),
+            ("Authorization", "Bearer secret"),
+            ("Cookie", "mainloop=secret"),
+            ("X-User-ID", "someone"),
+            ("Tailscale-User-Login", "owner@example.com"),
+            ("Tailscale-User-Name", "Owner"),
+            ("X-Forwarded-For", "100.64.0.1"),
+            ("X-Forwarded-Host", "5173--w--preview.example"),
+            ("X-Forwarded-Proto", "https"),
+            ("Forwarded", "for=100.64.0.1"),
+            ("X-Real-IP", "100.64.0.1"),
+            ("Proxy-Authorization", "x"),
+        ]
+        with (
+            patch.object(
+                settings, "substrate_router_address", "http://router.fixture:8081"
+            ),
+            patch.object(preview_proxy.socket, "create_connection", return_value=sock),
+        ):
+            preview_proxy._connect_router(
+                target,
+                5173,
+                2.0,
+                method="GET",
+                path="/",
+                headers=sent_headers,
+                body=b"",
+            ).close()
+        names = {
+            line.split(":", 1)[0].lower()
+            for line in sock.sent[1].decode("latin1").split("\r\n")[1:]
+            if ":" in line
+        }
+        self.assertEqual(
+            names,
+            {
+                "accept",
+                "x-csrf-token",
+                "x-requested-with",
+                "host",
+                "connection",
+                "content-length",
+            },
+        )
+
+    def test_exactly_one_host_header_reaches_the_router(self):
+        class FakeSocket:
+            def __init__(self):
+                self.reader = io.BytesIO(
+                    b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                )
+                self.sent: list[bytes] = []
+
+            def settimeout(self, _value):
+                pass
+
+            def makefile(self, _mode):
+                return self.reader
+
+            def sendall(self, payload):
+                self.sent.append(payload)
+
+            def close(self):
+                pass
+
+        target = preview_proxy.PreviewTarget(
+            workspace_id="workspace-1",
+            user_id="owner",
+            atespace="fixture-space",
+            actor="fixture-actor",
+            ports={},
+        )
+        sock = FakeSocket()
+        with (
+            patch.object(
+                settings, "substrate_router_address", "http://router.fixture:8081"
+            ),
+            patch.object(preview_proxy.socket, "create_connection", return_value=sock),
+        ):
+            preview_proxy._connect_router(
+                target,
+                5173,
+                2.0,
+                method="GET",
+                path="/",
+                headers=[
+                    ("Host", "5173--workspace-1--preview.example:8001"),
+                    ("HOST", "second.example"),
+                    ("Accept", "text/html"),
+                ],
+                body=b"",
+            ).close()
+        request = sock.sent[1].decode("latin1")
+        hosts = [
+            line
+            for line in request.split("\r\n")[1:]
+            if line.lower().startswith("host:")
+        ]
+        self.assertEqual(hosts, ["Host: actor-upstream:5173"])
+        self.assertNotIn("preview.example", request)
+
+    def test_forwardable_header_covers_the_websocket_upgrade_too(self):
+        for name in (
+            "Cookie",
+            "tailscale-user-login",
+            "X-Forwarded-For",
+            "X-Real-Ip",
+            "Forwarded",
+        ):
+            self.assertFalse(preview_proxy._forwardable_header(name), name)
+        for name in ("User-Agent", "Accept-Language", "X-CSRF-Token", "Sec-Fetch-Mode"):
+            self.assertTrue(preview_proxy._forwardable_header(name), name)
+
     def test_websocket_frame_parser_handles_masked_and_unmasked_payloads(self):
         async def exercise():
             reader = asyncio.StreamReader()
@@ -575,75 +1093,66 @@ class PreviewProxyTests(unittest.TestCase):
 
         asyncio.run(exercise())
 
-    def test_workspace_port_list_combines_declared_and_reported_ports(self):
+    def test_target_is_the_kagent_session_actor_and_ports_are_the_stored_ones(self):
         async def exercise():
-            shim_name = "shim" + "-fixture"
-            target = preview_proxy.PreviewTarget(
-                workspace_id="workspace-1",
-                user_id="owner",
-                atespace="fixture-space",
-                actor="fixture-actor",
-                agent="claude",
-                shim_secret_name=shim_name,
-                manifest={"dev": {"ports": [{"name": "web", "number": 5173}]}},
-                observed_state="running",
-            )
+            row = {
+                "workspace_id": "workspace-1",
+                "kagent_session_id": "sess-1",
+                "ports": {5173: "web", 8000: "api"},
+            }
             with (
-                patch.object(preview_proxy, "_resolve_target", return_value=target),
                 patch.object(
-                    preview_proxy, "_reported_ports", return_value=(5173, 8080)
-                ),
+                    preview_proxy.workspaces,
+                    "preview_row",
+                    new=AsyncMock(return_value=row),
+                ) as lookup,
+                patch.object(settings, "kagent_actor_atespace", "kagent"),
                 patch.object(
                     settings,
                     "substrate_preview_base_url",
-                    "http://preview.localhost:8001",
+                    "http://localhost:8001",
                 ),
             ):
-                result = await preview_proxy.workspace_preview_ports(
+                target = await preview_proxy._resolve_target("workspace-1", "owner")
+                ports = await preview_proxy.workspace_preview_ports(
                     "workspace-1", "owner"
                 )
+            lookup.assert_awaited_with("workspace-1", "owner")
             self.assertEqual(
-                result,
+                (target.atespace, target.actor, target.ports),
+                ("kagent", "session-sess-1", {5173: "web", 8000: "api"}),
+            )
+            self.assertEqual(
+                ports,
                 [
                     {
                         "port": 5173,
                         "name": "web",
-                        "url": "http://5173--workspace-1.preview.localhost:8001",
+                        "url": "http://5173--workspace-1--preview.localhost:8001",
                     },
                     {
-                        "port": 8080,
-                        "name": "Port 8080",
-                        "url": "http://8080--workspace-1.preview.localhost:8001",
+                        "port": 8000,
+                        "name": "api",
+                        "url": "http://8000--workspace-1--preview.localhost:8001",
                     },
                 ],
             )
 
         asyncio.run(exercise())
 
-    def test_workspace_port_list_does_not_wake_a_parked_actor(self):
+    def test_another_owners_or_missing_workspace_has_no_target(self):
         async def exercise():
-            shim_name = "shim" + "-fixture"
-            target = preview_proxy.PreviewTarget(
-                workspace_id="workspace-1",
-                user_id="owner",
-                atespace="fixture-space",
-                actor="fixture-actor",
-                agent="claude",
-                shim_secret_name=shim_name,
-                manifest={"forwardPorts": [5173]},
-                observed_state="suspended",
-            )
-            with (
-                patch.object(preview_proxy, "_resolve_target", return_value=target),
-                patch.object(
-                    preview_proxy, "_reported_ports", new_callable=AsyncMock
-                ) as report,
+            with patch.object(
+                preview_proxy.workspaces,
+                "preview_row",
+                new=AsyncMock(return_value=None),
             ):
-                ports = await preview_proxy.workspace_preview_ports(
-                    "workspace-1", "owner"
+                self.assertIsNone(
+                    await preview_proxy._resolve_target("workspace-1", "other")
                 )
-            report.assert_not_awaited()
-            self.assertEqual([row["port"] for row in ports], [5173])
+                self.assertIsNone(
+                    await preview_proxy.workspace_preview_ports("workspace-1", "other")
+                )
 
         asyncio.run(exercise())
 

@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 mainloop = "mainloop.api:run"
+mainloop-sweep-kagent-sessions = "mainloop.runtime.orphan_sessions:main"
 
 [build-system]
 requires = ["hatchling"]

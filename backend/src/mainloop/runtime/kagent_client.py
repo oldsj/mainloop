@@ -367,6 +367,10 @@ def _field_bytes(number: int, payload: bytes) -> bytes:
     return _varint(number << 3 | 2) + _varint(len(payload)) + payload
 
 
+def _field_varint(number: int, value: int) -> bytes:
+    return _varint(number << 3) + _varint(value)
+
+
 def _field_str(number: int, value: str) -> bytes:
     return _field_bytes(number, value.encode()) if value else b""
 
@@ -479,6 +483,43 @@ class AgentRef:
 
 
 @dataclass(frozen=True)
+class SessionWorkspace:
+    """The repository kagent clones into the harness before the first turn.
+
+    ``repo`` is an https URL without credentials whose host the Agent's harness allows
+    (``spec.git.origins``). ``ref`` is the branch, tag or commit to check out; ``branch`` is
+    the local branch to create or switch to; ``depth`` 0 means the server default. kagent
+    persists it on the Session and compares it when a create is retried under the same
+    request id, so a replacement Session must resend exactly this value.
+    """
+
+    repo: str
+    ref: str = ""
+    branch: str = ""
+    depth: int = 0
+
+    def encode(self) -> bytes:
+        message = (
+            _field_str(1, self.repo)
+            + _field_str(2, self.ref)
+            + _field_str(3, self.branch)
+        )
+        if self.depth:
+            message += _varint(4 << 3) + _varint(self.depth)
+        return message
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "SessionWorkspace":
+        fields = decode_fields(raw)
+        return cls(
+            repo=_text(fields, 1),
+            ref=_text(fields, 2),
+            branch=_text(fields, 3),
+            depth=_number(fields, 4),
+        )
+
+
+@dataclass(frozen=True)
 class KagentSession:
     """The Session fields Mainloop uses. ``id`` is also the A2A ``contextId``."""
 
@@ -489,6 +530,7 @@ class KagentSession:
     failure_reason: str = ""
     failure_message: str = ""
     name: str = ""
+    workspace: SessionWorkspace | None = None
 
     @property
     def settled(self) -> bool:
@@ -508,10 +550,26 @@ def decode_session_response(message: bytes) -> KagentSession:
     raw = outer.get(1, [b""])[0]
     if not isinstance(raw, bytes) or not raw:
         raise SessionError("SessionService response carried no session")
+    return _decode_session(raw)
+
+
+def decode_session_list(message: bytes) -> tuple[list[KagentSession], str]:
+    """Decode ``ListSessionsResponse{sessions = 1; page = 2{next_page_token = 1}}``."""
+    outer = decode_fields(message)
+    sessions = [
+        _decode_session(raw) for raw in outer.get(1, []) if isinstance(raw, bytes)
+    ]
+    page = outer.get(2, [b""])[0]
+    token = _text(decode_fields(page), 1) if isinstance(page, bytes) and page else ""
+    return sessions, token
+
+
+def _decode_session(raw: bytes) -> KagentSession:
     fields = decode_fields(raw)
     failure = fields.get(9, [b""])[0]
     failure_fields = decode_fields(failure) if isinstance(failure, bytes) else {}
     session_id = _text(fields, 1)
+    workspace = fields.get(16, [b""])[0]
     return KagentSession(
         id=session_id,
         state=_enum(RuntimeState, _number(fields, 7)),
@@ -520,6 +578,11 @@ def decode_session_response(message: bytes) -> KagentSession:
         failure_reason=_text(failure_fields, 1),
         failure_message=_text(failure_fields, 2),
         name=_text(fields, 13),
+        workspace=(
+            SessionWorkspace.decode(workspace)
+            if isinstance(workspace, bytes) and workspace
+            else None
+        ),
     )
 
 
@@ -573,6 +636,12 @@ class KagentClient:
     # ---- SessionService ----------------------------------------------------------------
 
     async def _session_call(self, method: str, message: bytes) -> KagentSession:
+        messages = await self._session_frames(method, message)
+        if not messages:
+            raise OutcomeUnknown(f"SessionService {method} returned no message")
+        return decode_session_response(messages[0])
+
+    async def _session_frames(self, method: str, message: bytes) -> list[bytes]:
         try:
             response = await self._client.post(
                 f"{_SESSION_SERVICE}/{method}",
@@ -617,9 +686,7 @@ class KagentClient:
                 f"SessionService {method} failed (grpc {status}): {detail or ''}".strip(),
                 grpc_status=int(status) if status.isdigit() else None,
             )
-        if not messages:
-            raise OutcomeUnknown(f"SessionService {method} returned no message")
-        return decode_session_response(messages[0])
+        return messages
 
     async def create_session(
         self,
@@ -628,6 +695,7 @@ class KagentClient:
         request_id: str,
         name: str = "",
         credentials: tuple[SessionCredential, ...] = (),
+        workspace: SessionWorkspace | None = None,
     ) -> KagentSession:
         """Create a Session. Retrying with the same ``request_id`` returns the same Session."""
         message = (
@@ -635,10 +703,27 @@ class KagentClient:
             + _field_str(3, request_id)
             + _field_str(4, name)
         )
+        if workspace is not None:
+            message += _field_bytes(6, workspace.encode())
         message += b"".join(
             _field_bytes(7, credential.encode()) for credential in credentials
         )
         return await self._session_call("CreateSession", message)
+
+    async def list_sessions(self) -> list[KagentSession]:
+        """Every Session the client's user created, following the page tokens.
+
+        An empty page is a response with no message, so it is not an error here.
+        """
+        sessions: list[KagentSession] = []
+        cursor = ""
+        while True:
+            page = _field_varint(1, 100) + _field_str(2, cursor)
+            frames = await self._session_frames("ListSessions", _field_bytes(3, page))
+            batch, cursor = decode_session_list(frames[0]) if frames else ([], "")
+            sessions.extend(batch)
+            if not cursor:
+                return sessions
 
     async def get_session(self, session_id: str) -> KagentSession:
         return await self._session_call("GetSession", _field_str(1, session_id))

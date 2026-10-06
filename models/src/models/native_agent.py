@@ -49,14 +49,6 @@ class ProviderExtension(ContractModel):
     output_tokens: Annotated[int, Field(ge=0, strict=True)] | None = None
 
 
-class WorkspaceBinding(ContractModel):
-    workspace_id: Identifier
-    runtime_endpoint: Identifier
-    observed_at: AwareDatetime
-    observed_state: Literal["ready", "unavailable", "unknown"] = "unknown"
-    capabilities: tuple[CapabilityResult, ...] = ()
-
-
 class NativeBinding(ContractModel):
     binding_id: Identifier
     workspace_id: Identifier
