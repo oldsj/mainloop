@@ -13,7 +13,8 @@
     "test": "../scripts/e2e-guard.sh && playwright test",
     "test:ui": "../scripts/e2e-guard.sh && playwright test --ui",
     "test:debug": "../scripts/e2e-guard.sh && playwright test --debug",
-    "test:report": "playwright show-report"
+    "test:report": "playwright show-report",
+    "test:unit": "node --test src/lib/*.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

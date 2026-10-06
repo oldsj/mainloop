@@ -50,6 +50,19 @@ jobs:
         working-directory: backend
         run: uv run --no-sync python -m unittest discover -s tests -t . -v
 
+  frontend-unit:
+    name: Frontend unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run pure-module tests
+        working-directory: frontend
+        run: node --test src/lib/*.test.ts
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

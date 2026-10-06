@@ -7,6 +7,7 @@
   import { allSessionMessages } from '$lib/stores/sessionMessages';
   import { api, SendError, type MainThreadInfo } from '$lib/api';
   import { draftMessage } from '$lib/stores/draftMessage';
+  import { deliveryNotices } from '$lib/delivery';
   import { connection } from '$lib/stores/connection';
   import ConversationView from './ConversationView.svelte';
   import MainThreadHeader from './MainThreadHeader.svelte';
@@ -23,6 +24,7 @@
     native && !!mainThread?.native?.turn_in_flight
   );
   const offline = $derived($connection.status === 'offline');
+  const notices = $derived(deliveryNotices(mainThread?.native?.deliveries ?? []));
   const placeholder = $derived(
     offline
       ? 'Backend unreachable…'
@@ -266,6 +268,7 @@
       allSessionMessages.loadSession(session.id);
     } catch (error) {
       console.error('Failed to send session message:', error);
+      sendError = `${error instanceof Error && error.message ? error.message : 'Could not send the message.'} Your message was not sent.`;
     }
   }
 </script>
@@ -286,6 +289,8 @@
       error={sendError}
       inputDisabled={busy || offline}
       onDismissError={() => (sendError = null)}
+      deliveryNotices={native ? notices : undefined}
+      onRetry={(message) => handleSendMessage({ message: message.content })}
       emptyStateTitle={loaded ? '$ mainloop --help' : '$ connecting'}
       emptyStateMessage={loaded ? 'Start a conversation to begin' : 'Waiting for the backend…'}
     />

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MainThreadInfo } from '$lib/api';
   import { connection } from '$lib/stores/connection';
+  import { threadStatus } from '$lib/delivery';
   import NativeIdentityStrip from './NativeIdentityStrip.svelte';
 
   let {
@@ -15,23 +16,31 @@
   const model = $derived((native?.model ?? 'claude').replace(/^claude-/, ''));
   const pending = $derived(info.topics.reduce((n, t) => n + t.pending, 0));
   // The last state we fetched is stale once the backend is unreachable; don't show it as live.
+  // A failed or unconfirmed last delivery is never shown as ready or working.
   const status = $derived(
-    $connection.status === 'offline'
-      ? 'unreachable'
-      : native?.turn_in_flight
-        ? 'working'
-        : native?.session_state === 'suspended'
-          ? 'idle'
-          : 'ready'
+    threadStatus({
+      offline: $connection.status === 'offline',
+      deliveries: native?.deliveries ?? [],
+      sessionState: native?.session_state
+    })
+  );
+  const label = $derived(
+    status === 'failed'
+      ? 'last message failed'
+      : status === 'unconfirmed'
+        ? 'last message unconfirmed'
+        : status
   );
   const dot = $derived(
     status === 'ready'
       ? 'bg-term-green'
       : status === 'idle'
         ? 'bg-term-fg-muted'
-        : status === 'unreachable'
+        : status === 'unreachable' || status === 'failed'
           ? 'bg-term-red'
-          : 'bg-term-yellow animate-pulse'
+          : status === 'unconfirmed'
+            ? 'bg-term-yellow'
+            : 'bg-term-yellow animate-pulse'
   );
 </script>
 
@@ -41,7 +50,7 @@
 >
   <div class="flex items-center gap-2 px-4 py-1.5">
     <span class="h-2 w-2 shrink-0 rounded-full {dot}" aria-hidden="true"></span>
-    <span class="text-term-fg" data-testid="mt-state">{status}</span>
+    <span class="text-term-fg" data-testid="mt-state">{label}</span>
     <span>·</span>
     <span data-testid="mt-model">{model}</span>
     {#if pending > 0}
