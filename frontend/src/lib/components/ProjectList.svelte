@@ -27,7 +27,6 @@
     error = null;
     try {
       const workspace = await api.createWorkspaceFromRepo(repo.trim(), branch.trim());
-      void projects.fetchProjects();
       repo = '';
       branch = '';
       formOpen = false;
@@ -35,6 +34,8 @@
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to create workspace';
     } finally {
+      // The project may exist even when the workspace was refused.
+      void projects.fetchProjects();
       busy = false;
     }
   }

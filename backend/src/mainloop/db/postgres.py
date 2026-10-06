@@ -336,9 +336,12 @@ END $$;
 -- Create indexes if they don't exist
 CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
 
--- One project per repository per user. Older databases may lack the table-level UNIQUE;
--- get_or_create_project relies on it for ON CONFLICT.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_user_full_name ON projects(user_id, full_name);
+-- One project per repository per user, whatever the letter case: GitHub names are
+-- case-insensitive. get_or_create_project relies on this index for ON CONFLICT. Creating it
+-- fails if a user already has two projects that differ only in case.
+DROP INDEX IF EXISTS idx_projects_user_full_name;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_user_lower_full_name
+    ON projects(user_id, lower(full_name));
 
 -- Add new columns to sessions for unified model
 DO $$
@@ -668,36 +671,6 @@ class Database:
             open_issue_count=row.get("open_issue_count", 0),
         )
 
-    async def create_project(self, project: Project) -> Project:
-        """Create a new project."""
-        if not self._pool:
-            return project
-        async with self.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO projects
-                (id, user_id, owner, name, full_name, description, default_branch,
-                 avatar_url, html_url, created_at, last_used_at, metadata_updated_at,
-                 open_pr_count, open_issue_count)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                """,
-                project.id,
-                project.user_id,
-                project.owner,
-                project.name,
-                project.full_name,
-                project.description,
-                project.default_branch,
-                project.avatar_url,
-                project.html_url,
-                project.created_at,
-                project.last_used_at,
-                project.metadata_updated_at,
-                project.open_pr_count,
-                project.open_issue_count,
-            )
-        return project
-
     async def get_project(self, project_id: str) -> Project | None:
         """Get a project by ID."""
         if not self._pool:
@@ -716,7 +689,7 @@ class Database:
             return None
         async with self.connection() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM projects WHERE user_id = $1 AND full_name = $2",
+                "SELECT * FROM projects WHERE user_id = $1 AND lower(full_name) = lower($2)",
                 user_id,
                 full_name,
             )
@@ -799,8 +772,8 @@ class Database:
     async def get_or_create_project(self, user_id: str, repo: GithubRepo) -> Project:
         """Find the user's project for a GitHub repository, creating it if absent.
 
-        One ``INSERT ... ON CONFLICT`` on ``(user_id, full_name)``, so concurrent callers get
-        the same row. An existing project keeps its stored URL and metadata and is touched. A
+        One ``INSERT ... ON CONFLICT`` on ``(user_id, lower(full_name))``, so concurrent callers get
+        the same row and ``Foo/Bar`` and ``foo/bar`` are one project. An existing project keeps its stored URL and metadata and is touched. A
         new one stores the canonical URL and an empty ``default_branch``: nothing here asks
         GitHub, so the repository default is unknown until a refresh and clones use the remote's.
         """
@@ -821,7 +794,7 @@ class Database:
                 (id, user_id, owner, name, full_name, default_branch, html_url,
                  created_at, last_used_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-                ON CONFLICT (user_id, full_name)
+                ON CONFLICT (user_id, lower(full_name))
                 DO UPDATE SET last_used_at = EXCLUDED.last_used_at
                 RETURNING *
                 """,

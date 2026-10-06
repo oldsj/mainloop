@@ -29,14 +29,17 @@ workspace operations.
 
 - A workspace is created from a project or straight from a repository. Naming a repository
   (`owner/name` or `https://github.com/owner/name[.git]`) finds the owner's project for it, or
-  creates one, in the same request. The home page's **New workspace** control (next to the project
-  list) takes a repository and an optional branch, creates the workspace and opens it; errors
-  (`422`, `502`) show inline. The project page creates one from an existing project.
+  creates one, in the same request. Repository names are matched case-insensitively (GitHub's
+  rule): `Foo/Bar` and `foo/bar` are one project, shown with the case it was first created with.
+  The desktop sidebar's **New workspace** control (next to the project list) takes a repository
+  and an optional branch, creates the workspace and opens it; a `422` and other API errors show
+  inline. The project page creates one from an existing project.
 - A project created this way stores the canonical `https://github.com/owner/name` URL and no
   default branch: nothing asks GitHub at this point. With no `ref` the clone uses the remote's
-  default branch, and a project **refresh** later records the default branch. A project that
-  already exists for that repository keeps its stored URL and metadata. The project outlives a
-  workspace that kagent then rejects, so a retry finds it again.
+  default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch
+  from GitHub. A project that already exists for that repository keeps its stored URL and
+  metadata. A bad `branch` or `ref` is refused before any project is created; the project does
+  outlive a workspace that kagent then rejects, so a retry finds it again.
 - Create sends `CreateSession` with the workspace. If kagent rejects the repository (for example
   its host is not in the Agent Harness `git.origins`) nothing is kept and the API returns `422`.
   If the outcome is unknown, the rows are kept and **refresh** retries the same request.
@@ -168,8 +171,12 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
     `project_id` is `404`.
   - `ref` defaults to the project's default branch, or is empty (the remote's default) when the
     project has none recorded.
-  - `branch` is the local branch to create or switch to. When empty it is the project's default
-    branch, or a new `mainloop/<8 hex>` branch while the default is not recorded.
+  - `branch` is the local branch to create or switch to. When empty it is always a new
+    `mainloop/<8 hex>` branch, whatever `ref` or the project's default is, so the working branch
+    never depends on hidden project state and never shadows `origin/<default>` with a different
+    commit. Send the project's default branch explicitly to work on it.
+  - A bad `branch`, `ref` or other field is `422` with the first problem, for example
+    `branch: Value error, ...`.
 - `GET /workspaces` and `GET /workspaces/{id}` return lifecycle records for the current user.
 - `POST /workspaces/{id}/suspend`, `/resume`, `/refresh`.
 - `DELETE /workspaces/{id}` returns `204`.

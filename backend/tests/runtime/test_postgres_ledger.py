@@ -45,7 +45,8 @@ from mainloop.runtime.kagent_client import (
     SessionWorkspace,
     Unreachable,
 )
-from mainloop.services.github_repo import GithubRepo
+from mainloop.services.github_pr import RepoMetadata
+from mainloop.services.github_repo import GithubRepo, parse_github_repo
 from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
 
 from models import (
@@ -2117,6 +2118,25 @@ class ProjectFromRepoTests(KagentFakeCase):
         await db.update_project_metadata(project.id, default_branch="")
         self.assertEqual((await db.get_project(project.id)).default_branch, "trunk")
 
+    async def test_repository_names_differing_only_in_case_are_one_project(self):
+        first = await db.get_or_create_project(self.user, GithubRepo("Foo", "Bar"))
+        second = await db.get_or_create_project(self.user, GithubRepo("foo", "bar"))
+        third = await db.get_or_create_project(
+            self.user, parse_github_repo("FOO/BAR.GIT")
+        )
+        self.assertEqual({first.id, second.id, third.id}, {first.id})
+        self.assertEqual(len(await self.rows()), 1)
+        self.assertEqual(second.full_name, "Foo/Bar")  # the case it was created with
+        self.assertEqual(second.html_url, "https://github.com/Foo/Bar")
+        projects = await asyncio.gather(
+            *(
+                db.get_or_create_project(self.user, GithubRepo("x", name))
+                for name in ("Y", "y", "Y", "y")
+            )
+        )
+        self.assertEqual({p.id for p in projects}, {projects[0].id})
+        self.assertEqual(len(await self.rows()), 2)
+
     async def client(self) -> httpx.AsyncClient:
         for patcher in (
             patch.object(settings, "owner_id", self.user),
@@ -2167,6 +2187,61 @@ class ProjectFromRepoTests(KagentFakeCase):
             ],
         )
 
+    async def test_post_workspaces_with_a_bad_branch_or_ref_stores_no_project(self):
+        client = await self.client()
+        for body in (
+            {"repo": "oldsj/mainloop", "branch": "bad branch"},
+            {"repo": "oldsj/mainloop", "branch": "a..b"},
+            {"repo": "oldsj/mainloop", "branch": "x", "ref": "bad ref"},
+        ):
+            with self.subTest(body=body):
+                response = await client.post("/workspaces", json=body)
+                self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(await self.rows(), [])
+        self.assertEqual(self.fake.created_workspaces(), [])
+
+    async def test_post_workspaces_without_a_branch_generates_one(self):
+        client = await self.client()
+        response = await client.post(
+            "/workspaces", json={"repo": "Oldsj/Mainloop", "ref": "v1.2"}
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        manifest = response.json()["manifest"]
+        self.assertEqual(manifest["ref"], "v1.2")
+        self.assertRegex(manifest["branch"], r"^mainloop/[0-9a-f]{8}$")
+        (project,) = await self.rows()
+        self.assertEqual(project["full_name"], "Oldsj/Mainloop")
+
+    async def test_the_refresh_endpoint_records_the_default_branch(self):
+        client = await self.client()
+        response = await client.post(
+            "/workspaces", json={"repo": "oldsj/mainloop", "branch": "x"}
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        (project,) = await self.rows()
+        self.assertEqual(project["default_branch"], "")
+        metadata = RepoMetadata(
+            owner="oldsj",
+            name="mainloop",
+            full_name="oldsj/mainloop",
+            description="d",
+            default_branch="trunk",
+            avatar_url="https://avatars.example/u",
+            html_url="https://github.com/oldsj/mainloop",
+            open_issues_count=3,
+        )
+        with patch.object(api, "get_repo_metadata", AsyncMock(return_value=metadata)):
+            response = await client.post(f"/projects/{project['id']}/refresh")
+        self.assertEqual(response.status_code, 200, response.text)
+        stored = await db.get_project(project["id"])
+        self.assertEqual(
+            (stored.default_branch, stored.description, stored.open_issue_count),
+            ("trunk", "d", 3),
+        )
+        # From now on a workspace without a ref starts from the recorded default.
+        response = await client.post("/workspaces", json={"repo": "oldsj/mainloop"})
+        self.assertEqual(response.json()["manifest"]["ref"], "trunk")
+
     async def test_post_workspaces_with_an_invalid_repo_stores_nothing(self):
         client = await self.client()
         response = await client.post(
@@ -2178,11 +2253,11 @@ class ProjectFromRepoTests(KagentFakeCase):
         self.assertEqual(self.fake.created_workspaces(), [])
 
 
-class ProjectsFromBeforeTheUniqueConstraintTests(PostgresTestCase):
-    """A database whose ``projects`` table never got ``UNIQUE(user_id, full_name)``.
+class ProjectsFromBeforeTheCaseInsensitiveIndexTests(PostgresTestCase):
+    """A database that has projects but not ``idx_projects_user_lower_full_name`` yet.
 
-    ``CREATE TABLE IF NOT EXISTS`` leaves such a table alone, so the migration has to add the
-    unique index that ``get_or_create_project``'s ``ON CONFLICT`` needs.
+    ``get_or_create_project``'s ``ON CONFLICT (user_id, lower(full_name))`` needs the index, so
+    the migration has to build it over the rows that are already there.
     """
 
     @classmethod
@@ -2191,28 +2266,44 @@ class ProjectsFromBeforeTheUniqueConstraintTests(PostgresTestCase):
         asyncio.run(
             _admin(
                 cls.url,
-                "ALTER TABLE projects DROP CONSTRAINT projects_user_id_full_name_key",
-                "DROP INDEX idx_projects_user_full_name",
+                "DROP INDEX idx_projects_user_lower_full_name",
+                """INSERT INTO projects (id, user_id, owner, name, full_name, html_url,
+                                        default_branch)
+                   VALUES ('proj-old', 'user-old', 'Foo', 'Bar', 'Foo/Bar',
+                           'https://github.com/Foo/Bar', 'trunk'),
+                          ('proj-other', 'user-old', 'foo', 'baz', 'foo/baz',
+                           'https://github.com/foo/baz', 'main')""",
             )
         )
 
-    async def test_the_migration_adds_the_constraint_and_can_run_again(self):
-        repo = GithubRepo("oldsj", "mainloop")
+    async def test_the_migration_indexes_the_existing_rows_and_can_run_again(self):
+        repo = GithubRepo("foo", "bar")
         with self.assertRaises(asyncpg.InvalidColumnReferenceError):
-            await db.get_or_create_project(self.user, repo)
+            await db.get_or_create_project("user-old", repo)
         await _init_schema(self.url)
         await _init_schema(self.url)
         projects = await asyncio.gather(
-            *(db.get_or_create_project(self.user, repo) for _ in range(8))
+            *(db.get_or_create_project("user-old", repo) for _ in range(8))
         )
-        self.assertEqual({p.id for p in projects}, {projects[0].id})
+        self.assertEqual({p.id for p in projects}, {"proj-old"})
+        self.assertEqual(projects[0].default_branch, "trunk")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM projects WHERE user_id='user-old'"
+            ),
+            2,
+        )
         with self.assertRaises(asyncpg.UniqueViolationError):
             await self.pool.execute(
                 """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
-                   VALUES ($1,$2,'oldsj','mainloop','oldsj/mainloop','u')""",
-                f"proj-{uuid.uuid4().hex[:8]}",
-                self.user,
+                   VALUES ('proj-dup','user-old','FOO','BAR','FOO/BAR','u')"""
             )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM pg_indexes WHERE indexname='idx_projects_user_full_name'"
+            ),
+            0,
+        )
 
 
 if __name__ == "__main__":

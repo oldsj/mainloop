@@ -15,6 +15,8 @@ class ParseGithubRepoTests(unittest.TestCase):
             "oldsj/mainloop",
             "  oldsj/mainloop  ",
             "oldsj/mainloop.git",
+            "oldsj/mainloop.GIT",
+            "oldsj/mainloop.Git/",
             "oldsj/mainloop/",
             "https://github.com/oldsj/mainloop",
             "https://github.com/oldsj/mainloop.git",
@@ -30,6 +32,9 @@ class ParseGithubRepoTests(unittest.TestCase):
     def test_case_is_kept(self):
         self.assertEqual(
             parse_github_repo("Foo-Bar/My_Repo.js").full_name, "Foo-Bar/My_Repo.js"
+        )
+        self.assertEqual(
+            parse_github_repo("Oldsj/Mainloop.GIT").full_name, "Oldsj/Mainloop"
         )
 
     def test_owner_and_name_charsets_and_lengths(self):

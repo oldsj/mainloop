@@ -34,10 +34,10 @@ class CreateWorkspaceRequest(BaseModel):
     # found or created (``owner/name`` or ``https://github.com/owner/name[.git]``).
     project_id: StrictStr | None = None
     repo: StrictStr | None = None
-    # Local branch to create or switch to; empty means the project's default branch, or a new
-    # ``mainloop/<id>`` branch while the default is not yet known.
+    # Local branch to create or switch to; empty always means a new ``mainloop/<8 hex>`` branch.
     branch: StrictStr = ""
-    # Branch, tag or commit to start from; empty means the project's default branch.
+    # Branch, tag or commit to start from; empty means the project's default branch, or the
+    # remote's default when none is recorded.
     ref: StrictStr = ""
     depth: Annotated[int, Field(ge=0, le=1000)] = 0
     dev: WorkspaceDev = WorkspaceDev()
@@ -72,30 +72,40 @@ async def create_workspace(
     owner: str = Depends(current_user),
 ):
     """Create a branch workspace: a session whose kagent Session has the repository cloned in."""
+    branch = request.branch or f"mainloop/{uuid.uuid4().hex[:8]}"
+
+    def manifest_for(repo_url: str, ref: str) -> WorkspaceManifest:
+        try:
+            return WorkspaceManifest(
+                repo_url=repo_url,
+                ref=ref,
+                branch=branch,
+                depth=request.depth,
+                agent_kind=request.agent_kind,
+                dev=request.dev,
+            )
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(part) for part in first["loc"])
+            raise HTTPException(
+                status_code=422, detail=f"{where}: {first['msg']}"
+            ) from exc
+
     if request.repo is not None:
         try:
             repo = parse_github_repo(request.repo)
         except InvalidGithubRepo as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Refuse a bad branch or ref before the project is found or created.
+        manifest_for(repo.html_url, request.ref)
         project = await workspaces.project_for_repo(owner, repo)
     else:
         project = await workspaces.project_for(owner, request.project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-    default_branch = project["default_branch"] or ""
-    try:
-        manifest = WorkspaceManifest(
-            repo_url=project["html_url"],
-            ref=request.ref or default_branch,
-            branch=request.branch
-            or default_branch
-            or f"mainloop/{uuid.uuid4().hex[:8]}",
-            depth=request.depth,
-            agent_kind=request.agent_kind,
-            dev=request.dev,
-        )
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    manifest = manifest_for(
+        project["html_url"], request.ref or project["default_branch"] or ""
+    )
     return await _run(owner, workspaces.create(owner, project["id"], manifest))
 
 

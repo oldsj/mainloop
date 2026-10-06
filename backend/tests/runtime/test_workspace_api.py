@@ -102,12 +102,49 @@ class CreateWorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         await self.post(repo="oldsj/mainloop", branch="b", ref="v1.2")
         self.assertEqual(self.manifest().ref, "v1.2")
 
-    async def test_an_omitted_branch_uses_the_default_or_a_generated_name(self):
-        await self.post(repo="oldsj/mainloop")
-        self.assertEqual(self.manifest().branch, "main")
-        self.project_for_repo.return_value = {**PROJECT, "default_branch": ""}
-        await self.post(repo="oldsj/mainloop", branch="")
-        self.assertRegex(self.manifest().branch, r"^mainloop/[0-9a-f]{8}$")
+    async def test_an_omitted_branch_is_always_a_generated_branch(self):
+        # Whatever the stored default and the ref: never the default branch, never hidden state.
+        for default in ("main", ""):
+            for body in (
+                {"repo": "oldsj/mainloop"},
+                {"repo": "oldsj/mainloop", "branch": ""},
+                {"repo": "oldsj/mainloop", "ref": "v1.2"},
+                {
+                    "repo": "oldsj/mainloop",
+                    "ref": "0123456789abcdef0123456789abcdef01234567",
+                },
+                {"project_id": "proj-1"},
+            ):
+                with self.subTest(default=default, body=body):
+                    self.project_for_repo.return_value = {
+                        **PROJECT,
+                        "default_branch": default,
+                    }
+                    self.project_for.return_value = {
+                        **PROJECT,
+                        "default_branch": default,
+                    }
+                    response = await self.post(**body)
+                    self.assertEqual(response.status_code, 201, response.text)
+                    self.assertRegex(self.manifest().branch, r"^mainloop/[0-9a-f]{8}$")
+                    self.assertEqual(self.manifest().ref, body.get("ref") or default)
+
+    async def test_a_bad_branch_or_ref_is_refused_before_the_project_is_touched(self):
+        for body in (
+            {"repo": "oldsj/mainloop", "branch": "bad branch"},
+            {"repo": "oldsj/mainloop", "branch": "a..b"},
+            {"repo": "oldsj/mainloop", "branch": "-x"},
+            {"repo": "oldsj/mainloop", "ref": "bad ref"},
+        ):
+            with self.subTest(body=body):
+                response = await self.post(**body)
+                self.assertEqual(response.status_code, 422, response.text)
+                detail = response.json()["detail"]
+                self.assertRegex(detail, r"^(branch|ref): ")
+                self.assertNotIn("\n", detail)
+                self.assertNotIn("errors.pydantic.dev", detail)
+        self.project_for_repo.assert_not_awaited()
+        self.create.assert_not_called()
 
     async def test_exactly_one_of_project_id_or_repo(self):
         for body in (

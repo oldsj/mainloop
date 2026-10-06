@@ -1,7 +1,8 @@
 """Parse and canonicalise a GitHub repository reference.
 
 The one place that turns user input (``owner/name`` or an ``https://github.com`` URL) into a
-repository identity. Everything that stores or clones a user-supplied repository goes through
+repository identity. Case is kept for display; GitHub names are case-insensitive, so the
+database keys projects on the lower-cased ``full_name``. Everything that stores or clones a user-supplied repository goes through
 ``parse_github_repo`` so a project has one canonical ``full_name`` and ``html_url``.
 """
 
@@ -52,7 +53,7 @@ def parse_github_repo(value: str) -> GithubRepo:
             "Repository must be owner/name or https://github.com/owner/name"
         )
     owner, name = parts
-    name = name.removesuffix(".git")
+    name = re.sub(r"\.git$", "", name, flags=re.IGNORECASE)
     if not _OWNER.fullmatch(owner):
         raise InvalidGithubRepo(f"Invalid GitHub owner: {owner!r}")
     if not _NAME.fullmatch(name) or name in (".", ".."):
