@@ -5,7 +5,7 @@ Mainloop is responsive across mobile and desktop viewports.
 ## Desktop
 
 - Chat takes main area
-- Sessions sidebar always visible on the right; the inbox and projects below it size to their content
+- Sessions sidebar always visible on the right; the inbox and projects below it size to their content. The projects section also holds the **New workspace** control (repository, optional branch).
 - No tab bar
 
 ## Mobile

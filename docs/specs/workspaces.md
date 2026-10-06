@@ -27,6 +27,19 @@ workspace operations.
 
 ## Create, suspend, resume, delete
 
+- A workspace is created from a project or straight from a repository. Naming a repository
+  (`owner/name` or `https://github.com/owner/name[.git]`) finds the owner's project for it, or
+  creates one, in the same request. Repository names are matched case-insensitively (GitHub's
+  rule): `Foo/Bar` and `foo/bar` are one project, shown with the case it was first created with.
+  The desktop sidebar's **New workspace** control (next to the project list) takes a repository
+  and an optional branch, creates the workspace and opens it; a `422` and other API errors show
+  inline. The project page creates one from an existing project.
+- A project created this way stores the canonical `https://github.com/owner/name` URL and no
+  default branch: nothing asks GitHub at this point. With no `ref` the clone uses the remote's
+  default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch
+  from GitHub. A project that already exists for that repository keeps its stored URL and
+  metadata. A bad `branch` or `ref` is refused before any project is created; the project does
+  outlive a workspace that kagent then rejects, so a retry finds it again.
 - Create sends `CreateSession` with the workspace. If kagent rejects the repository (for example
   its host is not in the Agent Harness `git.origins`) nothing is kept and the API returns `422`.
   If the outcome is unknown, the rows are kept and **refresh** retries the same request.
@@ -128,9 +141,14 @@ Mainloop's side: for example a create whose reply was lost and whose row was the
 The operator sweep lists them and deletes only when asked:
 
 ```bash
+# In the production image (it has no uv; the command is on PATH):
+mainloop-sweep-kagent-sessions            # list only
+mainloop-sweep-kagent-sessions --delete   # delete what it listed
+
+# Local development, from the repository:
 cd backend
-uv run mainloop-sweep-kagent-sessions            # list only
-uv run mainloop-sweep-kagent-sessions --delete   # delete what it listed
+uv run mainloop-sweep-kagent-sessions
+uv run mainloop-sweep-kagent-sessions --delete
 ```
 
 It uses the backend's environment (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `KAGENT_GATEWAY_URL`, `KAGENT_USER_ID`) and pages
@@ -141,8 +159,24 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 
 ## API
 
-- `POST /workspaces` creates a workspace: `{project_id, branch, ref?, depth?, dev?, agent_kind?}`.
-  `ref` defaults to the project's default branch. Returns `201`.
+- `POST /workspaces` creates a workspace:
+  `{project_id | repo, branch?, ref?, depth?, dev?, agent_kind?}`. Send exactly one of
+  `project_id` and `repo`, otherwise `422`. Returns `201`.
+  - `repo` is a GitHub repository as `owner/name` or `https://github.com/owner/name[.git]`
+    (one optional trailing slash). It is validated strictly: github.com over https only, an
+    owner of letters, digits and hyphens (at most 39, no leading or trailing hyphen), a name of
+    letters, digits, `.`, `_` and `-` (at most 100), and nothing else: extra path segments,
+    credentials, a port, a query or a fragment are `422`. The project is found or created
+    atomically by `(user, owner/name)`, so concurrent requests share one project. An unknown
+    `project_id` is `404`.
+  - `ref` defaults to the project's default branch, or is empty (the remote's default) when the
+    project has none recorded.
+  - `branch` is the local branch to create or switch to. When empty it is always a new
+    `mainloop/<8 hex>` branch, whatever `ref` or the project's default is, so the working branch
+    never depends on hidden project state and never shadows `origin/<default>` with a different
+    commit. Send the project's default branch explicitly to work on it.
+  - A bad `branch`, `ref` or other field is `422` with the first problem, for example
+    `branch: Value error, ...`.
 - `GET /workspaces` and `GET /workspaces/{id}` return lifecycle records for the current user.
 - `POST /workspaces/{id}/suspend`, `/resume`, `/refresh`.
 - `DELETE /workspaces/{id}` returns `204`.

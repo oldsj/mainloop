@@ -7,6 +7,7 @@ from typing import Any
 
 import asyncpg
 from mainloop.config import settings
+from mainloop.services.github_repo import GithubRepo
 
 from models import (
     Conversation,
@@ -112,8 +113,7 @@ CREATE TABLE IF NOT EXISTS projects (
     last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata_updated_at TIMESTAMPTZ,
     open_pr_count INTEGER DEFAULT 0,
-    open_issue_count INTEGER DEFAULT 0,
-    UNIQUE(user_id, full_name)
+    open_issue_count INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used_at DESC);
@@ -334,6 +334,17 @@ END $$;
 
 -- Create indexes if they don't exist
 CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
+
+-- One project per repository per user, whatever the letter case: GitHub names are
+-- case-insensitive. get_or_create_project relies on this index for ON CONFLICT. Creating it
+-- fails if a user already has two projects that differ only in case.
+DROP INDEX IF EXISTS idx_projects_user_full_name;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_user_lower_full_name
+    ON projects(user_id, lower(full_name));
+-- The older exact-case UNIQUE is redundant, and it is not an ON CONFLICT arbiter: two
+-- concurrent first inserts of one repository could still fail on it. Drop it only after
+-- the lower-case index exists, so uniqueness is never absent.
+ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_user_id_full_name_key;
 
 -- Add new columns to sessions for unified model
 DO $$
@@ -645,35 +656,23 @@ class Database:
 
     # ============= Project Operations =============
 
-    async def create_project(self, project: Project) -> Project:
-        """Create a new project."""
-        if not self._pool:
-            return project
-        async with self.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO projects
-                (id, user_id, owner, name, full_name, description, default_branch,
-                 avatar_url, html_url, created_at, last_used_at, metadata_updated_at,
-                 open_pr_count, open_issue_count)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                """,
-                project.id,
-                project.user_id,
-                project.owner,
-                project.name,
-                project.full_name,
-                project.description,
-                project.default_branch,
-                project.avatar_url,
-                project.html_url,
-                project.created_at,
-                project.last_used_at,
-                project.metadata_updated_at,
-                project.open_pr_count,
-                project.open_issue_count,
-            )
-        return project
+    def _row_to_project(self, row: asyncpg.Record) -> Project:
+        return Project(
+            id=row["id"],
+            user_id=row["user_id"],
+            owner=row["owner"],
+            name=row["name"],
+            full_name=row["full_name"],
+            description=row.get("description"),
+            default_branch=row.get("default_branch") or "",
+            avatar_url=row.get("avatar_url"),
+            html_url=row["html_url"],
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+            metadata_updated_at=row.get("metadata_updated_at"),
+            open_pr_count=row.get("open_pr_count", 0),
+            open_issue_count=row.get("open_issue_count", 0),
+        )
 
     async def get_project(self, project_id: str) -> Project | None:
         """Get a project by ID."""
@@ -685,22 +684,7 @@ class Database:
             )
         if not row:
             return None
-        return Project(
-            id=row["id"],
-            user_id=row["user_id"],
-            owner=row["owner"],
-            name=row["name"],
-            full_name=row["full_name"],
-            description=row.get("description"),
-            default_branch=row.get("default_branch", "main"),
-            avatar_url=row.get("avatar_url"),
-            html_url=row["html_url"],
-            created_at=row["created_at"],
-            last_used_at=row["last_used_at"],
-            metadata_updated_at=row.get("metadata_updated_at"),
-            open_pr_count=row.get("open_pr_count", 0),
-            open_issue_count=row.get("open_issue_count", 0),
-        )
+        return self._row_to_project(row)
 
     async def get_project_by_repo(self, user_id: str, full_name: str) -> Project | None:
         """Get a project by GitHub full_name (owner/repo)."""
@@ -708,28 +692,13 @@ class Database:
             return None
         async with self.connection() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM projects WHERE user_id = $1 AND full_name = $2",
+                "SELECT * FROM projects WHERE user_id = $1 AND lower(full_name) = lower($2)",
                 user_id,
                 full_name,
             )
         if not row:
             return None
-        return Project(
-            id=row["id"],
-            user_id=row["user_id"],
-            owner=row["owner"],
-            name=row["name"],
-            full_name=row["full_name"],
-            description=row.get("description"),
-            default_branch=row.get("default_branch", "main"),
-            avatar_url=row.get("avatar_url"),
-            html_url=row["html_url"],
-            created_at=row["created_at"],
-            last_used_at=row["last_used_at"],
-            metadata_updated_at=row.get("metadata_updated_at"),
-            open_pr_count=row.get("open_pr_count", 0),
-            open_issue_count=row.get("open_issue_count", 0),
-        )
+        return self._row_to_project(row)
 
     async def list_projects(self, user_id: str, limit: int = 20) -> list[Project]:
         """List user's projects ordered by last_used_at."""
@@ -741,31 +710,14 @@ class Database:
                 user_id,
                 limit,
             )
-        return [
-            Project(
-                id=row["id"],
-                user_id=row["user_id"],
-                owner=row["owner"],
-                name=row["name"],
-                full_name=row["full_name"],
-                description=row.get("description"),
-                default_branch=row.get("default_branch", "main"),
-                avatar_url=row.get("avatar_url"),
-                html_url=row["html_url"],
-                created_at=row["created_at"],
-                last_used_at=row["last_used_at"],
-                metadata_updated_at=row.get("metadata_updated_at"),
-                open_pr_count=row.get("open_pr_count", 0),
-                open_issue_count=row.get("open_issue_count", 0),
-            )
-            for row in rows
-        ]
+        return [self._row_to_project(row) for row in rows]
 
     async def update_project_metadata(
         self,
         project_id: str,
         description: str | None = None,
         avatar_url: str | None = None,
+        default_branch: str | None = None,
         open_pr_count: int | None = None,
         open_issue_count: int | None = None,
     ):
@@ -783,6 +735,10 @@ class Database:
         if avatar_url is not None:
             updates.append(f"avatar_url = ${param_idx}")
             params.append(avatar_url)
+            param_idx += 1
+        if default_branch:
+            updates.append(f"default_branch = ${param_idx}")
+            params.append(default_branch)
             param_idx += 1
         if open_pr_count is not None:
             updates.append(f"open_pr_count = ${param_idx}")
@@ -816,36 +772,45 @@ class Database:
                 project_id,
             )
 
-    async def get_or_create_project_from_url(
-        self, user_id: str, repo_url: str
-    ) -> Project:
-        """Get or create a project from a GitHub URL."""
-        # Parse owner/repo from URL
-        repo_url_clean = repo_url.replace("https://github.com/", "").replace(".git", "")
-        parts = repo_url_clean.split("/")
-        if len(parts) < 2:
-            raise ValueError(f"Invalid GitHub URL: {repo_url}")
+    async def get_or_create_project(self, user_id: str, repo: GithubRepo) -> Project:
+        """Find the user's project for a GitHub repository, creating it if absent.
 
-        owner = parts[0]
-        name = parts[1]
-        full_name = f"{owner}/{name}"
-
-        # Try to get existing project
-        project = await self.get_project_by_repo(user_id, full_name)
-        if project:
-            # Touch to update last_used_at
-            await self.touch_project(project.id)
-            return project
-
-        # Create new project
+        One ``INSERT ... ON CONFLICT`` on ``(user_id, lower(full_name))``, so concurrent callers get
+        the same row and ``Foo/Bar`` and ``foo/bar`` are one project. An existing project keeps its stored URL and metadata and is touched. A
+        new one stores the canonical URL and an empty ``default_branch``: nothing here asks
+        GitHub, so the repository default is unknown until a refresh and clones use the remote's.
+        """
         project = Project(
             user_id=user_id,
-            owner=owner,
-            name=name,
-            full_name=full_name,
-            html_url=repo_url,
+            owner=repo.owner,
+            name=repo.name,
+            full_name=repo.full_name,
+            default_branch="",
+            html_url=repo.html_url,
         )
-        return await self.create_project(project)
+        if not self._pool:
+            return project
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO projects
+                (id, user_id, owner, name, full_name, default_branch, html_url,
+                 created_at, last_used_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                ON CONFLICT (user_id, lower(full_name))
+                DO UPDATE SET last_used_at = EXCLUDED.last_used_at
+                RETURNING *
+                """,
+                project.id,
+                project.user_id,
+                project.owner,
+                project.name,
+                project.full_name,
+                project.default_branch,
+                project.html_url,
+                datetime.now(timezone.utc),
+            )
+        return self._row_to_project(row)
 
     # ============= Queue Item Operations =============
 

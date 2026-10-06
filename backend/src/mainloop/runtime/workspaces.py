@@ -36,6 +36,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SessionError,
 )
+from mainloop.services.github_repo import GithubRepo
 from mainloop.sse import notify_workspace_updated
 
 from models import (
@@ -249,6 +250,16 @@ async def project_for(user_id: str, project_id: str) -> dict | None:
             user_id,
         )
     return dict(row) if row else None
+
+
+async def project_for_repo(user_id: str, repo: GithubRepo) -> dict:
+    """Find or create the owner's project for a GitHub repository (same shape as ``project_for``)."""
+    project = await db.get_or_create_project(user_id, repo)
+    return {
+        "id": project.id,
+        "html_url": project.html_url,
+        "default_branch": project.default_branch,
+    }
 
 
 async def create(
