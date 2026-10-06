@@ -5,10 +5,13 @@ workspace row can outlive its Session if kagent was unreachable. Mainloop cannot
 itself, so this lists every Session kagent holds for ``KAGENT_USER_ID`` that no binding names.
 It only lists unless ``--delete`` is given.
 
-Run it with the backend's environment (database and kagent settings)::
+Run it with the backend's environment (database and kagent settings). The production image has
+no ``uv``; the command is on PATH::
 
-    uv run mainloop-sweep-kagent-sessions            # list
-    uv run mainloop-sweep-kagent-sessions --delete   # list, then delete
+    mainloop-sweep-kagent-sessions            # list
+    mainloop-sweep-kagent-sessions --delete   # list, then delete
+
+In local development use ``uv run mainloop-sweep-kagent-sessions`` from ``backend/``.
 
 Run it when Mainloop is quiet. A Session whose create has just returned but whose binding is not
 yet written looks orphaned for a moment, so each Session is checked against the database again

@@ -1191,13 +1191,13 @@ class CommitSummary(BaseModel):
 
 
 async def list_recent_commits(
-    repo_url: str, branch: str = "main", limit: int = 10
+    repo_url: str, branch: str | None = "main", limit: int = 10
 ) -> list[CommitSummary]:
     """List recent commits on a branch.
 
     Args:
         repo_url: GitHub repository URL
-        branch: Branch name (default: main)
+        branch: Branch name (default: main); None lists the repository's default branch
         limit: Maximum number of commits to return
 
     Returns:
@@ -1211,8 +1211,8 @@ async def list_recent_commits(
         response = await gh.rest.repos.async_list_commits(
             owner=owner,
             repo=repo,
-            sha=branch,
             per_page=limit,
+            **({"sha": branch} if branch else {}),
         )
         return [
             CommitSummary(

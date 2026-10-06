@@ -580,7 +580,7 @@ async def get_project_detail(
     # Fetch GitHub data in parallel
     open_prs = await list_open_prs(project.html_url, limit=10)
     recent_commits = await list_recent_commits(
-        project.html_url, branch=project.default_branch, limit=10
+        project.html_url, branch=project.default_branch or None, limit=10
     )
 
     # Fetch sessions for this project
@@ -610,6 +610,7 @@ async def refresh_project_metadata(
             project_id,
             description=metadata.description,
             avatar_url=metadata.avatar_url,
+            default_branch=metadata.default_branch,
             open_issue_count=metadata.open_issues_count,
         )
 

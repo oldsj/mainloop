@@ -210,7 +210,7 @@
           <div class="flex max-h-[30%] min-h-0 shrink-0 flex-col overflow-hidden border-b border-term-border">
             <TasksPanel desktop={true} />
           </div>
-          <div class="max-h-[25%] shrink-0 overflow-hidden">
+          <div class="max-h-[45%] shrink-0 overflow-y-auto">
             <ProjectList />
           </div>
         </div>

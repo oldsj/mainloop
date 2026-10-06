@@ -20,10 +20,25 @@ async function errorDetail(response: Response, fallback: string): Promise<string
   try {
     const body = await response.json();
     if (typeof body?.detail === 'string') return body.detail;
+    // FastAPI's own request validation answers with a list of {msg}.
+    if (Array.isArray(body?.detail)) {
+      const messages = body.detail.map((item: { msg?: unknown }) => item?.msg).filter(Boolean);
+      if (messages.length) return messages.join('; ');
+    }
   } catch {
     // not JSON (e.g. a proxy's error page)
   }
   return fallback;
+}
+
+async function postWorkspace(body: Record<string, unknown>): Promise<WorkspaceLifecycle> {
+  const response = await apiFetch(`${API_URL}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(await errorDetail(response, 'Failed to create workspace'));
+  return response.json();
 }
 
 /** fetch that tells the connection store when the backend can't be reached at all. */
@@ -439,13 +454,19 @@ export const api = {
     branch: string,
     options: { ref?: string; dev?: WorkspaceDev } = {}
   ): Promise<WorkspaceLifecycle> {
-    const response = await apiFetch(`${API_URL}/workspaces`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, branch, ...options })
-    });
-    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to create workspace'));
-    return response.json();
+    return postWorkspace({ project_id: projectId, branch, ...options });
+  },
+
+  /**
+   * Create a workspace from a GitHub repository (`owner/name` or an https://github.com URL).
+   * The backend finds or creates the project. An empty branch lets it choose one.
+   */
+  async createWorkspaceFromRepo(
+    repo: string,
+    branch = '',
+    options: { ref?: string; dev?: WorkspaceDev } = {}
+  ): Promise<WorkspaceLifecycle> {
+    return postWorkspace({ repo, branch, ...options });
   },
 
   async deleteWorkspace(workspaceId: string): Promise<void> {
