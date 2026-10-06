@@ -2083,6 +2083,35 @@ class ProjectFromRepoTests(KagentFakeCase):
         stored = (await self.rows())[0]
         self.assertEqual(stored["id"], projects[0].id)
 
+    async def test_first_creation_under_real_contention_never_raises(self):
+        """Every connection is open up front, so concurrent first inserts really overlap.
+
+        Only the ``lower(full_name)`` index may be unique on a project: ``ON CONFLICT`` absorbs
+        conflicts on its own arbiter index only, so a second unique index would raise here.
+        """
+        pool = await asyncpg.create_pool(self.url, min_size=8, max_size=8)
+        saved, db._pool = db._pool, pool
+        try:
+            for round_ in range(50):
+                name = f"Repo{round_}"
+                repos = [
+                    GithubRepo("Oldsj", name if i % 2 else name.lower())
+                    for i in range(8)
+                ]
+                results = await asyncio.gather(
+                    *(db.get_or_create_project(self.user, repo) for repo in repos),
+                    return_exceptions=True,
+                )
+                errors = [r for r in results if isinstance(r, BaseException)]
+                self.assertEqual(errors, [], f"round {round_}")
+                self.assertEqual({r.id for r in results}, {results[0].id})
+            rows = await self.rows()
+            self.assertEqual(len(rows), 50)
+            self.assertEqual(len({row["full_name"].lower() for row in rows}), 50)
+        finally:
+            db._pool = saved
+            await pool.close()
+
     async def test_projects_are_per_user_and_per_repository(self):
         other_user = f"user-{uuid.uuid4().hex[:8]}"
         mine = await db.get_or_create_project(self.user, self.REPO)
@@ -2267,6 +2296,9 @@ class ProjectsFromBeforeTheCaseInsensitiveIndexTests(PostgresTestCase):
             _admin(
                 cls.url,
                 "DROP INDEX idx_projects_user_lower_full_name",
+                # What an older database has: the exact-case table constraint.
+                """ALTER TABLE projects ADD CONSTRAINT projects_user_id_full_name_key
+                   UNIQUE (user_id, full_name)""",
                 """INSERT INTO projects (id, user_id, owner, name, full_name, html_url,
                                         default_branch)
                    VALUES ('proj-old', 'user-old', 'Foo', 'Bar', 'Foo/Bar',
@@ -2300,7 +2332,15 @@ class ProjectsFromBeforeTheCaseInsensitiveIndexTests(PostgresTestCase):
             )
         self.assertEqual(
             await self.pool.fetchval(
-                "SELECT count(*) FROM pg_indexes WHERE indexname='idx_projects_user_full_name'"
+                """SELECT count(*) FROM pg_indexes
+                   WHERE indexname IN ('idx_projects_user_full_name',
+                                       'projects_user_id_full_name_key')"""
+            ),
+            0,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM pg_constraint WHERE conname='projects_user_id_full_name_key'"
             ),
             0,
         )

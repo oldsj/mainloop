@@ -113,8 +113,7 @@ CREATE TABLE IF NOT EXISTS projects (
     last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata_updated_at TIMESTAMPTZ,
     open_pr_count INTEGER DEFAULT 0,
-    open_issue_count INTEGER DEFAULT 0,
-    UNIQUE(user_id, full_name)
+    open_issue_count INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_last_used ON projects(last_used_at DESC);
@@ -342,6 +341,10 @@ CREATE INDEX IF NOT EXISTS idx_queue_items_read_at ON queue_items(read_at);
 DROP INDEX IF EXISTS idx_projects_user_full_name;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_user_lower_full_name
     ON projects(user_id, lower(full_name));
+-- The older exact-case UNIQUE is redundant, and it is not an ON CONFLICT arbiter: two
+-- concurrent first inserts of one repository could still fail on it. Drop it only after
+-- the lower-case index exists, so uniqueness is never absent.
+ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_user_id_full_name_key;
 
 -- Add new columns to sessions for unified model
 DO $$
