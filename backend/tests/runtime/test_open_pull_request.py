@@ -163,6 +163,50 @@ class InputTests(unittest.TestCase):
                 with self.assertRaises(creation.PolicyError):
                     creation._project_repo({**workspace, key: value}, body)
 
+    def test_branch_refusal_reasons_preserve_private_scope(self):
+        from mainloop.services.workspace_authority import (
+            ScopeUnavailable,
+            repository_scope,
+        )
+
+        authority = {
+            "owner": "owner",
+            "name": "repo",
+            "full_name": "owner/repo",
+            "html_url": "https://github.com/owner/repo",
+            "default_branch": "trunk",
+            "role": "agent",
+            "mcp_grant_kind": "workspace",
+            "session_project_id": "project-1",
+            "session_repo": "https://github.com/owner/repo",
+            "workspace_repo": "https://github.com/owner/repo",
+            "session_branch": "feature/fix",
+            "workspace_branch": "feature/fix",
+            "kagent_session_id": "runtime-1",
+        }
+        for branch, reason in (
+            ("trunk", "default branch is not allowed"),
+            ("other", "branch does not match this workspace"),
+        ):
+            with self.subTest(branch=branch):
+                with self.assertRaisesRegex(creation.PolicyError, reason):
+                    repository_scope(
+                        authority,
+                        project_id="project-1",
+                        branch=branch,
+                        require_runtime=True,
+                    )
+                with self.assertRaises(ScopeUnavailable):
+                    repository_scope(
+                        authority, project_id="other-project", branch=branch
+                    )
+                with self.assertRaises(ScopeUnavailable):
+                    repository_scope(
+                        {**authority, "kagent_session_id": None},
+                        project_id="project-1",
+                        branch=branch,
+                    )
+
     def test_branch_sha_and_authority_arguments(self):
         for branch in (
             "main:feature",
@@ -382,9 +426,17 @@ class PRPostgresTests(PostgresTestCase):
             self.assertTrue(result.isError, changes)
         self.assertEqual(len(self.fake.posts), 1)
 
+        mismatch = await self.call(branch="feature/other")
+        self.assertIn("branch does not match this workspace", mismatch.content[0].text)
+        await self.pool.execute(
+            "UPDATE projects SET default_branch='trunk' WHERE id=$1", self.project.id
+        )
+        default_mismatch = await self.call(branch="trunk")
+        self.assertIn("default branch is not allowed", default_mismatch.content[0].text)
         await self.workspace("trunk")
-        default_head = await self.call(branch="trunk")
+        default_head = await self.call(branch="trunk", request_id="default-head")
         self.assertTrue(default_head.isError)
+        self.assertIn("default branch is not allowed", default_head.content[0].text)
         self.assertEqual(len(self.fake.posts), 1)
 
     async def test_sibling_workspace_identity_cannot_publish_another_branch(self):

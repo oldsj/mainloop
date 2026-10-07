@@ -130,7 +130,10 @@ class GitHub:
             await self.hook(req)
         path = req.url.path.removeprefix(f"/repos/{self.repo['full_name']}")
         if path in self.errors:
-            return httpx.Response(self.errors[path], json={"message": "fixture"})
+            error = self.errors[path]
+            if isinstance(error, tuple):
+                return httpx.Response(error[0], json=error[1])
+            return httpx.Response(error, json={"message": "fixture"})
         if req.method == "PUT":
             if json.loads(req.content) != {"sha": SHA, "merge_method": "squash"}:
                 raise AssertionError("merge must pin SHA and squash")
@@ -194,6 +197,107 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
                 self.fake.rules = rules
                 self.assertTrue((await self.evidence())["ci"]["green"])
         self.assertFalse(self.fake.puts)
+
+    async def test_plan_unavailable_preserves_mainloop_checks_and_evidence(self):
+        endpoints = {
+            "protection": "/branches/main/protection",
+            "rules": "/rules/branches/main",
+        }
+        message = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+        for missing in (("protection",), ("rules",), ("protection", "rules")):
+            with self.subTest(missing=missing):
+                self.fake.errors = {
+                    endpoints[key]: (403, {"message": message}) for key in missing
+                }
+                self.fake.runs = [self.fake.run(10)]
+                facts = await self.evidence()
+                self.assertTrue(facts["ci"]["green"])
+                self.assertEqual(
+                    facts["ci"]["github_rules_unavailable_on_plan"], list(missing)
+                )
+                self.fake.runs = [self.fake.run(10, conclusion="failure")]
+                self.assertFalse((await self.evidence())["ci"]["green"])
+                self.fake.runs = []
+                self.assertFalse((await self.evidence())["ci"]["green"])
+        self.assertFalse(self.fake.puts)
+
+    async def test_default_head_refusal_is_precise(self):
+        self.fake.pr["head"]["ref"] = "main"
+        with self.assertRaisesRegex(PolicyError, "default branch is not allowed"):
+            await self.evidence()
+        self.assertFalse(self.fake.puts)
+
+    async def test_malformed_plan_refusal_fails_closed(self):
+        for endpoint in ("/branches/main/protection", "/rules/branches/main"):
+
+            async def handle(req, endpoint=endpoint):
+                if req.url.path.endswith(endpoint):
+                    return httpx.Response(403, text="not JSON")
+                return await self.fake.handle(req)
+
+            with self.subTest(endpoint=endpoint):
+                async with github_merge.GitHubMergeClient(
+                    transport=httpx.MockTransport(handle)
+                ) as client:
+                    with self.assertRaises(GitHubError):
+                        await client.evidence("owner/repo", 17, SHA)
+
+    async def test_plan_refusal_after_partial_rules_fails_closed(self):
+        async def handle(req):
+            if "/rules/branches/" in req.url.path:
+                if req.url.params.get("page") == "1":
+                    return httpx.Response(200, json=[{"type": "deletion"}] * 100)
+                return httpx.Response(
+                    403,
+                    json={
+                        "message": "Upgrade to GitHub Pro or make this repository public to enable this feature."
+                    },
+                )
+            return await self.fake.handle(req)
+
+        async with github_merge.GitHubMergeClient(
+            transport=httpx.MockTransport(handle)
+        ) as client:
+            with self.assertRaises(GitHubError):
+                await client.evidence("owner/repo", 17, SHA)
+
+    async def test_plan_refusal_on_other_endpoints_fails_closed(self):
+        self.fake.errors["/pulls/17"] = (
+            403,
+            {
+                "message": "Upgrade to GitHub Pro or make this repository public to enable this feature."
+            },
+        )
+        with self.assertRaises(GitHubError):
+            await self.evidence()
+
+    async def test_ambiguous_plan_errors_fail_closed(self):
+        message = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+        for endpoint in ("/branches/main/protection", "/rules/branches/main"):
+            for error in (
+                (403, {"message": "Resource not accessible by integration"}),
+                (403, {"message": message + " extra"}),
+                (403, {"documentation_url": "https://docs.github.com/rest"}),
+                (403, [message]),
+                (401, {"message": message}),
+                (500, {"message": message}),
+            ):
+                with self.subTest(endpoint=endpoint, error=error):
+                    self.fake.errors = {endpoint: error}
+                    with self.assertRaises(GitHubError):
+                        await self.evidence()
+
+    async def test_available_rules_still_enforced_when_other_endpoint_unavailable(self):
+        message = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+        self.fake.errors = {"/branches/main/protection": (403, {"message": message})}
+        self.fake.rules = [{"type": "required_signatures"}]
+        with self.assertRaises(PolicyError):
+            await self.evidence()
+        self.fake.errors = {"/rules/branches/main": (403, {"message": message})}
+        self.fake.protection = {
+            "required_status_checks": {"checks": [], "contexts": ["absent"]}
+        }
+        self.assertFalse((await self.evidence())["ci"]["green"])
 
     async def test_zero_approval_and_linear_history(self):
         self.fake.errors["/branches/main/protection"] = 404
@@ -863,6 +967,7 @@ class MergeTests(MergeFixture):
             {**arguments, "request_id": "workspace-wrong-head"},
         )
         self.assertTrue(denied.isError)
+        self.assertIn("branch does not match this workspace", denied.content[0].text)
         self.assertEqual(len(self.fake.puts), 0)
 
         wrong_project = await db.get_or_create_project(
@@ -907,7 +1012,21 @@ class MergeTests(MergeFixture):
             {**arguments, "request_id": "workspace-default-head"},
         )
         self.assertTrue(denied_default.isError)
+        self.assertIn("default branch is not allowed", denied_default.content[0].text)
         self.assertEqual(len(self.fake.puts), 0)
+
+    async def test_prepare_records_plan_unavailability(self):
+        message = "Upgrade to GitHub Pro or make this repository public to enable this feature."
+        self.fake.errors = {
+            "/branches/main/protection": (403, {"message": message}),
+            "/rules/branches/main": (403, {"message": message}),
+        }
+        proposal = await self.prepare()
+        self.assertEqual(
+            proposal["ci"]["github_rules_unavailable_on_plan"], ["protection", "rules"]
+        )
+        self.assertTrue(proposal["ci"]["green"])
+        self.assertFalse(self.fake.puts)
 
     async def test_prepare_captures_immutable_bounded_presentation(self):
         proposal = await self.prepare()
