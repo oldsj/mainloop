@@ -21,7 +21,7 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
 
 ## Creating and messaging sessions
 
-- `/agents` offers Claude Code and Codex. `POST /sessions` accepts `agent_kind`; when omitted, it defaults to Claude Code.
+- `/agents` offers Claude Code and Codex. `POST /sessions` accepts a configured provider profile ID or alias in `agent_kind`; when omitted, it defaults to Claude Code. See [provider profiles](providers.md).
 - Each native session maps to one kagent Session (created on first use, resumed if suspended) on the configured kagent Agent for its kind. Mainloop does not create a Claude SDK worker for each session.
 - The ordinary `/agents` creation path creates an ungranted `agent` binding. The separate
   validated `POST /workspaces` path enrolls a new owner workspace with a per-session MCP grant

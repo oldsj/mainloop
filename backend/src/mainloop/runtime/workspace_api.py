@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 from models import (
-    WorkspaceAgentKind,
+    ProviderProfileId,
     WorkspaceDev,
     WorkspaceLifecycle,
     WorkspaceManifest,
@@ -41,7 +41,7 @@ class CreateWorkspaceRequest(BaseModel):
     ref: StrictStr = ""
     depth: Annotated[int, Field(ge=0, le=1000)] = 0
     dev: WorkspaceDev = WorkspaceDev()
-    agent_kind: WorkspaceAgentKind = WorkspaceAgentKind.CLAUDE
+    agent_kind: ProviderProfileId = "claude"
 
     @model_validator(mode="after")
     def exactly_one_target(self):
@@ -72,6 +72,12 @@ async def create_workspace(
     owner: str = Depends(current_user),
 ):
     """Create a branch workspace: a session whose kagent Session has the repository cloned in."""
+    from mainloop.providers import registry
+
+    try:
+        profile = registry().resolve(request.agent_kind, "agent", selecting=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     branch = request.branch or f"mainloop/{uuid.uuid4().hex[:8]}"
 
     def manifest_for(repo_url: str, ref: str) -> WorkspaceManifest:
@@ -81,7 +87,7 @@ async def create_workspace(
                 ref=ref,
                 branch=branch,
                 depth=request.depth,
-                agent_kind=request.agent_kind,
+                agent_kind=profile.id,
                 dev=request.dev,
             )
         except ValidationError as exc:

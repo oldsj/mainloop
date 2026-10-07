@@ -191,32 +191,14 @@ async def close_client() -> None:
 
 
 def agent_name(kind: str, role: str = "agent") -> str:
-    """Return the kagent Agent that runs a native agent kind.
-
-    The main thread has its own Agent. A session the owner starts (role ``agent``, which includes
-    every workspace) runs on a workspace Agent, whose Harness never expires the Session; a child
-    runs on the shorter-lived default Agent.
-    """
-    if role == "main":
-        return settings.kagent_main_agent
-    workspace = role == "agent"
-    if kind == "claude":
-        return (
-            settings.kagent_workspace_claude_agent
-            if workspace
-            else settings.kagent_claude_agent
-        )
-    if kind == "codex":
-        return (
-            settings.kagent_workspace_codex_agent
-            if workspace
-            else settings.kagent_codex_agent
-        )
-    raise ValueError(f"no kagent Agent is configured for native agent {kind}")
+    return agent_ref(kind, role).name
 
 
 def agent_ref(kind: str, role: str = "agent") -> AgentRef:
-    return AgentRef(settings.kagent_namespace, agent_name(kind, role))
+    from mainloop.providers import registry
+
+    ref = registry().resolve(kind, role).agents[role]
+    return AgentRef(ref.namespace, ref.name)
 
 
 def create_request_id(session_id: str) -> str:
@@ -736,7 +718,9 @@ async def create_binding(
     mcp_grant_kind: str | None = None,
     conn=None,
 ) -> dict:
-    agent_name(kind)  # an unconfigured kind fails here, before a row exists
+    from mainloop.providers import registry
+
+    kind = registry().resolve(kind, role, selecting=True).id
     from mainloop.runtime.agent_credentials import (
         credential_reference,
         reference_data,

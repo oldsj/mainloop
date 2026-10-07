@@ -3,9 +3,11 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+from models.provider import ProviderProfileId
 
 
 def _uuid() -> str:
@@ -55,7 +57,7 @@ class Session(BaseModel):
     )
     topic: str | None = Field(None, description="Topic this session works for")
 
-    agent_kind: Literal["claude", "codex"] | None = Field(
+    agent_kind: ProviderProfileId | None = Field(
         None, description="Native runtime kind from the session binding"
     )
 
@@ -156,7 +158,7 @@ class SessionCreate(BaseModel):
     )
 
     # Optional native runtime selection. Omitted sessions use Claude Code by default.
-    agent_kind: Literal["claude", "codex"] | None = Field(
+    agent_kind: ProviderProfileId | None = Field(
         None, description="Native agent kind; defaults to Claude Code"
     )
 
@@ -193,7 +195,7 @@ class NativeSessionInfo(BaseModel):
     """Identity strip for a session bound to a native agent session in kagent."""
 
     session_id: str
-    kind: Literal["claude", "codex"]
+    kind: ProviderProfileId
     role: str = "agent"  # agent | main | child
     parent_session_id: str | None = None
     topic: str | None = None

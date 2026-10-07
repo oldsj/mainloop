@@ -1,3 +1,23 @@
+export type ProviderProfileId = string;
+
+export interface ProviderProfile {
+  id: ProviderProfileId;
+  display_name: string;
+  runtime_adapter: 'kagent';
+  native_provider: 'claude' | 'codex';
+  configuration_revision: string;
+  agents: Partial<Record<'main' | 'child' | 'agent', { namespace: string; name: string }>>;
+  aliases: ProviderProfileId[];
+  enabled: boolean;
+  capabilities: {
+    capability: string;
+    state: 'proved' | 'partial' | 'unsupported' | 'unknown';
+    scope: 'fixture' | 'live' | 'unverified';
+    evidence_ref: string | null;
+    detail: string | null;
+  }[];
+}
+
 /**
  * API client for backend communication
  */

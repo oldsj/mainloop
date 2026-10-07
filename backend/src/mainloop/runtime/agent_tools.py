@@ -55,8 +55,12 @@ class Ctx:
 class AgentService:
     def __init__(self, store: Store, allowed_kinds: frozenset[str] | None = None):
         self.store = store
-        self.allowed_kinds = allowed_kinds or frozenset(
-            k.strip() for k in settings.native_child_kinds.split(",") if k.strip()
+        self.allowed_kinds = (
+            allowed_kinds
+            if allowed_kinds is not None
+            else frozenset(
+                k.strip() for k in settings.native_child_kinds.split(",") if k.strip()
+            )
         )
 
     async def open_pull_request(self, ctx: Ctx, **arguments) -> dict:
@@ -215,13 +219,22 @@ class AgentService:
             raise HTTPException(status_code=400, detail="a task brief is required")
         sid = ctx.binding["session_id"]
         try:
+            from mainloop.providers import registry
+
+            providers = registry()
+            kind = providers.resolve(kind, "child", selecting=True).id
+            allowed = frozenset(
+                providers.resolve(name, "child").id for name in self.allowed_kinds
+            )
             policy.check_spawn(
                 ctx.actor,
                 kind=kind,
-                allowed_kinds=self.allowed_kinds,
+                allowed_kinds=allowed,
                 live_children_of_actor=await self.store.count_live_children(sid),
                 live_children_global=await self.store.count_live_children(None),
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=f"[kind] {exc}") from exc
         except PolicyError as exc:
             raise HTTPException(
                 status_code=403, detail=f"[{exc.code}] {exc.message}"

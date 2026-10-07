@@ -52,6 +52,7 @@ from models import (
     MainThread,
     NativeSessionInfo,
     Project,
+    ProviderProfile,
     QueueItem,
     QueueItemResponse,
     Session,
@@ -189,6 +190,9 @@ async def startup_event():
 
     # Fail before touching anything when agent tokens could not be issued.
     require_token_key()
+    from mainloop.providers import registry
+
+    registry()  # Validate operator routing before connecting or starting workflows.
 
     # Apply mocks before anything else
     _apply_mock_github()
@@ -1048,6 +1052,14 @@ async def _get_next_session_color(user_id: str) -> str:
     return SESSION_COLORS[len(existing_sessions) % len(SESSION_COLORS)]
 
 
+@app.get("/providers", response_model=list[ProviderProfile])
+async def list_providers(owner: str = Depends(current_user)):
+    """Owner-only configured profiles, including disabled profiles and scoped evidence."""
+    from mainloop.providers import registry
+
+    return list(registry().profiles)
+
+
 @app.post("/sessions", response_model=Session)
 async def create_session(
     request: SessionCreate,
@@ -1055,6 +1067,15 @@ async def create_session(
 ):
     """Create a new session with its own conversation."""
     import uuid
+
+    from mainloop.providers import registry
+
+    try:
+        profile = registry().resolve(
+            request.agent_kind or "claude", "agent", selecting=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Ensure main thread exists
     main_thread_id = get_or_start_main_thread(user_id)
@@ -1086,7 +1107,7 @@ async def create_session(
 
     from mainloop.runtime import native_sessions
 
-    await native_sessions.create_binding(session.id, request.agent_kind or "claude")
+    await native_sessions.create_binding(session.id, profile.id)
     await db.update_session(session.id, status=SessionStatus.ACTIVE)
     await native_sessions.submit_message(session.id, request.prompt)
     return await db.get_session(session.id)

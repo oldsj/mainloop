@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import AwareDatetime, ConfigDict, Field, StrictStr, field_validator
 
 from models.native_agent import ContractModel
+from models.provider import ProviderProfileId
 
 WorkspaceIdentifier = Annotated[StrictStr, Field(min_length=1)]
 
@@ -90,7 +91,7 @@ class WorkspaceManifest(WorkspaceContractModel):
     branch: Annotated[StrictStr, Field(min_length=1, max_length=255)]
     # Clone depth; 0 means the kagent default.
     depth: Annotated[int, Field(ge=0, le=1000, strict=True)] = 0
-    agent_kind: WorkspaceAgentKind = WorkspaceAgentKind.CLAUDE
+    agent_kind: ProviderProfileId = "claude"
     dev: WorkspaceDev = WorkspaceDev()
 
     @field_validator("repo_url")
