@@ -1,6 +1,17 @@
 """Shared Pydantic models for mainloop."""
 
 from models.conversation import Conversation, Message
+from models.environment import (
+    DefinitionReference,
+    DevEnvironment,
+    EnvironmentVersion,
+    PackageDeclaration,
+    PackageSpec,
+    ProjectEnvironmentGrant,
+    ProjectEnvironmentSelection,
+    RegisterEnvironment,
+    SelectEnvironment,
+)
 from models.native_agent import (
     AttentionItem,
     AttentionRequest,
@@ -94,3 +105,15 @@ __all__ += [
 
 
 __all__ += ["ProviderAgentRef", "ProviderProfile", "ProviderProfileId"]
+
+__all__ += [
+    "DefinitionReference",
+    "DevEnvironment",
+    "EnvironmentVersion",
+    "PackageDeclaration",
+    "PackageSpec",
+    "ProjectEnvironmentGrant",
+    "ProjectEnvironmentSelection",
+    "RegisterEnvironment",
+    "SelectEnvironment",
+]
