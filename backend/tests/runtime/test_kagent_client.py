@@ -489,3 +489,122 @@ class ReconnectAndCancelTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HITLWireTests(unittest.IsolatedAsyncioTestCase):
+    async def test_identity_decoder_and_message_projection_preserve_extension(self):
+        from mainloop.runtime.kagent_client import (
+            Message,
+            Task,
+            TaskStatus,
+            _field_bytes,
+            _field_str,
+            decode_session_response,
+        )
+
+        from models.hitl import HITL_EXTENSION
+
+        raw = (
+            _field_str(1, "session")
+            + _field_str(2, "creator")
+            + _field_str(5, "revision")
+            + _field_str(6, "session-session.team.actors.resources.substrate.ate.dev")
+            + _field_str(14, "context")
+            + _field_bytes(15, AgentRef("team", "agent").encode())
+        )
+        decoded = decode_session_response(_field_bytes(1, raw))
+        self.assertEqual(
+            (
+                decoded.creator,
+                decoded.prepared_revision,
+                decoded.agent,
+                decoded.context_id,
+            ),
+            ("creator", "revision", AgentRef("team", "agent"), "context"),
+        )
+        projection = TaskProjection()
+        message = Message(
+            message_id="one",
+            extensions=[HITL_EXTENSION],
+            metadata={
+                "unknown": {"keep": True},
+                HITL_EXTENSION: {"type": "ask_user_request", "id": "a"},
+            },
+        )
+        task = Task(
+            id="task",
+            context_id="context",
+            status=TaskStatus(state="input-required", message=message),
+        )
+        self.assertTrue(projection.apply(StreamEvent(task=task)))
+        self.assertEqual(projection.status_message.metadata["unknown"], {"keep": True})
+        changed = task.model_copy(deep=True)
+        changed.status.message.metadata[HITL_EXTENSION]["id"] = "b"
+        self.assertTrue(projection.apply(StreamEvent(task=changed)))
+        self.assertFalse(projection.apply(StreamEvent(task=changed)))
+
+    async def test_structured_continuation_uses_exact_task_and_activates_extension(
+        self,
+    ):
+        import json
+
+        from models.hitl import HITL_EXTENSION, AskUserAnswer, AskUserResponse
+
+        requests = []
+
+        async def handler(request):
+            requests.append(request)
+            body = json.loads(request.content)
+            if body["method"] == "GetExtendedAgentCard":
+                result = {"capabilities": {"extensions": [{"uri": HITL_EXTENSION}]}}
+            elif body["method"] == "ListTasks":
+                result = {"tasks": [], "nextPageToken": "next"}
+            else:
+                result = {
+                    "task": {
+                        "id": "original-task",
+                        "contextId": "original-context",
+                        "status": {"state": "working"},
+                    }
+                }
+            return httpx.Response(200, json={"jsonrpc": "2.0", "result": result})
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://fake"
+        ) as http:
+            client = KagentClient("http://fake", user_id="configured", client=http)
+            self.assertTrue(await client.supports_hitl(AGENT))
+            self.assertEqual(
+                await client.list_tasks_page(AGENT, "original-context", "cursor", 7),
+                ([], "next"),
+            )
+            response = AskUserResponse(
+                type="ask_user_response",
+                id="child-question",
+                answers=(AskUserAnswer(answer=("answer",)),),
+            )
+            events = [
+                e
+                async for e in client.send_hitl_response(
+                    AGENT,
+                    response=response,
+                    message_id="stable-message",
+                    task_id="original-task",
+                    context_id="original-context",
+                )
+            ]
+            self.assertEqual(events[0].task.id, "original-task")
+        for request in requests:
+            self.assertEqual(request.headers["A2A-Extensions"], HITL_EXTENSION)
+            self.assertEqual(request.headers["x-user-id"], "configured")
+            self.assertEqual(request.url.path, AGENT.path)
+        wire = json.loads(requests[-1].content)["params"]["message"]
+        self.assertEqual(
+            (wire["taskId"], wire["contextId"], wire["messageId"]),
+            ("original-task", "original-context", "stable-message"),
+        )
+        self.assertEqual(wire["metadata"][HITL_EXTENSION]["id"], "child-question")
+        self.assertEqual(wire["parts"], [])
+        self.assertEqual(
+            json.loads(requests[1].content)["params"]["pageToken"], "cursor"
+        )

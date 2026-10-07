@@ -133,7 +133,7 @@ async def save_projection(conn: asyncpg.Connection, projection: HITLProjection) 
     request_id = await conn.fetchval(
         """INSERT INTO native_hitl_requests(id,owner_id,outer_key,snapshot)
            VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(owner_id,outer_key) DO UPDATE
-           SET snapshot=excluded.snapshot,observed_at=now() RETURNING id""",
+           SET snapshot=excluded.snapshot,observed_at=now(),superseded=false RETURNING id""",
         projection.id,
         projection.owner_id,
         outer_key,
@@ -163,7 +163,136 @@ async def save_projection(conn: asyncpg.Connection, projection: HITLProjection) 
         projection.owner_id,
         request_id,
     )
+    await refresh_card(conn, request_id)
+    await collapse_alias_cards(conn, [leaf.key() for leaf in projection.leaves])
     return request_id
+
+
+async def supersede_task_projections(conn, projection):
+    """Retire historical observations, not unavailable verified parent routes.
+
+    Caller saves the exact freshly observed projection in this same transaction.
+    Leaves remain in the old snapshot for receipt lookup/idempotency, but no longer
+    participate in route selection or card collapsing.
+    """
+    if not conn.is_in_transaction():
+        raise RuntimeError("Supersession and current projection require a transaction")
+    rows = await conn.fetch(
+        """SELECT snapshot FROM native_hitl_requests WHERE owner_id=$1
+        AND snapshot->'outer'->>'gateway'=$2 AND snapshot->'outer'->>'runtime_session_id'=$3
+        AND snapshot->'outer'->>'task_id'=$4 AND id<>$5 AND NOT superseded""",
+        projection.owner_id,
+        projection.outer.gateway,
+        projection.outer.runtime_session_id,
+        projection.outer.task_id,
+        projection.id,
+    )
+    previous = [HITLProjection.model_validate(_decode(row["snapshot"])) for row in rows]
+    keys = {leaf.key() for item in [projection, *previous] for leaf in item.leaves}
+    for key in sorted(keys):
+        await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", key)
+    for old in previous:
+        retired = old.model_copy(
+            update={
+                "availability": "unavailable",
+                "unavailable_reason": "Pending request was superseded",
+            }
+        )
+        await conn.execute(
+            "UPDATE native_hitl_requests SET snapshot=$2::jsonb,superseded=true WHERE id=$1",
+            old.id,
+            retired.model_dump_json(),
+        )
+        await conn.execute(
+            "DELETE FROM native_hitl_aliases WHERE request_id=$1", old.id
+        )
+        await refresh_card(conn, old.id)
+        await conn.execute(
+            "UPDATE queue_items SET context=context || jsonb_build_object('route_request_id',$2::text) WHERE hitl_request_id=$1",
+            old.id,
+            projection.id,
+        )
+
+
+async def refresh_card(conn, request_id):
+    """Derive inbox presentation from projection and durable delivery, never vice versa."""
+    await conn.execute(
+        """UPDATE queue_items q SET
+        title=CASE WHEN t.state='uncertain' OR t.state='sending' THEN 'Decision delivery uncertain'
+            WHEN t.state='accepted' THEN 'Decision delivered'
+            WHEN t.state='rejected_transport' THEN 'Decision destination unavailable'
+            WHEN t.state='recorded' THEN 'Decision recorded'
+            WHEN r.snapshot->>'availability'='pending' THEN 'Session needs input'
+            ELSE 'Session input unavailable' END,
+        status=CASE WHEN r.superseded THEN 'expired' WHEN t.state='accepted' THEN 'responded' ELSE 'pending' END,
+        context=jsonb_build_object('hitl_request_id',r.id,'availability',r.snapshot->>'availability',
+            'unavailable_reason',r.snapshot->>'unavailable_reason','transport_state',t.state,
+            'observed_at',r.observed_at)
+        FROM native_hitl_requests r
+        LEFT JOIN LATERAL (
+            SELECT transport.state FROM native_hitl_aliases a
+            JOIN native_hitl_response_members m ON m.leaf_key=a.leaf_key
+            JOIN native_hitl_response_transport transport USING(owner_id,action_id)
+            WHERE a.request_id=r.id LIMIT 1
+        ) t ON true WHERE q.hitl_request_id=r.id AND r.id=$1""",
+        request_id,
+    )
+
+
+async def collapse_alias_cards(conn, keys):
+    """One inbox entry for verified aliases; other session views link to that entry."""
+    if not keys:
+        return
+    rows = await conn.fetch(
+        """SELECT DISTINCT r.id,r.snapshot FROM native_hitl_requests r
+        JOIN native_hitl_aliases a ON a.request_id=r.id WHERE a.leaf_key=ANY($1::text[]) ORDER BY r.id""",
+        keys,
+    )
+    projections = [
+        HITLProjection.model_validate(_decode(row["snapshot"])) for row in rows
+    ]
+    if not projections:
+        return
+    raw = await conn.fetchval(
+        """SELECT r.snapshot FROM native_hitl_responses r
+        JOIN native_hitl_response_members m USING(owner_id,action_id) WHERE m.leaf_key=ANY($1::text[]) LIMIT 1""",
+        keys,
+    )
+    if raw:
+        receipt = DecisionReceipt.model_validate_json(json.dumps(_decode(raw)))
+        chosen = next(
+            (p for p in projections if p.outer == receipt.outer), projections[0]
+        )
+    else:
+        roots = [
+            p
+            for p in projections
+            if all(
+                verified_route(p.owner_id, p.outer, other.outer, p.associations)
+                for other in projections
+            )
+        ]
+        if len(roots) != 1:
+            return
+        chosen = roots[0]
+    await refresh_card(conn, chosen.id)
+    for projection in projections:
+        await conn.execute(
+            """UPDATE queue_items SET context=context || jsonb_build_object('route_request_id',$2::text),
+            status=CASE WHEN hitl_request_id=$2 THEN status ELSE 'expired' END WHERE hitl_request_id=$1""",
+            projection.id,
+            chosen.id,
+        )
+
+
+async def refresh_receipt_cards(conn, receipt):
+    rows = await conn.fetch(
+        "SELECT DISTINCT request_id FROM native_hitl_aliases WHERE leaf_key=ANY($1::text[])",
+        [c.leaf.key() for c in receipt.calls],
+    )
+    for row in rows:
+        await refresh_card(conn, row["request_id"])
+    await collapse_alias_cards(conn, [c.leaf.key() for c in receipt.calls])
 
 
 async def record_response(
@@ -228,6 +357,7 @@ async def record_response(
         receipt.owner_id,
         receipt.action_id,
     )
+    await refresh_receipt_cards(conn, receipt)
     return receipt
 
 

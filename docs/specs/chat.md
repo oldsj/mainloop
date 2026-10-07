@@ -58,3 +58,11 @@ claim, follow the same durable disposal path. They leave the brief unsent and th
 nonterminal until the reserved actor is confirmed absent or disposed. Only a proven
 pre-reservation create rejection can fail startup directly.
 A failed main-thread delivery remains recoverable independently of child startup failure.
+
+## Native structured input backend
+
+Pending native HITL requests are discovered without an open chat through the background
+observer. Chat and inbox consumers use the same request reference and dedicated owner
+response route; a normal chat message is not a structured approval. See
+[HITL discovery and continuation](merge-policy.md#background-discovery-and-structured-continuation).
+Shared interactive controls are not yet implemented.

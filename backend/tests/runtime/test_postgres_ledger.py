@@ -2201,6 +2201,11 @@ class ReconcileTests(PostgresTestCase):
 
         with (
             patch.object(ns, "sync", new=sync),
+            patch("mainloop.runtime.hitl_observer.observe_hitl_once", new=AsyncMock()),
+            patch(
+                "mainloop.runtime.hitl_continuation.reconcile_hitl_responses",
+                new=AsyncMock(),
+            ),
             patch.object(
                 workspaces, "suspend_idle", new=AsyncMock(return_value=[])
             ) as idle,

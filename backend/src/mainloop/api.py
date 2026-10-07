@@ -1,5 +1,6 @@
 """FastAPI application with DBOS durable workflows."""
 
+import json
 import logging
 import os
 import re
@@ -20,6 +21,8 @@ from mainloop.models import (
     ConversationListResponse,
     ConversationResponse,
 )
+from mainloop.runtime import hitl_continuation
+from mainloop.runtime.kagent_client import KagentError
 from mainloop.runtime.preview_proxy import register_preview_proxy
 from mainloop.runtime.workspace_api import router as workspace_api_router
 from mainloop.services.github_pr import (
@@ -42,7 +45,7 @@ from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 from mainloop.workflows.main_thread import (
     get_or_start_main_thread,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, field_validator
 
 from models import (
     MainThread,
@@ -55,6 +58,7 @@ from models import (
     SessionNotification,
     SessionStatus,
 )
+from models.hitl import HITLResponse, Identifier
 from models.merge_policy import MergePolicyUpdate, MergePolicyView
 
 logger = logging.getLogger(__name__)
@@ -510,6 +514,11 @@ async def respond_to_queue_item(
     if item.user_id != user_id:
         raise HTTPException(status_code=404, detail="Queue item not found")
 
+    if item.item_type == "hitl_request":
+        raise HTTPException(
+            status_code=409, detail="Use the structured HITL response route"
+        )
+
     # Mark as read when responding
     await db.mark_queue_item_read(item_id)
 
@@ -536,6 +545,71 @@ async def respond_to_queue_item(
     await notify_inbox_updated(user_id, item_id=item_id, unread_count=unread_count)
 
     return {"status": "ok", "message": "Response sent"}
+
+
+# HITL cards are projections; only this route records owner decisions.
+
+
+class HITLDecisionInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    action_id: Identifier
+    response: HITLResponse
+
+    @field_validator("response", mode="before")
+    @classmethod
+    def parse_wire_response(cls, value):
+        if isinstance(value, dict):
+            return TypeAdapter(HITLResponse).validate_json(json.dumps(value))
+        return value
+
+
+@app.get("/hitl-observer/status")
+async def get_hitl_observer_status(user_id: str = Depends(current_user)):
+    async with db.connection() as conn:
+        counts = await conn.fetchrow(
+            """SELECT count(*) AS pending_task_count,
+            min(checked_at) AS oldest_task_check FROM native_hitl_tasks
+            WHERE owner_id=$1 AND pending""",
+            user_id,
+        )
+        diagnostics = await conn.fetch(
+            """SELECT runtime_session_id,detail,observed_at
+            FROM native_hitl_diagnostics WHERE owner_id=$1 ORDER BY observed_at DESC LIMIT 100""",
+            user_id,
+        )
+        return {**dict(counts), "diagnostics": [dict(row) for row in diagnostics]}
+
+
+@app.get("/hitl/{request_id}")
+async def get_hitl_request(request_id: str, user_id: str = Depends(current_user)):
+    try:
+        async with db.connection() as conn:
+            projection = await hitl_continuation.load_projection(
+                conn, user_id, request_id
+            )
+            return await hitl_continuation.view(conn, projection)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="HITL request not found") from exc
+
+
+@app.post("/hitl/{request_id}/respond")
+async def respond_to_hitl(
+    request_id: str, decision: HITLDecisionInput, user_id: str = Depends(current_user)
+):
+    if os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED") != "true":
+        raise HTTPException(status_code=503, detail="Owner HITL writes are disabled")
+    try:
+        return await hitl_continuation.submit(
+            user_id, request_id, decision.action_id, decision.response
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="HITL request not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (TimeoutError, KagentError) as exc:
+        raise HTTPException(
+            status_code=503, detail="HITL observation temporarily unavailable"
+        ) from exc
 
 
 # ============= Project Endpoints =============

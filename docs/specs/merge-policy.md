@@ -2,9 +2,9 @@
 
 Implemented foundation: project policy API, immutable protected-path rules, typed HITL
 payloads, observed-session/checkpoint storage, verified alias storage, and durable owner
-decision receipts. This does not implement merge execution, background HITL discovery,
-owner decision submission, continuation transport, or inbox/chat controls. Those consumers
-must satisfy the contracts below before enabling answers or merge tools.
+decision receipts, plus background inventory discovery and task-bound owner continuation
+described below. Merge execution and shared inbox/chat controls remain unimplemented.
+Production enablement still requires the isolation and native capability evidence below.
 
 ## Owner policy
 
@@ -48,7 +48,7 @@ validation still apply. Approvals cannot contain a nonempty rejection reason; ac
 retain their reason. Builder and storage validation reject contradictions before reserving
 a response key or recording consent. Unknown metadata survives decoding but confers no authority. Payloads are limited
 to 128 KiB; batches/questions have at most 100 members. Malformed/unknown requests cannot
-produce an actionable receipt. The existing gateway decoder is not yet wired to these types.
+produce an actionable receipt. The gateway decoder retains metadata/extensions; the observer validates these types.
 
 The outer continuation retains endpoint, gateway, runtime session, context, task, status
 message, request hash, and the complete bounded request (including parent IDs). The leaf
@@ -83,7 +83,7 @@ Same owner/action ID and complete body return the original receipt; a changed bo
 Any already-answered leaf conflicts under another action or alias. Its original outer
 destination/message ID cannot change when new aliases arrive. Rebuilding/deleting projections
 cannot erase consent or uncertainty. Transport state is separate (`recorded`, `sending`,
-`accepted`, `uncertain`, `rejected_transport`); this foundation performs no remote dispatch.
+`accepted`, `uncertain`, `rejected_transport`); the b2 task-bound lane dispatches and reconciles these states.
 
 ## Frozen merge receipt contract
 
@@ -126,3 +126,87 @@ Lookup intentionally does not wait for transport acceptance, so the resumed tool
 deadlock on its own continuation. A raw call after consent can only be allowed for the exact
 operation, once, by the future merge-intent gate. No live native restoration or provider
 capability parity is claimed by the fixtures.
+
+## Background discovery and structured continuation
+
+Implemented b2: backend startup starts the existing reconciliation loop, whose independently
+protected HITL observation step discovers SessionService inventory even with no browser,
+Mainloop binding, or delivery row. It never creates or resumes an Actor. The configured gateway
+creator must match the server's configured kagent user and Mainloop owner before task contents
+are fetched. Bound sessions must also retain their stored owner/runtime identity. Gateway
+agent resource names select a relative endpoint under the configured gateway; runtime
+`a2a_authority` is checked as a logical actor identity and is never fetched as a URL.
+Missing creator, agent, revision, conflicting bindings, archived sessions, or replacements
+cannot enable answers. A standalone observation creates no project, MCP credential, or delivery.
+
+Inventory sweeps repeat every 30 seconds, continuing unfinished pages on subsequent passes.
+Each pass processes at most 50 inventory records and 50 listed tasks, at most 10 task snapshot
+reads including nested reads, with a two-second scheduling budget and per-operation timeouts.
+Inventory and task enumeration each get at most half a second so failed listings cannot starve
+known pending requests. PostgreSQL stores the inventory cursor and per-session task cursors;
+least-recently-scanned sessions and least-recently-checked tasks rotate across restart. Upserts
+and the cursor covering them commit together. Invalid tokens restart that enumeration without
+inferring deletions. Partial listings and temporary failures never imply completion.
+
+`GET /hitl-observer/status` exposes pending task count, oldest check time, and bounded inventory
+diagnostics. This backlog describes observation work, not a guaranteed discovery latency.
+Known requests become stale on transient reads and unavailable on confirmed deletion,
+cancellation, archive, replacement, or changed pending identity. Valid new requests get a new
+reference; repeated identical events retain the same reference/card. A changed status-message
+ID with unchanged pending payload supersedes the earlier observation: its card expires and
+its aliases leave route selection, while its snapshot and any recorded receipt remain.
+Later failures cannot reactivate superseded controls. A genuinely unavailable verified parent
+still holds its relationship; it is not treated as a superseded observation. Unsupported extension
+payloads and `auth_required` produce non-actionable attention. Metadata and extensions survive
+A2A decoding and stream projection, including changed payloads with an unchanged task state.
+
+`GET /hitl/{request_id}` returns the owner-scoped projection, selected route, retained receipt,
+transport state, and whether that particular view may answer. Inbox entries carry the same
+`hitl_request_id`; read/unread remains presentation state. Card titles/status derive from
+observations and durable receipts, including uncertainty after a rebuild. Generic queue
+responses and internal generic status/response mutations reject HITL cards.
+
+`POST /hitl/{request_id}/respond` accepts `action_id` and a complete typed `response`. This route
+is disabled unless **`MAINLOOP_OWNER_HITL_WRITES_ENABLED=true`** exactly. Like the policy gate,
+this is an operator opt-in after proving owner-route isolation, not request authentication.
+No manifest enables it. Fresh ownership/task checks, exact batch validation, sorted verified
+leaf locks and route revalidation precede immutable recording. Same action/body is idempotent;
+another action or contradictory batch cannot take any already-recorded leaf member.
+
+Trusted associations are read only from the server-owned association store. No public endpoint
+imports associations and no payload field creates them. Deployment integration must populate
+that store from verified creation/continuation evidence before propagated answers work.
+Direct Mainloop children remain direct despite their parent binding. Unverified propagated
+claims get separate unavailable cards with no leaf locks or aliases. Verified but unresolved
+or ambiguous parents hold only their verified relationship. Before consent, the outermost
+verified route is the sole answerable view; after consent, the retained receipt always wins,
+including when new aliases arrive or projections are rebuilt. Nested questions preserve distinct
+outer and child request IDs. Provider-local subagents have no assumed supported mapping.
+
+Background response recovery has its own two-second budget per reconciliation pass, including
+all remote phases across at most ten receipts. Attempt timestamps advance before remote work,
+so interrupted receipts rotate behind untouched work across passes and restarts. Budget
+cancellation after a send claim preserves `sending`; subsequent recovery observes uncertainty
+without replay. Ordinary reconciliation and housekeeping proceed after that bounded share.
+
+The task-bound continuation lane bypasses ordinary queued turns and never calls session
+replacement or prompt delivery. The decision and outbound message ID are durable before a
+send attempt is claimed. A crash while still `recorded` can recover and send; persisted
+`sending` after a crash is uncertain and is observed without replay. Only exact outbound
+message identity and structured response in the original task history prove acceptance;
+a changed status alone does not. The client only automatically retries the documented definite
+`KAGENT_SEND_NOT_ACCEPTED`; a definite pre-send connection failure also leaves the recorded
+attempt eligible. Uncertain decisions cannot be submitted again through a child alias.
+A confirmed invalid destination before dispatch becomes `rejected_transport`; uncertainty
+following a possible send remains uncertainty. Delivery acceptance does not complete the task.
+A status-message-ID refresh alone does not invalidate an already-recorded decision: dispatch
+still requires the exact original task/context, pending payload hash and verified leaf keys,
+and never rewrites the receipt's original status snapshot or destination.
+
+This checkpoint imports no pinned tool configuration and mints **no merge authorization** from
+observed tool names, including names that resemble the protected merge tool. Unknown prepared
+revisions can still support generic questions/decisions; the separate merge handler must refuse
+execution without the frozen exact receipt/configuration contract and proposal gates. Production
+nested evidence import, pinned configuration import, provider restoration/retention, owner-route
+isolation, and same-turn provider capabilities remain enablement prerequisites. These are fake
+transport/PostgreSQL proofs, not deployed Actor restoration. Shared UI controls belong to b3.

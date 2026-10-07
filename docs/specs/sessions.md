@@ -56,3 +56,11 @@ separately from a failed connection or a 404.
 ## Evidence boundary
 
 Measured on the kagent spike cluster (live, 2026-10-04): re-sending a `messageId` whose task had completed started a second task, so Mainloop relies on never re-sending, not on kagent deduplication. The kagent client and delivery handling are tested against a fake A2A and SessionService gateway with sanitized fixtures (`backend/tests/runtime/fixtures/kagent`). These are fixture tests, not live proof. The Kind session-resume proof in `docs/spikes/k8s-herdr-agents.md` is historical and does not prove the kagent path.
+
+## Observed sessions needing input
+
+The backend also observes gateway-owned standalone sessions without creating a Mainloop
+binding, project assignment, MCP credential, or delivery row. Their pending input can create
+an inbox reference through the [HITL observer](merge-policy.md#background-discovery-and-structured-continuation).
+Ownership is verified before reading task contents; unavailable ownership or continuation
+mapping cannot enable answers. The observer does not start or resume sessions.
