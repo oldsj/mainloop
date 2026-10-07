@@ -28,6 +28,7 @@ import uuid
 from datetime import UTC, datetime
 
 from mainloop.db import db
+from mainloop.push_gate import lifecycle as push_lifecycle
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import (
     KagentError,
@@ -157,6 +158,8 @@ async def _observe(
             session = await ns.get_client().get_session(kagent_session_id)
         except SessionError as exc:
             if exc.grpc_status == 5:
+                if workspace_id is not None:
+                    await _revoke_publication(workspace_id, kagent_session_id)
                 return (
                     WorkspaceObservedState.UNKNOWN,
                     "kagent no longer has the Session; the next message replaces it.",
@@ -164,6 +167,12 @@ async def _observe(
             return WorkspaceObservedState.UNKNOWN, f"kagent: {exc}"
         except KagentError as exc:
             return WorkspaceObservedState.UNKNOWN, f"kagent unreachable: {exc}"
+    if workspace_id is not None and session.state in (
+        RuntimeState.FAILED,
+        RuntimeState.DELETING,
+        RuntimeState.DELETED,
+    ):
+        await _revoke_publication(workspace_id, kagent_session_id)
     if workspace_id is not None and (
         session.development_environment is not None
         or session.runtime_composition is not None
@@ -172,11 +181,36 @@ async def _observe(
     return state_of(session)
 
 
+async def _revoke_publication(
+    workspace_id: str, observed_runtime_id: str | None
+) -> None:
+    from mainloop.config import settings
+
+    if settings.push_gate_enabled:
+        async with db.connection() as conn:
+            async with push_lifecycle.locked(conn, workspace_id):
+                current_runtime_id = await conn.fetchval(
+                    "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+                    workspace_id,
+                )
+                if (
+                    observed_runtime_id is not None
+                    and current_runtime_id == observed_runtime_id
+                ):
+                    from mainloop.push_gate import store
+
+                    await store.revoke(conn, workspace_id)
+
+
 async def _lifecycle(row, session: KagentSession | None = None) -> WorkspaceLifecycle:
     state, detail = await _observe(
         row["kagent_session_id"], session, workspace_id=row["session_id"]
     )
+    async with db.connection() as conn:
+        mode, reason = await push_lifecycle.projection(conn, row["session_id"])
     return WorkspaceLifecycle(
+        publication_mode=mode,
+        publication_reason=reason,
         workspace_id=row["session_id"],
         session_id=row["session_id"],
         observed_state=state,
@@ -444,33 +478,34 @@ async def _delete_rows(workspace_id: str) -> None:
 
     await revoke(workspace_id)
     async with db.connection() as conn:
-        async with conn.transaction():
-            conversation_id = await conn.fetchval(
-                "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
-            )
-            await conn.execute(
-                "DELETE FROM native_deliveries WHERE session_id=$1", workspace_id
-            )
-            await conn.execute(
-                "DELETE FROM native_bindings WHERE session_id=$1", workspace_id
-            )
-            await conn.execute(
-                "DELETE FROM workspaces WHERE session_id=$1", workspace_id
-            )
-            await conn.execute("DELETE FROM sessions WHERE id=$1", workspace_id)
-            await conn.execute(
-                """DELETE FROM messages
-                   WHERE conversation_id=$1
-                     AND NOT EXISTS (
-                         SELECT 1 FROM sessions s WHERE s.anchor_message_id=messages.id
-                     )""",
-                conversation_id,
-            )
-            await conn.execute(
-                """DELETE FROM conversations c WHERE c.id=$1
-                   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c.id)""",
-                conversation_id,
-            )
+        async with push_lifecycle.locked(conn, workspace_id, revoke=True):
+            async with conn.transaction():
+                conversation_id = await conn.fetchval(
+                    "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
+                )
+                await conn.execute(
+                    "DELETE FROM native_deliveries WHERE session_id=$1", workspace_id
+                )
+                await conn.execute(
+                    "DELETE FROM native_bindings WHERE session_id=$1", workspace_id
+                )
+                await conn.execute(
+                    "DELETE FROM workspaces WHERE session_id=$1", workspace_id
+                )
+                await conn.execute("DELETE FROM sessions WHERE id=$1", workspace_id)
+                await conn.execute(
+                    """DELETE FROM messages
+                       WHERE conversation_id=$1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM sessions s WHERE s.anchor_message_id=messages.id
+                         )""",
+                    conversation_id,
+                )
+                await conn.execute(
+                    """DELETE FROM conversations c WHERE c.id=$1
+                       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c.id)""",
+                    conversation_id,
+                )
 
 
 async def delete(workspace_id: str, user_id: str) -> None:

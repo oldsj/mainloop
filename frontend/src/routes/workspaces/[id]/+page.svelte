@@ -170,6 +170,9 @@
             <p class="text-term-fg-muted mt-1 text-sm">
               State <span class="text-term-fg">{workspace.observed_state}</span>
             </p>
+            <p class="text-term-fg-muted mt-1 text-sm">
+              Publication <span class="text-term-fg">{workspace.publication_mode === 'branch' ? 'Branch publication' : `Read only · ${workspace.publication_reason?.replaceAll('_', ' ') ?? 'no grant'}`}</span>
+            </p>
           </div>
           <div class="flex flex-wrap gap-2">
             <button

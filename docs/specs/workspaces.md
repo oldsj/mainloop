@@ -275,7 +275,9 @@ to be enabled. Static validation is metadata evidence, not a live composition pr
 
 ## Git publication contract (disabled)
 
-The standalone [push gate contract](push-gate.md) defines feature-branch publication
-scope and protected branches. No listener or lifecycle integration is active yet;
-read-only publication status in the workspace API/UI is deferred to slice 1b. Current
+The [push gate contract](push-gate.md) defines feature-branch publication scope and
+protected branches. Lifecycle issuance is disabled by default, and no listener or runtime
+push credential injection exists. Workspace responses include `publication_mode` and
+`publication_reason`, independently of runtime state. The badge and detail page show
+read-only reasons (default/protected branch, missing metadata, no grant, or disabled). Current
 actor GitHub credentials remain unchanged until the infrastructure containment switch.
