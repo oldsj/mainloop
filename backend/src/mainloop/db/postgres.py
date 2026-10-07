@@ -1590,8 +1590,9 @@ class Database:
         status: SessionStatus | None = None,
         limit: int = 50,
         include_archived: bool = False,
+        project_id: str | None = None,
     ) -> list[Session]:
-        """List sessions for a user (cleared sessions are hidden unless asked for)."""
+        """List a user's sessions, optionally by project; hide cleared sessions by default."""
         if not self._pool:
             return []
 
@@ -1610,6 +1611,10 @@ class Database:
         if status:
             query += f" AND status = ${len(params) + 1}"
             params.append(status.value)
+
+        if project_id is not None:
+            query += f" AND project_id = ${len(params) + 1}"
+            params.append(project_id)
 
         query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
         params.append(limit)

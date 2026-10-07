@@ -2,6 +2,10 @@
 
 Mainloop is responsive across mobile and desktop viewports.
 
+Project pages load repository details before showing project controls. If that request fails,
+the page shows the load error and a **Retry loading project** button instead of remaining on
+the loading message. Retrying requests the details for the current project.
+
 ## Desktop
 
 - Chat takes main area

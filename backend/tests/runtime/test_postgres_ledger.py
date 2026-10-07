@@ -2244,6 +2244,68 @@ class ReconcileTests(PostgresTestCase):
 
 
 class ApiQueryTests(PostgresTestCase):
+    async def test_project_detail_returns_only_the_projects_visible_owner_sessions(
+        self,
+    ):
+        project = await db.get_or_create_project(self.user, GithubRepo("owner", "repo"))
+        other_project = await db.get_or_create_project(
+            self.user, GithubRepo("owner", "other")
+        )
+        older, _ = await self.bound_session("claude", "active")
+        newer, _ = await self.bound_session("codex")
+        archived, _ = await self.session("completed")
+        unrelated, _ = await self.session()
+        await self.session()  # No project association.
+        foreign, _ = await self.session(user=f"other-{self.user}")
+        main = await ensure_main_session(self.user)
+        await self.pool.execute(
+            "UPDATE sessions SET project_id=$1 WHERE id=ANY($2::text[])",
+            project.id,
+            [older, newer, archived, foreign, main["session_id"]],
+        )
+        await db.update_session(unrelated, project_id=other_project.id)
+        await self.pool.execute(
+            "UPDATE sessions SET created_at=NOW() - INTERVAL '1 day' WHERE id=$1",
+            older,
+        )
+        await db.archive_sessions(self.user, [archived])
+
+        with (
+            patch.object(settings, "owner_id", self.user),
+            patch.object(settings, "api_hosts", "test"),
+            patch.object(api, "list_open_prs", AsyncMock(return_value=[])) as prs,
+            patch.object(
+                api, "list_recent_commits", AsyncMock(return_value=[])
+            ) as commits,
+        ):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=api.app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                response = await client.get(f"/projects/{project.id}/detail")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["project"]["id"], project.id)
+        self.assertEqual(body["open_prs"], [])
+        self.assertEqual(body["recent_commits"], [])
+        self.assertEqual([s["id"] for s in body["sessions"]], [newer, older])
+        self.assertEqual(
+            [s["agent_kind"] for s in body["sessions"]], ["codex", "claude"]
+        )
+        prs.assert_awaited_once_with(project.html_url, limit=10)
+        commits.assert_awaited_once_with(project.html_url, branch=None, limit=10)
+
+        filtered = await db.list_sessions(
+            self.user, status=SessionStatus.ACTIVE, limit=1, project_id=project.id
+        )
+        self.assertEqual([s.id for s in filtered], [older])
+        limited = await db.list_sessions(self.user, limit=1, project_id=project.id)
+        self.assertEqual([s.id for s in limited], [newer])
+        including_archived = await db.list_sessions(
+            self.user, include_archived=True, project_id=project.id
+        )
+        self.assertEqual({s.id for s in including_archived}, {older, newer, archived})
+
     async def test_session_summaries_include_standalone_agents_and_runtime_kind(self):
         main = await ensure_main_session(self.user)
         standalone, _ = await self.session()

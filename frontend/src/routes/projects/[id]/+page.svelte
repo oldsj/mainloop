@@ -297,8 +297,17 @@
       </section>
     </div>
   {:else}
-    <div class="flex h-full items-center justify-center">
-      <p class="text-term-fg-muted text-sm">Loading project...</p>
+    <div class="flex h-full flex-col items-center justify-center gap-3">
+      {#if $projects.error}
+        <p class="text-term-red text-sm" role="alert">{$projects.error}</p>
+        <button
+          type="button"
+          class="text-term-accent min-h-11 text-sm underline"
+          onclick={() => projectId && projects.fetchProjectDetail(projectId)}
+        >Retry loading project</button>
+      {:else}
+        <p class="text-term-fg-muted text-sm">Loading project...</p>
+      {/if}
     </div>
   {/if}
 </div>
