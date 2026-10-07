@@ -3,7 +3,7 @@
 Implemented foundation: project policy API, immutable protected-path rules, typed HITL
 payloads, observed-session/checkpoint storage, verified alias storage, and durable owner
 decision receipts, plus background inventory discovery and task-bound owner continuation
-described below. Merge execution and shared inbox/chat controls remain unimplemented.
+described below. Disabled merge execution is described in [Pull requests](pull-requests.md#merge-tools-implemented-disabled-by-default); shared inbox/chat controls remain a separate slice.
 Production enablement still requires the isolation and native capability evidence below.
 
 ## Owner policy
@@ -32,7 +32,7 @@ Protected globs are server constants, version 1: `k8s/**`, `.github/**`, and
 zero directories. Deleted paths and both sides of a rename count. Missing rename sources,
 invalid or incomplete paths, and more than 3,000 files fail closed. An approval policy or a
 protected match requires approval; callers cannot edit the globs or select an execution mode.
-This helper establishes path policy only; the future merge service must prove GitHub path
+This helper establishes path policy only; the merge service must prove GitHub path
 completeness and all other merge gates.
 
 The owner API uses the existing configured-owner/network-isolation boundary. It does not
@@ -93,7 +93,7 @@ snapshot. Configuration includes owner, binding, runtime, provider, revision and
 reference. A mapping includes compiled alias, RemoteMCPServer identity, endpoint, selected
 `merge_pull_request_with_approval` tool, `require_approval=True`, and the canonical operation
 `mainloop.merge_pull_request_with_approval.v1`. Unknown revision, alias, or ambiguous mapping
-returns no merge authority. No live configuration snapshot importer is implemented here.
+returns no merge authority. The merge service consumes an operator-only pinned configuration allowlist; no live configuration snapshot importer is implemented.
 
 For the verified alias `mainloop-merge-approval`, the only valid public names are:
 
@@ -114,8 +114,7 @@ retained leaf/outer/request/call/configuration snapshot; it never joins a mutabl
 A sibling, parent, replacement runtime, changed invocation ID or altered payload cannot use it.
 
 The handler must get binding/runtime identity from live MCP authentication and operation
-identity from its own protected registry. The future proposal resolver must validate owner,
-binding and immutable proposal facts when building a receipt. Its callback contract is
+identity from its own protected registry. The merge proposal resolver validates owner, binding and immutable proposal facts when building a receipt. Its callback contract is
 `Callable[[MergeReceiptKey, bool], None]`, where the boolean is the per-call approval;
 it raises on failure, allows rejection of stale owned proposals, and refuses stale approval.
 The merge service must claim the positive receipt with one persisted intent, serialize with
@@ -124,7 +123,7 @@ policy/rejection gates, and recheck all current authority, candidate and GitHub 
 Recorded consent does **not** attest that a later raw invocation traversed native approval.
 Lookup intentionally does not wait for transport acceptance, so the resumed tool cannot
 deadlock on its own continuation. A raw call after consent can only be allowed for the exact
-operation, once, by the future merge-intent gate. No live native restoration or provider
+operation, once, by the merge-intent gate. No live native restoration or provider
 capability parity is claimed by the fixtures.
 
 ## Background discovery and structured continuation
@@ -203,10 +202,8 @@ A status-message-ID refresh alone does not invalidate an already-recorded decisi
 still requires the exact original task/context, pending payload hash and verified leaf keys,
 and never rewrites the receipt's original status snapshot or destination.
 
-This checkpoint imports no pinned tool configuration and mints **no merge authorization** from
-observed tool names, including names that resemble the protected merge tool. Unknown prepared
-revisions can still support generic questions/decisions; the separate merge handler must refuse
-execution without the frozen exact receipt/configuration contract and proposal gates. Production
+Observed tool names alone mint **no merge authorization**. The disabled merge service now wires the exact operator-pinned configuration and proposal validation into this route. Unknown prepared
+revisions can still support generic questions/decisions; the separate merge handler refuses execution without the frozen exact receipt/configuration contract and proposal gates. Production
 nested evidence import, pinned configuration import, provider restoration/retention, owner-route
 isolation, and same-turn provider capabilities remain enablement prerequisites. These are fake
 transport/PostgreSQL proofs, not deployed Actor restoration. Shared UI controls are described in [inbox](inbox.md) and [chat](chat.md#native-structured-input).

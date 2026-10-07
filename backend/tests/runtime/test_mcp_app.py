@@ -15,7 +15,7 @@ from mainloop.runtime.kagent_client import (
     _field_bytes,
     decode_fields,
 )
-from mainloop.runtime.policy import tools_for
+from mainloop.runtime.policy import Actor, surface_tools, tools_for
 from tests.runtime.test_context_model import KINDS, FakeStore
 
 
@@ -130,7 +130,7 @@ class HTTPTests(unittest.TestCase):
             r = rpc("tools/list")
             self.assertEqual(
                 {t["name"] for t in r.json()["result"]["tools"]},
-                TOOLS.keys() - {"report"},
+                surface_tools(Actor("main", 0)),
             )
             r = rpc("tools/call", {"name": "whoami", "arguments": {}})
             self.assertEqual(r.json()["result"]["structuredContent"]["role"], "main")

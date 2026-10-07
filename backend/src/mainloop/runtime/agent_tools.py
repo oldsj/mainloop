@@ -65,6 +65,24 @@ class AgentService:
         policy.may_call(ctx.actor, "open_pull_request")
         return await open_pull_request(ctx.binding, arguments)
 
+    async def prepare_pull_request_merge(self, ctx: Ctx, **arguments) -> dict:
+        from mainloop.services.merge import prepare
+
+        policy.may_call(ctx.actor, "prepare_pull_request_merge")
+        return await prepare(ctx.binding, arguments)
+
+    async def merge_pull_request(self, ctx: Ctx, **arguments) -> dict:
+        from mainloop.services.merge import auto_merge
+
+        policy.may_call(ctx.actor, "merge_pull_request")
+        return await auto_merge(ctx.binding, arguments)
+
+    async def merge_pull_request_with_approval(self, ctx: Ctx, **arguments) -> dict:
+        from mainloop.services.merge import execute
+
+        policy.may_call(ctx.actor, "merge_pull_request_with_approval")
+        return await execute(ctx.binding, arguments, approved=True)
+
     async def authenticate(self, token: str) -> Ctx:
         binding = await self.store.binding_by_token_hash(hash_token(token))
         if (

@@ -10,3 +10,6 @@ data:
   DB_PORT: '5432'
   DB_NAME: mainloop
   FRONTEND_DOMAIN: mainloop.example.com # Override in kustomize overlay
+  # Merge tools and owner write routes remain off pending deployed authority proof.
+  MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
+  MAINLOOP_MERGE_CONFIGURATIONS: '[]'

@@ -12,3 +12,21 @@ spec:
   headersFrom:
     - name: Authorization
       value: Bearer kagent-credential-injected
+
+# Disabled source candidate; do not uncomment independently of the template and
+# Mainloop enablement gates documented in docs/specs/pull-requests.md.
+# ---
+# apiVersion: api.kagent.dev/v1alpha3
+# kind: RemoteMCPServer
+# metadata:
+#   name: mainloop-merge-approval
+#   namespace: kagent
+#   labels:
+#     kagent.dev/discovery: disabled
+# spec:
+#   description: Exact-receipt protected Mainloop merge tool only.
+#   protocol: STREAMABLE_HTTP
+#   url: http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval
+#   headersFrom:
+#     - name: Authorization
+#       value: Bearer kagent-credential-injected

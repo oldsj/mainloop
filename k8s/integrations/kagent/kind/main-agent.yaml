@@ -23,6 +23,11 @@ spec:
   tools:
     - mcp:
         server: { kind: RemoteMCPServer, name: mainloop }
+    # Disabled until the merge-policy deployment gates are proven.
+    # - mcp:
+    #     server: { kind: RemoteMCPServer, name: mainloop-merge-approval }
+    #     tools: [merge_pull_request_with_approval]
+    #     requireApproval: true
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
