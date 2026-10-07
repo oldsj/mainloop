@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Session, Message } from '$lib/api';
+  import { agentLabel } from '$lib/agentLabel';
   import { api } from '$lib/api';
   import { navigationContext } from '$lib/stores/navigationContext';
   import { sessions } from '$lib/stores/sessions';
@@ -194,12 +195,12 @@
       </div>
     {:else}
       {#each messages as message (message.id)}
-        <MessageBubble {message} context={session?.title ?? 'session'} />
+        <MessageBubble {message} context={session?.title ?? 'session'} agentKind={session?.agent_kind} />
       {/each}
     {/if}
 
     {#if isLoading}
-      {@const modelName = session?.model || 'claude'}
+      {@const modelName = agentLabel(session?.agent_kind)}
       <div
         class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:px-4"
       >

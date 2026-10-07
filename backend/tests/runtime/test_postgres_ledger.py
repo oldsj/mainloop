@@ -2239,6 +2239,25 @@ class ReconcileTests(PostgresTestCase):
 
 
 class ApiQueryTests(PostgresTestCase):
+    async def test_session_summaries_include_standalone_agents_and_runtime_kind(self):
+        main = await ensure_main_session(self.user)
+        standalone, _ = await self.session()
+        child, _ = await self.session()
+        legacy, _ = await self.session()
+        archived, _ = await self.session("completed")
+        await ns.create_binding(standalone, "codex")
+        await ns.create_binding(
+            child, "claude", role="child", parent_session_id=main["session_id"]
+        )
+        await db.archive_sessions(self.user, [archived])
+
+        sessions = {s.id: s for s in await db.list_sessions(self.user)}
+        self.assertEqual(set(sessions), {standalone, child, legacy})
+        self.assertEqual(sessions[standalone].agent_kind, "codex")
+        self.assertEqual(sessions[child].agent_kind, "claude")
+        self.assertIsNone(sessions[legacy].agent_kind)
+        self.assertEqual((await db.get_session(standalone)).agent_kind, "codex")
+
     async def test_conversation_and_session_list_queries_read_the_binding(self):
         from mainloop import api
 

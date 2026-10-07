@@ -187,6 +187,7 @@ export interface Session {
   description: string;
   prompt: string;
   conversation_id: string;
+  agent_kind?: 'claude' | 'codex' | null;
   parent_session_id?: string | null; // native child: the delegating session
   topic?: string | null;
   status: SessionStatus;

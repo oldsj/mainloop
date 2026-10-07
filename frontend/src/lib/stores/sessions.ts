@@ -35,7 +35,7 @@ function createSessionsStore() {
       }
     },
 
-    async createSession(request: SessionCreate): Promise<Session | null> {
+    async createSession(request: SessionCreate): Promise<Session> {
       try {
         const session = await api.createSession(request);
         update((state) => ({
@@ -45,7 +45,7 @@ function createSessionsStore() {
         return session;
       } catch (e) {
         console.error('Failed to create session:', e);
-        return null;
+        throw e;
       }
     },
 

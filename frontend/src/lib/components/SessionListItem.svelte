@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
+  import { agentLabel } from '$lib/agentLabel';
   import { statusLabel } from '$lib/sessionStatus';
   import { workspaces } from '$lib/stores/workspaces';
   import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
@@ -97,6 +98,7 @@
       >
         {statusLabel(session.status)}
       </span>
+      <span class="text-xs text-term-fg-muted" data-testid="session-kind">{agentLabel(session.agent_kind)}</span>
       {#if workspace}
         <WorkspaceLifecycleBadge {workspace} />
       {/if}

@@ -1565,7 +1565,10 @@ class Database:
             return None
         async with self.connection() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM sessions WHERE id = $1", session_id
+                """SELECT sessions.*,
+                          (SELECT b.kind FROM native_bindings b WHERE b.session_id = sessions.id) AS agent_kind
+                   FROM sessions WHERE id = $1""",
+                session_id,
             )
         if not row:
             return None
@@ -1584,7 +1587,9 @@ class Database:
 
         # The native main thread's session row is the conversation itself, not a listed session.
         query = (
-            "SELECT * FROM sessions WHERE user_id = $1 AND NOT EXISTS "
+            "SELECT sessions.*, "
+            "(SELECT b.kind FROM native_bindings b WHERE b.session_id = sessions.id) AS agent_kind "
+            "FROM sessions WHERE user_id = $1 AND NOT EXISTS "
             "(SELECT 1 FROM native_bindings b WHERE b.session_id = sessions.id AND b.role = 'main')"
         )
         params: list[Any] = [user_id]
@@ -1795,6 +1800,7 @@ class Database:
             description=row["description"],
             prompt=row["prompt"],
             conversation_id=row["conversation_id"],
+            agent_kind=row.get("agent_kind"),
             status=SessionStatus(row["status"]),
             worker_pod_name=row.get("worker_pod_name"),
             created_at=row["created_at"],

@@ -3,17 +3,20 @@
   import type { DeliveryNotice } from '$lib/delivery';
   import { renderMarkdown } from '$lib/markdown';
   import { parseChildReport } from '$lib/messages';
+  import { agentLabel } from '$lib/agentLabel';
   import { messageTime } from '$lib/time';
 
   let {
     message,
     context = 'main',
+    agentKind = undefined,
     notice = undefined,
     retryDisabled = false,
     onRetry = undefined
   }: {
     message: Message;
     context?: string;
+    agentKind?: 'claude' | 'codex' | null;
     /** This message was not delivered (or its delivery is unconfirmed); say so, with the reason. */
     notice?: DeliveryNotice;
     retryDisabled?: boolean;
@@ -47,7 +50,7 @@
       {#if report}
         child · {report.title}{report.fallback ? ' (ended without a report)' : ''}
       {:else}
-        {isUser ? 'user' : 'claude'}@{context}$
+        {isUser ? 'user' : agentLabel(agentKind)}@{context}$
         {#if stopped}<span class="text-term-yellow"> · stopped</span>{/if}
       {/if}
     </span>
