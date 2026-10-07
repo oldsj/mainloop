@@ -1560,7 +1560,7 @@ class WorkspaceTests(KagentFakeCase):
             if isinstance(binding["credential_ref"], str)
             else binding["credential_ref"]
         )
-        self.assertEqual(reference["secret_key"], wid)
+        self.assertEqual(reference["secret_key"], "authorization")
         self.assertEqual(binding["kagent_session_id"], CONTEXT_ID)
         create = decode_fields(self.fake.session_calls("CreateSession")[0])
         self.assertEqual(len(create[7]), 1)
@@ -1571,7 +1571,7 @@ class WorkspaceTests(KagentFakeCase):
         self.assertEqual(credential[2], [b"Authorization"])
         self.assertEqual(
             decode_fields(credential[3][0]),
-            {1: [b"mainloop-agent-tokens"], 2: [wid.encode()]},
+            {1: [f"mainloop-mcp-{wid}".encode()], 2: [b"authorization"]},
         )
         self.assertNotIn(
             token_for(wid).encode(), self.fake.session_calls("CreateSession")[0]
@@ -1679,8 +1679,12 @@ class WorkspaceTests(KagentFakeCase):
         self.assertEqual([len(request[7]) for request in requests], [1, 1])
         references = [decode_fields(request[7][0]) for request in requests]
         keys = [decode_fields(reference[3][0])[2][0] for reference in references]
-        self.assertEqual(keys, [value.encode() for value in session_ids])
-        self.assertEqual(len(set(keys)), 2)
+        self.assertEqual(keys, [b"authorization", b"authorization"])
+        names = [decode_fields(reference[3][0])[1][0] for reference in references]
+        self.assertEqual(
+            names, [f"mainloop-mcp-{value}".encode() for value in session_ids]
+        )
+        self.assertEqual(len(set(names)), 2)
 
     async def test_workspace_grant_rejects_non_owner_or_mismatched_repository(self):
         from models import WorkspaceAgentKind

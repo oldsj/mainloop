@@ -16,8 +16,12 @@ later change.
 ## Per-binding MCP grant
 
 Native sessions receive a per-binding credential reference in kagent `CreateSession`. The
-reference selects the `mainloop` MCP origin, Authorization header and one key in the runtime
-Secret; it contains no bearer. The Secret publisher derives that binding's bearer, while
+reference selects the `mainloop` MCP origin and Authorization header in the binding
+Secret `mainloop-mcp-<binding-id>` in the kagent namespace; it contains no bearer. Each Secret is Opaque, has only the `authorization` key
+containing the full `Bearer …` header,
+and carries `mainloop.dev/actor-egress=true` and `mainloop.dev/purpose=mcp`. The publisher
+creates it before CreateSession and verifies an existing Secret on retry without overwriting
+conflicts. The Secret publisher derives that binding's bearer, while
 PostgreSQL stores only its hash. MCP authentication checks the current binding and hash on every
 request, so revocation denies a cached bearer immediately even if Secret cleanup is delayed.
 
@@ -32,7 +36,10 @@ Creation stores the selected grant, hash, non-secret credential reference and ch
 first kagent create call. Retries reuse the persisted request and reference. A publish/revoke
 lock is shared through PostgreSQL across Mainloop processes. Revocation clears the hash before
 best-effort Secret removal; a cleanup record independent of the binding keeps retries durable
-after workspace deletion removes the session rows. Suspending or resuming a workspace preserves
+after workspace deletion removes the session rows. Cleanup deletes the whole binding Secret;
+a missing Secret is already clean. Publication and deletion reject references that do not
+match the binding. This is a greenfield cutover: existing shared-Secret bindings are deleted
+at cutover, with no migration or dual-write. Suspending or resuming a workspace preserves
 its grant. Existing `agent` bindings are not enrolled by migration.
 
 ## Mainloop control service credential

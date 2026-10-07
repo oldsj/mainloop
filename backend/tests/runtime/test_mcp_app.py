@@ -208,7 +208,9 @@ class HTTPTests(unittest.TestCase):
 
 
 class CredentialTests(unittest.IsolatedAsyncioTestCase):
-    async def test_publish_before_create_and_key_scoped_cleanup(self):
+    async def test_per_binding_secret_and_cleanup(self):
+        import base64
+
         api = Mock()
         store = CredentialStore(api)
         with patch(
@@ -216,15 +218,92 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
             return_value="Bearer fixture",
         ):
             ref = await store.publish("binding-id")
+            other = await store.publish("other-binding")
         self.assertEqual(ref.origin, MCP_ORIGIN)
-        self.assertEqual(ref.secret_key, "binding-id")
-        body = api.patch_namespaced_secret.call_args.args[2]
-        self.assertEqual(set(body["data"]), {"binding-id"})
+        self.assertEqual(ref.secret_name, "mainloop-mcp-binding-id")
+        self.assertNotEqual(ref.secret_name, other.secret_name)
+        self.assertEqual(ref.secret_key, "authorization")
+        body = api.create_namespaced_secret.call_args_list[0].args[1]
+        self.assertEqual(
+            body["metadata"]["labels"],
+            {"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp"},
+        )
+        self.assertEqual(
+            body["data"],
+            {"authorization": base64.b64encode(b"Bearer fixture").decode()},
+        )
         await store.remove("binding-id")
         self.assertEqual(
-            api.patch_namespaced_secret.call_args.args[2],
-            {"data": {"binding-id": None}},
+            api.delete_namespaced_secret.call_args.args[0], ref.secret_name
         )
+
+    async def test_uncertain_create_is_reconciled_without_overwriting(self):
+        import base64
+        from types import SimpleNamespace
+
+        from kubernetes.client.exceptions import ApiException
+
+        api = Mock()
+        api.create_namespaced_secret.side_effect = ApiException(status=409)
+        existing = SimpleNamespace(
+            data={"authorization": base64.b64encode(b"Bearer fixture").decode()},
+            type="Opaque",
+            metadata=SimpleNamespace(
+                labels={
+                    "mainloop.dev/actor-egress": "true",
+                    "mainloop.dev/purpose": "mcp",
+                }
+            ),
+        )
+        api.read_namespaced_secret.return_value = existing
+        store = CredentialStore(api)
+        with patch(
+            "mainloop.runtime.agent_credentials.credential_value",
+            return_value="Bearer fixture",
+        ):
+            await store.publish("binding-id")
+            existing.data["another-binding"] = "conflict"
+            with self.assertRaisesRegex(RuntimeError, "conflicts"):
+                await store.publish("binding-id")
+        api.patch_namespaced_secret.assert_not_called()
+        api.replace_namespaced_secret.assert_not_called()
+
+    async def test_errors_are_sanitized_and_delete_is_idempotent(self):
+        from kubernetes.client.exceptions import ApiException
+
+        api = Mock()
+        store = CredentialStore(api)
+        api.create_namespaced_secret.side_effect = ApiException(
+            status=500, reason="secret bytes"
+        )
+        with patch(
+            "mainloop.runtime.agent_credentials.credential_value",
+            return_value="Bearer fixture",
+        ):
+            with self.assertRaisesRegex(RuntimeError, "could not publish") as error:
+                await store.publish("binding-id")
+        self.assertNotIn("secret bytes", str(error.exception))
+        api.delete_namespaced_secret.side_effect = ApiException(status=404)
+        await store.remove("binding-id")
+        api.delete_namespaced_secret.side_effect = ApiException(status=500)
+        with self.assertRaisesRegex(RuntimeError, "could not delete"):
+            await store.remove("binding-id")
+
+    async def test_shared_or_other_binding_reference_is_rejected(self):
+        from mainloop.runtime.agent_credentials import credential_reference
+
+        api = Mock()
+        store = CredentialStore(api)
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            await store.remove("binding-id", credential_reference("other"))
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            await store.publish(
+                "binding-id",
+                SessionCredential(
+                    MCP_ORIGIN, "Authorization", "mainloop-agent-tokens", "binding-id"
+                ),
+            )
+        api.assert_not_called()
 
     async def test_complete_header_contract(self):
         from mainloop.runtime.agent_credentials import credential_value
@@ -264,8 +343,8 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         reference = {
             "origin": MCP_ORIGIN,
             "header": "Authorization",
-            "secret_name": "mainloop-agent-tokens",
-            "secret_key": "binding-id",
+            "secret_name": "mainloop-mcp-binding-id",
+            "secret_key": "authorization",
         }
         conn.fetchrow = AsyncMock(
             side_effect=[

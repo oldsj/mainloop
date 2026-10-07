@@ -41,9 +41,12 @@ the installed fork before deploying through the authorized spike workflow.
   The frontend image must be built with `VITE_API_URL=https://mainloop.example.ts.net:8443`.
   Vite embeds this value at build time; a Deployment environment variable cannot replace it.
 
-The integration bootstraps an empty `kagent/mainloop-agent-tokens` Secret and a Role scoped to
-that Secret. GitOps must preserve its runtime-managed data. Mainloop's Role is separate from
-the credential provider's permission to read that namespace.
+Mainloop creates runtime-owned `kagent/mainloop-mcp-<binding-id>` Secrets labeled
+`mainloop.dev/actor-egress=true` and `mainloop.dev/purpose=mcp`. The integration grants the
+trusted backend namespace-wide Secret `get/create/delete`; RBAC cannot constrain dynamic
+creates by name or label. Admission policy can restrict writes; prefix-scoped reads require
+a separate broker or authorization boundary. The credential provider needs its own read
+permission and actor-egress selector.
 
 ## Exposure settings
 

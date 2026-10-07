@@ -77,8 +77,8 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
             credential_ref={
                 "origin": "http://mainloop-mcp.mainloop.svc.cluster.local",
                 "header": "Authorization",
-                "secret_name": "mainloop-agent-tokens",
-                "secret_key": SESSION,
+                "secret_name": f"mainloop-mcp-{SESSION}",
+                "secret_key": "authorization",
             },
         )
         self.session = SimpleNamespace(
@@ -105,8 +105,8 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
                     return_value=SessionCredential(
                         "http://mainloop-mcp.mainloop.svc.cluster.local",
                         "Authorization",
-                        "mainloop-agent-tokens",
-                        SESSION,
+                        f"mainloop-mcp-{SESSION}",
+                        "authorization",
                     )
                 ),
             ),
