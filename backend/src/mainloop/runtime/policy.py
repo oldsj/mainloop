@@ -90,7 +90,7 @@ NOTE_MAX_CHARS = 2000
 
 
 # One role table controls discovery and invocation. Slice b extends these roles.
-_COMMON_TOOLS = frozenset({"whoami", "note", "decide"})
+_COMMON_TOOLS = frozenset({"whoami", "note", "decide", "open_pull_request"})
 ROLE_TOOLS = {
     "main": _COMMON_TOOLS
     | frozenset(

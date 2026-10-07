@@ -15,6 +15,7 @@ from starlette.responses import Response
 
 from models.agent_tools import (
     Delegate,
+    OpenPullRequest,
     OptionalSession,
     PendingDone,
     Read,
@@ -29,6 +30,11 @@ _context: ContextVar[Ctx] = ContextVar("mainloop_agent")
 
 # Registry is shared by discovery and invocation; future approval groups can select subsets.
 TOOLS = {
+    "open_pull_request": (
+        OpenPullRequest,
+        "Open a same-repository feature-branch PR against the current default branch. "
+        "Supply a stable request_id for retries; uncertain outcomes are reconciled without resending.",
+    ),
     "whoami": (ToolInput, "Show your binding identity and role."),
     "topics": (ToolInput, "List topics and pending counts."),
     "topic_open": (TopicOpen, "Create or select a topic and set its status."),
