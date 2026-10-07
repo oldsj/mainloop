@@ -402,3 +402,23 @@ test('intentional read cancellation preserves state; a read timeout disables sta
   await channel.refresh('request', deadline.signal);
   assert.equal(latest.stale, true);
 });
+
+test(
+  'renders verified merge evidence from the integrated observer and owner API',
+  { skip: !process.env.MERGE_UI_FIXTURE_PATH },
+  async () => {
+    const fixture: HITLView = JSON.parse(
+      await readFile(process.env.MERGE_UI_FIXTURE_PATH!, 'utf8')
+    );
+    const r = await renderer();
+    try {
+      const html = r.html(state(fixture));
+      assert.match(html, /Verified merge context/);
+      assert.match(html, /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+      assert.match(html, /bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/);
+      assert.match(html, /k8s\/protected.yaml/);
+    } finally {
+      await r.close();
+    }
+  }
+);
