@@ -6,7 +6,9 @@ export interface ProviderProfile {
   runtime_adapter: 'kagent';
   native_provider: 'claude' | 'codex';
   configuration_revision: string;
-  agents: Partial<Record<'main' | 'child' | 'agent', { namespace: string; name: string }>>;
+  agents: Partial<
+    Record<'main' | 'supervisor' | 'child' | 'agent', { namespace: string; name: string }>
+  >;
   aliases: ProviderProfileId[];
   enabled: boolean;
   capabilities: {
@@ -39,6 +41,20 @@ export class ApiError extends Error {
     readonly status: number
   ) {
     super(message);
+  }
+}
+
+/**
+ * A task read or action the backend answered with an HTTP error. The task routes put a typed
+ * code in `detail.reason` (e.g. `stale_task_version`); `reason` is null for other bodies.
+ */
+export class TaskApiError extends ApiError {
+  constructor(
+    message: string,
+    status: number,
+    readonly reason: string | null
+  ) {
+    super(message, status);
   }
 }
 
@@ -379,6 +395,229 @@ export interface SessionNotification {
   created_at: string;
 }
 
+// Durable task contracts (models/src/models/task.py, docs/specs/tasks.md). Fields that later
+// backend slices add (PR, CI and merge observations) are optional: absent means unknown.
+export type TaskStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type TaskReason =
+  | 'awaiting_child'
+  | 'approval'
+  | 'ci'
+  | 'publication'
+  | 'handoff'
+  | 'reconciliation'
+  | 'provisioning_unavailable'
+  | 'handoff_unavailable'
+  | 'cancel_unavailable';
+
+export type TaskAttemptState =
+  | 'creating'
+  | 'active'
+  | 'draining'
+  | 'fenced'
+  | 'superseded'
+  | 'failed'
+  | 'cancelled'
+  | 'completed';
+
+export type TaskOperationState =
+  | 'requested'
+  | 'draining'
+  | 'checkpoint_required'
+  | 'checkpoint_verified'
+  | 'source_fencing'
+  | 'source_fenced'
+  | 'target_creating'
+  | 'target_ready'
+  | 'completed'
+  | 'blocked'
+  | 'uncertain';
+
+export type TaskActionKind = 'retry' | 'reassign' | 'cancel';
+
+export interface TaskCheckout {
+  branch: string;
+  ref: string;
+  depth: number;
+}
+
+export interface Task {
+  id: string;
+  owner_id: string;
+  project_id: string | null;
+  topic_id: string | null;
+  parent_task_id: string | null;
+  root_task_id: string;
+  creator_binding_id: string | null;
+  title: string;
+  brief: string;
+  mode: 'code' | 'coordination';
+  assigned_profile_id: string;
+  selection_source: 'explicit' | 'project_default' | 'installation_default' | 'inherited';
+  provider_constraint: string | null;
+  accepted_environment?: WorkspaceManifest['development_environment'];
+  status: TaskStatus;
+  reason: TaskReason | null;
+  current_attempt_id: string | null;
+  version: number;
+  checkout: TaskCheckout | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskAttempt {
+  id: string;
+  task_id: string;
+  number: number;
+  profile_id: string;
+  native_provider: 'claude' | 'codex';
+  configuration_revision: string;
+  agent_ref: { namespace: string; name: string };
+  role: 'supervisor' | 'child';
+  depth: 1 | 2;
+  writer_generation: number | null;
+  session_id: string | null;
+  binding_id: string | null;
+  workspace_id: string | null;
+  state: TaskAttemptState;
+  brief_delivery_id?: string | null;
+  evidence_refs?: string[];
+  result_ref?: string | null;
+  environment?: WorkspaceManifest['development_environment'];
+  initial_ref?: string | null;
+  manifest_ref?: string | null;
+  archived_at?: string | null;
+  native_deleted_at?: string | null;
+  retention_hold?: string | null;
+  predecessor_id: string | null;
+  successor_id: string | null;
+  checkpoint_ref: string | null;
+  superseded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskOperation {
+  id: string;
+  owner_id: string;
+  principal_key: string;
+  request_digest: string;
+  request_payload?: Record<string, unknown>;
+  kind: 'create' | 'retry' | 'reassign' | 'cancel';
+  request_id: string;
+  task_id: string | null;
+  attempt_id: string | null;
+  state: TaskOperationState;
+  last_confirmed_step: TaskOperationState;
+  source_attempt_id: string | null;
+  target_attempt_id: string | null;
+  checkpoint_ref: string | null;
+  manifest_ref?: string | null;
+  reason: TaskReason | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskEligibility =
+  | { available: true; reason?: TaskReason | null }
+  | { available: false; reason: TaskReason };
+
+export interface TaskProjection {
+  agent_activity?: string | null;
+  delivery_state?: string | null;
+  workspace_health?: string | null;
+  environment_version_id?: string | null;
+  repository?: string | null;
+  branch?: string | null;
+  pr_url?: string | null;
+  pr_number?: number | null;
+  pr_head_sha?: string | null;
+  pr_state?: 'open' | 'closed' | 'merged' | 'unknown';
+  ci_state?: 'pending' | 'success' | 'failure' | 'unknown';
+  ci_head_sha?: string | null;
+  merge_state?: string | null;
+  merge_proposal_id?: string | null;
+  publication_state?: string | null;
+  pending_approval_ids?: string[];
+  observed_at?: string | null;
+}
+
+export interface TaskArtifact {
+  id: string;
+  operation_id: string;
+  kind: 'checkpoint' | 'handoff_manifest' | 'unverified_provider_summary';
+  sha256: string;
+  payload: Record<string, unknown>;
+}
+
+export interface TaskReportRecord {
+  task_id: string;
+  attempt_id: string;
+  request_id: string;
+  summary: string;
+  outcome: 'progress' | 'completed' | 'failed' | 'blocked';
+  evidence_refs?: string[];
+}
+
+export interface TaskView {
+  task: Task;
+  attempts: TaskAttempt[];
+  operations: TaskOperation[];
+  artifacts: TaskArtifact[];
+  reports: TaskReportRecord[];
+  projection: TaskProjection;
+  actions: Partial<Record<TaskActionKind, TaskEligibility>>;
+}
+
+/** Body of retry, reassign and cancel. The version and attempt are the ones the owner saw. */
+export interface TaskActionBody {
+  request_id: string;
+  expected_version: number;
+  expected_attempt_id: string | null;
+  target_profile_id?: string;
+}
+
+/** Payload of the `task:updated` SSE event. It names a change; the task itself comes from GET. */
+export interface TaskUpdatedEvent {
+  type: 'task:updated';
+  event_id: string;
+  task_id: string;
+  version: number;
+  attempt_id: string | null;
+  root_task_id: string;
+  parent_task_id: string | null;
+  occurred_at: string;
+}
+
+async function taskResponse<T>(response: Response, fallback: string): Promise<T> {
+  if (response.ok) return response.json();
+  let reason: string | null = null;
+  let message = fallback;
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === 'string') message = body.detail;
+    else if (typeof body?.detail?.reason === 'string') reason = message = body.detail.reason;
+  } catch {
+    // not JSON
+  }
+  throw new TaskApiError(message, response.status, reason);
+}
+
+function taskActionRequest(body: TaskActionBody): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  };
+}
+
 function readSignal(signal?: AbortSignal): AbortSignal {
   return AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])]);
 }
@@ -450,6 +689,58 @@ export const api = {
       );
     return response.json();
   },
+  async listTasks(
+    filter: { project_id?: string; parent_task_id?: string } = {},
+    signal?: AbortSignal
+  ): Promise<TaskView[]> {
+    const params = new URLSearchParams();
+    if (filter.project_id) params.set('project_id', filter.project_id);
+    if (filter.parent_task_id) params.set('parent_task_id', filter.parent_task_id);
+    const url = params.size ? `${API_URL}/tasks?${params}` : `${API_URL}/tasks`;
+    const response = await apiFetch(url, { signal: readSignal(signal) });
+    return taskResponse(response, 'Could not load tasks');
+  },
+  async getTask(id: string, signal?: AbortSignal): Promise<TaskView> {
+    const response = await apiFetch(`${API_URL}/tasks/${encodeURIComponent(id)}`, {
+      signal: readSignal(signal)
+    });
+    return taskResponse(response, 'Could not load task');
+  },
+  async getTaskOperation(id: string, signal?: AbortSignal): Promise<TaskOperation> {
+    const response = await apiFetch(`${API_URL}/task-operations/${encodeURIComponent(id)}`, {
+      signal: readSignal(signal)
+    });
+    return taskResponse(response, 'Could not load task operation');
+  },
+  /** Retry, reassign and cancel answer 202 with the durable operation; the task changes later. */
+  async retryTask(id: string, body: TaskActionBody): Promise<TaskOperation> {
+    const response = await apiFetch(
+      `${API_URL}/tasks/${encodeURIComponent(id)}/retry`,
+      taskActionRequest(body)
+    );
+    return taskResponse(response, 'Could not retry the task');
+  },
+  async reassignTask(id: string, body: TaskActionBody): Promise<TaskOperation> {
+    const response = await apiFetch(
+      `${API_URL}/tasks/${encodeURIComponent(id)}/reassign`,
+      taskActionRequest(body)
+    );
+    return taskResponse(response, 'Could not reassign the task');
+  },
+  async cancelTask(id: string, body: TaskActionBody): Promise<TaskOperation> {
+    const response = await apiFetch(
+      `${API_URL}/tasks/${encodeURIComponent(id)}/cancel`,
+      taskActionRequest(body)
+    );
+    return taskResponse(response, 'Could not cancel the task');
+  },
+  async listProviders(signal?: AbortSignal): Promise<ProviderProfile[]> {
+    const response = await apiFetch(`${API_URL}/providers`, { signal: readSignal(signal) });
+    if (!response.ok)
+      throw new ApiError(await errorDetail(response, 'Could not load providers'), response.status);
+    return response.json();
+  },
+
   async listConversations(): Promise<{ conversations: Conversation[]; total: number }> {
     const response = await apiFetch(`${API_URL}/conversations`);
     if (!response.ok) throw new Error('Failed to list conversations');

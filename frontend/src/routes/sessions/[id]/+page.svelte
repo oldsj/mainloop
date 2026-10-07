@@ -10,6 +10,8 @@
   import NativeIdentityStrip from '$lib/components/NativeIdentityStrip.svelte';
   import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
   import { workspaces } from '$lib/stores/workspaces';
+  import { tasks, taskViews } from '$lib/stores/tasks';
+  import { statusLabel as taskStatusLabel, taskForSession } from '$lib/taskState';
 
   let sessionId = $derived($page.params.id);
   let loaded = $state<Session | null>(null);
@@ -24,6 +26,11 @@
   const workspace = $derived(
     $workspaces.workspaces.find((item) => item.session_id === session?.id)
   );
+
+  const owningTask = $derived(session ? taskForSession($taskViews, session.id) : null);
+  $effect(() => {
+    void tasks.fetchList({});
+  });
 
   // SvelteKit reuses this component when only [id] changes, so load per id rather than on mount.
   // Clearing `loaded` first unmounts the chat and identity strip, which read their id once.
@@ -222,6 +229,26 @@
     {/if}
 
     <NativeIdentityStrip sessionId={session.id} />
+
+    {#if owningTask}
+      <div
+        class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-term-border px-4 py-2 text-sm"
+        data-testid="session-task-link"
+      >
+        <span class="text-term-fg-muted">Task</span>
+        <a
+          href="/tasks/{owningTask.view.task.id}"
+          class="text-term-accent underline underline-offset-4 hover:text-term-fg"
+        >
+          {owningTask.view.task.title}
+        </a>
+        <span class="text-term-fg-muted text-xs">
+          {taskStatusLabel(owningTask.view.task.status)}{owningTask.current
+            ? ''
+            : ' · attempt superseded, history only'}
+        </span>
+      </div>
+    {/if}
 
     {#if workspace}
       <div class="flex items-center gap-3 border-b border-term-border px-4 py-2 text-sm">

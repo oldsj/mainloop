@@ -13,6 +13,7 @@ export type SSEEventType =
   | 'session:needs_input'
   | 'session:message'
   | 'workspace:updated'
+  | 'task:updated'
   | 'heartbeat'
   | 'log'
   | 'status'
@@ -88,6 +89,7 @@ export class SSEClient {
       'session:needs_input',
       'session:message',
       'workspace:updated',
+      'task:updated',
       'heartbeat',
       'log',
       'status',

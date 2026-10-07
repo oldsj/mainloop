@@ -26,6 +26,11 @@ test('a failed project detail read renders an error and retry instead of loading
       export const agentLabel = (kind) => kind ?? 'agent';
       export const goto = () => {};
       export const statusLabel = (status) => status;
+      export const taskViews = writable([]);
+      export const tasks = {
+        subscribe: writable({ byId: {}, loading: false, loaded: true, error: null }).subscribe,
+        fetchList: async () => {}
+      };
       export default function MergePolicy() {}
     `
     );
