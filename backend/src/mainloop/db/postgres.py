@@ -8,6 +8,7 @@ from typing import Any
 
 import asyncpg
 from mainloop.config import settings
+from mainloop.db.hitl_schema import HITL_MIGRATION_SQL
 from mainloop.services.github_repo import GithubRepo
 
 from models import (
@@ -22,6 +23,7 @@ from models import (
     SessionNotification,
     SessionStatus,
 )
+from models.merge_policy import MergePolicyUpdate
 
 
 class PRCreationConflict(Exception):
@@ -442,6 +444,9 @@ CREATE TABLE IF NOT EXISTS pr_creation_requests (
 """
 
 
+MIGRATION_SQL += HITL_MIGRATION_SQL
+
+
 class Database:
     """PostgreSQL database client for workflow persistence."""
 
@@ -811,9 +816,44 @@ class Database:
             created_at=row["created_at"],
             last_used_at=row["last_used_at"],
             metadata_updated_at=row.get("metadata_updated_at"),
+            merge_policy=row["merge_policy"],
+            merge_policy_version=row["merge_policy_version"],
             open_pr_count=row.get("open_pr_count") or 0,
             open_issue_count=row.get("open_issue_count") or 0,
         )
+
+    async def update_merge_policy(
+        self, project_id: str, owner_id: str, update: MergePolicyUpdate
+    ) -> Project | None:
+        """Serialize owner changes on the project row; merge claims must use this lock too."""
+        async with self.connection() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM projects WHERE id=$1 AND user_id=$2 FOR UPDATE",
+                project_id,
+                owner_id,
+            )
+            if row is None:
+                return None
+            if row["merge_policy_version"] != update.expected_version:
+                raise ValueError("Merge policy version changed")
+            if row["merge_policy"] == update.merge_policy:
+                return self._row_to_project(row)
+            changed = await conn.fetchrow(
+                """UPDATE projects SET merge_policy=$2,merge_policy_version=merge_policy_version+1
+                   WHERE id=$1 RETURNING *""",
+                project_id,
+                update.merge_policy.value,
+            )
+            await conn.execute(
+                """INSERT INTO project_merge_policy_audit(project_id,owner_id,old_policy,new_policy,version)
+                   VALUES($1,$2,$3,$4,$5)""",
+                project_id,
+                owner_id,
+                row["merge_policy"],
+                update.merge_policy.value,
+                changed["merge_policy_version"],
+            )
+            return self._row_to_project(changed)
 
     async def get_project(self, project_id: str) -> Project | None:
         """Get a project by ID."""
@@ -1143,6 +1183,7 @@ class Database:
             options=list(row["options"]) if row["options"] else None,
             status=row["status"],
             response=row["response"],
+            hitl_request_id=row.get("hitl_request_id"),
             responded_at=row["responded_at"],
             read_at=row.get("read_at"),
             created_at=row["created_at"],

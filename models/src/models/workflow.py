@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from models.merge_policy import MergePolicy
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -15,6 +17,7 @@ def _uuid() -> str:
 class QueueItemType(str, Enum):
     """Types of items in the human queue."""
 
+    HITL_REQUEST = "hitl_request"
     QUESTION = "question"
     APPROVAL = "approval"
     REVIEW = "review"
@@ -69,6 +72,8 @@ class QueueItem(BaseModel):
     main_thread_id: str = Field(..., description="Parent main thread ID")
     task_id: str | None = Field(None, description="Related worker task ID")
     user_id: str = Field(..., description="User ID")
+
+    hitl_request_id: str | None = None
 
     # Item details
     item_type: QueueItemType = Field(..., description="Type of queue item")
@@ -180,6 +185,9 @@ class Project(BaseModel):
 
     id: str = Field(default_factory=_uuid, description="Unique project ID")
     user_id: str = Field(..., description="User who owns this project")
+
+    merge_policy: MergePolicy = MergePolicy.AUTO
+    merge_policy_version: int = Field(default=1, ge=1)
 
     # GitHub identifiers
     owner: str = Field(..., description="GitHub owner/org")
