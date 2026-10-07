@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     # snapshot scope. See docs/architecture.md.
     kagent_workspace_claude_agent: str = "claude-workspace"
     kagent_workspace_codex_agent: str = "codex-workspace"
-    # JSON list of operator-owned profiles. Matching IDs override legacy defaults.
+    # JSON list of operator-owned profiles. Matching IDs override explicit native defaults.
     provider_profiles: list[ProviderProfile] = Field(default_factory=list)
 
     @field_validator("provider_profiles")
@@ -118,6 +118,32 @@ class Settings(BaseSettings):
             ):
                 raise ValueError("legacy profile native provider must not change")
         return profiles
+
+    kagent_supervisor_claude_agent: str = "claude-workspace"
+    kagent_supervisor_codex_agent: str = "codex-workspace"
+    task_default_provider_profile_id: str = "claude"
+    task_max_children_per_parent: int = Field(default=3, ge=1)
+    task_max_children_global: int = Field(default=6, ge=1)
+    task_reconcile_seconds: float = Field(default=5.0, gt=0)
+    task_archive_after_days: int = Field(default=21, ge=0)
+    task_delete_after_months: int = Field(default=2, ge=1)
+
+    @field_validator("task_default_provider_profile_id")
+    @classmethod
+    def _task_default_id(cls, value):
+        from pydantic import TypeAdapter
+
+        from models.provider import ProviderProfileId
+
+        return TypeAdapter(ProviderProfileId).validate_python(value)
+
+    @model_validator(mode="after")
+    def _retention_order(self):
+        # A calendar month is at least 28 days. This conservative bound guarantees
+        # deletion never precedes archive for any superseded_at date.
+        if self.task_archive_after_days > 28 * self.task_delete_after_months:
+            raise ValueError("task deletion cannot precede archive")
+        return self
 
     kagent_request_timeout_seconds: float = 30.0
     kagent_turn_timeout_seconds: float = 1800.0

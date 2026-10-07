@@ -13,6 +13,7 @@ CAPABILITIES = (
     "message_completion",
     "cancel_reconciliation",
     "workspace_git_origins",
+    "workspace_environment_composition",
     "workspace_snapshot",
     "workspace_freeze",
     "workspace_import",
@@ -46,20 +47,20 @@ class ProviderRegistry:
 
 
 def registry() -> ProviderRegistry:
-    """Defaults retain legacy settings; configured entries replace matching IDs or add IDs.
-
-    Reserved legacy IDs cannot be redirected through aliases. Keep configured IDs and AgentRefs
-    stable while sessions exist: bindings already use these IDs for runtime routing.
-    """
+    """Explicit Claude/Codex defaults; operator profiles replace matching IDs or add IDs."""
     defaults = [
         ProviderProfile(
             id=kind,
             display_name="Claude Code" if kind == "claude" else "Codex",
             native_provider=kind,
-            configuration_revision="legacy-v1",
+            configuration_revision="native-v1",
             agents={
                 "main": ProviderAgentRef(
                     namespace=settings.kagent_namespace, name=settings.kagent_main_agent
+                ),
+                "supervisor": ProviderAgentRef(
+                    namespace=settings.kagent_namespace,
+                    name=getattr(settings, f"kagent_supervisor_{kind}_agent"),
                 ),
                 "child": ProviderAgentRef(
                     namespace=settings.kagent_namespace,
@@ -81,3 +82,40 @@ def registry() -> ProviderRegistry:
     for profile in configured:
         profiles[profile.id] = profile
     return ProviderRegistry(list(profiles.values()))
+
+
+TASK_REQUIRED_CAPABILITIES = frozenset(
+    {
+        "native_create",
+        "native_identity",
+        "message_receipt",
+        "message_completion",
+        "cancel_reconciliation",
+        "mainloop_mcp_credentials",
+    }
+)
+TASK_CODE_CAPABILITIES = frozenset(
+    {"workspace_git_origins", "workspace_environment_composition"}
+)
+
+
+def qualify_task_profile(profile, role, mode, *, allow_fixture=False):
+    """Only explicitly proved evidence qualifies; tests must opt into fixture scope."""
+    if not profile.enabled or role not in profile.agents:
+        raise ValueError("provider_unavailable")
+    required = TASK_REQUIRED_CAPABILITIES | (
+        TASK_CODE_CAPABILITIES if mode == "code" else frozenset()
+    )
+    evidence = {c.capability: c for c in profile.capabilities}
+    for name in required:
+        value = evidence.get(name)
+        if (
+            value is None
+            or value.state != "proved"
+            or (
+                value.scope != "live"
+                and not (allow_fixture and value.scope == "fixture")
+            )
+        ):
+            raise ValueError(f"provider_unqualified:{name}")
+    return profile

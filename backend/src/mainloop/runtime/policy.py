@@ -147,3 +147,9 @@ def surface_tools(actor: Actor, surface: str = "ordinary") -> frozenset[str]:
 def may_call(actor: Actor, tool: str) -> None:
     if tool not in tools_for(actor):
         raise PolicyError("role", f"a {actor.role} agent may not call {tool}")
+
+
+def may_report_task(actor: Actor) -> None:
+    """Frozen task hierarchy, separate from the production session tools until S2."""
+    if (actor.role, actor.depth) not in (("supervisor", 1), ("child", 2)):
+        raise PolicyError("role", "invalid task reporting role/depth")

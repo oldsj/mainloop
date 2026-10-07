@@ -43,11 +43,15 @@ def fixture(**changes):
 
 
 class ProviderTests(unittest.TestCase):
-    def test_legacy_defaults_reproduce_every_role_and_namespace(self):
+    def test_explicit_defaults_reproduce_configured_roles_and_namespace(self):
         with patch.object(settings, "kagent_namespace", "team"):
             for kind in ("claude", "codex"):
                 for role, expected in (
                     ("main", settings.kagent_main_agent),
+                    (
+                        "supervisor",
+                        getattr(settings, f"kagent_supervisor_{kind}_agent"),
+                    ),
                     ("child", getattr(settings, f"kagent_{kind}_agent")),
                     ("agent", getattr(settings, f"kagent_workspace_{kind}_agent")),
                 ):

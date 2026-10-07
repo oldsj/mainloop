@@ -66,7 +66,19 @@ class PolicyTests(unittest.TestCase):
             spawn(Actor("main", 0), glob=policy.MAX_CHILDREN_GLOBAL)
         self.assertEqual(cm.exception.code, "global-concurrency")
 
-    def test_only_children_report(self):
+    def test_task_supervisors_and_children_report_at_exact_depth(self):
+        policy.may_report_task(Actor("supervisor", 1))
+        policy.may_report_task(Actor("child", 2))
+        for actor in (
+            Actor("main", 0),
+            Actor("child", 1),
+            Actor("supervisor", 2),
+            Actor("agent", 0),
+        ):
+            with self.subTest(actor=actor), self.assertRaises(PolicyError):
+                policy.may_report_task(actor)
+
+    def test_production_session_child_report_remains_available(self):
         policy.may_report(Actor("child", 1))
         with self.assertRaises(PolicyError):
             policy.may_report(Actor("main", 0))

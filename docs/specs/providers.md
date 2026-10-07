@@ -1,25 +1,19 @@
 # Provider profiles
 
-Mainloop owns the provider registry. `GET /providers` returns configured profiles and their
-capability evidence through the same owner-only listener and `current_user` dependency as the
-session and workspace APIs. The MCP listener does not expose this endpoint. Caller identity
-headers do not change the configured owner. There is no registry write API.
+Mainloop owns a Claude/Codex native provider registry. `GET /providers` returns configured
+profiles and scoped capability evidence on the owner REST listener. There is no registry write
+API. Tool/API callers select a profile ID, never AgentRefs, namespaces, credentials or harness wiring.
 
-A profile contains `id`, `display_name`, `native_provider` (Claude or Codex),
-`runtime_adapter` (`kagent`), `configuration_revision`, role-specific `agents` (namespace and
-name), `aliases`, `enabled`, and `capabilities`. Roles use the existing binding names:
-`agent` for owner sessions and workspaces, `child` for delegation, and `main` for the home
-thread. A profile can omit unsupported roles; selecting an omitted role is rejected.
+Profiles contain ID, display name, native provider, kagent adapter, configuration revision,
+role-specific AgentRefs, configured profile aliases, enabled flag and capability evidence.
+Roles are `main`, `supervisor`, `child`, and `agent` (owner workspace). A missing role is rejected;
+a supervisor is never silently routed as main. Operator profile aliases are configurable ID
+shortcuts, not legacy delegation payload aliases. Task schemas reject the old `kind` payload.
 
-## Operator configuration
-
-`PROVIDER_PROFILES` is a JSON list, loaded through application settings. Entries replace
-matching profile IDs or add new IDs. Unknown fields, unsupported adapters/providers, invalid
-AgentRefs, duplicate IDs/aliases, and aliases that collide with other IDs are rejected. The
-legacy IDs `claude` and `codex` are reserved and cannot be assigned as another profile's alias
-or changed to a different native provider.
-
-For example, an additional child-only Codex profile:
+`PROVIDER_PROFILES` is a validated JSON list replacing matching explicit default IDs or adding
+Claude/Codex profiles. IDs/aliases must be unique. Reserved `claude` and `codex` IDs cannot be
+redirected to a different native provider or used as another profile's alias. Unsupported native
+providers, adapters, malformed AgentRefs and unknown fields fail closed.
 
 ```json
 [
@@ -27,47 +21,36 @@ For example, an additional child-only Codex profile:
     "id": "codex-review",
     "display_name": "Codex review",
     "native_provider": "codex",
-    "runtime_adapter": "kagent",
     "configuration_revision": "review-v1",
     "agents": {
-      "child": { "namespace": "kagent", "name": "codex-review-child" }
+      "supervisor": { "namespace": "kagent", "name": "codex-review" },
+      "child": { "namespace": "kagent", "name": "codex-child" }
     },
-    "aliases": ["review"],
     "enabled": true,
     "capabilities": [{ "capability": "native_create", "state": "unknown" }]
   }
 ]
 ```
 
-Without configuration, `claude` and `codex` retain the existing `KAGENT_NAMESPACE`,
-`KAGENT_MAIN_AGENT`, `KAGENT_CLAUDE_AGENT`, `KAGENT_CODEX_AGENT`,
-`KAGENT_WORKSPACE_CLAUDE_AGENT`, and `KAGENT_WORKSPACE_CODEX_AGENT` settings exactly.
-Both defaults route `main` to the same existing main Agent. No sessions are migrated or rebound.
-Operator configuration must retain profile IDs and AgentRefs while their sessions exist;
-configuration revisions are descriptive, not per-binding routing snapshots in this slice.
-Use a new ID for different runtime wiring.
+Explicit default construction uses `KAGENT_NAMESPACE`, `KAGENT_MAIN_AGENT`,
+`KAGENT_CLAUDE_AGENT`, `KAGENT_CODEX_AGENT`, workspace Agent settings and the separate
+`KAGENT_SUPERVISOR_CLAUDE_AGENT`/`KAGENT_SUPERVISOR_CODEX_AGENT` settings. Default revision is
+`native-v1`. All capability evidence starts unknown. Configured revisions are operator-owned;
+no defaults fabricate qualification.
 
-## Selection and evidence
+Task selection precedence is explicit choice, project default (`GET/PUT
+/projects/{id}/default-provider` with expected preference version), installation default
+(`TASK_DEFAULT_PROVIDER_PROFILE_ID`). Selection source is persisted. Explicit owner constraints
+are inherited by supervisors. A task attempt pins its profile ID, native provider, revision and
+immutable role AgentRef, so later registry changes cannot reroute its persisted identity.
+Disabled profiles block new selection and do not prevent reading/reconciling a pinned attempt.
+Existing session/workspace routing remains in its runtime adapter until S1 integrates attempt routing.
 
-The existing `agent_kind` fields on session/workspace APIs and `kind` on delegate accept a
-profile ID or configured alias. `claude` and `codex` remain accepted and omission still defaults
-to Claude. New bindings store the canonical profile ID. Unknown, disabled, or role-ineligible
-selections fail before creating session/workspace records. Delegation still requires inclusion
-in `NATIVE_CHILD_KINDS` (IDs or aliases) and retains existing role and concurrency caps.
-Callers cannot supply AgentRefs, namespaces, harness settings, or credentials to select a runtime.
-The frontend picker remains Claude/Codex; this slice adds registry types without changing UI consumers.
-
-Disabled profiles remain in `GET /providers` with `enabled: false`, so owners can distinguish
-configuration from availability. Disabling a profile blocks new selection; existing bindings
-continue to route, observe, and reconcile using it.
-
-Capability results reuse the shared native-agent states: `proved`, `partial`, `unsupported`,
-and `unknown`. Proved/partial results require an evidence reference and `fixture` or `live`
-scope. Fixture evidence is not live qualification. Default evidence is unknown; omitted
-capabilities are also unknown. The defaults describe native create/resume/identity, delivery
-receipt/completion/cancel reconciliation, workspace Git origins/snapshot/freeze/import, MCP
-credential injection, HITL, and retention. Existing creation does not acquire a new evidence
-gate; future task requirements must explicitly require proved capabilities rather than treating
-unknown as supported. This slice provides no handoff, snapshot transfer, task/attempt records,
-or automatic provider selection. Provider-specific HITL/merge qualification remains governed
-by its existing runtime/template contracts.
+Task qualification requires proved live evidence for native create/identity, delivery
+receipt/completion, cancellation reconciliation and Mainloop MCP credential injection. Code
+also requires workspace Git origins and environment composition. Unknown/partial/unsupported or
+fixture-only evidence cannot qualify production selection. Pure fake tests may explicitly opt
+into fixture evidence. Snapshot/import capabilities are not a committed-handoff prerequisite.
+Evidence states remain `proved`, `partial`, `unsupported`, `unknown`; proved/partial require
+scope and evidence reference. Existing owner-session APIs retain their configured selection
+behavior until S1; S0 task mutators remain unavailable and cannot create native sessions.

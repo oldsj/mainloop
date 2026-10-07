@@ -5,6 +5,16 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from models.provider import ProviderProfileId
+from models.task import (
+    TaskCreate,
+)
+from models.task import TaskList as TaskListInput
+from models.task import (
+    TaskLookup,
+    TaskReport,
+    TaskScopedAction,
+    TaskScopedReassign,
+)
 
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
@@ -33,6 +43,9 @@ class PendingDone(ToolInput):
     id: Annotated[str, Field(min_length=8)]
 
 
+# Production session tools remain unchanged until S2 replaces their handlers.
+
+
 class Delegate(ToolInput):
     topic: Name = "inbox"
     kind: ProviderProfileId
@@ -42,6 +55,39 @@ class Delegate(ToolInput):
 
 class Report(ToolInput):
     summary: Annotated[str, Field(min_length=1, max_length=4000)]
+
+
+# Future task tools use distinct strict schemas; there are no legacy argument aliases.
+class TaskDelegate(TaskCreate):
+    pass
+
+
+class TaskReportInput(TaskReport):
+    pass
+
+
+class TaskGet(TaskLookup):
+    pass
+
+
+class TaskList(TaskListInput):
+    pass
+
+
+class TaskHistory(TaskLookup):
+    pass
+
+
+class TaskRetry(TaskScopedAction):
+    pass
+
+
+class TaskCancel(TaskScopedAction):
+    pass
+
+
+class TaskReassign(TaskScopedReassign):
+    pass
 
 
 class OptionalSession(ToolInput):
