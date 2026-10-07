@@ -59,3 +59,7 @@ This tool creates PRs only. It does not merge, edit merge policy, create inbox i
 changes, or grant agents GitHub API access. Existing native-session delivery behavior is
 unchanged. The default tests use scratch PostgreSQL and a fake GitHub HTTP transport;
 they are not live GitHub or deployment proof.
+
+Project policy and the generic decision storage contract are described in
+[Merge policy](merge-policy.md). That foundation does not yet enable merge tools or
+native HITL inbox actions.

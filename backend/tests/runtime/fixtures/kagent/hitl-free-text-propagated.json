@@ -1,0 +1,37 @@
+{
+  "metadata": {
+    "https://kagent.dev/extensions/hitl/v1": {
+      "type": "ask_user_request",
+      "id": "ask-parent",
+      "questions": [
+        {
+          "question": "Enter the branch name",
+          "choices": null,
+          "multiple": false
+        }
+      ],
+      "nested": {
+        "subagent_name": "fixture-child",
+        "task_id": "task",
+        "context_id": "leaf",
+        "tools": [
+          {
+            "id": "ask-child",
+            "call_id": "ask-child",
+            "name": "ask_user",
+            "args": {
+              "questions": [
+                {
+                  "question": "Enter the branch name",
+                  "choices": null,
+                  "multiple": false
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "extensions": ["https://kagent.dev/extensions/hitl/v1"]
+}

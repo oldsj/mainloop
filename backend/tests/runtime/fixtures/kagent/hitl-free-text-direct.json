@@ -1,0 +1,16 @@
+{
+  "metadata": {
+    "https://kagent.dev/extensions/hitl/v1": {
+      "type": "ask_user_request",
+      "id": "ask-child",
+      "questions": [
+        {
+          "question": "Enter the branch name",
+          "choices": null,
+          "multiple": false
+        }
+      ]
+    }
+  },
+  "extensions": ["https://kagent.dev/extensions/hitl/v1"]
+}

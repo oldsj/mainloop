@@ -1,6 +1,7 @@
 """FastAPI application with DBOS durable workflows."""
 
 import logging
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime
@@ -54,6 +55,7 @@ from models import (
     SessionNotification,
     SessionStatus,
 )
+from models.merge_policy import MergePolicyUpdate, MergePolicyView
 
 logger = logging.getLogger(__name__)
 
@@ -556,6 +558,43 @@ async def get_project(project_id: str, user_id: str = Depends(current_user)):
     if not project or project.user_id != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+
+@app.get("/projects/{project_id}/merge-policy", response_model=MergePolicyView)
+async def get_project_merge_policy(
+    project_id: str, user_id: str = Depends(current_user)
+):
+    project = await db.get_project(project_id)
+    if not project or project.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return MergePolicyView(
+        merge_policy=project.merge_policy,
+        merge_policy_version=project.merge_policy_version,
+    )
+
+
+@app.put("/projects/{project_id}/merge-policy", response_model=MergePolicyView)
+async def update_project_merge_policy(
+    project_id: str,
+    update: MergePolicyUpdate,
+    user_id: str = Depends(current_user),
+):
+    # current_user is a configured identity, not request authentication. Operators
+    # may opt in only after proving actors cannot reach this owner-only listener.
+    if os.environ.get("MAINLOOP_OWNER_POLICY_WRITES_ENABLED") != "true":
+        raise HTTPException(status_code=503, detail="Owner policy writes are disabled")
+    try:
+        project = await db.update_merge_policy(project_id, user_id, update)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="Merge policy version changed"
+        ) from exc
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return MergePolicyView(
+        merge_policy=project.merge_policy,
+        merge_policy_version=project.merge_policy_version,
+    )
 
 
 class ProjectDetail(BaseModel):
