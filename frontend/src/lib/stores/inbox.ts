@@ -1,9 +1,10 @@
 /**
  * Inbox store for managing queue items and unread state
  *
- * Uses SSE for real-time updates instead of polling.
+ * Uses SSE updates plus bounded foreground reads for observer-created requests.
  */
 
+import { singleFlight } from '../visiblePolling';
 import { writable, derived } from 'svelte/store';
 import { api, type QueueItem } from '$lib/api';
 import { getSSEClient, type SSEEvent } from '$lib/sse';
@@ -32,15 +33,18 @@ function createInboxStore() {
   return {
     subscribe,
 
-    async fetchItems() {
+    fetchItems: singleFlight(async (signal?: AbortSignal) => {
       update((s) => ({ ...s, isLoading: true, error: null }));
       try {
-        const items = await api.listQueueItems({ status: 'pending' });
-        update((s) => ({ ...s, items, isLoading: false }));
+        const items = await api.listQueueItems({ status: 'pending' }, signal);
+        if (!signal?.aborted) update((s) => ({ ...s, items, isLoading: false }));
       } catch (e) {
-        update((s) => ({ ...s, error: 'Failed to load inbox', isLoading: false }));
+        if (!signal?.aborted || signal.reason?.name === 'TimeoutError')
+          update((s) => ({ ...s, error: 'Failed to load inbox', isLoading: false }));
+      } finally {
+        update((s) => ({ ...s, isLoading: false }));
       }
-    },
+    }),
 
     async fetchUnreadCount() {
       try {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import MergePolicy from '$lib/components/MergePolicy.svelte';
   import { page } from '$app/stores';
   import { projects, currentProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
@@ -137,6 +138,7 @@
 
     <!-- Content -->
     <div class="flex-1 overflow-y-auto px-6 py-4">
+      {#key project.id}<MergePolicy projectId={project.id} />{/key}
       <!-- Open PRs -->
       <section class="mb-6">
         <h2 class="text-term-fg mb-3 text-sm font-semibold">Open Pull Requests</h2>

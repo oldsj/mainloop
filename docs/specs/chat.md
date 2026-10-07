@@ -59,10 +59,27 @@ nonterminal until the reserved actor is confirmed absent or disposed. Only a pro
 pre-reservation create rejection can fail startup directly.
 A failed main-thread delivery remains recoverable independently of child startup failure.
 
-## Native structured input backend
+## Native structured input
 
 Pending native HITL requests are discovered without an open chat through the background
 observer. Chat and inbox consumers use the same request reference and dedicated owner
 response route; a normal chat message is not a structured approval. See
 [HITL discovery and continuation](merge-policy.md#background-discovery-and-structured-continuation).
-Shared interactive controls are not yet implemented.
+The main thread and session chats show the same structured-input card as the inbox. Cards
+refresh while mounted and visible, with a nominal four-second interval. Tool batches require an explicit approve/reject
+choice for every call; rejections may include a reason. Questions show single/multiple choices
+or free text when choices are empty/null. Answers use the dedicated HITL route, never the
+ordinary chat composer or generic queue response route.
+
+A recorded answer disables further decisions. Delivery uncertainty, stale observations,
+unavailable continuations and server-disabled writes are visible separately from task activity.
+Refreshing reads status; it never replays a decision. An unconfirmed browser submission remains
+locked until a receipt is observed. A newer request gets fresh controls keyed to its own ID.
+Claude rejection reasons are included in the denial message; Codex reasons are saved but its
+runtime receives rejection only. An unknown leaf provider makes no reason-delivery claim.
+Valid questions render for any provider, without claiming native Claude Ask User support.
+
+Verified aliases link to the selected continuation card. Bound requests link to the original
+conversation; observed standalone requests explicitly state when no Mainloop conversation
+exists. Agent-supplied request data is escaped text, and unknown fields remain inspectable.
+See [inbox](inbox.md) and [project policy](projects.md).

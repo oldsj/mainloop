@@ -2,6 +2,7 @@
  * API client for backend communication
  */
 
+import type { HITLView, HITLResponse, MergePolicyView } from './hitl';
 import { API_URL } from '$lib/config';
 import { connection } from '$lib/stores/connection';
 
@@ -94,6 +95,7 @@ export interface ChatResponse {
 }
 
 export type QueueItemType =
+  | 'hitl_request'
   | 'question'
   | 'notification'
   | 'error'
@@ -336,7 +338,58 @@ export interface SessionNotification {
   created_at: string;
 }
 
+function readSignal(signal?: AbortSignal): AbortSignal {
+  return AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])]);
+}
+
 export const api = {
+  async getHITL(id: string, signal?: AbortSignal): Promise<HITLView> {
+    const response = await apiFetch(`${API_URL}/hitl/${encodeURIComponent(id)}`, {
+      signal: readSignal(signal)
+    });
+    if (!response.ok)
+      throw new ApiError(await errorDetail(response, 'Could not load request'), response.status);
+    return response.json();
+  },
+  async listSessionHITL(id: string, signal?: AbortSignal): Promise<string[]> {
+    const response = await apiFetch(`${API_URL}/sessions/${encodeURIComponent(id)}/hitl`, {
+      signal: readSignal(signal)
+    });
+    if (!response.ok) throw new ApiError('Could not load session input', response.status);
+    return response.json();
+  },
+  async respondHITL(id: string, action_id: string, responseBody: HITLResponse): Promise<HITLView> {
+    const response = await apiFetch(`${API_URL}/hitl/${encodeURIComponent(id)}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action_id, response: responseBody })
+    });
+    if (!response.ok)
+      throw new ApiError(await errorDetail(response, 'Could not record decision'), response.status);
+    return response.json();
+  },
+  async getMergePolicy(id: string): Promise<MergePolicyView> {
+    const response = await apiFetch(`${API_URL}/projects/${encodeURIComponent(id)}/merge-policy`);
+    if (!response.ok) throw new ApiError('Could not load merge policy', response.status);
+    return response.json();
+  },
+  async updateMergePolicy(
+    id: string,
+    merge_policy: 'auto' | 'approval',
+    expected_version: number
+  ): Promise<MergePolicyView> {
+    const response = await apiFetch(`${API_URL}/projects/${encodeURIComponent(id)}/merge-policy`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ merge_policy, expected_version })
+    });
+    if (!response.ok)
+      throw new ApiError(
+        await errorDetail(response, 'Could not save merge policy'),
+        response.status
+      );
+    return response.json();
+  },
   async listConversations(): Promise<{ conversations: Conversation[]; total: number }> {
     const response = await apiFetch(`${API_URL}/conversations`);
     if (!response.ok) throw new Error('Failed to list conversations');
@@ -386,18 +439,21 @@ export const api = {
     return data.count;
   },
 
-  async listQueueItems(options?: {
-    status?: string;
-    unreadOnly?: boolean;
-    taskId?: string;
-  }): Promise<QueueItem[]> {
+  async listQueueItems(
+    options?: {
+      status?: string;
+      unreadOnly?: boolean;
+      taskId?: string;
+    },
+    signal?: AbortSignal
+  ): Promise<QueueItem[]> {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);
     if (options?.unreadOnly) params.set('unread_only', 'true');
     if (options?.taskId) params.set('task_id', options.taskId);
 
     const url = params.toString() ? `${API_URL}/queue?${params}` : `${API_URL}/queue`;
-    const response = await apiFetch(url);
+    const response = await apiFetch(url, { signal: readSignal(signal) });
     if (!response.ok) throw new Error('Failed to list queue items');
     return response.json();
   },

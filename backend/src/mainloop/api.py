@@ -580,6 +580,63 @@ async def get_hitl_observer_status(user_id: str = Depends(current_user)):
         return {**dict(counts), "diagnostics": [dict(row) for row in diagnostics]}
 
 
+async def hitl_presentation(conn, result):
+    """Add display context from owned bindings, never from tool arguments."""
+    outer = result["request"]["outer"]
+    row = await conn.fetchrow(
+        """SELECT s.id AS session_id,s.title,s.project_id,p.full_name AS project_name,b.role
+        FROM native_observed_sessions o
+        JOIN sessions s ON s.id=o.snapshot->>'binding_id' AND s.user_id=o.owner_id
+        JOIN native_bindings b ON b.session_id=s.id
+        LEFT JOIN projects p ON p.id=s.project_id AND p.user_id=s.user_id
+        WHERE o.owner_id=$1 AND o.gateway=$2 AND o.runtime_session_id=$3""",
+        result["request"]["owner_id"],
+        outer["gateway"],
+        outer["runtime_session_id"],
+    )
+    context = dict(row) if row else {}
+    # Reasons apply to the leaf provider. Do not infer it from an agent/tool name.
+    leaves = result["request"]["leaves"]
+    kinds = set()
+    for leaf in leaves:
+        kind = await conn.fetchval(
+            """SELECT b.kind FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+            WHERE s.id=$1 AND s.user_id=$2""",
+            leaf["binding_id"],
+            result["request"]["owner_id"],
+        )
+        kinds.add(kind)
+    context["provider"] = next(iter(kinds)) if len(kinds) == 1 else None
+    return {
+        **result,
+        "context": context,
+        "writes_enabled": os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED")
+        == "true",
+        # Reserved for a server-verified merge resolver; payload hints never fill this.
+        "merge": None,
+    }
+
+
+@app.get("/sessions/{session_id}/hitl")
+async def list_session_hitl(session_id: str, user_id: str = Depends(current_user)):
+    async with db.connection() as conn:
+        if not await conn.fetchval(
+            "SELECT 1 FROM sessions WHERE id=$1 AND user_id=$2", session_id, user_id
+        ):
+            raise HTTPException(status_code=404, detail="Session not found")
+        rows = await conn.fetch(
+            """SELECT r.id FROM native_hitl_requests r
+            JOIN native_observed_sessions o ON o.gateway=r.snapshot->'outer'->>'gateway'
+                AND o.runtime_session_id=r.snapshot->'outer'->>'runtime_session_id'
+                AND o.owner_id=r.owner_id
+            WHERE r.owner_id=$1 AND o.snapshot->>'binding_id'=$2 AND NOT r.superseded
+            ORDER BY r.observed_at DESC,r.id LIMIT 100""",
+            user_id,
+            session_id,
+        )
+        return [row["id"] for row in rows]
+
+
 @app.get("/hitl/{request_id}")
 async def get_hitl_request(request_id: str, user_id: str = Depends(current_user)):
     try:
@@ -587,7 +644,9 @@ async def get_hitl_request(request_id: str, user_id: str = Depends(current_user)
             projection = await hitl_continuation.load_projection(
                 conn, user_id, request_id
             )
-            return await hitl_continuation.view(conn, projection)
+            return await hitl_presentation(
+                conn, await hitl_continuation.view(conn, projection)
+            )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="HITL request not found") from exc
 
@@ -599,9 +658,11 @@ async def respond_to_hitl(
     if os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED") != "true":
         raise HTTPException(status_code=503, detail="Owner HITL writes are disabled")
     try:
-        return await hitl_continuation.submit(
+        result = await hitl_continuation.submit(
             user_id, request_id, decision.action_id, decision.response
         )
+        async with db.connection() as conn:
+            return await hitl_presentation(conn, result)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="HITL request not found") from exc
     except ValueError as exc:
@@ -644,6 +705,7 @@ async def get_project_merge_policy(
     return MergePolicyView(
         merge_policy=project.merge_policy,
         merge_policy_version=project.merge_policy_version,
+        writes_enabled=os.environ.get("MAINLOOP_OWNER_POLICY_WRITES_ENABLED") == "true",
     )
 
 
@@ -668,6 +730,7 @@ async def update_project_merge_policy(
     return MergePolicyView(
         merge_policy=project.merge_policy,
         merge_policy_version=project.merge_policy_version,
+        writes_enabled=os.environ.get("MAINLOOP_OWNER_POLICY_WRITES_ENABLED") == "true",
     )
 
 

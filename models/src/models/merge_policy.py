@@ -22,6 +22,7 @@ class MergePolicyUpdate(BaseModel):
 
 
 class MergePolicyView(BaseModel):
+    writes_enabled: bool = False
     merge_policy: MergePolicy
     merge_policy_version: int = Field(ge=1)
     protected_globs: tuple[str, ...] = PROTECTED_GLOBS
