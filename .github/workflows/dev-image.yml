@@ -23,35 +23,36 @@ concurrency:
 
 jobs:
   validate:
+    name: Validate ${{ matrix.arch }}
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    outputs:
-      digest: ${{ steps.image.outputs.digest }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Validate both architectures
-        id: image
+      - name: Validate native build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: .devcontainer/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: false
-          tags: |
-            ghcr.io/oldsj/mainloop-dev:sha-${{ github.sha }}
-            ghcr.io/oldsj/mainloop-dev:latest
-      - name: Record immutable image digest
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: echo "Image digest (published on main only) $IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          cache-from: type=gha,scope=mainloop-dev-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=mainloop-dev-${{ matrix.arch }}
 
-  publish:
+  publish-amd64:
+    name: Publish amd64 digest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -63,25 +64,94 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish both architectures
+      - name: Publish native build by digest
         id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: .devcontainer/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/oldsj/mainloop-dev:sha-${{ github.sha }}
-            ghcr.io/oldsj/mainloop-dev:latest
-      - name: Record immutable image digest
+          platforms: linux/amd64
+          outputs: type=image,name=ghcr.io/oldsj/mainloop-dev,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mainloop-dev-amd64
+          cache-to: type=gha,mode=max,scope=mainloop-dev-amd64
+
+  publish-arm64:
+    name: Publish arm64 digest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish native build by digest
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          platforms: linux/arm64
+          outputs: type=image,name=ghcr.io/oldsj/mainloop-dev,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mainloop-dev-arm64
+          cache-to: type=gha,mode=max,scope=mainloop-dev-arm64
+
+  merge:
+    name: Publish multi-arch index
+    needs: [publish-amd64, publish-arm64]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and record multi-arch index
+        id: index
+        shell: bash
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: echo "Image digest (published on main only) $IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          IMAGE: ghcr.io/oldsj/mainloop-dev
+          AMD64_DIGEST: ${{ needs.publish-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.publish-arm64.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$AMD64_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$ARM64_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker buildx imagetools create \
+            --tag "$IMAGE:$GITHUB_SHA" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            --tag "$IMAGE:latest" \
+            "$IMAGE@$AMD64_DIGEST" "$IMAGE@$ARM64_DIGEST"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$GITHUB_SHA" \
+            --format '{{json .Manifest}}' | jq -er '.digest')
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            printf '### Mainloop dev multi-arch index\n\n'
+            printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Tags: `%s`, `sha-%s`, `latest`\n\n' "$GITHUB_SHA" "$GITHUB_SHA"
+            printf 'Index digest: `%s`\n\n' "$digest"
+            printf 'Immutable image: `%s@%s`\n' "$IMAGE" "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"

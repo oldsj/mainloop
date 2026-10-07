@@ -54,9 +54,15 @@ socket only. Root launches PostgreSQL as uid 65532; the supplied command retains
 the caller's user. This helper is for disposable test environments.
 Stop PostgreSQL before parking a workspace; Full-restore support is unproven.
 
-The **Mainloop dev image** workflow builds amd64 and arm64 on pull requests.
-Only pushes to `main` publish `ghcr.io/oldsj/mainloop-dev`; the job output and
-run summary record its digest. No image is published by local builds.
+The **Mainloop dev image** workflow validates pull requests with native amd64
+(`ubuntu-latest`) and arm64 (`ubuntu-24.04-arm`) builds, without registry login
+or publishing. Each architecture uses its own GitHub Actions cache. Only pushes
+to `main` publish `ghcr.io/oldsj/mainloop-dev`: the native jobs push by digest,
+then a merge job publishes the combined multi-arch index with `<full SHA>`,
+`sha-<full SHA>`, and `latest` tags after both builds succeed. The merge job output
+and summary record the index digest for immutable registration. New runs cancel
+older runs for the same ref; a cancelled run may leave untagged architecture
+digests, so use a fully successful run. No image is published by local builds.
 Once environment registration is available, register the published immutable
 `ghcr.io/oldsj/mainloop-dev@sha256:…` digest, or register this definition at an
 exact source commit, then select the accepted version for the project. This
