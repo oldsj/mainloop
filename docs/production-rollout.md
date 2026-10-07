@@ -45,10 +45,13 @@ The frontend image bakes the API URL at build time (`VITE_API_URL`); the runtime
 `ORIGIN` does not change it. Build it for the deployment's API domain.
 
 Cross-namespace pieces are owned by the cluster repository, not this overlay: the
-kagent Agents named in `mainloop-config`, the Role that lets `mainloop-backend` update
-`kagent/mainloop-agent-tokens`, the MCP `RemoteMCPServer` (`k8s/integrations/kagent`
+kagent Agents named in `mainloop-config`, the Role granting `mainloop-backend` namespace-wide
+Secret `get/create/delete` in `kagent`, the MCP `RemoteMCPServer` (`k8s/integrations/kagent`
 is for Kind only), and policies that let the backend reach kagent `:8083` and the
-Substrate router `:8081`.
+Substrate router `:8081`. Mainloop creates runtime-owned `mainloop-mcp-<binding-id>` Secrets
+labeled `mainloop.dev/actor-egress=true` and `mainloop.dev/purpose=mcp`. RBAC cannot constrain
+dynamic creates by name or label; admission policy can restrict writes, while prefix-scoped
+reads require a separate broker or authorization boundary.
 
 ## Production changes are GitOps-only
 

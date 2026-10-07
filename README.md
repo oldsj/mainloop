@@ -153,8 +153,10 @@ on port 8002. Service `mainloop-mcp` serves port 80 at
 `http://mainloop-mcp.mainloop.svc.cluster.local/mcp`; it exposes no REST API.
 The Substrate egress gateway replaces the agent's literal `Authorization: Bearer
 kagent-credential-injected` placeholder with its binding credential. Mainloop stores a token
-hash on the binding and publishes the gateway credential under that binding id in
-`kagent/mainloop-agent-tokens`. Terminal or archived bindings lose tool access.
+hash on the binding and creates a runtime-owned `kagent/mainloop-mcp-<binding-id>` Secret
+with the full header in its `authorization` key, labeled `mainloop.dev/actor-egress=true`
+and `mainloop.dev/purpose=mcp`. Terminal or archived bindings lose tool access; cleanup
+deletes their Secret.
 
 A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;
 its port 8000 must admit only the frontend and the Tailscale gateway. MCP port 8002 admits
@@ -165,9 +167,12 @@ gateway-to-Mainloop hop depends on this isolation and the pinned stock agentgate
 never expose the MCP Service outside the cluster.
 
 The base includes the dedicated MCP container, Service and ingress policy. Cross-namespace
-bootstrap resources are separately rendered with `k8s/integrations/kagent`: the empty token
-Secret, name-scoped Role/RoleBinding, and RemoteMCPServer. Configure GitOps to preserve the
-Secret's runtime-managed data. Main and child AgentTemplates must bind that RemoteMCPServer.
+integration resources are separately rendered with `k8s/integrations/kagent`: the
+Role/RoleBinding and RemoteMCPServer. Binding Secrets are created by Mainloop at runtime.
+The trusted backend Role grants namespace-wide Secret `get/create/delete` in `kagent`.
+RBAC cannot constrain dynamic creates by name or label; admission policy can restrict writes,
+while prefix-scoped reads require a separate broker or authorization boundary.
+Main and child AgentTemplates must bind that RemoteMCPServer.
 Mainloop uses three kinds of kagent Agent, named by settings. Agent templates and harnesses
 remain owned by the kagent installation.
 
@@ -191,9 +196,9 @@ The supported gateway is stock Substrate v0.3.0-alpha3 using agentgateway revisi
 `sha256:f1907a50b2e74a071da53fcd2008d585b6a63d31b4e1ba3ee46cf22b342cf04b`.
 That dataplane injects complete header values on HTTP and HTTPS when a configured placeholder
 header is present. The credential provider must authorize the actor's atespace to read the
-`kagent` namespace containing `mainloop-agent-tokens`; Mainloop's name-scoped writer Role does
-not grant the provider that access. Keep this version pinned and repeat the gateway regression
-proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
+per-binding Secrets in `kagent`, selected by `mainloop.dev/actor-egress=true`; Mainloop's
+namespace-scoped publisher Role does not grant the provider that access. Keep this version
+pinned and repeat the gateway regression proof on every Substrate/agentgateway upgrade: HTTP injection is not a portable guarantee of
 other dataplanes. The proposed atenet cleartext allowlist patch is parked and is not required.
 
 The companion's hash-only live gateway proof established HTTP/HTTPS injection and placeholder
