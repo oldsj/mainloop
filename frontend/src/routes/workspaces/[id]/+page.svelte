@@ -6,6 +6,8 @@
   import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
   import { connection } from '$lib/stores/connection';
   import { workspaces } from '$lib/stores/workspaces';
+  import { tasks, taskViews } from '$lib/stores/tasks';
+  import { statusLabel as taskStatusLabel, taskForWorkspace } from '$lib/taskState';
 
   type WorkspaceAction = 'suspend' | 'resume' | 'refresh' | 'delete';
 
@@ -22,6 +24,11 @@
     $workspaces.workspaces.find((item) => item.workspace_id === workspaceId)
   );
   const isBusy = $derived(pendingAction !== null);
+  const owningTask = $derived(workspaceId ? taskForWorkspace($taskViews, workspaceId) : null);
+
+  $effect(() => {
+    void tasks.fetchList({});
+  });
 
   $effect(() => {
     const id = workspaceId;
@@ -162,6 +169,20 @@
         </div>
         <WorkspaceLifecycleBadge {workspace} />
       </header>
+
+      {#if owningTask}
+        <p class="border-term-border border-b py-3 text-sm" data-testid="workspace-task-link">
+          <span class="text-term-fg-muted">Task</span>
+          <a href="/tasks/{owningTask.view.task.id}" class="text-term-accent underline underline-offset-4"
+            >{owningTask.view.task.title}</a
+          >
+          <span class="text-term-fg-muted text-xs">
+            {taskStatusLabel(owningTask.view.task.status)}{owningTask.current
+              ? ''
+              : ' · attempt superseded, history only'}
+          </span>
+        </p>
+      {/if}
 
       <section class="border-term-border border-b py-5" aria-labelledby="lifecycle-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">

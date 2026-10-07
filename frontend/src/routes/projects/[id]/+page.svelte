@@ -6,6 +6,8 @@
   import { statusLabel } from '$lib/sessionStatus';
   import { agentLabel } from '$lib/agentLabel';
   import { api, type WorkspaceLifecycle } from '$lib/api';
+  import TaskList from '$lib/components/TaskList.svelte';
+  import { tasks, taskViews } from '$lib/stores/tasks';
 
   // The route is reused when only [id] changes, so load per id rather than once on mount.
   const projectId = $derived($page.params.id);
@@ -29,6 +31,15 @@
         });
     }
   });
+
+  $effect(() => {
+    const id = projectId;
+    if (!id) return;
+    const controller = new AbortController();
+    void tasks.fetchList({ project_id: id }, controller.signal);
+    return () => controller.abort();
+  });
+  const projectTasks = $derived($taskViews.filter((view) => view.task.project_id === projectId));
 
   // The store keeps the last project until the next one arrives; don't show it under another id.
   const detail = $derived($currentProject?.project.id === projectId ? $currentProject : null);
@@ -142,6 +153,15 @@
     <!-- Content -->
     <div class="flex-1 overflow-y-auto px-6 py-4">
       {#key project.id}<MergePolicy projectId={project.id} />{/key}
+      <section class="mb-6" aria-labelledby="tasks-heading" data-testid="project-tasks">
+        <h2 id="tasks-heading" class="text-term-fg mb-3 text-sm font-semibold">Tasks</h2>
+        <TaskList
+          views={projectTasks}
+          loading={$tasks.loading && !$tasks.loaded}
+          error={$tasks.error}
+          emptyText="No tasks for this project yet."
+        />
+      </section>
       <!-- Open PRs -->
       <section class="mb-6">
         <h2 class="text-term-fg mb-3 text-sm font-semibold">Open Pull Requests</h2>

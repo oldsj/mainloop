@@ -2,12 +2,15 @@
   import { visiblePolling } from '../visiblePolling';
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
   import HITLCard from './HITLCard.svelte';
+  import { tasks } from '$lib/stores/tasks';
   import type { QueueItem } from '$lib/api';
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
 
   $effect(() => {
     if (!desktop && !mobile) return;
+    // Task links on cards come from the task list; task events keep it current afterwards.
+    void tasks.fetchList({});
     // Observer projections can arrive without an SSE queue event.
     return visiblePolling().watch('inbox', (signal) => inbox.fetchItems(signal));
   });
