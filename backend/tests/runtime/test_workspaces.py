@@ -17,11 +17,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import workspaces
+from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.kagent_client import (
     KagentClient,
     KagentSession,
     RuntimeOperation,
     RuntimeState,
+    SessionCredential,
     SessionError,
     SessionWorkspace,
     Unreachable,
@@ -69,6 +71,16 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
         self.fake = GatedKagent()
         self.ledger = MemoryLedger()
         self.ledger.workspace = WORKSPACE
+        self.ledger.binding.update(
+            mcp_grant_kind="workspace",
+            token_hash=hash_token("sanitized-fixture"),
+            credential_ref={
+                "origin": "http://mainloop-mcp.mainloop.svc.cluster.local",
+                "header": "Authorization",
+                "secret_name": "mainloop-agent-tokens",
+                "secret_key": SESSION,
+            },
+        )
         self.session = SimpleNamespace(
             id=SESSION,
             user_id="user-1",
@@ -87,6 +99,18 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
         ns._streaming.clear()
         ns._locks.clear()
         for patcher in (
+            patch(
+                "mainloop.runtime.agent_credentials.publish_for_binding",
+                AsyncMock(
+                    return_value=SessionCredential(
+                        "http://mainloop-mcp.mainloop.svc.cluster.local",
+                        "Authorization",
+                        "mainloop-agent-tokens",
+                        SESSION,
+                    )
+                ),
+            ),
+            patch("mainloop.runtime.agent_credentials.revoke", AsyncMock()),
             patch.object(ns, "ledger", self.ledger),
             patch.object(ns.db, "get_session", AsyncMock(return_value=self.session)),
             patch.object(ns.db, "update_session", AsyncMock()),

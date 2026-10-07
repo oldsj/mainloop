@@ -40,7 +40,21 @@ workspace operations.
   from GitHub. A project that already exists for that repository keeps its stored URL and
   metadata. A bad `branch` or `ref` is refused before any project is created; the project does
   outlive a workspace that kagent then rejects, so a retry finds it again.
-- Create sends `CreateSession` with the workspace. If kagent rejects the repository (for example
+- Before the first kagent call, creation transactionally stores the owner project, session,
+  checkout and a per-binding `workspace` MCP grant with its non-secret credential reference.
+  The reference uses a unique Secret key for this session. Claude and Codex workspaces use the
+  same contract. The normal workspace path verifies that the repository matches the
+  owner-owned project. The grant is scoped to that project's repository and the exact stored
+  feature branch; it allows `whoami` and `open_pull_request`, plus merge tools only under the
+  existing merge enablement gates. It does not expose topic edits, reports or delegation.
+- Create sends `CreateSession` with the stored workspace and exactly its credential reference.
+  A Secret publish failure leaves the durable create pending and sends no workspace brief. An
+  unknown create reply is retried with the original request id, checkout and credential
+  reference. If the owner cancels before that outcome is known, the bearer hash is revoked and
+  Secret cleanup proceeds; a later **refresh** or **delete** still retries the original request
+  with that frozen reference, without publishing it again or restoring the hash. Refresh reports
+  the recovered runtime; delete immediately disposes of it. Neither path sends a brief or creates
+  a second writer. If kagent rejects the repository (for example
   its host is not in the Agent Harness `git.origins`) nothing is kept and the API returns `422`.
   If the outcome is unknown, the rows are kept and **refresh** retries the same request.
 - Suspend is refused (`409`) while the native delivery ledger has a recorded, queued (unless held after a stop), sending or
@@ -49,14 +63,18 @@ workspace operations.
   cover, so a message it records during a suspend can still arrive; it resumes the Session
   before it is sent. A message that arrives during a suspend waits for it, then resumes the
   Session before it is sent.
-- Resume calls `ResumeSession` only when the Session is suspended and counts as activity.
+- Resume calls `ResumeSession` only when the Session is suspended and counts as activity. A
+  suspend or resume keeps the workspace grant and its token hash.
 - Delete is refused (`409`) while a delivery is open. If the create's outcome was never known,
   delete first resolves it with the same idempotent `CreateSession` (the stored request id) that
-  **refresh** uses: a Session found there is deleted. A rejected retry or an outcome that is still
+  **refresh** uses, including after cancellation has revoked the bearer: a Session found there is
+  deleted without republishing the credential or restoring its hash. A rejected retry or an outcome that is still
   unknown returns `502` and keeps the rows: a rejected retry cannot prove that the earlier
   unknown request created nothing. kagent's `DeleteSession`
   must confirm (a Session it does not know counts as confirmed) before the rows are removed;
-  otherwise the API returns `502` and keeps them.
+  otherwise the API returns `502` and keeps them. Before deleting a confirmed runtime, Mainloop
+  revokes the DB hash. Secret cleanup is best effort and its durable record survives deletion of
+  the workspace rows.
 - Archiving a session deletes its kagent Session the same way. A failed delete is retried by the
   reconcile loop until kagent confirms. A create whose outcome was never known stores no Session
   id; deleting the workspace resolves it first (above), and the operator sweep below finds any
@@ -186,6 +204,10 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 - Lifecycle changes are published on the event stream as `workspace:updated`.
 
 ## Scope and evidence
+
+Existing or legacy workspaces and standalone `/agents` sessions remain ungranted. Migration does
+not infer enrollment from a checkout or retrofit a credential-free kagent Session; a new
+workspace must go through this creation path.
 
 Fake-backed unit tests and opt-in PostgreSQL tests cover these paths. Earlier revisions ran
 against a scratch PostgreSQL; the M7 continuation tests and manifests still require supervisor

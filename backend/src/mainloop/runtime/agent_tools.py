@@ -85,13 +85,71 @@ class AgentService:
 
     async def authenticate(self, token: str) -> Ctx:
         binding = await self.store.binding_by_token_hash(hash_token(token))
+        grant_kind = binding.get("mcp_grant_kind") if binding else None
+        grant_matches_role = (binding or {}).get("role") and (
+            (binding["role"], grant_kind)
+            in {
+                ("main", "coordination"),
+                ("child", "coordination"),
+                ("agent", "workspace"),
+            }
+        )
         if (
             binding is None
+            or not grant_matches_role
             or binding.get("archived_at")
             or binding.get("status") in FINISHED_STATUSES
         ):
             raise HTTPException(status_code=401, detail="unknown agent token")
-        return Ctx(binding, Actor(binding["role"], await self._depth(binding)))
+        return Ctx(
+            binding,
+            Actor(
+                binding["role"],
+                await self._depth(binding),
+                binding["mcp_grant_kind"],
+            ),
+        )
+
+    async def whoami(self, ctx: Ctx) -> dict:
+        """Return only server-resolved, non-secret binding and workspace scope facts."""
+        binding = ctx.binding
+        project_id = binding.get("session_project_id")
+        repository = branch = None
+        scope_status = "not_enrolled"
+        grant_status = "active"
+        workspace_id = None
+        if binding.get("mcp_grant_kind") == "workspace":
+            workspace_id = binding["session_id"]
+            from mainloop.services.workspace_authority import (
+                ScopeUnavailable,
+                workspace_identity,
+            )
+
+            try:
+                repository, branch = workspace_identity(binding)
+                scope_status = "available"
+            except ScopeUnavailable:
+                grant_status = "scope_unavailable"
+                scope_status = "scope_unavailable"
+        elif binding.get("mcp_grant_kind") not in ("coordination", "workspace"):
+            grant_status = "not_enrolled"
+
+        return {
+            "text": (
+                f"{binding['role']} {binding['kind']} session={binding['session_id'][:8]} "
+                f"depth={ctx.actor.depth} grant={grant_status} scope={scope_status}"
+            ),
+            "session_id": binding["session_id"],
+            "role": binding["role"],
+            "depth": ctx.actor.depth,
+            "mcp_grant_kind": binding.get("mcp_grant_kind", "none"),
+            "grant_status": grant_status,
+            "scope_status": scope_status,
+            "project_id": project_id,
+            "workspace_id": workspace_id,
+            "repository": repository,
+            "branch": branch,
+        }
 
     async def _depth(self, binding: dict) -> int:
         depth, cur, seen = 0, binding, set()

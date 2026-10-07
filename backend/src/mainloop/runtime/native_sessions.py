@@ -23,6 +23,7 @@ control plane and sent when idle.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -255,16 +256,22 @@ class Ledger:
         parent_session_id: str | None,
         topic_id: str | None,
         token_hash: str | None,
+        mcp_grant_kind: str,
+        credential_ref: dict | None,
     ) -> None:
         await connection.execute(
-            """INSERT INTO native_bindings (session_id, kind, role, parent_session_id, topic_id, token_hash)
-               VALUES ($1,$2,$3,$4,$5,$6)""",
+            """INSERT INTO native_bindings
+               (session_id,kind,role,parent_session_id,topic_id,token_hash,
+                mcp_grant_kind,credential_ref)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
             session_id,
             kind,
             role,
             parent_session_id,
             topic_id,
             token_hash,
+            mcp_grant_kind,
+            json.dumps(credential_ref) if credential_ref is not None else None,
         )
 
     async def update_binding(self, session_id: str, **fields) -> None:
@@ -726,11 +733,30 @@ async def create_binding(
     role: str = "agent",
     parent_session_id: str | None = None,
     topic_id: str | None = None,
+    mcp_grant_kind: str | None = None,
     conn=None,
 ) -> dict:
     agent_name(kind)  # an unconfigured kind fails here, before a row exists
-    token_hash = (
-        hash_token(token_for(session_id)) if role in ("main", "child") else None
+    from mainloop.runtime.agent_credentials import (
+        credential_reference,
+        reference_data,
+    )
+
+    grant_kind = mcp_grant_kind or (
+        "coordination" if role in ("main", "child") else "none"
+    )
+    valid_grant = (role, grant_kind) in {
+        ("main", "coordination"),
+        ("child", "coordination"),
+        ("agent", "workspace"),
+    }
+    if grant_kind not in ("none", "coordination", "workspace") or (
+        grant_kind != "none" and not valid_grant
+    ):
+        raise ValueError("MCP grant kind does not match the native binding role")
+    token_hash = hash_token(token_for(session_id)) if valid_grant else None
+    credential_ref = (
+        reference_data(credential_reference(session_id)) if valid_grant else None
     )
     fields = dict(
         session_id=session_id,
@@ -739,6 +765,8 @@ async def create_binding(
         parent_session_id=parent_session_id,
         topic_id=topic_id,
         token_hash=token_hash,
+        mcp_grant_kind=grant_kind,
+        credential_ref=credential_ref,
     )
     if conn is None:
         async with db.connection() as connection:
@@ -899,26 +927,75 @@ async def _remember_child_start_failure(binding: dict, reason: str) -> bool:
     return remembered
 
 
-async def _create_bound_session(binding: dict) -> KagentSession:
-    from mainloop.runtime.agent_credentials import credentials
-
-    refs = ()
-    if binding["role"] in ("main", "child"):
-        if not binding.get("token_hash"):
-            raise RuntimeError("binding identity is revoked")
-        try:
-            refs = (await credentials.publish(binding["session_id"]),)
-        except Exception as exc:
-            if binding.get("child_start_failure"):
-                raise ChildStartPending(str(exc)) from exc
-            raise
+async def _create_session_with_credentials(
+    binding: dict,
+    refs: tuple,
+    *,
+    require_workspace: bool = False,
+) -> KagentSession:
+    workspace = await ledger.get_workspace(binding["session_id"])
+    if require_workspace and workspace is None:
+        raise RuntimeError("persisted workspace create contract is unavailable")
     # The workspace is read from its one stored copy on every create, so a replacement Session
     # resends exactly what the first one got (kagent rejects a changed workspace under one id).
     return await get_client().create_session(
         agent_ref(binding["kind"], binding["role"]),
         request_id=_request_id(binding),
         credentials=refs,
-        workspace=await ledger.get_workspace(binding["session_id"]),
+        workspace=workspace,
+    )
+
+
+async def _create_bound_session(binding: dict) -> KagentSession:
+    from mainloop.runtime.agent_credentials import publish_for_binding
+
+    refs = ()
+    if binding.get("mcp_grant_kind") in ("coordination", "workspace"):
+        if not binding.get("token_hash"):
+            raise RuntimeError("binding identity is revoked")
+        try:
+            refs = (await publish_for_binding(binding),)
+        except Exception as exc:
+            if binding.get("child_start_failure"):
+                raise ChildStartPending(str(exc)) from exc
+            raise
+    elif binding.get("token_hash"):
+        raise RuntimeError("binding identity has no persisted MCP grant")
+    return await _create_session_with_credentials(binding, refs)
+
+
+async def reconcile_revoked_workspace_creation(binding: dict) -> KagentSession:
+    """Recover a cancelled workspace's original uncertain CreateSession without reenrolling it.
+
+    Cancellation clears the bearer hash before Secret cleanup. If the first CreateSession reply
+    was lost, retry its frozen request ID, checkout and persisted credential reference so kagent
+    returns the same runtime. Never publish the reference or restore the hash on this path.
+    """
+    from mainloop.runtime.agent_credentials import reference_from_data
+
+    async with db.connection() as conn:
+        row = await conn.fetchrow(
+            """SELECT b.*,s.status AS session_status
+               FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE b.session_id=$1 FOR SHARE OF b,s""",
+            binding["session_id"],
+        )
+    if (
+        row is None
+        or row["role"] != "agent"
+        or row["mcp_grant_kind"] != "workspace"
+        or row["token_hash"] is not None
+        or row["kagent_session_id"] is not None
+        or row["session_status"] != SessionStatus.CANCELLED.value
+    ):
+        raise RuntimeError(
+            "cancelled workspace create is not eligible for reconciliation"
+        )
+    reference = reference_from_data(row["credential_ref"])
+    if reference is None:
+        raise RuntimeError("persisted workspace credential reference is unavailable")
+    return await _create_session_with_credentials(
+        dict(row), (reference,), require_workspace=True
     )
 
 

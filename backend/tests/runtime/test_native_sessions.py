@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from mainloop.config import settings
 from mainloop.runtime import native_sessions as ns
+from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.kagent_client import (
     A2AError,
     KagentClient,
@@ -43,6 +44,8 @@ class MemoryLedger:
             "session_id": SESSION,
             "kind": "claude",
             "role": "agent",
+            "mcp_grant_kind": "none",
+            "token_hash": None,
             "parent_session_id": None,
             "topic_id": None,
             "kagent_session_id": None,
@@ -271,7 +274,6 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fake = FakeKagent()
         self.ledger = MemoryLedger()
-        self.ledger.binding["token_hash"] = str(12345)
         self.session = SimpleNamespace(
             id=SESSION,
             user_id="user-1",
@@ -310,7 +312,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
         for patcher in (
             patch(
-                "mainloop.runtime.agent_credentials.credentials.publish",
+                "mainloop.runtime.agent_credentials.publish_for_binding",
                 AsyncMock(
                     return_value=SessionCredential(
                         "http://mainloop-mcp.mainloop.svc.cluster.local",
@@ -344,14 +346,26 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         return mid
 
+    def as_role(self, role: str) -> None:
+        """Model the persisted grant created with a main/child binding."""
+        self.ledger.binding.update(
+            role=role,
+            mcp_grant_kind="coordination",
+            token_hash=hash_token("sanitized-fixture"),
+        )
+
     async def test_credentials_precede_create_and_survive_replacement(self):
-        from mainloop.runtime.agent_credentials import credentials
         from mainloop.runtime.kagent_client import decode_fields
 
-        self.ledger.binding["role"] = "main"
+        self.ledger.binding.update(
+            role="main",
+            mcp_grant_kind="coordination",
+            token_hash=hash_token("sanitized-fixture"),
+        )
         calls = []
 
-        async def publish(binding_id):
+        async def publish(binding):
+            binding_id = binding["session_id"]
             calls.append(binding_id)
             self.assertEqual(
                 len([r for r in self.fake.requests if r[1].endswith("CreateSession")]),
@@ -364,7 +378,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 binding_id,
             )
 
-        with patch.object(credentials, "publish", publish):
+        with patch("mainloop.runtime.agent_credentials.publish_for_binding", publish):
             await ns._ensure_kagent_session(self.ledger.binding)
             await ns.get_client().delete_session(CONTEXT_ID)
             self.fake.next_session_ids = ["replacement-session"]
@@ -379,12 +393,13 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [SESSION, SESSION])
 
     async def test_credential_failure_never_calls_create(self):
-        from mainloop.runtime.agent_credentials import credentials
-
-        self.ledger.binding["role"] = "child"
-        with patch.object(
-            credentials,
-            "publish",
+        self.ledger.binding.update(
+            role="child",
+            mcp_grant_kind="coordination",
+            token_hash=hash_token("sanitized-fixture"),
+        )
+        with patch(
+            "mainloop.runtime.agent_credentials.publish_for_binding",
             AsyncMock(side_effect=RuntimeError("publication failed")),
         ):
             with self.assertRaisesRegex(RuntimeError, "publication failed"):
@@ -392,16 +407,20 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.requests, [])
 
     async def test_rejected_initial_child_start_is_terminal_after_publication(self):
-        from mainloop.runtime.agent_credentials import credentials
-
-        self.ledger.binding["role"] = "child"
+        self.ledger.binding.update(
+            role="child",
+            mcp_grant_kind="coordination",
+            token_hash=hash_token("sanitized-fixture"),
+        )
         with patch.object(
             ns.get_client(),
             "create_session",
             AsyncMock(side_effect=SessionError("invalid revision", grpc_status=3)),
-        ), patch.object(credentials, "publish", AsyncMock()) as publish:
+        ), patch(
+            "mainloop.runtime.agent_credentials.publish_for_binding", AsyncMock()
+        ) as publish:
             mid = await self.send(source="brief")
-        publish.assert_awaited_once_with(SESSION)
+        publish.assert_awaited_once()
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
         self.assertEqual(self.session.status, SessionStatus.FAILED)
         self.assertEqual(self.updated, [SessionStatus.FAILED])
@@ -410,7 +429,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_readiness_timeout_reconciles_and_deletes_before_terminal_failure(
         self,
     ):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         with patch.object(
             ns.get_client(),
             "ensure_ready",
@@ -425,7 +444,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_post_readiness_context_failure_disposes_before_terminal_state(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         update = ns.db.update_session
 
         async def after_disposal(session_id, **fields):
@@ -448,7 +467,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_context_failure_with_pending_lost_disposal_remains_retryable(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         client = ns.get_client()
         delete = client.delete_session
         deleted = []
@@ -486,7 +505,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_failed_binding_write_after_creation_keeps_actor_for_disposal(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
 
         # Real reads return separate dictionaries, so the local admitted ID must survive
         # independently of a failed persistence operation.
@@ -515,7 +534,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_context_failure_pending_delete_response_defers_terminal_state(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         client = ns.get_client()
 
         async def pending(session_id):
@@ -540,7 +559,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_non_protocol_readiness_error_also_disposes_actor(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         with patch.object(
             ns.get_client(),
             "ensure_ready",
@@ -552,7 +571,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_main_context_error_leaves_actor_and_main_recoverable(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         with patch(
             "mainloop.runtime.delegation.render_for_binding",
             AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
@@ -564,7 +583,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
 
     async def test_context_error_cannot_dispose_brief_claimed_by_another_process(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
 
         async def competing_claim(binding):
             mid = next(iter(self.ledger.rows))
@@ -581,7 +600,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
 
     async def test_unknown_readiness_disposal_defers_failure_and_never_replaces(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         client = ns.get_client()
         with patch.object(
             client,
@@ -604,7 +623,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_lost_create_response_reconciles_same_request_then_cleans_up(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         client = ns.get_client()
         create = client.create_session
         calls = []
@@ -627,7 +646,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [ns.create_request_id(SESSION)])
 
     async def test_main_start_rejection_does_not_make_main_terminal(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         with patch.object(
             ns.get_client(),
             "create_session",
@@ -640,7 +659,8 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_reserved_aborted_create_progresses_only_on_same_request_retry(self):
         from tests.runtime.kagent_fake import grpc_response
 
-        self.ledger.binding.update(role="child", kagent_request_id="persisted-create")
+        self.as_role("child")
+        self.ledger.binding["kagent_request_id"] = "persisted-create"
         client = ns.get_client()
         create = client.create_session
         calls = []
@@ -716,7 +736,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
 
     async def test_claimed_brief_blocks_disposal_and_pending_pass_cannot_reset_it(self):
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         mid = await self.ledger.record_message(
             session_id=SESSION,
             conversation_id="c",
@@ -736,7 +756,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.updated, [])
 
     async def test_main_unknown_start_is_nonterminal(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         with patch.object(
             ns.get_client(),
             "create_session",
@@ -747,7 +767,8 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ledger.binding.get("child_start_failure"))
 
     async def test_concurrent_create_loser_cannot_abandon_reserved_actor(self):
-        self.ledger.binding.update(role="child", kagent_request_id="contended")
+        self.as_role("child")
+        self.ledger.binding["kagent_request_id"] = "contended"
         client = ns.get_client()
         create = client.create_session
         reserved, release = asyncio.Event(), asyncio.Event()
@@ -839,7 +860,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_kind_selects_the_kagent_agent(self):
         self.ledger.binding["kind"] = "codex"
-        self.ledger.binding["role"] = "child"
+        self.as_role("child")
         await self.send()
         path = next(p for _, p, b in self.fake.requests if isinstance(b, dict))
         self.assertTrue(path.endswith("/codex-subscription-https"))
@@ -851,7 +872,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(path.endswith("/codex-workspace"))
 
     async def test_standing_context_prefixes_only_the_first_turn(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         with patch(
             "mainloop.runtime.delegation.render_for_binding",
             AsyncMock(return_value="STANDING"),
@@ -869,7 +890,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_standing_context_is_resent_if_the_first_send_was_never_accepted(
         self,
     ):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         self.fake.send_script = ["unreachable"]
         with patch(
             "mainloop.runtime.delegation.render_for_binding",
@@ -1076,7 +1097,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fake.rpc_calls("ListTasks"), [])
 
     async def test_main_thread_cannot_be_cancelled(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         with self.assertRaises(ValueError):
             await ns.cancel(SESSION)
 
@@ -1525,7 +1546,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.rows[mid]["state"], "completed")
 
     async def test_a_deleted_kagent_session_is_replaced_with_standing_context(self):
-        self.ledger.binding["role"] = "main"
+        self.as_role("main")
         replacement = "00000000-0000-4000-8000-0000000000aa"
         self.fake.next_session_ids = [CONTEXT_ID, replacement]
         with patch(

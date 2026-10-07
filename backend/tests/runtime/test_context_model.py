@@ -1,10 +1,11 @@
 """Context model (plan r7) with fakes only: no cluster, no agents, no Postgres, no credentials."""
 
 import unittest
+from unittest.mock import patch
 
 from mainloop.runtime import agent_tools, policy
 from mainloop.runtime.agent_identity import hash_token
-from mainloop.runtime.policy import Actor, PolicyError
+from mainloop.runtime.policy import Actor, PolicyError, tools_for
 from mainloop.runtime.standing import (
     RecentMessage,
     StandingInputs,
@@ -27,6 +28,20 @@ def spawn(actor, own=0, glob=0, kind="claude"):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_workspace_tools_require_the_workspace_grant_and_keep_merge_gated(self):
+        workspace = Actor("agent", 0, "workspace")
+        self.assertEqual(tools_for(workspace), {"whoami", "open_pull_request"})
+        for name in ("report", "delegate", "note", "decide", "topic_open"):
+            with self.subTest(tool=name), self.assertRaises(PolicyError):
+                policy.may_call(workspace, name)
+        with patch.dict("os.environ", {"MAINLOOP_MERGE_TOOLS_ENABLED": "true"}):
+            self.assertTrue(policy.MERGE_TOOLS <= tools_for(workspace))
+        with patch.dict("os.environ", {"MAINLOOP_MERGE_TOOLS_ENABLED": "false"}):
+            self.assertFalse(policy.MERGE_TOOLS & tools_for(workspace))
+
+        ungranted = Actor("agent", 0, "none")
+        self.assertEqual(tools_for(ungranted), frozenset())
+
     def test_main_may_spawn_up_to_three_concurrent_children(self):
         for own in (0, 1, 2):
             spawn(Actor("main", 0), own=own)
@@ -103,6 +118,7 @@ class FakeStore:
             "main-1": {
                 "session_id": "main-1",
                 "role": "main",
+                "mcp_grant_kind": "coordination",
                 "kind": "claude",
                 "user_id": "u",
                 "parent_session_id": None,
@@ -237,6 +253,7 @@ class FakeStore:
         self.bindings[sid] = {
             "session_id": sid,
             "role": "child",
+            "mcp_grant_kind": "coordination",
             "kind": kind,
             "user_id": "u",
             "parent_session_id": parent["session_id"],

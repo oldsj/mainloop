@@ -6,6 +6,12 @@ decision receipts, plus background inventory discovery and task-bound owner cont
 described below. Disabled merge execution is described in [Pull requests](pull-requests.md#merge-tools-implemented-disabled-by-default); shared inbox/chat controls remain a separate slice.
 Production enablement still requires the isolation and native capability evidence below.
 
+A newly enrolled owner workspace may discover and invoke merge tools only when the existing
+`MAINLOOP_MERGE_TOOLS_ENABLED=true` gate is enabled, and its PR identity must satisfy the same
+server-resolved project/repository/branch scope used by PR creation. Workspace enrollment does
+not change merge policy, mint HITL consent, enable production flags or grant owner REST access.
+The normal production manifests keep merge tools disabled.
+
 ## Owner policy
 
 New projects and existing projects migrated from the schema without policy columns default

@@ -183,7 +183,15 @@ CREATE TABLE IF NOT EXISTS native_bindings (
     child_start_failure TEXT,
     kagent_deleted_at TIMESTAMPTZ,  -- set once kagent confirmed DeleteSession for an archived session
     queue_held BOOLEAN NOT NULL DEFAULT FALSE,  -- the owner stopped a turn: queued messages wait for their next message
+    mcp_grant_kind TEXT NOT NULL DEFAULT 'none',
+    credential_ref JSONB,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Cleanup survives deletion of the workspace/session binding that owned a credential.
+CREATE TABLE IF NOT EXISTS agent_credential_cleanup (
+    session_id TEXT PRIMARY KEY,
+    credential_ref JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Delivery ledger: one row per message; the A2A task is the receipt
 CREATE TABLE IF NOT EXISTS native_deliveries (
@@ -213,6 +221,36 @@ ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS task_id TEXT;
 ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS partial_text TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS kagent_deleted_at TIMESTAMPTZ;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS queue_held BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS mcp_grant_kind TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS credential_ref JSONB;
+CREATE TABLE IF NOT EXISTS agent_credential_cleanup (
+    session_id TEXT PRIMARY KEY,
+    credential_ref JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Existing authenticated main/child bindings remain coordination grants. Ordinary agent
+-- bindings (including retained workspace Sessions) are never enrolled by migration.
+UPDATE native_bindings SET mcp_grant_kind='coordination'
+ WHERE role IN ('main','child') AND token_hash IS NOT NULL AND mcp_grant_kind='none';
+-- Freeze the already-supported reference for existing coordination bindings with a live hash.
+UPDATE native_bindings SET credential_ref=jsonb_build_object(
+    'origin','http://mainloop-mcp.mainloop.svc.cluster.local',
+    'header','Authorization','secret_name','mainloop-agent-tokens','secret_key',session_id)
+ WHERE (mcp_grant_kind='coordination' AND token_hash IS NOT NULL
+        OR credential_cleanup_pending=TRUE) AND credential_ref IS NULL;
+-- Carry forward any cleanup that was pending before cleanup records became deletion-safe.
+INSERT INTO agent_credential_cleanup(session_id,credential_ref)
+ SELECT session_id,credential_ref FROM native_bindings
+ WHERE credential_cleanup_pending=TRUE AND credential_ref IS NOT NULL
+ ON CONFLICT(session_id) DO NOTHING;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='native_bindings_mcp_grant_kind_check') THEN
+        ALTER TABLE native_bindings ADD CONSTRAINT native_bindings_mcp_grant_kind_check
+          CHECK (mcp_grant_kind IN ('none','coordination','workspace')) NOT VALID;
+    END IF;
+END $$;
+ALTER TABLE native_bindings VALIDATE CONSTRAINT native_bindings_mcp_grant_kind_check;
 -- The Substrate journal transport is gone: its cursors, lineage and events have no meaning on kagent.
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS agent_name;
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS native_session_id;
@@ -487,26 +525,23 @@ class Database:
             await conn.execute(SCHEMA_SQL)
             await conn.execute(MIGRATION_SQL)
 
-    async def pr_project_authority(self, binding: dict, project_id: str) -> dict | None:
-        """Resolve current session, owner, role and workspace from server state."""
+    async def pr_project_authority(
+        self, binding: dict, project_id: str, branch: str | None = None
+    ) -> dict | None:
+        """Resolve PR authority through the shared role/grant/workspace scope check."""
+        from mainloop.services.workspace_authority import (
+            ScopeUnavailable,
+            resolve_project_authority,
+        )
+
         async with self.connection() as conn:
-            row = await conn.fetchrow(
-                """SELECT p.*, b.role, s.project_id AS session_project_id,
-                          s.repo_url AS session_repo, w.repo AS workspace_repo,
-                          w.branch AS workspace_branch
-                   FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-                   JOIN projects p ON p.user_id=s.user_id AND p.id=$4
-                   LEFT JOIN workspaces w ON w.session_id=s.id
-                   WHERE b.session_id=$1 AND s.user_id=$2 AND b.token_hash=$3
-                     AND b.role IN ('main','child') AND b.kagent_deleted_at IS NULL
-                     AND s.archived_at IS NULL
-                     AND s.status NOT IN ('completed','failed','cancelled')""",
-                binding["session_id"],
-                binding["user_id"],
-                binding.get("token_hash"),
-                project_id,
-            )
-        return dict(row) if row else None
+            try:
+                resolved = await resolve_project_authority(
+                    conn, binding, project_id, branch=branch
+                )
+            except ScopeUnavailable:
+                return None
+        return resolved[0] if resolved else None
 
     async def claim_pr_creation(
         self,

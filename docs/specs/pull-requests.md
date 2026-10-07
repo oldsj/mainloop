@@ -1,8 +1,9 @@
 # Pull request creation
 
 The `open_pull_request` Mainloop MCP tool is available to authenticated `main` and `child`
-bindings. Unknown roles cannot discover or invoke it. Standalone workspace sessions have no
-MCP identity; this tool does not add one.
+bindings and to new owner workspaces enrolled through `POST /workspaces`. Unknown roles,
+standalone sessions and retained legacy workspaces cannot discover or invoke it. A checkout or
+tool discovery does not enroll a binding.
 
 ## Inputs and authority
 
@@ -11,13 +12,21 @@ Inputs are `project_id`, `branch`, `expected_sha` (40 lowercase hexadecimal char
 remote, base branch, API host, or token. Branch inputs must be feature branch names, not
 revision expressions or fork-qualified heads.
 
-Mainloop resolves the active binding and owner-owned project from PostgreSQL. A child also
-needs its session's project, repository, and workspace repository to match the project, and
-its requested branch to match the workspace branch. Revoked, archived, finished, or deleted
-bindings cannot create PRs. The server verifies the repository identity and remote branch
-SHA against GitHub. The head must be in the project's repository and cannot be its default
-branch. The base comes from GitHub's current default branch, rather than cached project
-metadata. Identity and authority are refreshed before creation.
+Mainloop resolves the active binding and owner-owned project from PostgreSQL. A child needs its
+session's project, repository, and workspace repository to match the project, and its requested
+branch to match the workspace branch. A workspace grant additionally requires the exact
+project ID, canonical session/workspace repositories, matching session and workspace branches,
+a valid feature branch and a live kagent runtime. Missing or inconsistent rows deny the call.
+Revoked, archived, finished, deleted or runtime-deleted bindings cannot create PRs. The server
+verifies the repository identity and remote branch SHA against GitHub. The head must be in the
+project's repository and cannot be its current default branch. The base comes from GitHub's
+current default branch, rather than cached project metadata. Identity and authority are
+refreshed before creation.
+
+`whoami` reports non-secret grant status and, for an enrolled workspace, its server-resolved
+project ID, workspace/session ID, canonical repository and stored branch. It returns
+`scope_unavailable` if the grant exists but its scope rows do not agree. An ungranted binding
+cannot authenticate to call `whoami`.
 
 Mainloop uses the backend `GITHUB_TOKEN` setting. Requests go only to `https://api.github.com`,
 with bounded timeouts, response sizes, and pagination; redirects and environment proxies
@@ -84,9 +93,11 @@ Server filtering applies even when a harness ignores binding tool selection.
   canonical merge operation, proposal, invocation ID and argument hash. The receipt
   is claimed with one merge intent. It need not have reached the native runtime yet.
 
-Main and child roles are supported, with the same live project/workspace authority
-as PR creation; a child must match the PR branch. Standalone observed sessions gain
-no MCP credential or merge permission. Caller-supplied mode, base, URL, token or
+Main, child and enrolled owner-workspace bindings are supported, with the same live
+project/workspace authority as PR creation; a workspace must match the PR head to its stored
+branch. Standalone observed sessions and legacy workspaces gain no MCP credential or merge
+permission. Enrolling a workspace does not enable merge tools or production flags.
+Caller-supplied mode, base, URL, token or
 `approved` arguments are refused.
 
 ### Proposals, decisions and retries

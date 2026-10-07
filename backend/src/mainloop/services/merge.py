@@ -6,13 +6,16 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from mainloop.db import db
 from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
-from mainloop.services.github_creation import GitHubError, _project_repo
+from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_merge import GitHubMergeClient
+from mainloop.services.workspace_authority import (
+    ScopeUnavailable,
+    resolve_project_authority,
+)
 from pydantic import ValidationError
 
 from models.agent_tools import MergePullRequestWithApproval, PreparePullRequestMerge
@@ -40,30 +43,19 @@ def pinned(facts):
 
 
 async def authority(conn, binding, project_id, branch=None):
-    row = await conn.fetchrow(
-        """SELECT p.*,b.role,b.kagent_session_id,s.project_id AS session_project_id,
-        s.repo_url AS session_repo,w.repo AS workspace_repo,w.branch AS workspace_branch
-        FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-        JOIN projects p ON p.user_id=s.user_id AND p.id=$4
-        LEFT JOIN workspaces w ON w.session_id=s.id
-        WHERE b.session_id=$1 AND s.user_id=$2 AND b.token_hash=$3
-        AND b.role IN ('main','child') AND b.kagent_deleted_at IS NULL
-        AND s.archived_at IS NULL AND s.status NOT IN ('completed','failed','cancelled')
-        FOR SHARE OF b,s""",
-        binding["session_id"],
-        binding["user_id"],
-        binding.get("token_hash"),
-        project_id,
-    )
-    if not row or not row["kagent_session_id"]:
+    try:
+        resolved = await resolve_project_authority(
+            conn,
+            binding,
+            project_id,
+            branch=branch,
+            require_runtime=True,
+        )
+    except ScopeUnavailable:
+        resolved = None
+    if not resolved:
         raise PolicyError("ownership", "no live runtime binding for this project")
-    project = dict(row)
-    name = _project_repo(
-        project,
-        SimpleNamespace(
-            project_id=project_id, branch=branch or project["workspace_branch"]
-        ),
-    )
+    project, name = resolved
     return project, name
 
 

@@ -154,8 +154,15 @@ class PgStore:
     async def binding_by_token_hash(self, token_hash: str) -> dict | None:
         async with db.connection() as conn:
             row = await conn.fetchrow(
-                """SELECT b.*, s.user_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+                """SELECT b.*,s.user_id,s.project_id AS session_project_id,
+                          s.repo_url AS session_repo,s.branch_name AS session_branch,
+                          s.status,s.archived_at,p.full_name,p.owner,p.name,p.html_url,
+                          w.repo AS workspace_repo,w.branch AS workspace_branch
+                   FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+                   LEFT JOIN projects p ON p.id=s.project_id AND p.user_id=s.user_id
+                   LEFT JOIN workspaces w ON w.session_id=s.id
                    WHERE b.token_hash=$1 AND s.archived_at IS NULL
+                     AND b.kagent_deleted_at IS NULL
                      AND s.status NOT IN ('completed','failed','cancelled')""",
                 token_hash,
             )

@@ -39,11 +39,13 @@ from mainloop.runtime.delegation import (
 from mainloop.runtime.kagent_client import (
     KagentClient,
     KagentError,
+    OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
     SessionError,
     SessionWorkspace,
     Unreachable,
+    decode_fields,
 )
 from mainloop.services.github_pr import RepoMetadata
 from mainloop.services.github_repo import GithubRepo, parse_github_repo
@@ -1004,17 +1006,20 @@ async def _create_workspace(
 ) -> str:
     """Seed a branch workspace as ``workspaces.create`` stores it, without calling kagent."""
     project_id = f"proj-{uuid.uuid4().hex[:8]}"
+    repo_url = f"https://github.com/example/{project_id}"
     await case.pool.execute(
         """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
-           VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+           VALUES ($1,$2,'example',$3,$4,$5)""",
         project_id,
         case.user,
-        f"o/{project_id}",
+        project_id,
+        f"example/{project_id}",
+        repo_url,
     )
     workspace_id = str(uuid.uuid4())
     branch = f"b-{uuid.uuid4().hex[:6]}"
     manifest = WorkspaceManifest(
-        repo_url="https://github.com/example/repo",
+        repo_url=repo_url,
         ref="main",
         branch=branch,
         agent_kind=WorkspaceAgentKind.CLAUDE,
@@ -1061,7 +1066,12 @@ async def _create_workspace(
                 idle_minutes,
                 now,
             )
-            await ns.create_binding(workspace_id, "claude", conn=conn)
+            await ns.create_binding(
+                workspace_id,
+                "claude",
+                mcp_grant_kind="workspace",
+                conn=conn,
+            )
     if kagent_session_id:
         await ns.ledger.update_binding(
             workspace_id, kagent_session_id=kagent_session_id
@@ -1444,6 +1454,16 @@ class KagentFakeCase(PostgresTestCase):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        from mainloop.runtime.agent_credentials import credentials
+
+        self.credential_publish = AsyncMock(
+            side_effect=lambda _binding_id, reference: reference
+        )
+        self.credential_publish_patch = patch.object(
+            credentials, "publish", new=self.credential_publish
+        )
+        self.credential_publish_patch.start()
+        self.addCleanup(self.credential_publish_patch.stop)
         self.fake = FakeKagent()
         http = httpx.AsyncClient(
             transport=self.fake.transport(), base_url="http://kagent.test"
@@ -1464,17 +1484,55 @@ class KagentFakeCase(PostgresTestCase):
 
 
 class WorkspaceTests(KagentFakeCase):
-    async def test_create_stores_the_rows_and_sends_the_workspace_to_kagent(self):
+    async def _workspace_with_lost_create_reply(self, branch: str) -> str:
         project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
         await self.pool.execute(
             """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
-               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+               VALUES ($1,$2,'example',$3,$4,$5)""",
             project_id,
             self.user,
-            f"o/{project_id}",
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        client = ns.get_client()
+        create = client.create_session
+        calls = 0
+
+        async def lose_reply(agent, **kwargs):
+            nonlocal calls
+            session = await create(agent, **kwargs)
+            calls += 1
+            if calls == 1:
+                raise OutcomeUnknown("sanitized lost create reply")
+            return session
+
+        with patch.object(client, "create_session", lose_reply):
+            lifecycle = await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(repo_url=repo_url, branch=branch),
+            )
+        self.assertEqual(lifecycle.observed_state.value, "unknown")
+        return lifecycle.workspace_id
+
+    async def test_create_stores_the_rows_and_sends_the_workspace_to_kagent(self):
+        from mainloop.runtime.agent_identity import token_for
+
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
         )
         manifest = WorkspaceManifest(
-            repo_url="https://github.com/example/repo",
+            repo_url=repo_url,
             ref="main",
             branch="feature/x",
             depth=1,
@@ -1486,7 +1544,7 @@ class WorkspaceTests(KagentFakeCase):
             self.fake.created_workspaces(),
             [
                 SessionWorkspace(
-                    repo="https://github.com/example/repo",
+                    repo=repo_url,
                     ref="main",
                     branch="feature/x",
                     depth=1,
@@ -1494,14 +1552,37 @@ class WorkspaceTests(KagentFakeCase):
             ],
         )
         binding = await ns.get_binding(wid)
+        self.assertEqual(binding["role"], "agent")
+        self.assertEqual(binding["mcp_grant_kind"], "workspace")
+        self.assertTrue(binding["token_hash"])
+        reference = (
+            json.loads(binding["credential_ref"])
+            if isinstance(binding["credential_ref"], str)
+            else binding["credential_ref"]
+        )
+        self.assertEqual(reference["secret_key"], wid)
         self.assertEqual(binding["kagent_session_id"], CONTEXT_ID)
+        create = decode_fields(self.fake.session_calls("CreateSession")[0])
+        self.assertEqual(len(create[7]), 1)
+        credential = decode_fields(create[7][0])
+        self.assertEqual(
+            credential[1], [b"http://mainloop-mcp.mainloop.svc.cluster.local"]
+        )
+        self.assertEqual(credential[2], [b"Authorization"])
+        self.assertEqual(
+            decode_fields(credential[3][0]),
+            {1: [b"mainloop-agent-tokens"], 2: [wid.encode()]},
+        )
+        self.assertNotIn(
+            token_for(wid).encode(), self.fake.session_calls("CreateSession")[0]
+        )
         self.assertEqual(lifecycle.manifest, manifest)
         self.assertEqual(lifecycle.observed_state.value, "running")
         # The stored copy is what a replacement Session resends.
         self.assertEqual(
             await ns.ledger.get_workspace(wid),
             SessionWorkspace(
-                repo="https://github.com/example/repo",
+                repo=repo_url,
                 ref="main",
                 branch="feature/x",
                 depth=1,
@@ -1517,18 +1598,250 @@ class WorkspaceTests(KagentFakeCase):
             [wid],
         )
 
-    async def test_a_create_kagent_rejects_leaves_nothing_behind(self):
+    async def test_claude_and_codex_workspaces_get_distinct_frozen_references(self):
+        from models import WorkspaceAgentKind
+
         project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
         await self.pool.execute(
             """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
-               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+               VALUES ($1,$2,'example',$3,$4,$5)""",
             project_id,
             self.user,
-            f"o/{project_id}",
+            project_id,
+            f"example/{project_id}",
+            repo_url,
         )
-        manifest = WorkspaceManifest(
-            repo_url="https://github.com/example/repo", branch="feature/x"
+        self.fake.next_session_ids = ["claude-runtime", "codex-runtime"]
+        session_ids = []
+        for index, kind in enumerate(
+            (WorkspaceAgentKind.CLAUDE, WorkspaceAgentKind.CODEX)
+        ):
+            lifecycle = await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(
+                    repo_url=repo_url,
+                    branch=f"feature/{index}",
+                    agent_kind=kind,
+                ),
+            )
+            session_ids.append(lifecycle.workspace_id)
+        requests = [
+            decode_fields(raw) for raw in self.fake.session_calls("CreateSession")
+        ]
+        self.assertEqual(len(requests), 2)
+        self.assertEqual([len(request[7]) for request in requests], [1, 1])
+        references = [decode_fields(request[7][0]) for request in requests]
+        keys = [decode_fields(reference[3][0])[2][0] for reference in references]
+        self.assertEqual(keys, [value.encode() for value in session_ids])
+        self.assertEqual(len(set(keys)), 2)
+
+    async def test_workspace_grant_rejects_non_owner_or_mismatched_repository(self):
+        from models import WorkspaceAgentKind
+
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
         )
+        with self.assertRaises(workspaces.WorkspaceConflict):
+            await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(
+                    repo_url="https://github.com/example/other",
+                    branch="feature/wrong-repo",
+                    agent_kind=WorkspaceAgentKind.CODEX,
+                ),
+            )
+        self.assertEqual(self.fake.session_calls("CreateSession"), [])
+
+    async def test_publish_failure_keeps_a_pending_enrollment_without_a_create_or_brief(
+        self,
+    ):
+        from mainloop.runtime.agent_credentials import credentials
+
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        with patch.object(
+            credentials,
+            "publish",
+            AsyncMock(side_effect=RuntimeError("secret publish failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "secret publish failed"):
+                await workspaces.create(
+                    self.user,
+                    project_id,
+                    WorkspaceManifest(repo_url=repo_url, branch="feature/pending"),
+                )
+        binding = await self.pool.fetchrow(
+            """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE s.user_id=$1 AND s.project_id=$2""",
+            self.user,
+            project_id,
+        )
+        self.assertEqual(binding["mcp_grant_kind"], "workspace")
+        self.assertTrue(binding["token_hash"])
+        self.assertIsNone(binding["kagent_session_id"])
+        self.assertEqual(self.fake.session_calls("CreateSession"), [])
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1",
+                binding["session_id"],
+            ),
+            0,
+        )
+
+    async def test_lost_create_reply_retries_the_same_request_and_reference(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        client = ns.get_client()
+        create = client.create_session
+        calls = []
+
+        async def lose_first_reply(agent, **kwargs):
+            calls.append(
+                (kwargs["request_id"], kwargs["workspace"], kwargs["credentials"])
+            )
+            session = await create(agent, **kwargs)
+            if len(calls) == 1:
+                raise OutcomeUnknown("sanitized lost create reply")
+            return session
+
+        with patch.object(client, "create_session", lose_first_reply):
+            lifecycle = await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(repo_url=repo_url, branch="feature/reconcile"),
+            )
+            self.assertEqual(lifecycle.observed_state.value, "unknown")
+            await workspaces.refresh(lifecycle.workspace_id, self.user)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        creates = self.fake.session_calls("CreateSession")
+        self.assertEqual(len(creates), 2)
+        fields = [decode_fields(raw) for raw in creates]
+        self.assertEqual(fields[0][3], fields[1][3])
+        self.assertEqual(fields[0][6], fields[1][6])
+        self.assertEqual(fields[0][7], fields[1][7])
+
+    async def test_cancelled_unknown_create_remains_deletable_without_republishing(
+        self,
+    ):
+        wid = await self._workspace_with_lost_create_reply("feature/cancel-delete")
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+
+        self.assertEqual(await ns.cancel(wid), "not_running")
+        cancelled = await ns.get_binding(wid)
+        self.assertIsNone(cancelled["token_hash"])
+        self.assertEqual(cancelled["mcp_grant_kind"], "workspace")
+
+        await workspaces.delete(wid, self.user)
+
+        self.assertIsNone(await ns.get_binding(wid))
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        creates = self.fake.session_calls("CreateSession")
+        self.assertEqual(len(creates), 2)
+        first, second = (decode_fields(raw) for raw in creates)
+        self.assertEqual(first[3], second[3])
+        self.assertEqual(first[6], second[6])
+        self.assertEqual(first[7], second[7])
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+        self.credential_publish.assert_awaited_once()
+
+    async def test_cancelled_unknown_create_refresh_uses_frozen_reference(self):
+        wid = await self._workspace_with_lost_create_reply("feature/cancel-refresh")
+        self.assertEqual(await ns.cancel(wid), "not_running")
+
+        refreshed = await workspaces.refresh(wid, self.user)
+
+        self.assertEqual(refreshed.observed_state.value, "running")
+        binding = await ns.get_binding(wid)
+        self.assertEqual(binding["kagent_session_id"], CONTEXT_ID)
+        self.assertIsNone(binding["token_hash"])
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        creates = self.fake.session_calls("CreateSession")
+        self.assertEqual(len(creates), 2)
+        first, second = (decode_fields(raw) for raw in creates)
+        self.assertEqual(first[3], second[3])
+        self.assertEqual(first[6], second[6])
+        self.assertEqual(first[7], second[7])
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+        self.credential_publish.assert_awaited_once()
+
+        await workspaces.delete(wid, self.user)
+        self.assertEqual(len(self.fake.session_calls("DeleteSession")), 1)
+        self.assertIsNone(await ns.get_binding(wid))
+
+    async def test_suspend_and_resume_keep_the_enrolled_identity(self):
+        wid = await self._create_workspace_for_test()
+        before = await ns.get_binding(wid)
+        await workspaces.suspend(wid, self.user)
+        await workspaces.resume(wid, self.user)
+        after = await ns.get_binding(wid)
+        self.assertEqual(after["mcp_grant_kind"], "workspace")
+        self.assertEqual(after["token_hash"], before["token_hash"])
+
+    async def _create_workspace_for_test(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        return (
+            await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(repo_url=repo_url, branch="feature/suspend"),
+            )
+        ).workspace_id
+
+    async def test_a_create_kagent_rejects_leaves_nothing_behind(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        manifest = WorkspaceManifest(repo_url=repo_url, branch="feature/x")
         with patch.object(
             ns.get_client(),
             "create_session",
@@ -1546,16 +1859,17 @@ class WorkspaceTests(KagentFakeCase):
         self,
     ):
         project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
         await self.pool.execute(
             """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
-               VALUES ($1,$2,'o','n',$3,'https://github.com/example/repo')""",
+               VALUES ($1,$2,'example',$3,$4,$5)""",
             project_id,
             self.user,
-            f"o/{project_id}",
+            project_id,
+            f"example/{project_id}",
+            repo_url,
         )
-        manifest = WorkspaceManifest(
-            repo_url="https://github.com/example/repo", branch="feature/x"
-        )
+        manifest = WorkspaceManifest(repo_url=repo_url, branch="feature/x")
         with patch.object(
             ns.get_client(),
             "create_session",
@@ -1609,6 +1923,49 @@ class WorkspaceTests(KagentFakeCase):
         self.assertEqual(
             await self.pool.fetchval(
                 "SELECT count(*) FROM conversations WHERE id=$1", cid
+            ),
+            0,
+        )
+
+    async def test_delete_keeps_secret_cleanup_durable_after_binding_rows_are_removed(
+        self,
+    ):
+        from fastapi import HTTPException
+        from mainloop.runtime.agent_credentials import credentials, reconcile_cleanup
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+        from mainloop.runtime.delegation import PgStore
+
+        wid = await self._create_workspace_for_test()
+        with patch.object(
+            credentials,
+            "remove",
+            AsyncMock(side_effect=RuntimeError("sanitized Secret outage")),
+        ):
+            await workspaces.delete(wid, self.user)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_bindings WHERE session_id=$1", wid
+            ),
+            0,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                wid,
+            ),
+            1,
+        )
+        with self.assertRaises(HTTPException):
+            await AgentService(PgStore()).authenticate(token_for(wid))
+        with patch.object(credentials, "remove", AsyncMock()) as remove:
+            await reconcile_cleanup()
+        remove.assert_awaited_once()
+        self.assertEqual(remove.await_args.args[0], wid)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                wid,
             ),
             0,
         )

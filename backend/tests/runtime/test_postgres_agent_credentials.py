@@ -86,7 +86,10 @@ class CredentialPostgresTests(PostgresTestCase):
         client.create_session.side_effect = create
         client.delete_session.side_effect = delete
         ref = SessionCredential(
-            "http://fixture-mcp", "Authorization", "fixture-tokens", sid
+            credentials.MCP_ORIGIN,
+            "Authorization",
+            credentials.SECRET_NAME,
+            sid,
         )
         with patch.object(
             native_sessions, "get_client", return_value=client
@@ -232,7 +235,8 @@ class CredentialPostgresTests(PostgresTestCase):
             await self.pool.expire_connections()
             await native_sessions._deliver(sid, mid, "brief")
             render.assert_awaited_once()
-            remove.assert_awaited_once_with(sid)
+            remove.assert_awaited_once()
+            self.assertEqual(remove.await_args.args[0], sid)
         terminal = await self.reload_binding(sid)
         self.assertIsNone(terminal["token_hash"])
         self.assertTrue(terminal["credential_cleanup_pending"])
@@ -262,7 +266,8 @@ class CredentialPostgresTests(PostgresTestCase):
             self.assertEqual((await self.auth(sid)).binding["session_id"], sid)
             with patch.object(credentials.credentials, "remove", AsyncMock()) as remove:
                 await db.update_session(sid, status=status)
-            remove.assert_awaited_once_with(sid)
+            remove.assert_awaited_once()
+            self.assertEqual(remove.await_args.args[0], sid)
             row = await self.pool.fetchrow(
                 "SELECT token_hash, credential_cleanup_pending FROM native_bindings WHERE session_id=$1",
                 sid,
@@ -282,11 +287,60 @@ class CredentialPostgresTests(PostgresTestCase):
         with patch.object(credentials.credentials, "remove", AsyncMock()) as remove:
             archived = await db.archive_sessions(self.user, parent_session_id=parent)
         self.assertEqual(archived, [child])
-        remove.assert_awaited_once_with(child)
+        remove.assert_awaited_once()
+        self.assertEqual(remove.await_args.args[0], child)
         self.assertIsNone((await native_sessions.get_binding(child))["token_hash"])
         with self.assertRaises(HTTPException):
             await self.auth(child)
         self.assertEqual((await self.auth(parent)).actor.role, "main")
+
+    async def test_workspace_publish_and_revoke_serialize_across_database_connections(
+        self,
+    ):
+        sid, _ = await self.bound_session(role="agent", mcp_grant_kind="workspace")
+        binding = await self.reload_binding(sid)
+        publish_started = asyncio.Event()
+        allow_publish = asyncio.Event()
+
+        async def publish(binding_id, reference):
+            self.assertEqual(binding_id, sid)
+            publish_started.set()
+            await allow_publish.wait()
+            return reference
+
+        with patch.object(
+            credentials.credentials, "publish", AsyncMock(side_effect=publish)
+        ) as publish_call, patch.object(
+            credentials.credentials, "remove", AsyncMock()
+        ) as remove:
+            publishing = asyncio.create_task(credentials.publish_for_binding(binding))
+            await publish_started.wait()
+            revoking = asyncio.create_task(credentials.revoke(sid))
+            await asyncio.sleep(0)
+            self.assertFalse(revoking.done())
+            allow_publish.set()
+            reference = await publishing
+            await revoking
+
+        self.assertEqual(reference.secret_key, sid)
+        publish_call.assert_awaited_once()
+        remove.assert_awaited_once()
+        self.assertEqual(remove.await_args.args[0], sid)
+        current = await self.reload_binding(sid)
+        self.assertIsNone(current["token_hash"])
+        self.assertFalse(current["credential_cleanup_pending"])
+        with self.assertRaises(HTTPException):
+            await self.auth(sid)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                sid,
+            ),
+            0,
+        )
+        with self.assertRaisesRegex(RuntimeError, "revoked"):
+            await credentials.publish_for_binding(binding)
+        self.assertEqual(publish_call.await_count, 1)
 
     async def test_secret_outage_retains_retry_after_new_pool(self):
         sid, _ = await self.bound_session(role="child")
@@ -305,9 +359,7 @@ class CredentialPostgresTests(PostgresTestCase):
         await self.pool.expire_connections()
         with patch.object(credentials.credentials, "remove", AsyncMock()) as remove:
             await credentials.reconcile_cleanup()
-        self.assertIn(
-            ((sid,), {}), [(c.args, c.kwargs) for c in remove.await_args_list]
-        )
+        self.assertEqual(remove.await_args.args[0], sid)
         self.assertFalse(
             (await native_sessions.get_binding(sid))["credential_cleanup_pending"]
         )
