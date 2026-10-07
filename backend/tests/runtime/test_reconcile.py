@@ -15,6 +15,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
     def patched(self, **overrides):
         steps = {
             "sync": AsyncMock(),
+            "observe_hitl_once": AsyncMock(),
+            "reconcile_hitl_responses": AsyncMock(),
             "reconcile_cleanup": AsyncMock(),
             "reconcile_archived_deletes": AsyncMock(),
             "suspend_idle": AsyncMock(return_value=[]),
@@ -23,6 +25,14 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         ledger = AsyncMock()
         ledger.sessions_with_open_work.return_value = ["s1", "s2", "s3"]
         for p in (
+            patch(
+                "mainloop.runtime.hitl_observer.observe_hitl_once",
+                steps["observe_hitl_once"],
+            ),
+            patch(
+                "mainloop.runtime.hitl_continuation.reconcile_hitl_responses",
+                steps["reconcile_hitl_responses"],
+            ),
             patch.object(ns, "ledger", ledger),
             patch.object(ns, "sync", steps["sync"]),
             patch.object(
@@ -80,6 +90,16 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             await ns.reconcile_once(sweep=True)
         steps["suspend_idle"].assert_awaited_once()
         self.assertEqual(logs.records[0].step, "list_open_work")
+
+    async def test_hitl_failure_does_not_starve_deliveries_or_other_observation(self):
+        steps = self.patched(
+            observe_hitl_once=AsyncMock(side_effect=ValueError("bad gateway"))
+        )
+        with self.assertLogs(ns.logger, logging.ERROR) as logs:
+            await ns.reconcile_once(sweep=False)
+        self.assertEqual(logs.records[0].step, "hitl_observation")
+        steps["reconcile_hitl_responses"].assert_awaited_once()
+        self.assertEqual(steps["sync"].await_count, 3)
 
     async def test_one_failing_archived_delete_does_not_block_the_next(self):
         ledger = AsyncMock()

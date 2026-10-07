@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS native_hitl_requests (
     observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(owner_id, outer_key)
 );
+-- Historical observations retain their snapshots but cannot compete as routes.
+ALTER TABLE native_hitl_requests ADD COLUMN IF NOT EXISTS superseded BOOLEAN NOT NULL DEFAULT false;
 -- Only verified aliases enter this table. Unresolved payload hints have no leaf key.
 CREATE TABLE IF NOT EXISTS native_hitl_aliases (
     request_id TEXT NOT NULL REFERENCES native_hitl_requests(id) ON DELETE CASCADE,
@@ -97,4 +99,29 @@ CREATE TRIGGER immutable_hitl_member BEFORE UPDATE OR DELETE ON native_hitl_resp
 DROP TRIGGER IF EXISTS immutable_policy_audit ON project_merge_policy_audit;
 CREATE TRIGGER immutable_policy_audit BEFORE UPDATE OR DELETE ON project_merge_policy_audit
     FOR EACH ROW EXECUTE FUNCTION immutable_hitl_receipt();
+"""
+
+# Durable discovery work is independent of delivery rows and browser subscriptions.
+HITL_MIGRATION_SQL += """
+CREATE TABLE IF NOT EXISTS native_hitl_inventory_state (
+    gateway TEXT NOT NULL, owner_id TEXT NOT NULL,
+    next_sweep TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(gateway,owner_id)
+);
+CREATE TABLE IF NOT EXISTS native_hitl_task_scan (
+    gateway TEXT NOT NULL, runtime_session_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+    cursor TEXT NOT NULL DEFAULT '', scanned_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
+    PRIMARY KEY(gateway,runtime_session_id)
+);
+CREATE TABLE IF NOT EXISTS native_hitl_tasks (
+    gateway TEXT NOT NULL, runtime_session_id TEXT NOT NULL, task_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL, checked_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
+    pending BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY(gateway,runtime_session_id,task_id)
+);
+CREATE TABLE IF NOT EXISTS native_hitl_diagnostics (
+    gateway TEXT NOT NULL, runtime_session_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+    detail TEXT NOT NULL, observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(gateway,runtime_session_id,owner_id)
+);
 """

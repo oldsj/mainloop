@@ -1098,6 +1098,14 @@ class Database:
         """Update queue item fields."""
         if not self._pool:
             return
+        async with self.connection() as conn:
+            if await conn.fetchval(
+                "SELECT 1 FROM queue_items WHERE id=$1 AND item_type='hitl_request'",
+                item_id,
+            ):
+                raise ValueError(
+                    "HITL cards can only be settled by their structured decision"
+                )
         updates = []
         params = []
         param_idx = 1

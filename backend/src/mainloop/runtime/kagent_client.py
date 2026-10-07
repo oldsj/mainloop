@@ -37,6 +37,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from models.hitl import HITL_EXTENSION, HITLResponse
+
 
 @dataclass(frozen=True, slots=True)
 class SessionCredential:
@@ -170,6 +172,8 @@ class Message(_Wire):
     task_id: str | None = None
     role: str | None = None
     parts: list[Part] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    extensions: list[str] = Field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -289,6 +293,7 @@ class TaskProjection:
     failure_text: str = ""
     artifacts: dict[str, Artifact] = field(default_factory=dict)
     history_message_ids: list[str] = field(default_factory=list)
+    status_message: Message | None = None
 
     @property
     def terminal(self) -> bool:
@@ -313,6 +318,7 @@ class TaskProjection:
     def replace(self, task: Task) -> None:
         self.task_id = task.id
         self.context_id = task.context_id
+        self.status_message = task.status.message
         self.state = task.status.state
         self.failure_text = task.status.message.text if task.status.message else ""
         self.artifacts = {a.artifact_id: a for a in task.artifacts}
@@ -321,14 +327,30 @@ class TaskProjection:
     def apply(self, event: StreamEvent) -> bool:
         """Fold one stream event in. Returns whether the projection changed."""
         if event.task is not None:
-            before = (self.task_id, self.state, self.text, self.failure_text)
+            before = (
+                self.task_id,
+                self.state,
+                self.text,
+                self.failure_text,
+                self.status_message,
+            )
             self.replace(event.task)
-            return before != (self.task_id, self.state, self.text, self.failure_text)
+            return before != (
+                self.task_id,
+                self.state,
+                self.text,
+                self.failure_text,
+                self.status_message,
+            )
         if event.status_update is not None:
             update = event.status_update
             self.task_id = self.task_id or update.task_id
             self.context_id = self.context_id or update.context_id
-            changed = update.status.state != self.state
+            changed = (
+                update.status.state != self.state
+                or update.status.message != self.status_message
+            )
+            self.status_message = update.status.message
             self.state = update.status.state or self.state
             if update.status.message is not None:
                 self.failure_text = update.status.message.text
@@ -531,6 +553,10 @@ class KagentSession:
     failure_message: str = ""
     name: str = ""
     workspace: SessionWorkspace | None = None
+    creator: str = ""
+    agent: AgentRef | None = None
+    prepared_revision: str = ""
+    a2a_authority: str = ""
 
     @property
     def settled(self) -> bool:
@@ -566,10 +592,16 @@ def decode_session_list(message: bytes) -> tuple[list[KagentSession], str]:
 
 def _decode_session(raw: bytes) -> KagentSession:
     fields = decode_fields(raw)
+    if any(len(fields.get(number, [])) > 1 for number in (1, 2, 5, 6, 14, 15)):
+        raise SessionError("Ambiguous gateway session identity")
     failure = fields.get(9, [b""])[0]
     failure_fields = decode_fields(failure) if isinstance(failure, bytes) else {}
     session_id = _text(fields, 1)
     workspace = fields.get(16, [b""])[0]
+    agent_raw = fields.get(15, [b""])[0]
+    agent_fields = decode_fields(agent_raw) if isinstance(agent_raw, bytes) else {}
+    if any(len(agent_fields.get(number, [])) > 1 for number in (1, 2)):
+        raise SessionError("Ambiguous gateway agent identity")
     return KagentSession(
         id=session_id,
         state=_enum(RuntimeState, _number(fields, 7)),
@@ -578,6 +610,14 @@ def _decode_session(raw: bytes) -> KagentSession:
         failure_reason=_text(failure_fields, 1),
         failure_message=_text(failure_fields, 2),
         name=_text(fields, 13),
+        creator=_text(fields, 2),
+        agent=(
+            AgentRef(_text(agent_fields, 1), _text(agent_fields, 2))
+            if agent_fields
+            else None
+        ),
+        prepared_revision=_text(fields, 5),
+        a2a_authority=_text(fields, 6),
         workspace=(
             SessionWorkspace.decode(workspace)
             if isinstance(workspace, bytes) and workspace
@@ -631,7 +671,11 @@ class KagentClient:
             await self._client.aclose()
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        return {"x-user-id": self._user_id, **(extra or {})}
+        return {
+            "x-user-id": self._user_id,
+            "A2A-Extensions": HITL_EXTENSION,
+            **(extra or {}),
+        }
 
     # ---- SessionService ----------------------------------------------------------------
 
@@ -710,17 +754,18 @@ class KagentClient:
         )
         return await self._session_call("CreateSession", message)
 
-    async def list_sessions(self) -> list[KagentSession]:
-        """Every Session the client's user created, following the page tokens.
+    async def list_sessions_page(
+        self, cursor: str = "", limit: int = 100
+    ) -> tuple[list[KagentSession], str]:
+        page = _field_varint(1, min(max(limit, 1), 100)) + _field_str(2, cursor)
+        frames = await self._session_frames("ListSessions", _field_bytes(3, page))
+        return decode_session_list(frames[0]) if frames else ([], "")
 
-        An empty page is a response with no message, so it is not an error here.
-        """
+    async def list_sessions(self) -> list[KagentSession]:
         sessions: list[KagentSession] = []
         cursor = ""
         while True:
-            page = _field_varint(1, 100) + _field_str(2, cursor)
-            frames = await self._session_frames("ListSessions", _field_bytes(3, page))
-            batch, cursor = decode_session_list(frames[0]) if frames else ([], "")
+            batch, cursor = await self.list_sessions_page(cursor)
             sessions.extend(batch)
             if not cursor:
                 return sessions
@@ -826,21 +871,70 @@ class KagentClient:
     async def get_task(self, agent: AgentRef, task_id: str) -> Task:
         return Task.model_validate(await self._rpc(agent, "GetTask", {"id": task_id}))
 
-    async def list_tasks(self, agent: AgentRef, context_id: str) -> list[Task]:
-        """Every task of a context, oldest first, following ``nextPageToken``.
+    async def list_tasks_page(
+        self, agent: AgentRef, context_id: str, cursor: str = "", limit: int = 100
+    ) -> tuple[list[Task], str]:
+        result = await self._rpc(
+            agent,
+            "ListTasks",
+            {
+                "contextId": context_id,
+                "pageSize": min(max(limit, 1), 100),
+                **({"pageToken": cursor} if cursor else {}),
+            },
+        )
+        return [Task.model_validate(t) for t in result.get("tasks") or []], result.get(
+            "nextPageToken"
+        ) or ""
 
-        kagent pages ListTasks (50 by default, 100 at most) and leaves artifacts out unless asked,
-        so the tasks returned here carry status and history but no reply text.
-        """
+    async def list_tasks(self, agent: AgentRef, context_id: str) -> list[Task]:
         tasks: list[Task] = []
-        params: dict[str, Any] = {"contextId": context_id, "pageSize": 100}
+        cursor = ""
         while True:
-            result = await self._rpc(agent, "ListTasks", params)
-            tasks.extend(Task.model_validate(t) for t in result.get("tasks") or [])
-            token = result.get("nextPageToken")
-            if not token:
+            batch, cursor = await self.list_tasks_page(agent, context_id, cursor)
+            tasks.extend(batch)
+            if not cursor:
                 return tasks
-            params = {**params, "pageToken": token}
+
+    async def supports_hitl(self, agent: AgentRef) -> bool:
+        card = await self._rpc(agent, "GetExtendedAgentCard", {})
+        return any(
+            e.get("uri") == HITL_EXTENSION
+            for e in card.get("capabilities", {}).get("extensions", [])
+            if isinstance(e, dict)
+        )
+
+    def send_hitl_response(
+        self,
+        agent: AgentRef,
+        *,
+        response: HITLResponse,
+        message_id: str,
+        context_id: str,
+        task_id: str,
+    ) -> AsyncIterator[StreamEvent]:
+        if not task_id or not context_id or not message_id:
+            raise ValueError(
+                "Structured continuation requires exact task/context/message identity"
+            )
+        return self._send_with_retry(
+            agent,
+            {
+                "message": {
+                    "messageId": message_id,
+                    "contextId": context_id,
+                    "taskId": task_id,
+                    "role": "ROLE_USER",
+                    "parts": [],
+                    "extensions": [HITL_EXTENSION],
+                    "metadata": {
+                        HITL_EXTENSION: response.model_dump(
+                            mode="json", exclude_none=True
+                        )
+                    },
+                }
+            },
+        )
 
     async def cancel_task(self, agent: AgentRef, task_id: str) -> Task:
         """Cancel a task. On a task that is already terminal, kagent returns it unchanged."""

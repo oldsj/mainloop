@@ -1721,6 +1721,11 @@ async def reconcile_once(*, sweep: bool) -> None:
     Every step has its own ``try``: one session's failed sync, or a failing sweep step, must not
     starve the others. ``sweep`` adds the slower housekeeping steps.
     """
+    from mainloop.runtime.hitl_continuation import reconcile_hitl_responses
+    from mainloop.runtime.hitl_observer import observe_hitl_once
+
+    await _reconcile_step("hitl_observation", observe_hitl_once)
+    await _reconcile_step("hitl_responses", reconcile_hitl_responses)
     sids: list[str] = []
 
     async def list_open() -> None:
