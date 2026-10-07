@@ -40,6 +40,25 @@ def stream_chunks(message_id: str, text: str = "hello") -> list[str]:
     return [chunk + "\n\n" for chunk in raw.split("\n\n") if chunk.strip()]
 
 
+def unauthorized_envelope(message: str = "permission denied") -> dict:
+    """a2a-go v2.6.0 ErrUnauthorized wire shape, with sanitized test messages."""
+    return {
+        "jsonrpc": "2.0",
+        "id": "fixture-request",
+        "error": {
+            "code": -31403,
+            "message": message,
+            "data": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "a2a-protocol.org",
+                    "reason": "UNAUTHORIZED",
+                }
+            ],
+        },
+    }
+
+
 def session_message(
     session_id: str,
     state: RuntimeState = RuntimeState.READY,

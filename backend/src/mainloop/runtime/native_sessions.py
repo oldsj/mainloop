@@ -44,6 +44,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeOperation,
     RuntimeState,
     SendNotAccepted,
+    ServiceConfigurationError,
     SessionError,
     SessionWorkspace,
     StreamEvent,
@@ -176,6 +177,7 @@ def get_client() -> KagentClient:
         _client = KagentClient(
             settings.kagent_gateway_url,
             user_id=settings.kagent_user_id,
+            control_token_file=settings.kagent_control_token_file,
             request_timeout=settings.kagent_request_timeout_seconds,
             stream_timeout=settings.kagent_turn_timeout_seconds,
             send_retry_budget=settings.kagent_send_retry_budget_seconds,
@@ -1043,6 +1045,8 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
             return await client.ensure_ready(
                 session, timeout=settings.kagent_session_ready_timeout_seconds
             )
+        except ServiceConfigurationError:
+            raise
         except KagentError as exc:
             if binding["role"] != "child" or binding["turns"]:
                 raise
@@ -1090,6 +1094,14 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     detail=f"startup reconciliation pending: {exc}",
                 )
                 return
+            except ServiceConfigurationError as exc:
+                await ledger.transition(
+                    message_id,
+                    "failed",
+                    from_states=("recorded",),
+                    detail=f"not sent: {describe_error(exc)}",
+                )
+                prompt = None
             except Exception as exc:
                 logger.exception("delivery not attempted for %s", message_id)
                 if (
@@ -1187,6 +1199,20 @@ async def _consume(
                 if standing_hash:
                     # kagent has the standing context now; never prefix it again.
                     await ledger.update_binding(session_id, standing_hash=standing_hash)
+    except ServiceConfigurationError as exc:
+        if snapshot or proj.task_id:
+            # Existing delivery evidence survives an observation refusal.
+            logger.info(
+                "control configuration failure following %s: %s", message_id, exc
+            )
+            return None
+        await ledger.transition(
+            message_id,
+            "failed",
+            from_states=_RESOLVABLE + ("recorded",),
+            detail=describe_error(exc),
+        )
+        return None
     except TaskNotFound:
         await ledger.transition(
             message_id,

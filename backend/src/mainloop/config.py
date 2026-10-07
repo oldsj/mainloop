@@ -2,7 +2,8 @@
 
 from urllib.parse import quote_plus, urlsplit
 
-from pydantic import Field, computed_field, field_validator
+from mainloop.runtime.control_credentials import read_control_token
+from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from models.provider import ProviderProfile
@@ -58,6 +59,24 @@ class Settings(BaseSettings):
     # kagent scopes Sessions to this identity. Changing it is a migration: every existing kagent
     # Session becomes not found and is replaced, losing its native context.
     kagent_user_id: str = "mainloop"
+    kagent_control_token_file: str | None = None
+
+    @field_validator("kagent_control_token_file")
+    @classmethod
+    def _control_token_file(cls, value: str | None) -> str | None:
+        if value is not None:
+            read_control_token(value)
+        return value
+
+    @model_validator(mode="after")
+    def _control_principal(self):
+        if (
+            self.kagent_control_token_file is not None
+            and self.kagent_user_id != "mainloop"
+        ):
+            raise ValueError("service-token mode requires KAGENT_USER_ID=mainloop")
+        return self
+
     kagent_namespace: str = "kagent"
     kagent_main_agent: str = "mainloop-main"
     # Child agents (delegated by the main thread) run on these.
