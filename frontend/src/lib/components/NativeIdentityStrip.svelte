@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type NativeSessionInfo } from '$lib/api';
+  import { deliveryNotices, threadStatus } from '$lib/delivery';
 
   let {
     sessionId,
@@ -14,8 +15,24 @@
   let open = $state(false);
 
   const expanded = $derived(!collapsible || open);
+  const deliveries = $derived(info?.deliveries ?? []);
+  const delivery = $derived(threadStatus({ offline: false, deliveries }));
+  // A failed or unconfirmed last delivery is not "live", whatever the kagent Session says.
   const live = $derived(
-    !info?.session_state ? 'unknown' : info.session_state === 'ready' ? 'live' : info.session_state
+    delivery === 'failed'
+      ? 'last message failed'
+      : delivery === 'unconfirmed'
+        ? 'last message unconfirmed'
+        : !info?.session_state
+          ? 'unknown'
+          : info.session_state === 'ready'
+            ? 'live'
+            : info.session_state
+  );
+  const lastProblem = $derived(
+    delivery === 'failed' || delivery === 'unconfirmed'
+      ? deliveryNotices(deliveries).get(deliveries.at(-1)?.message_id ?? '')
+      : undefined
   );
 
   async function refresh() {
@@ -41,7 +58,13 @@
     {#if collapsible}
       <div class="flex items-center gap-2">
         <span
-          class="h-2 w-2 shrink-0 rounded-full {live === 'live' ? 'bg-term-green' : 'bg-term-fg-muted'}"
+          class="h-2 w-2 shrink-0 rounded-full {delivery === 'failed'
+            ? 'bg-term-red'
+            : delivery === 'unconfirmed'
+              ? 'bg-term-yellow'
+              : live === 'live'
+                ? 'bg-term-green'
+                : 'bg-term-fg-muted'}"
           aria-hidden="true"
         ></span>
         <span class="text-term-fg">{info.kind}</span>
@@ -96,6 +119,14 @@
     </div>
     {#if info.note}
       <div class="text-term-yellow mt-1" data-testid="id-note">{info.note}</div>
+    {/if}
+    {#if lastProblem}
+      <div
+        class="mt-1 {lastProblem.state === 'failed' ? 'text-term-red' : 'text-term-yellow'}"
+        data-testid="id-delivery-problem"
+      >
+        {lastProblem.label}{lastProblem.reason ? `: ${lastProblem.reason}` : ''}
+      </div>
     {/if}
     {#if info.deliveries.length}
       <div class="mt-1 {expanded ? '' : 'hidden'}" data-testid="id-deliveries">

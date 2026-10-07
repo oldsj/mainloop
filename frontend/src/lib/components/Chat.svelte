@@ -5,24 +5,29 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
   import { allSessionMessages } from '$lib/stores/sessionMessages';
-  import { api, SendError, type MainThreadInfo } from '$lib/api';
+  import { api, SendError, type Message, type MainThreadInfo } from '$lib/api';
   import { draftMessage } from '$lib/stores/draftMessage';
+  import { deliveryNotices } from '$lib/delivery';
+  import { createSendGuard, retryMessage } from '$lib/messageSend';
   import { connection } from '$lib/stores/connection';
   import ConversationView from './ConversationView.svelte';
   import MainThreadHeader from './MainThreadHeader.svelte';
 
   // Mainloop mirrors the kagent A2A task into the conversation, so we poll for the reply.
   let mainThread = $state<MainThreadInfo | null>(null);
+  let sendPending = $state(false);
+  const guardSend = createSendGuard((pending) => {
+    sendPending = pending;
+  });
   let sendError = $state<string | null>(null);
 
   let { messages: allMessages, isLoading } = $derived($conversationStore);
   const native = $derived(mainThread?.mode === 'native');
   const messages = $derived(allMessages);
   // The main thread takes one message at a time; say so instead of letting a send fail.
-  const busy = $derived(
-    native && !!mainThread?.native?.turn_in_flight
-  );
+  const busy = $derived(native && !!mainThread?.native?.turn_in_flight);
   const offline = $derived($connection.status === 'offline');
+  const notices = $derived(deliveryNotices(mainThread?.native?.deliveries ?? []));
   const placeholder = $derived(
     offline
       ? 'Backend unreachable…'
@@ -118,18 +123,42 @@
   });
 
   async function handleSendMessage(detail: { message: string }) {
-    const userMessage = detail.message;
+    await guardSend(async () => {
+      const userMessage = detail.message;
 
-    // Route to session or main thread based on context
-    if (!$isMainContext && $currentSession) {
-      await sendSessionMessage(userMessage);
-    } else {
-      await sendMainThreadMessage(userMessage);
-    }
+      // Route to session or main thread based on context
+      if (!$isMainContext && $currentSession) {
+        await sendSessionMessage(userMessage);
+      } else {
+        await sendMainThreadMessage(userMessage);
+      }
+    });
   }
 
-  async function sendMainThreadMessage(userMessage: string) {
-    const currentConversationId = $conversationStore.currentConversation?.id;
+  async function handleRetry(message: Message) {
+    await guardSend(async () => {
+      try {
+        await retryMessage(
+          message,
+          async () => {
+            const info = await api.getMainThread();
+            mainThread = info;
+            return {
+              conversationId: info.conversation_id,
+              deliveries: info.native?.deliveries ?? [],
+              blocked: offline || !!info.native?.turn_in_flight
+            };
+          },
+          sendMainThreadMessage
+        );
+      } catch (error) {
+        sendError = error instanceof Error ? error.message : 'Could not refresh delivery state.';
+      }
+    });
+  }
+
+  async function sendMainThreadMessage(userMessage: string, conversationId?: string) {
+    const currentConversationId = conversationId ?? $conversationStore.currentConversation?.id;
 
     // Optimistic: Add user message immediately
     const tempId = `temp-${Date.now()}`;
@@ -261,11 +290,12 @@
     try {
       await api.sendSessionMessage(session.id, userMessage);
       // Refresh session status and messages
-      sessions.fetchSessions();
+      await sessions.fetchSessions();
       // Force immediate refresh to get real message ID and any quick response
-      allSessionMessages.loadSession(session.id);
+      await allSessionMessages.loadSession(session.id);
     } catch (error) {
       console.error('Failed to send session message:', error);
+      sendError = `${error instanceof Error && error.message ? error.message : 'Could not send the message.'} Your message was not sent.`;
     }
   }
 </script>
@@ -279,13 +309,15 @@
   <div class="min-h-0 flex-1">
     <ConversationView
       {messages}
-      {isLoading}
+      isLoading={isLoading || sendPending}
       onSendMessage={handleSendMessage}
       {placeholder}
       showInlineSessions={!native}
       error={sendError}
       inputDisabled={busy || offline}
       onDismissError={() => (sendError = null)}
+      deliveryNotices={native ? notices : undefined}
+      onRetry={handleRetry}
       emptyStateTitle={loaded ? '$ mainloop --help' : '$ connecting'}
       emptyStateMessage={loaded ? 'Start a conversation to begin' : 'Waiting for the backend…'}
     />

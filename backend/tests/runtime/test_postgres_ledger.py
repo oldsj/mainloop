@@ -1970,6 +1970,218 @@ class StopTurnTests(PostgresTestCase):
         self.assertNotIn(("assistant", ns.TURN_STOPPED_NOTE), await self.rows(cid))
 
 
+class DeliveryFailureReasonTests(PostgresTestCase):
+    """The reason a delivery failed is stored with it and reaches the owner through the API."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.fake = FakeKagent()
+        http = httpx.AsyncClient(
+            transport=self.fake.transport(), base_url="http://kagent.test"
+        )
+        self._saved_client = ns._client
+        ns._client = KagentClient("http://kagent.test", user_id="mainloop", client=http)
+        ns._locks.clear()
+        ns._streaming.clear()
+
+    async def asyncTearDown(self):
+        await asyncio.gather(*ns._tasks, return_exceptions=True)
+        await ns.close_client()
+        ns._client = self._saved_client
+        await super().asyncTearDown()
+
+    async def send(self, sid: str, text: str = "hello") -> str:
+        mid = await ns.submit_message(sid, text)
+        while ns._tasks:
+            await asyncio.gather(*list(ns._tasks), return_exceptions=True)
+        return mid
+
+    async def stored(self, mid: str):
+        return await self.pool.fetchrow(
+            "SELECT state, detail FROM native_deliveries WHERE message_id=$1", mid
+        )
+
+    async def test_a_message_never_sent_keeps_the_kagent_error_class_and_message(self):
+        sid, _ = await self.bound_session()
+        failed = "00000000-0000-4000-8000-0000000000ff"
+        self.fake.sessions[failed] = (RuntimeState.FAILED, RuntimeOperation.NONE)
+        await ns.ledger.update_binding(sid, kagent_session_id=failed)
+        mid = await self.send(sid)
+        row = await self.stored(mid)
+        self.assertEqual(row["state"], "failed")
+        self.assertTrue(row["detail"].startswith("not sent: SessionError: "))
+        self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+        # The same text reaches the UI, next to the message it belongs to.
+        info = await ns.identity(sid)
+        (delivery,) = info.deliveries
+        self.assertEqual(
+            (delivery.message_id, delivery.state, delivery.detail),
+            (mid, "failed", row["detail"]),
+        )
+        self.assertFalse(info.turn_in_flight)
+
+    async def test_a_kagent_rejection_stores_the_a2a_error_class_and_reason(self):
+        sid, _ = await self.bound_session()
+        self.fake.send_script = ["other-error"]
+        mid = await self.send(sid)
+        row = await self.stored(mid)
+        self.assertEqual(row["state"], "failed")
+        self.assertEqual(
+            row["detail"], "send rejected: A2AError (INVALID_PARAMS): invalid params"
+        )
+
+    async def test_a_failed_task_stores_its_reason_without_credentials(self):
+        sid, _ = await self.bound_session()
+        self.fake.send_script = ["cut"]
+        mid = await self.send(sid)
+        self.fake.tasks["task-fixture-1"]["status"] = {
+            "state": "TASK_STATE_FAILED",
+            "message": {
+                "messageId": "x",
+                "parts": [
+                    {
+                        "text": "claude exited with an error: exit status 1\n"
+                        "Authorization: Bearer abc.def-123 token=hunter2 "
+                        "https://user:pw@example.test/x"
+                    }
+                ],
+            },
+        }
+        self.fake.tasks["task-fixture-1"]["artifacts"] = []
+        await ns.sync(sid)
+        row = await self.stored(mid)
+        self.assertEqual(row["state"], "failed")
+        self.assertIn("claude exited with an error: exit status 1", row["detail"])
+        for secret in ("abc.def-123", "hunter2", "user:pw"):
+            self.assertNotIn(secret, row["detail"])
+        self.assertNotIn("\n", row["detail"])
+
+    async def test_a_failed_task_with_no_reason_says_so(self):
+        sid, _ = await self.bound_session()
+        self.fake.send_script = ["cut"]
+        mid = await self.send(sid)
+        self.fake.tasks["task-fixture-1"]["status"] = {"state": "TASK_STATE_FAILED"}
+        self.fake.tasks["task-fixture-1"]["artifacts"] = []
+        await ns.sync(sid)
+        self.assertEqual(
+            (await self.stored(mid))["detail"], "task failed: kagent gave no reason"
+        )
+
+    async def test_the_ledger_bounds_every_reason_it_stores(self):
+        sid, cid = await self.bound_session()
+        long = "x " * 1000
+        sending = await self.delivery(sid, cid, "sending")
+        await ns.ledger.transition(
+            sending, "failed", from_states=("sending",), detail=long
+        )
+        queued = await self.delivery(sid, cid, "queued")
+        await ns.ledger.fail_open(sid, long)
+        for mid in (sending, queued):
+            detail = (await self.stored(mid))["detail"]
+            self.assertLessEqual(len(detail), ns.DETAIL_MAX_CHARS)
+            self.assertTrue(detail.endswith("…"))
+
+    async def test_rows_written_before_sanitising_are_cleaned_on_read(self):
+        sid, cid = await self.bound_session()
+        mid = await self.delivery(sid, cid, "failed")
+        await self.pool.execute(
+            "UPDATE native_deliveries SET detail=$2 WHERE message_id=$1",
+            mid,
+            "not sent: boom\npassword: hunter2 " + "y " * 600,
+        )
+        (delivery,) = (await ns.identity(sid)).deliveries
+        self.assertNotIn("hunter2", delivery.detail)
+        self.assertNotIn("\n", delivery.detail)
+        self.assertLessEqual(len(delivery.detail), ns.DETAIL_MAX_CHARS)
+
+    async def test_credential_formats_on_all_writes_and_legacy_reads(self):
+        credentials = (
+            ('{"password": "synthetic secret value"}', "synthetic secret value"),
+            ("{'token': 'synthetic-token'}", "synthetic-token"),
+            ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+            ("Authorization: Digest synthetic-auth", "synthetic-auth"),
+            ("SERVICE_TOKEN=synthetic-token", "synthetic-token"),
+            ('OPENAI_API_KEY="synthetic key value"', "synthetic key value"),
+            ("CLIENT_SECRET=synthetic-secret", "synthetic-secret"),
+            ("PASSWORD=synthetic-password", "synthetic-password"),
+            ("Bearer synthetic-bearer", "synthetic-bearer"),
+            ("sk-proj-abcdefghijk", "sk-proj-abcdefghijk"),
+        )
+        for credential, secret in credentials:
+            for path in ("transition", "fail_open", "settle_cancelled", "legacy"):
+                with self.subTest(credential=credential, path=path):
+                    sid, cid = await self.bound_session()
+                    mid = await self.delivery(sid, cid, "sending")
+                    detail = "task failed: " + credential
+                    if path == "transition":
+                        await ns.ledger.transition(
+                            mid, "failed", from_states=("sending",), detail=detail
+                        )
+                    elif path == "fail_open":
+                        await ns.ledger.fail_open(sid, detail)
+                    elif path == "settle_cancelled":
+                        await ns.ledger.settle_cancelled(
+                            mid,
+                            from_states=("sending",),
+                            conversation_id=cid,
+                            note_id=f"note-{mid}",
+                            note=ns.TURN_STOPPED_NOTE,
+                            detail=detail,
+                        )
+                    else:
+                        await self.pool.execute(
+                            "UPDATE native_deliveries SET state='failed', detail=$2 WHERE message_id=$1",
+                            mid,
+                            detail,
+                        )
+                    if path != "legacy":
+                        self.assertNotIn(secret, (await self.stored(mid))["detail"])
+                    (delivery,) = (await ns.identity(sid)).deliveries
+                    self.assertNotIn(secret, delivery.detail)
+                    self.assertIn("[redacted]", delivery.detail)
+
+    async def test_the_main_thread_endpoint_carries_the_failure_for_the_header(self):
+        from mainloop import api
+
+        main = await ensure_main_session(self.user)
+        sid = main["session_id"]
+        self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
+        await ns.ledger.update_binding(sid, kagent_session_id=CONTEXT_ID)
+        self.fake.send_script = ["unreachable"]
+        mid = await self.send(sid)
+        info = await api.get_main_thread_info(user_id=self.user)
+        native = info.native
+        self.assertFalse(native.turn_in_flight)
+        (delivery,) = native.deliveries
+        self.assertEqual((delivery.message_id, delivery.state), (mid, "failed"))
+        self.assertTrue(delivery.detail.startswith("not sent: "), delivery.detail)
+        self.assertIn("Unreachable", delivery.detail)
+        # The failed message is still in the conversation, so the UI can pin the reason to it.
+        cid = (await db.get_session(sid)).conversation_id
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM messages WHERE id=$1 AND conversation_id=$2",
+                mid,
+                cid,
+            ),
+            1,
+        )
+
+    async def test_a_retry_is_a_new_message_and_never_resends_the_failed_id(self):
+        sid, _ = await self.bound_session()
+        self.fake.send_script = ["unreachable", "ok"]
+        first = await self.send(sid)
+        self.assertEqual((await self.stored(first))["state"], "failed")
+        second = await self.send(sid)
+        self.assertNotEqual(first, second)
+        self.assertEqual((await self.stored(second))["state"], "completed")
+        # The failed one stays failed and is not requeued.
+        await ns.sync(sid)
+        self.assertEqual((await self.stored(first))["state"], "failed")
+        # kagent accepted only the retry; the failed id never reached it a second time.
+        self.assertEqual(self.fake.accepted_message_ids, [second])
+
+
 class ReconcileTests(PostgresTestCase):
     async def test_reconcile_loop_syncs_sessions_with_open_work_and_checks_idle(self):
         busy, busy_cid = await self.bound_session()

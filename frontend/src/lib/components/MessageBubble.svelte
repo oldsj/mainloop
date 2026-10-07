@@ -1,10 +1,25 @@
 <script lang="ts">
   import type { Message } from '$lib/api';
+  import type { DeliveryNotice } from '$lib/delivery';
   import { renderMarkdown } from '$lib/markdown';
   import { parseChildReport } from '$lib/messages';
   import { messageTime } from '$lib/time';
 
-  let { message, context = 'main' }: { message: Message; context?: string } = $props();
+  let {
+    message,
+    context = 'main',
+    notice = undefined,
+    retryDisabled = false,
+    onRetry = undefined
+  }: {
+    message: Message;
+    context?: string;
+    /** This message was not delivered (or its delivery is unconfirmed); say so, with the reason. */
+    notice?: DeliveryNotice;
+    retryDisabled?: boolean;
+    /** Send the text again as a new message. Only offered when the backend allows it. */
+    onRetry?: (message: Message) => void;
+  } = $props();
   let isUser = $derived(message.role === 'user');
   const stoppedNote = 'This turn was stopped before it finished.';
   let stopped = $derived(!isUser && message.content.endsWith(stoppedNote));
@@ -42,6 +57,38 @@
       </div>
       {#if stopped}
         <p class="mt-2 text-sm text-term-fg-muted" data-testid="turn-stopped-note">{stoppedNote}</p>
+      {/if}
+      {#if notice}
+        <div
+          class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border px-2 py-1 text-xs {notice.state ===
+          'failed'
+            ? 'border-term-red/60 bg-term-red/10 text-term-red'
+            : 'border-term-yellow/60 bg-term-yellow/10 text-term-yellow'}"
+          role="alert"
+          data-testid="delivery-notice"
+        >
+          <span class="font-medium" data-testid="delivery-notice-label">{notice.label}</span>
+          {#if notice.reason}
+            <span class="min-w-0 [overflow-wrap:anywhere]" data-testid="delivery-notice-reason"
+              >{notice.reason}</span
+            >
+          {/if}
+          {#if notice.state === 'uncertain'}
+            <span>Not replayed. Check for a reply before sending again.</span>
+          {/if}
+          {#if notice.retryable && onRetry}
+            <button
+              type="button"
+              class="min-h-9 border border-current px-3 hover:underline disabled:opacity-50"
+              disabled={retryDisabled}
+              onclick={() => onRetry(message)}
+              title="Sends the same text as a new message"
+              data-testid="delivery-retry"
+            >
+              retry
+            </button>
+          {/if}
+        </div>
       {/if}
       <time class="text-term-fg-muted mt-1 block text-xs">
         {messageTime(message.created_at)}

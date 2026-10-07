@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Message, type Session } from '$lib/api';
+  import { api, type Message, type NativeSessionInfo, type Session } from '$lib/api';
+  import { deliveryNotices } from '$lib/delivery';
+  import { createSendGuard, retryMessage } from '$lib/messageSend';
   import { connection } from '$lib/stores/connection';
   import { draftMessage } from '$lib/stores/draftMessage';
   import ConversationView from './ConversationView.svelte';
@@ -9,7 +11,13 @@
 
   let session = $state<Session | null>(null);
   let messages = $state<Message[]>([]);
-  let isLoading = $state(false);
+  let native = $state<NativeSessionInfo | null>(null);
+  let agentActive = $state(false);
+  let sendPending = $state(false);
+  const isLoading = $derived(sendPending || agentActive);
+  const guardSend = createSendGuard((pending) => {
+    sendPending = pending;
+  });
   // The last poll failed. Cleared by the next successful one; the messages already shown stay.
   let loadError = $state<string | null>(null);
   // The last send was not delivered. Stays until dismissed or the next send.
@@ -17,6 +25,7 @@
 
   const offline = $derived($connection.status === 'offline');
   // A cancelled or failed session takes no more messages (the backend refuses them).
+  const notices = $derived(deliveryNotices(native?.deliveries ?? []));
   const ended = $derived(session?.status === 'cancelled' || session?.status === 'failed');
 
   onMount(() => {
@@ -31,7 +40,9 @@
       const result = await api.getSessionConversation(sessionId);
       session = result.session;
       messages = result.messages;
-      isLoading = session.status === 'active';
+      // Delivery failures live in the ledger, not the conversation. A failed fetch keeps the last.
+      native = await api.getSessionNative(sessionId).catch(() => native);
+      agentActive = session.status === 'active';
       loadError = null;
     } catch (e) {
       console.error('Failed to load session:', e);
@@ -40,9 +51,39 @@
   }
 
   async function handleSendMessage(detail: { message: string }) {
-    if (!session) return;
+    await guardSend(() => sendMessage(detail.message));
+  }
 
-    const userMessage = detail.message;
+  async function handleRetry(message: Message) {
+    await guardSend(async () => {
+      try {
+        await retryMessage(
+          message,
+          async () => {
+            const [conversation, freshNative] = await Promise.all([
+              api.getSessionConversation(sessionId),
+              api.getSessionNative(sessionId)
+            ]);
+            session = conversation.session;
+            native = freshNative;
+            agentActive = session.status === 'active';
+            return {
+              conversationId: session.conversation_id,
+              deliveries: freshNative?.deliveries ?? [],
+              blocked: offline || ended || !freshNative || !!freshNative.turn_in_flight
+            };
+          },
+          sendMessage
+        );
+      } catch (error) {
+        sendError = error instanceof Error ? error.message : 'Could not refresh delivery state.';
+      }
+    });
+  }
+
+  async function sendMessage(userMessage: string) {
+    if (!session || offline || ended || agentActive) return;
+
     const tempId = `temp-${Date.now()}`;
     sendError = null;
 
@@ -58,8 +99,6 @@
       }
     ];
 
-    isLoading = true;
-
     try {
       await api.sendSessionMessage(sessionId, userMessage);
       // Reload messages to get the full response
@@ -71,8 +110,6 @@
       draftMessage.set(userMessage);
       const reason = e instanceof Error && e.message ? e.message : 'Could not send the message.';
       sendError = `${reason} Your message is back in the box.`;
-    } finally {
-      isLoading = false;
     }
   }
 </script>
@@ -92,6 +129,8 @@
   context={session?.title ?? 'session'}
   error={sendError ?? loadError}
   inputDisabled={offline || ended}
+  deliveryNotices={notices}
+  onRetry={handleRetry}
   onDismissError={() => {
     sendError = null;
     loadError = null;
