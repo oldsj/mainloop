@@ -1,0 +1,29 @@
+{
+  "id": "fixture-task",
+  "contextId": "fixture-context",
+  "status": {
+    "state": "input-required",
+    "message": {
+      "role": "agent",
+      "messageId": "fixture-status",
+      "taskId": "fixture-task",
+      "contextId": "fixture-context",
+      "parts": [],
+      "extensions": ["https://kagent.dev/extensions/hitl/v1"],
+      "metadata": {
+        "https://kagent.dev/extensions/hitl/v1": {
+          "type": "tool_approval_request",
+          "tools": [
+            {
+              "id": "call",
+              "call_id": "native",
+              "name": "mcp__mainloop-merge-approval__merge_pull_request_with_approval",
+              "args": { "proposal_id": "fixture-proposal", "request_id": "invoke-1" }
+            }
+          ]
+        },
+        "fixture.example/provenance": { "synthetic": true, "provider": "claude" }
+      }
+    }
+  }
+}

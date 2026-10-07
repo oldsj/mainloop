@@ -93,7 +93,7 @@ class GitHub:
             raise AssertionError("unexpected upstream origin")
         if self.hook:
             await self.hook(req)
-        path = req.url.path.removeprefix("/repos/owner/repo")
+        path = req.url.path.removeprefix(f"/repos/{self.repo['full_name']}")
         if req.method == "PUT":
             if json.loads(req.content) != {"sha": SHA, "merge_method": "squash"}:
                 raise AssertionError("merge must pin SHA and squash")
@@ -418,7 +418,7 @@ class SurfaceTests(unittest.TestCase):
                     )
 
 
-class MergeTests(PostgresTestCase):
+class MergeFixture(PostgresTestCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
         self.project = await db.get_or_create_project(
@@ -539,6 +539,8 @@ class MergeTests(PostgresTestCase):
             service=observer,
         )
 
+
+class MergeTests(MergeFixture):
     async def test_auto_no_human_card_pinned_squash_and_notification_dedup(self):
         results = await asyncio.gather(
             *(merge.auto_merge(self.binding, self.args) for _ in range(2))

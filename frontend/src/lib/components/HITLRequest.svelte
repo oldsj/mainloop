@@ -2,6 +2,7 @@
   import {
     buildHITLResponse,
     hitlStatus,
+    mergeContexts,
     parseHITL,
     reasonNotice,
     requestTools,
@@ -43,13 +44,6 @@
         : [...current, choice]
       : [choice];
   }
-  function safeLink(url: string) {
-    try {
-      return new URL(url).protocol === 'https:' ? url : undefined;
-    } catch {
-      return undefined;
-    }
-  }
 </script>
 
 <section class="hitl" aria-label="Session input">
@@ -86,20 +80,49 @@
     {/if}
     {#if view.unavailable_reason}<p class="context">{view.unavailable_reason}</p>{/if}
     {#if !view.writes_enabled && !view.response}<p>Responding disabled by the server.</p>{/if}
-    {#if view.merge}
-      <section aria-label="Verified merge context" class="merge">
-        <h4>Merge context</h4>
-        {#if safeLink(view.merge.pr_url)}<a
-            href={safeLink(view.merge.pr_url)}
+    {#each mergeContexts(view) as context}
+      <section
+        aria-label={context.facts ? 'Verified merge context' : 'Merge context unavailable'}
+        class="merge"
+      >
+        <h4>Merge context · call {context.toolId}</h4>
+        {#if context.facts}
+          {@const facts = context.facts}
+          <a
+            href={`https://github.com/${facts.repository}/pull/${facts.pr_number}`}
             target="_blank"
-            rel="noopener noreferrer">View pull request</a
-          >{/if}
-        <p>Head: <code>{view.merge.head}</code></p>
-        <p>Base: <code>{view.merge.base}</code></p>
-        <p>Protected paths: {view.merge.protected_matches.join(', ') || 'None'}</p>
-        <p>CI evidence: {view.merge.ci_evidence}</p>
+            rel="noopener noreferrer">{facts.repository} #{facts.pr_number}</a
+          >
+          {#if facts.stale || snapshot.stale || view.request.availability !== 'pending'}
+            <p role="status">
+              Current merge context unavailable. These are previously recorded facts.
+            </p>
+          {/if}
+          <p>Head: {facts.head} · <code>{facts.head_sha}</code></p>
+          <p>Base: {facts.base} · <code>{facts.base_sha}</code></p>
+          <p>Protected paths: {facts.protected_matches.join(', ') || 'None recorded'}</p>
+          {#if facts.ci && typeof facts.ci.green === 'boolean'}
+            <p>
+              Recorded CI evidence: {facts.ci.green
+                ? 'Checks passed at preparation'
+                : 'Checks not passing at preparation'}.
+            </p>
+            <details>
+              <summary>Recorded checks and statuses</summary>
+              <pre>{JSON.stringify(facts.ci, null, 2)}</pre>
+            </details>
+          {:else}
+            <p>CI evidence unavailable.</p>
+          {/if}
+          <p class="context">
+            Recorded evidence is not merge approval. Current facts are checked when you respond and
+            when the merge runs.
+          </p>
+        {:else}
+          <p>Verified merge context unavailable.</p>
+        {/if}
       </section>
-    {/if}
+    {/each}
     {#if !payload}
       <p role="alert">Malformed or unsupported request. Controls are unavailable.</p>
     {:else if payload.type === 'tool_approval_request'}
