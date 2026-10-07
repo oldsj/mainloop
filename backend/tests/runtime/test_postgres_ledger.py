@@ -1598,6 +1598,51 @@ class WorkspaceTests(KagentFakeCase):
             [wid],
         )
 
+    async def test_configured_profile_routes_and_persists_canonical_id(self):
+        from tests.runtime.test_providers import fixture
+
+        project_id = f"profile-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        with patch.object(settings, "provider_profiles", [fixture()]):
+            lifecycle = await workspaces.create(
+                self.user,
+                project_id,
+                WorkspaceManifest(
+                    repo_url=repo_url, branch="profile/test", agent_kind="review"
+                ),
+            )
+            wid = lifecycle.workspace_id
+            self.assertEqual(lifecycle.manifest.agent_kind, "codex-review")
+            self.assertEqual((await db.get_session(wid)).agent_kind, "codex-review")
+            self.assertEqual((await ns.get_binding(wid))["kind"], "codex-review")
+            request = decode_fields(self.fake.session_calls("CreateSession")[0])
+            self.assertEqual(
+                decode_fields(request[5][0]),
+                {
+                    1: [b"workspace-team"],
+                    2: [b"review-workspace"],
+                },
+            )
+            self.assertEqual(
+                (await workspaces.get(wid, self.user)).manifest.agent_kind,
+                "codex-review",
+            )
+        # Disabling selection does not interrupt existing workspace observation.
+        with patch.object(settings, "provider_profiles", [fixture(enabled=False)]):
+            self.assertEqual(
+                (await workspaces.get(wid, self.user)).manifest.agent_kind,
+                "codex-review",
+            )
+
     async def test_claude_and_codex_workspaces_get_distinct_frozen_references(self):
         from models import WorkspaceAgentKind
 

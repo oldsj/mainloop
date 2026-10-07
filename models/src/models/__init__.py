@@ -16,6 +16,7 @@ from models.native_agent import (
     ProviderExtension,
     ReconciliationEvidence,
 )
+from models.provider import ProviderAgentRef, ProviderProfile, ProviderProfileId
 from models.session import (
     NativeDeliveryInfo,
     NativeSessionInfo,
@@ -90,3 +91,6 @@ __all__ += [
     "WorkspaceObservedState",
     "WorkspacePort",
 ]
+
+
+__all__ += ["ProviderAgentRef", "ProviderProfile", "ProviderProfileId"]

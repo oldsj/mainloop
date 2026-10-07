@@ -44,7 +44,6 @@ from mainloop.services.github_repo import (
 from mainloop.sse import notify_workspace_updated
 
 from models import (
-    WorkspaceAgentKind,
     WorkspaceDev,
     WorkspaceLifecycle,
     WorkspaceManifest,
@@ -101,7 +100,7 @@ def _manifest(row) -> WorkspaceManifest:
         ref=row["ref"],
         branch=row["branch"],
         depth=row["depth"],
-        agent_kind=WorkspaceAgentKind(row["kind"]),
+        agent_kind=row["kind"],
         dev=WorkspaceDev(
             ports=tuple(WorkspacePort(**port) for port in ports or []),
             idle_timeout_minutes=row["idle_timeout_minutes"],
@@ -276,6 +275,13 @@ async def create(
     refusing the request (for example a repository host outside the harness's allowed origins)
     removes the rows again and raises ``WorkspaceRejected``.
     """
+    from mainloop.providers import registry
+
+    try:
+        profile = registry().resolve(manifest.agent_kind, "agent", selecting=True)
+    except ValueError as exc:
+        raise WorkspaceRejected(str(exc)) from exc
+    manifest = manifest.model_copy(update={"agent_kind": profile.id})
     workspace_id = str(uuid.uuid4())
     conversation_id = str(uuid.uuid4())
     now = datetime.now(UTC)
@@ -356,7 +362,7 @@ async def create(
             )
             await ns.create_binding(
                 workspace_id,
-                manifest.agent_kind.value,
+                manifest.agent_kind,
                 mcp_grant_kind="workspace",
                 conn=conn,
             )

@@ -1,8 +1,10 @@
 """Validated inputs for the Mainloop MCP tools."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from models.provider import ProviderProfileId
 
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
@@ -33,7 +35,7 @@ class PendingDone(ToolInput):
 
 class Delegate(ToolInput):
     topic: Name = "inbox"
-    kind: Literal["claude", "codex"]
+    kind: ProviderProfileId
     title: Annotated[str, Field(max_length=80)] = ""
     brief: Annotated[str, Field(min_length=1)]
 

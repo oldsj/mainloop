@@ -7,7 +7,9 @@ checkout request. Workspace lifecycle is separate from the session's task status
 activity, message delivery, user attention, and publication state.
 
 Mainloop stores the checkout request (repository, ref, branch, depth), the declared preview
-ports and the idle timeout. Everything about the running state is read from kagent.
+ports and the idle timeout. `agent_kind` accepts a configured [provider profile](providers.md) ID
+or alias; existing Claude/Codex selection is unchanged. Everything about the running state is
+read from kagent.
 
 ## Lifecycle
 

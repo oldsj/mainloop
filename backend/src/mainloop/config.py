@@ -5,6 +5,8 @@ from urllib.parse import quote_plus, urlsplit
 from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from models.provider import ProviderProfile
+
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -68,6 +70,25 @@ class Settings(BaseSettings):
     # snapshot scope. See docs/architecture.md.
     kagent_workspace_claude_agent: str = "claude-workspace"
     kagent_workspace_codex_agent: str = "codex-workspace"
+    # JSON list of operator-owned profiles. Matching IDs override legacy defaults.
+    provider_profiles: list[ProviderProfile] = Field(default_factory=list)
+
+    @field_validator("provider_profiles")
+    @classmethod
+    def _unique_provider_ids(cls, profiles):
+        names = [name for p in profiles for name in (p.id, *p.aliases)]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate provider ID or alias")
+        for profile in profiles:
+            if any(alias in ("claude", "codex") for alias in profile.aliases):
+                raise ValueError("claude/codex are reserved legacy profile IDs")
+            if (
+                profile.id in ("claude", "codex")
+                and profile.native_provider != profile.id
+            ):
+                raise ValueError("legacy profile native provider must not change")
+        return profiles
+
     kagent_request_timeout_seconds: float = 30.0
     kagent_turn_timeout_seconds: float = 1800.0
     kagent_session_ready_timeout_seconds: float = 120.0
