@@ -28,6 +28,10 @@ class GitHubError(Exception):
     """Opaque upstream failure, deliberately without response/request/token text."""
 
 
+class GitHubNotFound(GitHubError):
+    """Opaque 404, interpreted only by endpoints where absence is supported."""
+
+
 class Repo(BaseModel):
     model_config = ConfigDict(strict=True)
     id: int = Field(gt=0)
@@ -86,6 +90,8 @@ class GitHubCreationClient:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS), self.client.stream(
                 method, path, **kwargs
             ) as response:
+                if response.status_code == 404:
+                    raise GitHubNotFound
                 if response.status_code not in (200, 201):
                     raise GitHubError
                 data = bytearray()

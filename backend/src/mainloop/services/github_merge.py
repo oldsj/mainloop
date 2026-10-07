@@ -7,10 +7,11 @@ from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import (
     GitHubCreationClient,
     GitHubError,
+    GitHubNotFound,
     PullRequest,
     Repo,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.hitl import normalized_hash
 from models.merge_policy import ChangedPath, protected_matches
@@ -65,34 +66,92 @@ class Suite(BaseModel):
 
 
 class RequiredCheck(BaseModel):
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict(strict=True, extra="forbid")
     context: str = Field(min_length=1, max_length=512)
-    app_id: int | None = None
     integration_id: int | None = None
 
 
+class ClassicRequiredCheck(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    context: str = Field(min_length=1, max_length=512)
+    app_id: int | None
+
+
 class ClassicChecks(BaseModel):
-    model_config = ConfigDict(strict=True)
-    checks: list[RequiredCheck]
-    contexts: list[str] = []
+    model_config = ConfigDict(strict=True, extra="forbid")
+    checks: list[ClassicRequiredCheck]
+    contexts: list[str]
+    strict: bool = False
+    url: str | None = None
+    contexts_url: str | None = None
+    enforcement_level: str | None = None
+
+
+class ProtectionFlag(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    enabled: bool
+    url: str | None = None
 
 
 class Protection(BaseModel):
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict(strict=True, extra="forbid")
     required_status_checks: ClassicChecks | None
     required_pull_request_reviews: dict | None = None
     restrictions: dict | None = None
+    url: str | None = None
+    enabled: bool | None = None
+    name: str | None = None
+    protection_url: str | None = None
+    enforce_admins: ProtectionFlag | None = None
+    required_linear_history: ProtectionFlag | None = None
+    allow_force_pushes: ProtectionFlag | None = None
+    allow_deletions: ProtectionFlag | None = None
+    allow_fork_syncing: ProtectionFlag | None = None
+    block_creations: ProtectionFlag | None = None
+    required_conversation_resolution: ProtectionFlag | None = None
+    required_signatures: ProtectionFlag | None = None
+    lock_branch: ProtectionFlag | None = None
+
+    @model_validator(mode="after")
+    def validate_present_flags(self):
+        for field in self.model_fields_set:
+            if (
+                field
+                not in {
+                    "required_status_checks",
+                    "required_pull_request_reviews",
+                    "restrictions",
+                    "url",
+                    "name",
+                    "protection_url",
+                }
+                and getattr(self, field) is None
+            ):
+                raise ValueError("present protection flags must be explicit")
+        return self
 
 
 class RuleParameters(BaseModel):
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict(strict=True, extra="forbid")
     required_status_checks: list[RequiredCheck]
+    strict_required_status_checks_policy: bool
+    do_not_enforce_on_create: bool = False
+
+
+class PullRequestParameters(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    required_approving_review_count: int = Field(ge=0)
+    dismiss_stale_reviews_on_push: bool
+    require_code_owner_review: bool
+    require_last_push_approval: bool
+    required_review_thread_resolution: bool
+    allowed_merge_methods: list[str] | None = None
 
 
 class Rule(BaseModel):
     model_config = ConfigDict(strict=True)
     type: str
-    parameters: RuleParameters | None = None
+    parameters: dict | None = None
 
 
 class Status(BaseModel):
@@ -253,27 +312,83 @@ class GitHubMergeClient(GitHubCreationClient):
             old = statuses.get(status.context)
             if old is None or (status.created_at, status.id) > (old.created_at, old.id):
                 statuses[status.context] = status
-        # Never interpret a 404 as proof of absent classic protection: it may be
-        # missing permission. Require explicit successful inventory instead.
-        protection = await self._request(
-            "GET", f"{root}/branches/{quote(base, safe='')}/protection"
-        )
-        protection = Protection.model_validate(protection)
-        if protection.required_pull_request_reviews or protection.restrictions:
+        # The protection endpoint returns 404 for ruleset-only/unprotected
+        # branches. Other reads, including active rules, must still succeed.
+        try:
+            protection = await self._request(
+                "GET", f"{root}/branches/{quote(base, safe='')}/protection"
+            )
+        except GitHubNotFound:
+            protection = {"required_status_checks": None}
+        try:
+            protection = Protection.model_validate(protection)
+        except ValueError:
+            raise PolicyError(
+                "rules", "unsupported classic branch protection fields"
+            ) from None
+        if (
+            protection.required_pull_request_reviews is not None
+            or protection.restrictions is not None
+        ):
             raise PolicyError("rules", "unsupported classic branch protection")
+        for field in (
+            "block_creations",
+            "required_conversation_resolution",
+            "required_signatures",
+            "lock_branch",
+        ):
+            flag = getattr(protection, field)
+            if flag is not None and flag.enabled:
+                raise PolicyError("rules", f"unsupported classic protection: {field}")
+        # Squash preserves linear history; no force push, deletion or fork sync
+        # is performed. Admin enforcement applies the same evaluated policy.
         required = []
         classic = protection.required_status_checks
         if classic is not None:
+            if classic.strict:
+                raise PolicyError("rules", "unsupported classic strict status checks")
             required.extend((c.context, c.app_id) for c in classic.checks)
             required.extend((c, None) for c in classic.contexts)
         rules = await self.pages(f"{root}/rules/branches/{quote(base, safe='')}")
         for raw_rule in rules:
             rule = Rule.model_validate(raw_rule)
             if rule.type == "required_status_checks" and rule.parameters is not None:
+                try:
+                    parameters = RuleParameters.model_validate(rule.parameters)
+                except ValueError:
+                    raise PolicyError(
+                        "rules", "unsupported required_status_checks parameters"
+                    ) from None
+                if parameters.strict_required_status_checks_policy:
+                    raise PolicyError(
+                        "rules", "unsupported strict_required_status_checks_policy"
+                    )
                 required.extend(
                     (c.context, c.integration_id)
-                    for c in rule.parameters.required_status_checks
+                    for c in parameters.required_status_checks
                 )
+            elif rule.type == "pull_request":
+                try:
+                    parameters = PullRequestParameters.model_validate(rule.parameters)
+                except ValueError:
+                    raise PolicyError(
+                        "rules", "unsupported pull_request parameters"
+                    ) from None
+                if (
+                    parameters.required_approving_review_count != 0
+                    or parameters.dismiss_stale_reviews_on_push
+                    or parameters.require_code_owner_review
+                    or parameters.require_last_push_approval
+                    or parameters.required_review_thread_resolution
+                    or (
+                        parameters.allowed_merge_methods is not None
+                        and "squash" not in parameters.allowed_merge_methods
+                    )
+                ):
+                    raise PolicyError(
+                        "rules", "unsupported pull_request review or merge requirements"
+                    )
+                # Our pinned squash PUT already goes through a PR.
             elif rule.type not in (
                 "deletion",
                 "non_fast_forward",

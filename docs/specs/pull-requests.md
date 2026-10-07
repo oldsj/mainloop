@@ -155,11 +155,34 @@ deadline can use the same proposal and owner receipt. Unknown states are not tre
 as pending. Terminal unsuccessful evidence takes precedence over pending evidence.
 See [GitHub check-run API](https://docs.github.com/en/rest/checks/runs).
 
-Classic protection must return a successful, understood inventory. A 404 is not
-proof of absence because it can hide missing access; such repositories are currently
-unsupported. Active branch rules alone are insufficient. Unsupported active rules
-fail closed. Consequently enablement also requires appropriate read permissions and
-supported repository protection, not just a merge-capable token.
+Classic protection returning 404 is supported as no classic protection; ruleset-only
+and unprotected branches can proceed. This exception applies only to that endpoint:
+repository, branch, PR, CI and active branch-rule inventories must still succeed.
+Other protection errors fail closed. Since a 404 can also conceal missing access,
+operators must supply appropriate read permissions; GitHub remains the enforcement
+boundary at merge time.
+
+Classic and active ruleset required status checks both add required named/app-bound
+evidence. Active `deletion`, `non_fast_forward` and `required_linear_history` rules
+are compatible with the PR squash API. A `pull_request` rule with zero required
+approvals is supported only with all four required review flags explicitly false.
+Missing flags, stale-review dismissal, code-owner review,
+last-push approval, review-thread resolution, nonzero approval counts, unknown PR
+parameters and merge-method lists excluding squash fail closed with an unsupported
+PR-rule reason. Ruleset checks require an explicit
+`strict_required_status_checks_policy: false`; true is unsupported because Mainloop
+does not prove the head was tested with the latest base. Classic `strict: true`
+is likewise unsupported. Unknown active rule types also fail closed.
+
+Classic checks require both `contexts` and `checks`; every check must include
+`app_id`. An explicit null means any app, but an omitted ID is rejected.
+Classic review and push restrictions, conversation resolution, required signatures,
+branch locking and creation blocking remain unsupported. Unknown protection fields
+and malformed flags fail closed. Linear history is satisfied by squash; admin
+enforcement applies the same evaluated requirements. Force-push, deletion and fork-sync
+permissions impose no additional requirement on this PR squash operation.
+No rule grants Mainloop merge authority
+or relaxes its CI requirements, including the refusal of empty overall evidence.
 
 Fresh evidence, current policy, proposal identity and known mergeability precede the
 transactional intent. The single PUT uses `merge_method=squash` and

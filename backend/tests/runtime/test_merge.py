@@ -33,6 +33,24 @@ BASE = "b" * 40
 MERGED = "c" * 40
 
 
+def default_branch_rules():
+    # oldsj/infrastructure PR 69, terraform/github/main.tf, with required REST fields.
+    return [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {
+            "type": "pull_request",
+            "parameters": {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews_on_push": False,
+                "require_code_owner_review": False,
+                "require_last_push_approval": False,
+                "required_review_thread_resolution": False,
+            },
+        },
+    ]
+
+
 class GitHub:
     def __init__(self):
         self.repo = {
@@ -66,6 +84,7 @@ class GitHub:
         self.statuses = []
         self.rules = []
         self.protection = {"required_status_checks": None}
+        self.errors = {}
         self.calls = []
         self.lose = False
         self.fail_before_put = False
@@ -94,6 +113,8 @@ class GitHub:
         if self.hook:
             await self.hook(req)
         path = req.url.path.removeprefix(f"/repos/{self.repo['full_name']}")
+        if path in self.errors:
+            return httpx.Response(self.errors[path], json={"message": "fixture"})
         if req.method == "PUT":
             if json.loads(req.content) != {"sha": SHA, "merge_method": "squash"}:
                 raise AssertionError("merge must pin SHA and squash")
@@ -150,6 +171,188 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         ) as client:
             return await client.evidence("owner/repo", 17, SHA)
 
+    async def test_no_classic_protection_with_or_without_rulesets(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        for rules in ([], default_branch_rules()):
+            with self.subTest(rules=rules):
+                self.fake.rules = rules
+                self.assertTrue((await self.evidence())["ci"]["green"])
+        self.assertFalse(self.fake.puts)
+
+    async def test_zero_approval_and_linear_history(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.rules = default_branch_rules()
+        self.fake.rules[-1]["parameters"].update(allowed_merge_methods=["squash"])
+        self.fake.rules.append({"type": "required_linear_history"})
+        self.assertTrue((await self.evidence())["ci"]["green"])
+
+    async def test_unsupported_pr_requirements_fail_closed(self):
+        for field, value in (
+            ("required_approving_review_count", 1),
+            ("required_approving_review_count", "0"),
+            ("dismiss_stale_reviews_on_push", True),
+            ("require_code_owner_review", True),
+            ("require_last_push_approval", True),
+            ("required_review_thread_resolution", True),
+            ("allowed_merge_methods", ["rebase"]),
+            ("future_requirement", True),
+        ):
+            with self.subTest(field=field, value=value):
+                self.fake.rules = default_branch_rules()
+                self.fake.rules[-1]["parameters"][field] = value
+                with self.assertRaisesRegex(PolicyError, "unsupported pull_request"):
+                    await self.evidence()
+        self.fake.rules = [{"type": "pull_request"}]
+        with self.assertRaisesRegex(PolicyError, "unsupported pull_request"):
+            await self.evidence()
+
+    async def test_only_protection_404_is_supported(self):
+        for code in (401, 403, 429, 500):
+            self.fake.errors["/branches/main/protection"] = code
+            with self.assertRaises(GitHubError):
+                await self.evidence()
+        self.fake.errors["/branches/main/protection"] = 404
+        for path in ("/rules/branches/main", "/branches/main", "/pulls/17", ""):
+            self.fake.errors[path] = 404
+            with self.assertRaises(GitHubError):
+                await self.evidence()
+            del self.fake.errors[path]
+        self.fake.errors.clear()
+        self.fake.protection = None
+        with self.assertRaises((GitHubError, ValueError)):
+            await self.evidence()
+
+    async def test_pr_rule_required_fields_cannot_be_omitted(self):
+        for field in default_branch_rules()[-1]["parameters"]:
+            with self.subTest(field=field):
+                self.fake.rules = default_branch_rules()
+                del self.fake.rules[-1]["parameters"][field]
+                with self.assertRaisesRegex(
+                    PolicyError, "unsupported pull_request parameters"
+                ):
+                    await self.evidence()
+
+    async def test_ruleset_strict_checks_require_explicit_false(self):
+        baseline = {
+            "required_status_checks": [{"context": "build", "integration_id": 4}],
+            "strict_required_status_checks_policy": False,
+        }
+        for value in (False, True, None, "false", "missing"):
+            with self.subTest(value=value):
+                parameters = copy.deepcopy(baseline)
+                if value == "missing":
+                    del parameters["strict_required_status_checks_policy"]
+                else:
+                    parameters["strict_required_status_checks_policy"] = value
+                self.fake.rules = [
+                    {"type": "required_status_checks", "parameters": parameters}
+                ]
+                if value is False:
+                    self.assertTrue((await self.evidence())["ci"]["green"])
+                else:
+                    with self.assertRaises(PolicyError):
+                        await self.evidence()
+
+    async def test_classic_unsupported_and_unknown_protection_fields(self):
+        for field in (
+            "required_conversation_resolution",
+            "required_signatures",
+            "lock_branch",
+            "block_creations",
+        ):
+            for value in (True, False):
+                with self.subTest(field=field, value=value):
+                    self.fake.protection = {
+                        "required_status_checks": None,
+                        field: {"enabled": value},
+                    }
+                    if value:
+                        with self.assertRaisesRegex(PolicyError, field):
+                            await self.evidence()
+                    else:
+                        self.assertTrue((await self.evidence())["ci"]["green"])
+        for field, value in (
+            ("future_requirement", {"enabled": True}),
+            ("required_signatures", {}),
+            ("required_signatures", None),
+            ("required_signatures", {"enabled": "false"}),
+            ("required_signatures", {"enabled": False, "future_requirement": True}),
+            ("required_pull_request_reviews", {}),
+            ("restrictions", {}),
+        ):
+            with self.subTest(field=field, value=value):
+                self.fake.protection = {"required_status_checks": None, field: value}
+                with self.assertRaisesRegex(PolicyError, "unsupported classic"):
+                    await self.evidence()
+
+    async def test_classic_compatible_flags(self):
+        self.fake.protection.update(
+            {
+                "url": "https://api.github.com/repos/owner/repo/branches/main/protection",
+                "enabled": True,
+                "enforce_admins": {
+                    "enabled": True,
+                    "url": "https://api.github.com/fixture",
+                },
+                "required_linear_history": {"enabled": True},
+                "allow_force_pushes": {"enabled": False},
+                "allow_deletions": {"enabled": False},
+                "allow_fork_syncing": {"enabled": True},
+            }
+        )
+        self.assertTrue((await self.evidence())["ci"]["green"])
+
+    async def test_classic_check_app_id_required_but_nullable(self):
+        for app in (None, 4, 99, "missing"):
+            with self.subTest(app=app):
+                check = {"context": "build", "app_id": app}
+                if app == "missing":
+                    del check["app_id"]
+                self.fake.protection = {
+                    "required_status_checks": {
+                        "checks": [check],
+                        "contexts": ["build"],
+                        "strict": False,
+                    }
+                }
+                if app == "missing":
+                    with self.assertRaisesRegex(PolicyError, "unsupported classic"):
+                        await self.evidence()
+                else:
+                    self.assertEqual((await self.evidence())["ci"]["green"], app != 99)
+        self.fake.protection["required_status_checks"]["checks"] = [
+            {"context": "build", "app_id": 4}
+        ]
+        self.fake.protection["required_status_checks"]["strict"] = True
+        with self.assertRaisesRegex(PolicyError, "strict status checks"):
+            await self.evidence()
+        self.fake.protection["required_status_checks"]["strict"] = False
+        del self.fake.protection["required_status_checks"]["contexts"]
+        with self.assertRaisesRegex(PolicyError, "unsupported classic"):
+            await self.evidence()
+
+    async def test_ruleset_checks_and_unknown_rule_without_classic_protection(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.rules = default_branch_rules() + [
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": False,
+                    "required_status_checks": [
+                        {"context": "build", "integration_id": 4}
+                    ],
+                },
+            }
+        ]
+        self.assertTrue((await self.evidence())["ci"]["green"])
+        self.fake.rules[-1]["parameters"]["required_status_checks"][0][
+            "integration_id"
+        ] = 99
+        self.assertFalse((await self.evidence())["ci"]["green"])
+        self.fake.rules.append({"type": "future_rule", "parameters": {"unknown": True}})
+        with self.assertRaisesRegex(PolicyError, "unsupported active branch rule"):
+            await self.evidence()
+
     async def test_green_rerun_namespaces_and_required_app(self):
         self.assertTrue((await self.evidence())["ci"]["green"])
         self.fake.runs.append(self.fake.run(11, status="queued", conclusion=None))
@@ -177,9 +380,10 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             {
                 "type": "required_status_checks",
                 "parameters": {
+                    "strict_required_status_checks_policy": False,
                     "required_status_checks": [
                         {"context": "build", "integration_id": 99}
-                    ]
+                    ],
                 },
             }
         ]
@@ -234,7 +438,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             await self.evidence()
         self.fake.rules = []
         self.fake.protection = {}
-        with self.assertRaises((GitHubError, ValueError)):
+        with self.assertRaises((GitHubError, ValueError, PolicyError)):
             await self.evidence()
 
     async def test_identity_change_between_file_reads(self):
@@ -294,6 +498,8 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             }
         }
         self.assertFalse((await self.evidence())["ci"]["green"])
+        self.fake.protection["required_status_checks"]["checks"][0]["context"] = "build"
+        self.assertTrue((await self.evidence())["ci"]["green"])
         self.fake.protection = {
             "required_status_checks": None,
             "restrictions": {"users": []},
@@ -541,6 +747,19 @@ class MergeFixture(PostgresTestCase):
 
 
 class MergeTests(MergeFixture):
+    async def test_ruleset_only_pinned_squash_through_pr_api(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.rules = default_branch_rules()
+        result = await merge.auto_merge(self.binding, self.args)
+        self.assertEqual(result["state"], "merged")
+        writes = [r for r in self.fake.calls if r.method != "GET"]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0].method, "PUT")
+        self.assertEqual(writes[0].url.path, "/repos/owner/repo/pulls/17/merge")
+        self.assertEqual(
+            json.loads(writes[0].content), {"sha": SHA, "merge_method": "squash"}
+        )
+
     async def test_auto_no_human_card_pinned_squash_and_notification_dedup(self):
         results = await asyncio.gather(
             *(merge.auto_merge(self.binding, self.args) for _ in range(2))
