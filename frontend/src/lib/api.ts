@@ -280,6 +280,13 @@ export interface WorkspaceManifest {
   depth: number;
   agent_kind: 'claude' | 'codex';
   dev: WorkspaceDev;
+  development_environment?: {
+    environment_id: string;
+    version_id: string;
+    image: string;
+    platform: string;
+    policy_identity: string;
+  } | null;
 }
 
 export interface WorkspaceLifecycle {

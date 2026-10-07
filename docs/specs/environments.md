@@ -1,8 +1,9 @@
 # Development environments
 
 Implemented: owner-managed environment metadata, immutable versions, project grants
-and project selection. These records do not change workspace creation or existing
-sessions. There are no environment MCP tools or frontend controls.
+and project selection. New workspaces resolve and pin the selected environment;
+existing sessions keep their recorded environment. There are no environment MCP tools
+or frontend selection controls.
 
 ## Registration and validation
 
@@ -77,7 +78,7 @@ first selection; later writes use the returned `revision`. Stale values return
 environment and be statically validated. Following a default requires an accepted
 default; reads return its current `resolved_version_id` without rewriting the
 selection. Explicit selections retain their version when the default changes.
-Neither mode affects any workspace in this slice.
+Both modes apply to future workspace creation; existing workspaces remain pinned.
 
 The environment owner may grant a project `use` or `derive`. Both permit selection;
 `derive` reserves authority for a later build path and grants no ability to change
@@ -89,7 +90,26 @@ They are not silently deleted or activated.
 ## Not yet implemented
 
 Builders, executable validation/probes, ABI and reserved-path checks, package
-requests/policy enforcement, approvals for build/activation, workspace activation,
-session replacement, retention and environment UI are not implemented. Models
+requests/policy enforcement, approvals for build/activation,
+activation of a different environment in an existing workspace, retention and environment selection UI are not implemented. Models
 reserve parent version, structured package declaration and approval-reference
 fields; they do not execute package installation or establish approval authority.
+
+## Workspace environment resolution
+
+Workspace creation resolves the project's explicit version or accepted default once,
+re-checks its use grant, and requires `static_validated` evidence for the deployment
+platform. `WORKSPACE_DEVELOPMENT_PLATFORM` defaults to `linux/arm64`; `linux/amd64`
+is also supported. A version stores evidence for one platform; a missing platform,
+revoked grant, missing default, pending version or stale validation policy rejects creation before kagent is called.
+
+The workspace stores the environment and version ids, platform image digest reference,
+platform, and policy identity (`version_id:validator_version`). CreateSession sends this
+selection as `development_environment`. Replacement and uncertain-create recovery reuse
+that stored selection. Recovery retries the persisted request id; a replacement uses a fresh
+request id. Default changes and CLI/runtime updates never change the recorded environment. kagent's reported development environment and runtime composition
+are stored separately when present. The workspace view displays the short resolved digest.
+Projects without a selection retain the legacy CreateSession request without that field.
+
+Selection requires kagent's runtime composition feature and service-token authentication
+to be enabled. Static validation is metadata evidence, not a live composition proof.

@@ -253,3 +253,22 @@ work before the review repairs; they were not redeployed after them):
 The tracked [Kind overlay](../../k8s/apps/mainloop/overlays/kind/README.md) includes dedicated
 workspace Harnesses with `git.origins`, `sessionIdleTTL: 0s` and `onQuiesce: Full`. Production
 Harnesses remain the responsibility of the kagent installation.
+
+## Workspace environment resolution
+
+Workspace creation resolves the project's explicit version or accepted default once,
+re-checks its use grant, and requires `static_validated` evidence for the deployment
+platform. `WORKSPACE_DEVELOPMENT_PLATFORM` defaults to `linux/arm64`; `linux/amd64`
+is also supported. A version stores evidence for one platform; a missing platform,
+revoked grant, missing default, pending version or stale validation policy rejects creation before kagent is called.
+
+The workspace stores the environment and version ids, platform image digest reference,
+platform, and policy identity (`version_id:validator_version`). CreateSession sends this
+selection as `development_environment`. Replacement and uncertain-create recovery reuse
+that stored selection. Recovery retries the persisted request id; a replacement uses a fresh
+request id. Default changes and CLI/runtime updates never change the recorded environment. kagent's reported development environment and runtime composition
+are stored separately when present. The workspace view displays the short resolved digest.
+Projects without a selection retain the legacy CreateSession request without that field.
+
+Selection requires kagent's runtime composition feature and service-token authentication
+to be enabled. Static validation is metadata evidence, not a live composition proof.

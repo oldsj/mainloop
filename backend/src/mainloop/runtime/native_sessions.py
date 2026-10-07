@@ -437,6 +437,35 @@ class Ledger:
             repo=row["repo"], ref=row["ref"], branch=row["branch"], depth=row["depth"]
         )
 
+    async def get_development_environment(self, session_id: str):
+        from mainloop.db.environments import decode
+
+        async with db.connection() as conn:
+            value = await conn.fetchval(
+                "SELECT development_environment FROM workspaces WHERE session_id=$1",
+                session_id,
+            )
+        return decode(value) if value is not None else None
+
+    async def record_composition(self, session_id: str, session: KagentSession):
+        from dataclasses import asdict
+
+        async with db.connection() as conn:
+            await conn.execute(
+                "UPDATE workspaces SET reported_development_environment=$2::jsonb, runtime_composition=$3::jsonb WHERE session_id=$1",
+                session_id,
+                (
+                    json.dumps(asdict(session.development_environment))
+                    if session.development_environment
+                    else None
+                ),
+                (
+                    json.dumps(asdict(session.runtime_composition))
+                    if session.runtime_composition
+                    else None
+                ),
+            )
+
     async def undeleted_archived(self) -> list[dict]:
         """Return archived sessions whose kagent Session kagent has not confirmed deleted."""
         async with db.connection() as conn:
@@ -924,12 +953,27 @@ async def _create_session_with_credentials(
         raise RuntimeError("persisted workspace create contract is unavailable")
     # The workspace is read from its one stored copy on every create, so a replacement Session
     # resends exactly what the first one got (kagent rejects a changed workspace under one id).
-    return await get_client().create_session(
+    from mainloop.runtime.kagent_client import DevelopmentEnvironment
+
+    value = await ledger.get_development_environment(binding["session_id"])
+    options = {}
+    if value is not None:
+        options["development_environment"] = DevelopmentEnvironment(
+            value["image"], value["platform"], value["policy_identity"]
+        )
+    session = await get_client().create_session(
         agent_ref(binding["kind"], binding["role"]),
         request_id=_request_id(binding),
         credentials=refs,
         workspace=workspace,
+        **options,
     )
+    if (
+        session.development_environment is not None
+        or session.runtime_composition is not None
+    ):
+        await ledger.record_composition(binding["session_id"], session)
+    return session
 
 
 async def _create_bound_session(binding: dict) -> KagentSession:

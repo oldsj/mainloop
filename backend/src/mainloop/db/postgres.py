@@ -316,6 +316,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS development_environment JSONB;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS reported_development_environment JSONB;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS runtime_composition JSONB;
+
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY,

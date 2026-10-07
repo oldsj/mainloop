@@ -422,13 +422,21 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
         shift += 7
 
 
-def decode_fields(buf: bytes) -> dict[int, list[int | bytes]]:
+def decode_fields(
+    buf: bytes, *, wire_types: dict[int, int] | None = None
+) -> dict[int, list[int | bytes]]:
     """Decode a protobuf message into ``{field number: [values]}`` (varints and byte strings)."""
     fields: dict[int, list[int | bytes]] = {}
     pos = 0
     while pos < len(buf):
         key, pos = _read_varint(buf, pos)
         number, wire = key >> 3, key & 7
+        if (
+            wire_types is not None
+            and number in wire_types
+            and wire != wire_types[number]
+        ):
+            raise ValueError(f"unexpected wire type {wire} for field {number}")
         value: int | bytes
         if wire == 0:
             value, pos = _read_varint(buf, pos)
@@ -439,8 +447,12 @@ def decode_fields(buf: bytes) -> dict[int, list[int | bytes]]:
             value = buf[pos : pos + length]
             pos += length
         elif wire == 1:
+            if pos + 8 > len(buf):
+                raise ValueError("truncated fixed64 field")
             value, pos = buf[pos : pos + 8], pos + 8
         elif wire == 5:
+            if pos + 4 > len(buf):
+                raise ValueError("truncated fixed32 field")
             value, pos = buf[pos : pos + 4], pos + 4
         else:
             raise ValueError(f"unsupported wire type {wire}")
@@ -650,6 +662,58 @@ class SessionWorkspace:
         )
 
 
+def _composition_fields(raw: bytes, wire_types: dict[int, int]):
+    """Validate known composition field types; absent proto3 scalars keep their defaults."""
+    try:
+        if not isinstance(raw, bytes):
+            raise ValueError("composition message must be bytes")
+        fields = decode_fields(raw, wire_types=wire_types)
+        for number, wire in wire_types.items():
+            values = fields.get(number, [])
+            if len(values) > 1:
+                raise ValueError(f"duplicate composition field {number}")
+            if values and wire == 2:
+                values[0].decode("utf-8")
+        return fields
+    except (ValueError, TypeError) as exc:
+        raise OutcomeUnknown("Malformed kagent composition response") from exc
+
+
+@dataclass(frozen=True)
+class DevelopmentEnvironment:
+    image: str
+    platform: str
+    policy_identity: str
+
+    def encode(self) -> bytes:
+        return (
+            _field_str(1, self.image)
+            + _field_str(2, self.platform)
+            + _field_str(3, self.policy_identity)
+        )
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "DevelopmentEnvironment":
+        fields = _composition_fields(raw, {1: 2, 2: 2, 3: 2})
+        return cls(_text(fields, 1), _text(fields, 2), _text(fields, 3))
+
+
+@dataclass(frozen=True)
+class RuntimeComposition:
+    payload_image: str
+    provider: str
+    schema: int
+    cli_version: str
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "RuntimeComposition":
+        fields = _composition_fields(raw, {1: 2, 2: 2, 3: 0, 4: 2})
+        schema = _number(fields, 3)
+        if schema > 0xFFFFFFFF:
+            raise OutcomeUnknown("Malformed kagent runtime composition schema")
+        return cls(_text(fields, 1), _text(fields, 2), schema, _text(fields, 4))
+
+
 @dataclass(frozen=True)
 class KagentSession:
     """The Session fields Mainloop uses. ``id`` is also the A2A ``contextId``."""
@@ -666,6 +730,8 @@ class KagentSession:
     agent: AgentRef | None = None
     prepared_revision: str = ""
     a2a_authority: str = ""
+    development_environment: DevelopmentEnvironment | None = None
+    runtime_composition: RuntimeComposition | None = None
 
     @property
     def settled(self) -> bool:
@@ -700,8 +766,16 @@ def decode_session_list(message: bytes) -> tuple[list[KagentSession], str]:
 
 
 def _decode_session(raw: bytes) -> KagentSession:
-    fields = decode_fields(raw)
-    if any(len(fields.get(number, [])) > 1 for number in (1, 2, 5, 6, 14, 15)):
+    try:
+        return _decode_session_fields(raw)
+    except (ValueError, TypeError) as exc:
+        # A malformed reply does not establish whether CreateSession reserved a runtime.
+        raise OutcomeUnknown("Malformed kagent Session response") from exc
+
+
+def _decode_session_fields(raw: bytes) -> KagentSession:
+    fields = decode_fields(raw, wire_types={18: 2, 19: 2})
+    if any(len(fields.get(number, [])) > 1 for number in (1, 2, 5, 6, 14, 15, 18, 19)):
         raise SessionError("Ambiguous gateway session identity")
     failure = fields.get(9, [b""])[0]
     failure_fields = decode_fields(failure) if isinstance(failure, bytes) else {}
@@ -724,6 +798,12 @@ def _decode_session(raw: bytes) -> KagentSession:
             AgentRef(_text(agent_fields, 1), _text(agent_fields, 2))
             if agent_fields
             else None
+        ),
+        development_environment=(
+            DevelopmentEnvironment.decode(fields[18][0]) if fields.get(18) else None
+        ),
+        runtime_composition=(
+            RuntimeComposition.decode(fields[19][0]) if fields.get(19) else None
         ),
         prepared_revision=_text(fields, 5),
         a2a_authority=_text(fields, 6),
@@ -891,6 +971,7 @@ class KagentClient:
         name: str = "",
         credentials: tuple[SessionCredential, ...] = (),
         workspace: SessionWorkspace | None = None,
+        development_environment: DevelopmentEnvironment | None = None,
     ) -> KagentSession:
         """Create a Session. Retrying with the same ``request_id`` returns the same Session."""
         message = (
@@ -903,6 +984,8 @@ class KagentClient:
         message += b"".join(
             _field_bytes(7, credential.encode()) for credential in credentials
         )
+        if development_environment is not None:
+            message += _field_bytes(8, development_environment.encode())
         return await self._session_call("CreateSession", message)
 
     async def list_sessions_page(
