@@ -2147,6 +2147,15 @@ class ProjectFromRepoTests(KagentFakeCase):
         await db.update_project_metadata(project.id, default_branch="")
         self.assertEqual((await db.get_project(project.id)).default_branch, "trunk")
 
+    async def test_nullable_project_counts_are_read_as_zero(self):
+        project = await db.get_or_create_project(self.user, self.REPO)
+        await self.pool.execute(
+            "UPDATE projects SET open_pr_count=NULL, open_issue_count=NULL WHERE id=$1",
+            project.id,
+        )
+        stored = await db.get_project(project.id)
+        self.assertEqual((stored.open_pr_count, stored.open_issue_count), (0, 0))
+
     async def test_repository_names_differing_only_in_case_are_one_project(self):
         first = await db.get_or_create_project(self.user, GithubRepo("Foo", "Bar"))
         second = await db.get_or_create_project(self.user, GithubRepo("foo", "bar"))
@@ -2215,6 +2224,36 @@ class ProjectFromRepoTests(KagentFakeCase):
                 for branch in ("feature/a", "feature/b")
             ],
         )
+
+    async def test_empty_and_legacy_null_base_refs_are_readable_through_sessions_api(
+        self,
+    ):
+        client = await self.client()
+        created = await client.post(
+            "/workspaces", json={"repo": "https://github.com/oldsj/mainloop"}
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        wid = created.json()["workspace_id"]
+        self.assertEqual(created.json()["manifest"]["ref"], "")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT base_branch FROM sessions WHERE id=$1", wid
+            ),
+            "",
+        )
+        for legacy_null in (False, True):
+            with self.subTest(legacy_null=legacy_null):
+                if legacy_null:
+                    await self.pool.execute(
+                        "UPDATE sessions SET base_branch=NULL WHERE id=$1", wid
+                    )
+                listed = await client.get("/sessions")
+                self.assertEqual(listed.status_code, 200, listed.text)
+                session = next(s for s in listed.json() if s["id"] == wid)
+                self.assertEqual(session["base_branch"], "")
+                detail = await client.get(f"/sessions/{wid}")
+                self.assertEqual(detail.status_code, 200, detail.text)
+                self.assertEqual(detail.json()["base_branch"], "")
 
     async def test_post_workspaces_with_a_bad_branch_or_ref_stores_no_project(self):
         client = await self.client()

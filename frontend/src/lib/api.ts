@@ -5,6 +5,16 @@
 import { API_URL } from '$lib/config';
 import { connection } from '$lib/stores/connection';
 
+/** A read request failed with an HTTP response; the backend was reachable. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+  }
+}
+
 /** A send the backend did not accept. `status` is 0 when it never got an HTTP response. */
 export class SendError extends Error {
   constructor(
@@ -490,7 +500,9 @@ export const api = {
 
   async getWorkspace(workspaceId: string): Promise<WorkspaceLifecycle> {
     const response = await apiFetch(`${API_URL}/workspaces/${workspaceId}`);
-    if (!response.ok) throw new Error(await errorDetail(response, 'Failed to get workspace'));
+    if (!response.ok) {
+      throw new ApiError(await errorDetail(response, 'Failed to get workspace'), response.status);
+    }
     return response.json();
   },
 
@@ -568,7 +580,7 @@ export const api = {
 
   async getSession(sessionId: string): Promise<Session> {
     const response = await apiFetch(`${API_URL}/sessions/${sessionId}`);
-    if (!response.ok) throw new Error('Failed to get session');
+    if (!response.ok) throw new ApiError('Failed to get session', response.status);
     return response.json();
   },
 

@@ -2,7 +2,7 @@
   import { page } from '$app/stores';
   import { get } from 'svelte/store';
   import { goto } from '$app/navigation';
-  import { api, type Session } from '$lib/api';
+  import { api, ApiError, type Session } from '$lib/api';
   import { sessions } from '$lib/stores/sessions';
   import { connection } from '$lib/stores/connection';
   import { statusLabel } from '$lib/sessionStatus';
@@ -61,10 +61,14 @@
     } catch (e) {
       console.error('Failed to load session:', e);
       if (id !== sessionId) return;
-      // A dead backend answers with a network error or, behind a proxy, a 5xx; neither means
-      // the session doesn't exist.
-      unreachable = e instanceof TypeError || get(connection).status === 'offline';
-      error = unreachable ? "Can't reach the Mainloop backend." : 'Session not found';
+      // An HTTP error is distinct from a failed connection, even if a health probe failed too.
+      unreachable = !(e instanceof ApiError) &&
+        (e instanceof TypeError || get(connection).status === 'offline');
+      error = e instanceof ApiError
+        ? e.status >= 500
+          ? 'Mainloop returned a server error. Reload to try again.'
+          : e.status === 404 ? 'Session not found' : 'Session could not be loaded.'
+        : unreachable ? "Can't reach the Mainloop backend." : 'Session could not be loaded.';
     }
   }
 

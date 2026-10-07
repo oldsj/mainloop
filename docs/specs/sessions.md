@@ -47,6 +47,8 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
 The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, and delivery states. Workspace health and lifecycle controls are shown separately.
 
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
+An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
+separately from a failed connection or a 404.
 
 ## Evidence boundary
 

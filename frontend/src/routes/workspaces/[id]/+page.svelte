@@ -2,7 +2,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { get } from 'svelte/store';
-  import { api, type WorkspaceLifecycle, type WorkspacePreviewPort } from '$lib/api';
+  import { api, ApiError, type WorkspaceLifecycle, type WorkspacePreviewPort } from '$lib/api';
   import WorkspaceLifecycleBadge from '$lib/components/WorkspaceLifecycleBadge.svelte';
   import { connection } from '$lib/stores/connection';
   import { workspaces } from '$lib/stores/workspaces';
@@ -54,8 +54,13 @@
       void loadPreviewPorts(id);
     } catch (error) {
       if (id !== workspaceId) return;
-      unreachable = error instanceof TypeError || get(connection).status === 'offline';
-      pageError = unreachable ? "Can't reach the Mainloop backend." : 'Workspace not found';
+      unreachable = !(error instanceof ApiError) &&
+        (error instanceof TypeError || get(connection).status === 'offline');
+      pageError = error instanceof ApiError
+        ? error.status >= 500
+          ? 'Mainloop returned a server error. Reload to try again.'
+          : error.status === 404 ? 'Workspace not found' : 'Workspace could not be loaded.'
+        : unreachable ? "Can't reach the Mainloop backend." : 'Workspace could not be loaded.';
     } finally {
       if (id === workspaceId) loading = false;
     }
