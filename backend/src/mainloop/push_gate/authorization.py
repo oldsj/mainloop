@@ -10,6 +10,13 @@ from models.push_gate import ProtectedBranchPolicy, PushGrant, RefUpdate
 
 ZERO_OID = "0" * 40
 
+# The only (role, grant kind) pairs that may hold push authority. Coordination grants of
+# any role, including main and delegated coordination children, never appear here.
+WORKSPACE_WRITER_PAIRS = frozenset(
+    {("agent", "workspace"), ("supervisor", "workspace"), ("child", "workspace")}
+)
+DELEGATED_WRITER_DEPTHS = {"supervisor": 1, "child": 2}
+
 
 def protected_reason(branch: str, policy: ProtectedBranchPolicy) -> str | None:
     if not policy.default_branch:
@@ -39,8 +46,12 @@ def authorize(
         return "session_archived"
     if grant.terminal:
         return "session_terminal"
-    if grant.role != "agent" or grant.grant_kind != "workspace":
+    if (grant.role, grant.grant_kind) not in WORKSPACE_WRITER_PAIRS:
         return "grant_kind"
+    if grant.role != "agent" and (
+        grant.attempt_id is None or grant.writer_generation is None
+    ):
+        return "attempt_not_current"
     if not all(
         (grant.owner_id, grant.workspace_id, grant.session_id, grant.runtime_identity)
     ):

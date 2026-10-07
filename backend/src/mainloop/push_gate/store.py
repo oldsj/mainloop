@@ -8,8 +8,14 @@ import hashlib
 import secrets
 from contextlib import asynccontextmanager
 
-from mainloop.push_gate.authorization import authorize, protected_reason
+from mainloop.push_gate.authorization import (
+    DELEGATED_WRITER_DEPTHS,
+    WORKSPACE_WRITER_PAIRS,
+    authorize,
+    protected_reason,
+)
 from mainloop.runtime.policy import PolicyError
+from mainloop.services.github_repo import parse_github_repo
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
     _feature_branch,
@@ -121,7 +127,80 @@ async def set_policy(conn, policy: ProtectedBranchPolicy):
         )
 
 
-async def live_grant(conn, grant: PushGrant) -> PushGrant:
+def stored_grant(row) -> PushGrant:
+    """Decode a ``push_grants`` row; the proof columns are the authority and must agree
+    with the ``grant_data`` copy (row needs ``grant_data,attempt_id,writer_generation``).
+    """
+    grant = _decode(row["grant_data"], PushGrant)
+    if row["attempt_id"] != grant.attempt_id:
+        raise ValueError("attempt_not_current")
+    if row["writer_generation"] != grant.writer_generation:
+        raise ValueError("stale_writer_generation")
+    return grant
+
+
+async def _delegated_writer(
+    conn, row, grant: PushGrant, repository: str, *, bind: bool = False
+) -> PushGrant:
+    """Current-attempt and writer-generation proof for a supervisor/child coding writer.
+
+    One statement gives a consistent view of the attempt, its task and the branch claim.
+    Callers hold the grant lock; lifecycle fencing must hold it across its durable change
+    so a fence cannot interleave between this read and a dispatched write.
+    """
+    a = await conn.fetchrow(
+        """SELECT a.id,a.state,a.role,a.depth,a.writer_generation,a.binding_id,a.session_id,
+            t.owner_id,t.project_id,t.mode,t.status,t.current_attempt_id,
+            c.generation AS claim_generation,c.held AS claim_held,
+            c.attempt_id AS claim_attempt_id
+        FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+        LEFT JOIN workspace_writer_claims c ON c.owner_id=t.owner_id
+            AND c.repository=$2 AND c.branch=$3
+        WHERE a.binding_id=$1 AND a.session_id=$1""",
+        grant.session_id,
+        repository.lower(),
+        grant.branch,
+    )
+    if a is None:
+        raise ValueError("attempt_unavailable")
+    if (
+        a["owner_id"] != grant.owner_id
+        or a["project_id"] != grant.project_id
+        or a["mode"] != "code"
+        or a["role"] != row["role"]
+        or a["depth"] != DELEGATED_WRITER_DEPTHS[row["role"]]
+    ):
+        raise ValueError("attempt_scope")
+    if a["status"] in {"completed", "failed", "cancelled"}:
+        raise ValueError("task_terminal")
+    if a["current_attempt_id"] != a["id"] or a["state"] != "active":
+        raise ValueError("attempt_not_current")
+    if not a["claim_held"] or a["claim_attempt_id"] != a["id"]:
+        raise ValueError("writer_claim_lost")
+    if (
+        a["writer_generation"] is None
+        or a["writer_generation"] != a["claim_generation"]
+    ):
+        raise ValueError("stale_writer_generation")
+    # The grant must have been issued for exactly this attempt and claim generation, so an
+    # older un-revoked bearer cannot survive the same attempt re-taking the claim.
+    if bind:
+        if grant.attempt_id not in (None, a["id"]):
+            raise ValueError("attempt_not_current")
+        if grant.writer_generation not in (None, a["claim_generation"]):
+            raise ValueError("stale_writer_generation")
+        return grant.model_copy(
+            update={"attempt_id": a["id"], "writer_generation": a["claim_generation"]}
+        )
+    if grant.attempt_id != a["id"]:
+        raise ValueError("attempt_not_current")
+    if grant.writer_generation != a["claim_generation"]:
+        raise ValueError("stale_writer_generation")
+    return grant
+
+
+async def live_grant(conn, grant: PushGrant, *, bind: bool = False) -> PushGrant:
+    """Resolve live authority; ``bind`` (issue only) records the live attempt/generation."""
     row = await conn.fetchrow(
         """SELECT p.*,b.role,b.mcp_grant_kind,b.kagent_session_id,
             b.token_hash,b.kagent_deleted_at,s.project_id AS session_project_id,
@@ -146,13 +225,21 @@ async def live_grant(conn, grant: PushGrant) -> PushGrant:
         raise ValueError("session_terminal")
     if not row["token_hash"] or row["kagent_deleted_at"] is not None:
         raise ValueError("grant_revoked")
-    if (row["role"], row["mcp_grant_kind"]) != ("agent", "workspace"):
+    if (row["role"], row["mcp_grant_kind"]) not in WORKSPACE_WRITER_PAIRS or (
+        grant.role,
+        grant.grant_kind,
+    ) != (row["role"], row["mcp_grant_kind"]):
         raise ValueError("grant_kind")
     if row["kagent_session_id"] != grant.runtime_identity:
         raise ValueError("runtime_mismatch")
+    # Delegated writers use the owner-workspace scope checks (feature branch, session and
+    # workspace agreement, live runtime); the attempt checks below add delegation proof.
+    scope_row = dict(row)
+    if row["role"] != "agent":
+        scope_row["role"] = "agent"
     try:
         repository = repository_scope(
-            dict(row),
+            scope_row,
             project_id=grant.project_id,
             branch=grant.branch,
             require_runtime=True,
@@ -161,6 +248,12 @@ async def live_grant(conn, grant: PushGrant) -> PushGrant:
         raise ValueError("binding_mismatch") from None
     if repository.lower() != grant.repository.lower():
         raise ValueError("repository_mismatch")
+    if row["role"] != "agent":
+        return await _delegated_writer(
+            conn, row, grant, parse_github_repo(row["full_name"]).full_name, bind=bind
+        )
+    if grant.attempt_id is not None or grant.writer_generation is not None:
+        raise ValueError("attempt_scope")
     return grant
 
 
@@ -169,7 +262,7 @@ async def issue(conn, grant: PushGrant) -> str:
     if grant.id != grant.session_id or not _feature_branch(grant.branch):
         raise ValueError("binding_unavailable")
     async with policy_lock(conn, grant.project_id), publication_lock(conn, grant.id):
-        await live_grant(conn, grant)
+        grant = await live_grant(conn, grant, bind=True)
         policy = await load_policy(conn, grant.project_id)
         reason = protected_reason(grant.branch, policy)
         if reason:
@@ -178,8 +271,7 @@ async def issue(conn, grant: PushGrant) -> str:
             not grant.active
             or grant.archived
             or grant.terminal
-            or grant.role != "agent"
-            or grant.grant_kind != "workspace"
+            or (grant.role, grant.grant_kind) not in WORKSPACE_WRITER_PAIRS
         ):
             raise ValueError("grant_unavailable")
         previous = await conn.fetchrow(
@@ -199,15 +291,19 @@ async def issue(conn, grant: PushGrant) -> str:
             raise ValueError("grant_version")
         token = "push_" + secrets.token_urlsafe(32)
         await conn.execute(
-            """INSERT INTO push_grants(id,token_hash,owner_id,project_id,session_id,grant_data)
-            VALUES($1,$2,$3,$4,$5,$6::jsonb) ON CONFLICT(id) DO UPDATE
-            SET token_hash=EXCLUDED.token_hash,grant_data=EXCLUDED.grant_data,revoked_at=NULL""",
+            """INSERT INTO push_grants(id,token_hash,owner_id,project_id,session_id,grant_data,
+                attempt_id,writer_generation)
+            VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(id) DO UPDATE
+            SET token_hash=EXCLUDED.token_hash,grant_data=EXCLUDED.grant_data,revoked_at=NULL,
+                attempt_id=EXCLUDED.attempt_id,writer_generation=EXCLUDED.writer_generation""",
             grant.id,
             token_hash(token),
             grant.owner_id,
             grant.project_id,
             grant.session_id,
             grant.model_dump_json(),
+            grant.attempt_id,
+            grant.writer_generation,
         )
         return token
 
@@ -239,13 +335,14 @@ async def authorized(conn, token: str, repository: str, updates, is_ancestor):
         raise ValueError("grant_unavailable")
     async with policy_lock(conn, row["project_id"]), publication_lock(conn, row["id"]):
         current = await conn.fetchrow(
-            "SELECT grant_data,revoked_at FROM push_grants WHERE id=$1 AND token_hash=$2",
+            """SELECT grant_data,revoked_at,attempt_id,writer_generation
+            FROM push_grants WHERE id=$1 AND token_hash=$2""",
             row["id"],
             token_hash(token),
         )
         if current is None or current["revoked_at"] is not None:
             raise ValueError("grant_revoked")
-        grant = await live_grant(conn, _decode(current["grant_data"], PushGrant))
+        grant = await live_grant(conn, stored_grant(current))
         policy = await load_policy(conn, grant.project_id)
         reason = authorize(grant, policy, repository, updates, is_ancestor)
         if reason:

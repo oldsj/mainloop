@@ -23,6 +23,10 @@ POLICY = ProtectedBranchPolicy(
 UPDATE = RefUpdate(ref="refs/heads/Feature", old_oid="a" * 40, new_oid="b" * 40)
 
 
+def proof(role):
+    return {} if role == "agent" else {"attempt_id": "attempt", "writer_generation": 1}
+
+
 class PushAuthorizationTests(unittest.TestCase):
     def test_scope_matrix(self):
         cases = [
@@ -73,13 +77,59 @@ class PushAuthorizationTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_workspace_writer_roles_hold_scope(self):
+        for role in ("agent", "supervisor", "child"):
+            with self.subTest(role=role):
+                self.assertIsNone(
+                    authorize(
+                        GRANT.model_copy(update={"role": role, **proof(role)}),
+                        POLICY,
+                        "owner/repo",
+                        [UPDATE],
+                        lambda *_: True,
+                    )
+                )
+
+    def test_delegated_writer_requires_attempt_proof(self):
+        for role in ("supervisor", "child"):
+            with self.subTest(role=role):
+                self.assertEqual(
+                    authorize(
+                        GRANT.model_copy(update={"role": role}),
+                        POLICY,
+                        "owner/repo",
+                        [UPDATE],
+                        lambda *_: True,
+                    ),
+                    "attempt_not_current",
+                )
+
+    def test_writer_proof_is_paired_and_absent_for_owner_agents(self):
+        for changes in (
+            {"attempt_id": "a"},
+            {"writer_generation": 1},
+            {"attempt_id": "a", "writer_generation": 1},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                PushGrant(**{**GRANT.model_dump(), **changes})
+        PushGrant(
+            **{
+                **GRANT.model_dump(),
+                "role": "child",
+                "attempt_id": "a",
+                "writer_generation": 1,
+            }
+        )
+
     def test_authority_matrix(self):
         for changes, reason in [
             ({"active": False}, "grant_revoked"),
             ({"archived": True}, "session_archived"),
             ({"terminal": True}, "session_terminal"),
             ({"role": "main"}, "grant_kind"),
-            ({"role": "child"}, "grant_kind"),
+            ({"role": "child", "grant_kind": "coordination"}, "grant_kind"),
+            ({"role": "supervisor", "grant_kind": "coordination"}, "grant_kind"),
+            ({"role": "worker"}, "grant_kind"),
             ({"grant_kind": "coordination"}, "grant_kind"),
             ({"runtime_identity": ""}, "binding_unavailable"),
             ({"project_id": "other"}, "policy_mismatch"),

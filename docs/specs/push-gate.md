@@ -13,8 +13,11 @@ confer no MCP or owner API authority. One stable grant ID equals its workspace/s
 only at the next version with a fresh bearer. Audit rows survive session deletion.
 A grant binds owner, project, canonical GitHub
 repository, exact case-sensitive branch, workspace/session and current runtime identity.
-Only a live `agent` binding with workspace grant kind, active MCP enrollment, matching
-stored workspace and session, and a nonarchived/nonterminal session qualifies. Runtime
+Only a live binding whose role and grant kind are exactly `agent/workspace`,
+`supervisor/workspace` or `child/workspace`, with active MCP enrollment, matching
+stored workspace and session, and a nonarchived/nonterminal session qualifies. A grant
+must carry the same pair as its binding. Coordination grants of any role (`main`,
+`supervisor`, `child`) never hold push authority. Runtime
 identity currently uses the stored kagent Session ID; attested runtime UID validation is
 still required before activation.
 
@@ -48,6 +51,47 @@ reopened. An unresolved `dispatching` or `unknown` attempt blocks new authorizat
 for that grant, including after bearer rotation. Request identity reuse with different facts is refused. `unknown` is never
 retried automatically; future reconciliation requires remote evidence and owner resolution.
 A process crash leaving `dispatching` must be reconciled to unknown, never replayed.
+
+## Implemented: delegated writer roles
+
+`supervisor/workspace` and `child/workspace` coding writers use the same push grant, scope
+and ledger rules as owner `agent/workspace` workspaces. Because their authority comes from
+a task attempt, every live resolution (issue and each authorization) additionally proves,
+in one snapshot under the grant lock:
+
+- the session is the attempt's session and binding, and the attempt's role and depth
+  (`supervisor`/1, `child`/2) match the binding role;
+- the attempt's task is a `code` task for the grant's owner and project and is not
+  completed, failed or cancelled;
+- the attempt is the task's current attempt and is `active` (a `draining`, `fenced` or
+  superseded source is denied: `attempt_not_current`);
+- the owner/repository/branch writer claim is held by that attempt
+  (`writer_claim_lost` otherwise) and its generation equals the attempt's recorded
+  writer generation (`stale_writer_generation`), so a source that lost or re-took the
+  claim cannot publish with an older bearer.
+
+Delegated grants also persist the `attempt_id` and `writer_generation` they were issued for
+(in the grant and in `push_grants` columns; both unset for owner `agent/workspace` grants).
+`issue` records them from the live attempt and claim snapshot and refuses caller-supplied
+values that disagree. Every authorization requires the stored values to equal the current
+attempt id (`attempt_not_current`) and claim generation (`stale_writer_generation`), so an
+older, un-revoked bearer is denied even if the same attempt re-takes the claim at a higher
+generation; only a revoked-then-reissued next-version grant bound to the new generation
+works. Owner agent grants carrying attempt proof are refused.
+
+Scope checks (feature branch, session/workspace/repository agreement, live runtime) are
+those of owner workspaces. A sibling or parent grant authorizes only its own exact branch;
+authorizing another writer's branch is `branch_mismatch`, and a grant minted for another
+writer's branch is `binding_mismatch`. Owner `agent/workspace` behavior is unchanged and
+needs no attempt. `PUSH_GATE_ENABLED` remains `false` by default; fixture and PostgreSQL
+tests establish local authority only.
+
+Lifecycle fencing must hold the project policy lock then the grant lock (the existing
+`locked(..., revoke=True)` context) across the durable attempt fence and writer-claim
+release, as for other revocation points; push resolution takes no task admission or writer
+locks, so it cannot deadlock with them. The dedicated push credential must still be
+planned before CreateSession and installed only after confirmed identity; this slice does
+not inject or publish any bearer.
 
 ## Implemented: lifecycle wiring and publication projection
 
