@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PushContract(BaseModel):
@@ -33,6 +33,18 @@ class PushGrant(PushContract):
     active: bool = True
     archived: bool = False
     terminal: bool = False
+    # Delegated supervisor/child writers: the attempt and writer-claim generation the grant
+    # was issued for, recorded from the live snapshot. Owner agent grants leave both unset.
+    attempt_id: Annotated[str | None, Field(min_length=1)] = None
+    writer_generation: Annotated[int | None, Field(ge=1)] = None
+
+    @model_validator(mode="after")
+    def _writer_proof_is_paired(self):
+        if (self.attempt_id is None) != (self.writer_generation is None):
+            raise ValueError("attempt_id and writer_generation are set together")
+        if self.role == "agent" and self.attempt_id is not None:
+            raise ValueError("owner agent grants carry no attempt")
+        return self
 
 
 class RefUpdate(PushContract):
