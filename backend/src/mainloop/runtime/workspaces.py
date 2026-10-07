@@ -36,7 +36,11 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SessionError,
 )
-from mainloop.services.github_repo import GithubRepo
+from mainloop.services.github_repo import (
+    GithubRepo,
+    InvalidGithubRepo,
+    parse_github_repo,
+)
 from mainloop.sse import notify_workspace_updated
 
 from models import (
@@ -278,6 +282,30 @@ async def create(
     title = f"{project_id} · {manifest.branch}"
     async with db.connection() as conn:
         async with conn.transaction():
+            project = await conn.fetchrow(
+                "SELECT id,full_name,html_url FROM projects WHERE id=$1 AND user_id=$2 FOR SHARE",
+                project_id,
+                user_id,
+            )
+            if project is None:
+                raise WorkspaceConflict(
+                    "Workspace project must belong to the current owner."
+                )
+            try:
+                project_repo = parse_github_repo(project["full_name"])
+                url_repo = parse_github_repo(manifest.repo_url)
+                html_repo = parse_github_repo(project["html_url"])
+            except (InvalidGithubRepo, TypeError):
+                raise WorkspaceConflict(
+                    "Workspace repository must match an owner-owned GitHub project."
+                ) from None
+            if (
+                project_repo.full_name.lower() != url_repo.full_name.lower()
+                or project_repo.full_name.lower() != html_repo.full_name.lower()
+            ):
+                raise WorkspaceConflict(
+                    "Workspace repository must match an owner-owned GitHub project."
+                )
             thread = await conn.fetchrow(
                 "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
                 user_id,
@@ -326,7 +354,12 @@ async def create(
                 manifest.dev.idle_timeout_minutes,
                 now,
             )
-            await ns.create_binding(workspace_id, manifest.agent_kind.value, conn=conn)
+            await ns.create_binding(
+                workspace_id,
+                manifest.agent_kind.value,
+                mcp_grant_kind="workspace",
+                conn=conn,
+            )
     await _create_session(workspace_id, user_id, reject_removes_rows=True)
     return await get(workspace_id, user_id)
 
@@ -339,7 +372,13 @@ async def _create_session(
         if binding is None or binding["kagent_session_id"] is not None:
             return
         try:
-            session = await ns._create_bound_session(binding)
+            if (
+                binding.get("mcp_grant_kind") == "workspace"
+                and binding.get("token_hash") is None
+            ):
+                session = await ns.reconcile_revoked_workspace_creation(binding)
+            else:
+                session = await ns._create_bound_session(binding)
         except SessionError as exc:
             if exc.grpc_status in _REJECTED:
                 if reject_removes_rows:
@@ -369,6 +408,11 @@ async def refresh(workspace_id: str, user_id: str) -> WorkspaceLifecycle:
 
 
 async def _delete_rows(workspace_id: str) -> None:
+    # Revoke before deleting the binding. Cleanup has an independent durable tombstone, so a
+    # Kubernetes Secret outage cannot leave an active bearer or erase the retry record.
+    from mainloop.runtime.agent_credentials import revoke
+
+    await revoke(workspace_id)
     async with db.connection() as conn:
         async with conn.transaction():
             conversation_id = await conn.fetchval(
@@ -431,6 +475,10 @@ async def delete(workspace_id: str, user_id: str) -> None:
                 "refresh before retrying."
             )
         if binding is not None and binding["kagent_session_id"] is not None:
+            from mainloop.runtime.agent_credentials import revoke
+
+            # Stop accepting the cached bearer before asking kagent to delete its runtime.
+            await revoke(workspace_id)
             try:
                 await ns.get_client().delete_session(binding["kagent_session_id"])
             except SessionError as exc:

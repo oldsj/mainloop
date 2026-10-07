@@ -16,7 +16,10 @@ from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.postgres import PRCreationConflict
 from mainloop.runtime.policy import PolicyError
-from mainloop.services.github_repo import InvalidGithubRepo, parse_github_repo
+from mainloop.services.workspace_authority import (
+    ScopeUnavailable,
+    repository_scope,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from models.agent_tools import OpenPullRequest
@@ -155,27 +158,8 @@ class GitHubCreationClient:
 
 def _project_repo(project: dict, body: OpenPullRequest) -> str:
     try:
-        repo = parse_github_repo(project["full_name"])
-        if (
-            repo.full_name.lower() != f"{project['owner']}/{project['name']}".lower()
-            or parse_github_repo(project["html_url"]).full_name.lower()
-            != repo.full_name.lower()
-        ):
-            raise InvalidGithubRepo
-        if project["role"] == "child":
-            if (
-                project["session_project_id"] != body.project_id
-                or project["workspace_branch"] != body.branch
-                or parse_github_repo(project["workspace_repo"] or "").full_name.lower()
-                != repo.full_name.lower()
-                or parse_github_repo(project["session_repo"] or "").full_name.lower()
-                != repo.full_name.lower()
-            ):
-                raise InvalidGithubRepo
-        elif project["role"] != "main":
-            raise InvalidGithubRepo
-        return repo.full_name
-    except (InvalidGithubRepo, KeyError, TypeError):
+        return repository_scope(project, project_id=body.project_id, branch=body.branch)
+    except (ScopeUnavailable, KeyError, TypeError):
         raise PolicyError(
             "ownership", "project and session workspace must match"
         ) from None
@@ -230,7 +214,9 @@ def _uncertain(request_id: str) -> dict:
 
 async def open_pull_request(binding: dict, arguments: dict) -> dict:
     body = OpenPullRequest.model_validate(arguments)
-    project = await db.pr_project_authority(binding, body.project_id)
+    project = await db.pr_project_authority(
+        binding, body.project_id, branch=body.branch
+    )
     if not project:
         raise PolicyError("ownership", "no active binding for this owner-owned project")
     full_name = _project_repo(project, body)
@@ -289,7 +275,9 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
             fresh = await github.repo(full_name)
             _verify_repo(fresh, full_name, body)
             _verify_head(await github.branch(full_name, body.branch), body)
-            current = await db.pr_project_authority(binding, body.project_id)
+            current = await db.pr_project_authority(
+                binding, body.project_id, branch=body.branch
+            )
             if not current or _project_repo(current, body) != full_name:
                 raise PolicyError(
                     "ownership", "project binding changed before PR creation"

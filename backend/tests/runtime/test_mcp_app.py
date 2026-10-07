@@ -2,14 +2,14 @@
 
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mainloop.mcp_app import TOOLS, create_app, invoke
 from mainloop.runtime.agent_credentials import MCP_ORIGIN, CredentialStore
 from mainloop.runtime.agent_identity import hash_token
-from mainloop.runtime.agent_tools import AgentService
+from mainloop.runtime.agent_tools import AgentService, Ctx
 from mainloop.runtime.kagent_client import (
     SessionCredential,
     _field_bytes,
@@ -61,6 +61,71 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         r = await self.call("pending_add", text="do it", topic="billing")
         await self.call("pending_done", id=r["id"][:8])
         self.assertIn("[0 pending]", (await self.call("topics"))["text"])
+
+    async def test_workspace_grant_policy_and_server_resolved_identity(self):
+        binding = {
+            "session_id": "workspace-1",
+            "role": "agent",
+            "kind": "codex",
+            "user_id": "u",
+            "mcp_grant_kind": "workspace",
+            "session_project_id": "project-1",
+            "session_repo": "https://github.com/owner/repo",
+            "session_branch": "feature/workspace",
+            "workspace_repo": "https://github.com/owner/repo",
+            "workspace_branch": "feature/workspace",
+            "full_name": "owner/repo",
+            "owner": "owner",
+            "name": "repo",
+            "html_url": "https://github.com/owner/repo",
+            "kagent_session_id": "runtime-1",
+            "token_hash": "hash-only",
+        }
+        actor = Actor("agent", 0, "workspace")
+        ctx = Ctx(binding, actor)
+        self.assertEqual(tools_for(actor), frozenset({"whoami", "open_pull_request"}))
+        identity = await invoke(self.service, ctx, "whoami", {})
+        self.assertFalse(identity.isError)
+        self.assertEqual(
+            identity.structuredContent,
+            {
+                "text": "agent codex session=workspac depth=0 grant=active scope=available",
+                "session_id": "workspace-1",
+                "role": "agent",
+                "depth": 0,
+                "mcp_grant_kind": "workspace",
+                "grant_status": "active",
+                "scope_status": "available",
+                "project_id": "project-1",
+                "workspace_id": "workspace-1",
+                "repository": "owner/repo",
+                "branch": "feature/workspace",
+            },
+        )
+        self.assertNotIn("token", str(identity.structuredContent).lower())
+        for name in ("report", "delegate", "note", "decide", "topic_open"):
+            denied = await invoke(self.service, ctx, name, {})
+            self.assertTrue(denied.isError, name)
+
+        with patch(
+            "mainloop.services.github_creation.open_pull_request",
+            new=AsyncMock(return_value={"text": "scoped"}),
+        ) as run:
+            result = await invoke(
+                self.service,
+                ctx,
+                "open_pull_request",
+                {
+                    "project_id": "project-1",
+                    "branch": "feature/workspace",
+                    "expected_sha": "a" * 40,
+                    "title": "title",
+                    "body": "body",
+                    "request_id": "request-1",
+                },
+            )
+        self.assertFalse(result.isError)
+        run.assert_awaited_once()
 
     async def test_status_read_cancel_and_clear_stay_in_own_tree(self):
         child = (await self.call("delegate", kind="claude", brief="do it"))[
@@ -196,29 +261,62 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         from mainloop.runtime import agent_credentials as module
 
         conn = Mock()
-        conn.fetchval = AsyncMock(return_value="binding-id")
+        reference = {
+            "origin": MCP_ORIGIN,
+            "header": "Authorization",
+            "secret_name": "mainloop-agent-tokens",
+            "secret_key": "binding-id",
+        }
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "mcp_grant_kind": "workspace",
+                    "credential_ref": reference,
+                    "token_hash": "fixture-hash",
+                    "credential_cleanup_pending": False,
+                },
+                {"credential_ref": reference},
+                {"credential_ref": reference},
+            ]
+        )
         conn.execute = AsyncMock()
         conn.fetch = AsyncMock(return_value=[{"session_id": "binding-id"}])
+
+        @asynccontextmanager
+        async def transaction():
+            yield
+
+        conn.transaction = transaction
 
         @asynccontextmanager
         async def connection():
             yield conn
 
+        @asynccontextmanager
+        async def lock(_conn, _binding_id):
+            yield
+
         with patch("mainloop.db.db.connection", connection), patch.object(
+            module, "_binding_lock", lock
+        ), patch.object(
             module.credentials,
             "remove",
             AsyncMock(side_effect=RuntimeError("unavailable")),
-        ):
+        ) as remove:
             await module.revoke("binding-id")
-        sql = conn.fetchval.call_args.args[0]
+        remove.assert_awaited_once_with(
+            "binding-id", module.reference_from_data(reference)
+        )
+        sql = "\n".join(call.args[0] for call in conn.execute.await_args_list)
         self.assertIn("token_hash=NULL", sql)
         self.assertIn("credential_cleanup_pending=TRUE", sql)
-        conn.execute.assert_not_called()
+        self.assertIn("agent_credential_cleanup", sql)
         with patch("mainloop.db.db.connection", connection), patch.object(
-            module.credentials, "remove", AsyncMock()
-        ) as remove:
+            module, "_binding_lock", lock
+        ), patch.object(module.credentials, "remove", AsyncMock()) as remove:
             await module.reconcile_cleanup()
-        remove.assert_awaited_once_with("binding-id")
-        self.assertIn(
-            "credential_cleanup_pending=FALSE", conn.execute.call_args.args[0]
+        remove.assert_awaited_once_with(
+            "binding-id", module.reference_from_data(reference)
         )
+        sql = "\n".join(call.args[0] for call in conn.execute.await_args_list)
+        self.assertIn("credential_cleanup_pending=FALSE", sql)

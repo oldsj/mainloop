@@ -7,10 +7,12 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from fastapi import HTTPException
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.postgres import PRCreationConflict
 from mainloop.mcp_app import TOOLS, invoke
+from mainloop.runtime import native_sessions
 from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.agent_tools import AgentService, Ctx
 from mainloop.runtime.delegation import PgStore
@@ -110,12 +112,14 @@ class InputTests(unittest.TestCase):
             "full_name": "owner/repo",
             "html_url": "https://github.com/owner/repo",
             "role": "main",
+            "mcp_grant_kind": "coordination",
         }
         body = OpenPullRequest.model_validate(ARGS)
         self.assertEqual(creation._project_repo(project, body), "owner/repo")
         child = {
             **project,
             "role": "child",
+            "mcp_grant_kind": "coordination",
             "session_project_id": "project-1",
             "session_repo": "https://github.com/owner/repo",
             "workspace_repo": "https://github.com/owner/repo",
@@ -133,6 +137,31 @@ class InputTests(unittest.TestCase):
         ):
             with self.subTest(key=key), self.assertRaises(creation.PolicyError):
                 creation._project_repo({**child, key: value}, body)
+
+        workspace = {
+            **project,
+            "role": "agent",
+            "mcp_grant_kind": "workspace",
+            "session_project_id": "project-1",
+            "session_repo": "https://github.com/owner/repo",
+            "session_branch": "feature/fix",
+            "workspace_repo": "https://github.com/owner/repo",
+            "workspace_branch": "feature/fix",
+            "kagent_session_id": "runtime-1",
+        }
+        self.assertEqual(creation._project_repo(workspace, body), "owner/repo")
+        for key, value in (
+            ("session_project_id", "another"),
+            ("session_repo", "https://github.com/fork/repo"),
+            ("workspace_repo", None),
+            ("workspace_branch", "feature/other"),
+            ("session_branch", "feature/other"),
+            ("workspace_branch", "invalid..branch"),
+            ("kagent_session_id", None),
+        ):
+            with self.subTest(workspace_key=key, workspace_value=value):
+                with self.assertRaises(creation.PolicyError):
+                    creation._project_repo({**workspace, key: value}, body)
 
     def test_branch_sha_and_authority_arguments(self):
         for branch in (
@@ -295,6 +324,96 @@ class PRPostgresTests(PostgresTestCase):
         return await invoke(
             self.service, self.ctx, "open_pull_request", {**self.args, **changes}
         )
+
+    async def workspace(self, branch="feature/fix"):
+        sid, _ = await self.bound_session(
+            role="agent", mcp_grant_kind="workspace", status="active"
+        )
+        await self.pool.execute(
+            """UPDATE sessions SET project_id=$2,repo_url=$3,branch_name=$4
+               WHERE id=$1""",
+            sid,
+            self.project.id,
+            "https://github.com/owner/repo",
+            branch,
+        )
+        await self.pool.execute(
+            "INSERT INTO workspaces(session_id,repo,branch) VALUES($1,$2,$3)",
+            sid,
+            "https://github.com/owner/repo",
+            branch,
+        )
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_session_id=$2 WHERE session_id=$1",
+            sid,
+            f"runtime-{sid}",
+        )
+        self.ctx = await self.service.authenticate(token_for(sid))
+        self.args = {**ARGS, "project_id": self.project.id}
+        return sid
+
+    async def test_workspace_identity_and_pr_scope_are_resolved_server_side(self):
+        sid = await self.workspace()
+        self.assertEqual(
+            tools_for(self.ctx.actor), frozenset({"whoami", "open_pull_request"})
+        )
+        identity = await invoke(self.service, self.ctx, "whoami", {})
+        self.assertFalse(identity.isError)
+        self.assertEqual(identity.structuredContent["grant_status"], "active")
+        self.assertEqual(identity.structuredContent["scope_status"], "available")
+        self.assertEqual(identity.structuredContent["project_id"], self.project.id)
+        self.assertEqual(identity.structuredContent["workspace_id"], sid)
+        self.assertEqual(identity.structuredContent["repository"], "owner/repo")
+        self.assertEqual(identity.structuredContent["branch"], ARGS["branch"])
+        self.assertNotIn("token", str(identity.structuredContent).lower())
+
+        accepted = await self.call()
+        self.assertFalse(accepted.isError, accepted.content)
+        self.assertEqual(len(self.fake.posts), 1)
+
+        other_project = await db.get_or_create_project(
+            self.user, parse_github_repo("owner/other")
+        )
+        for changes in (
+            {"project_id": other_project.id},
+            {"branch": "feature/other"},
+        ):
+            result = await self.call(**changes)
+            self.assertTrue(result.isError, changes)
+        self.assertEqual(len(self.fake.posts), 1)
+
+        await self.workspace("trunk")
+        default_head = await self.call(branch="trunk")
+        self.assertTrue(default_head.isError)
+        self.assertEqual(len(self.fake.posts), 1)
+
+    async def test_sibling_workspace_identity_cannot_publish_another_branch(self):
+        owner = await self.workspace("feature/owner")
+        self.args["branch"] = "feature/owner"
+        owner_ctx = self.ctx
+        sibling = await self.workspace("feature/sibling")
+        sibling_ctx = self.ctx
+
+        self.ctx = owner_ctx
+        self.args["branch"] = "feature/sibling"
+        self.assertTrue((await self.call()).isError)
+        self.assertEqual(len(self.fake.posts), 0)
+
+        self.ctx = sibling_ctx
+        self.args["branch"] = "feature/sibling"
+        result = await self.call()
+        self.assertFalse(result.isError, result.content)
+        self.assertEqual(len(self.fake.posts), 1)
+        self.assertNotEqual(owner, sibling)
+
+    async def test_legacy_agent_binding_remains_unenrolled(self):
+        sid, _ = await self.bound_session(role="agent")
+        binding = await native_sessions.get_binding(sid)
+        self.assertEqual(binding["mcp_grant_kind"], "none")
+        self.assertIsNone(binding["token_hash"])
+        with self.assertRaises(HTTPException) as denied:
+            await self.service.authenticate(token_for(sid))
+        self.assertEqual(denied.exception.status_code, 401)
 
     async def child(self):
         sid, _ = await self.bound_session(role="child", parent_session_id=self.sid)

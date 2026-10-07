@@ -49,7 +49,10 @@ TOOLS = {
         "Open a same-repository feature-branch PR against the current default branch. "
         "Supply a stable request_id for retries; uncertain outcomes are reconciled without resending.",
     ),
-    "whoami": (ToolInput, "Show your binding identity and role."),
+    "whoami": (
+        ToolInput,
+        "Show your non-secret binding identity, grant status and resolved workspace scope.",
+    ),
     "topics": (ToolInput, "List topics and pending counts."),
     "topic_open": (TopicOpen, "Create or select a topic and set its status."),
     "note": (Record, "Write a durable topic note."),
@@ -79,13 +82,7 @@ async def invoke(
             raise PolicyError("surface", "tool is unavailable on this MCP surface")
         body = TOOLS[name][0].model_validate(arguments)
         if name == "whoami":
-            b = ctx.binding
-            result = {
-                "text": f"{b['role']} {b['kind']} session={b['session_id'][:8]} depth={ctx.actor.depth}",
-                "session_id": b["session_id"],
-                "role": b["role"],
-                "depth": ctx.actor.depth,
-            }
+            result = await service.whoami(ctx)
         elif name in ("note", "decide", "pending_add"):
             result = await service.record(
                 ctx,

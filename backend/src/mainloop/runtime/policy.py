@@ -29,8 +29,9 @@ class PolicyError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Actor:
-    role: str  # main | child
+    role: str  # main | child | agent
     depth: int
+    mcp_grant_kind: str = "coordination"
 
 
 def check_spawn(
@@ -110,6 +111,8 @@ ROLE_TOOLS = {
     "child": _COMMON_TOOLS | frozenset({"report"}),
 }
 
+WORKSPACE_TOOLS = frozenset({"whoami", "open_pull_request"})
+
 
 MERGE_TOOLS = frozenset(
     {
@@ -121,7 +124,12 @@ MERGE_TOOLS = frozenset(
 
 
 def tools_for(actor: Actor) -> frozenset[str]:
-    tools = ROLE_TOOLS.get(actor.role, frozenset())
+    if actor.mcp_grant_kind == "coordination":
+        tools = ROLE_TOOLS.get(actor.role, frozenset())
+    elif actor.role == "agent" and actor.mcp_grant_kind == "workspace":
+        tools = WORKSPACE_TOOLS
+    else:
+        tools = frozenset()
     if tools and os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true":
         tools |= MERGE_TOOLS
     return tools

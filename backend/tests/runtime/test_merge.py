@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.mcp_app import create_app, invoke
-from mainloop.runtime import hitl_continuation
+from mainloop.runtime import hitl_continuation, native_sessions
 from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.agent_tools import AgentService
 from mainloop.runtime.delegation import PgStore
@@ -747,6 +747,99 @@ class MergeFixture(PostgresTestCase):
 
 
 class MergeTests(MergeFixture):
+    async def test_workspace_merge_access_uses_the_same_persisted_scope(self):
+        sid, _ = await self.session("active")
+        await self.pool.execute(
+            """UPDATE sessions SET project_id=$2,repo_url=$3,branch_name=$4
+               WHERE id=$1""",
+            sid,
+            self.project.id,
+            "https://github.com/owner/repo",
+            "feature",
+        )
+        await self.pool.execute(
+            "INSERT INTO workspaces(session_id,repo,branch) VALUES($1,$2,$3)",
+            sid,
+            "https://github.com/owner/repo",
+            "feature",
+        )
+        await native_sessions.create_binding(sid, "claude", mcp_grant_kind="workspace")
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_session_id=$2 WHERE session_id=$1",
+            sid,
+            f"runtime-{sid}",
+        )
+        service = AgentService(PgStore())
+        ctx = await service.authenticate(token_for(sid))
+        arguments = {
+            "project_id": self.project.id,
+            "pr_number": 17,
+            "expected_sha": SHA,
+            "request_id": "workspace-prepare",
+        }
+        exposed = await invoke(service, ctx, "prepare_pull_request_merge", arguments)
+        self.assertFalse(exposed.isError, exposed.content)
+        self.assertEqual(exposed.structuredContent["state"], "prepared")
+
+        await self.pool.execute(
+            "UPDATE workspaces SET branch='feature/other' WHERE session_id=$1", sid
+        )
+        await self.pool.execute(
+            "UPDATE sessions SET branch_name='feature/other' WHERE id=$1", sid
+        )
+        denied = await invoke(
+            service,
+            ctx,
+            "prepare_pull_request_merge",
+            {**arguments, "request_id": "workspace-wrong-head"},
+        )
+        self.assertTrue(denied.isError)
+        self.assertEqual(len(self.fake.puts), 0)
+
+        wrong_project = await db.get_or_create_project(
+            self.user, parse_github_repo("owner/other")
+        )
+        denied_project = await invoke(
+            service,
+            ctx,
+            "prepare_pull_request_merge",
+            {
+                **arguments,
+                "project_id": wrong_project.id,
+                "request_id": "workspace-wrong-project",
+            },
+        )
+        self.assertTrue(denied_project.isError)
+
+        await self.pool.execute(
+            "UPDATE workspaces SET repo='https://github.com/fork/repo' WHERE session_id=$1",
+            sid,
+        )
+        denied_repo = await invoke(
+            service,
+            ctx,
+            "prepare_pull_request_merge",
+            {**arguments, "request_id": "workspace-wrong-repo"},
+        )
+        self.assertTrue(denied_repo.isError)
+
+        await self.pool.execute(
+            "UPDATE workspaces SET repo='https://github.com/owner/repo',branch='main' WHERE session_id=$1",
+            sid,
+        )
+        await self.pool.execute(
+            "UPDATE sessions SET branch_name='main' WHERE id=$1", sid
+        )
+        self.fake.pr["head"]["ref"] = "main"
+        denied_default = await invoke(
+            service,
+            ctx,
+            "prepare_pull_request_merge",
+            {**arguments, "request_id": "workspace-default-head"},
+        )
+        self.assertTrue(denied_default.isError)
+        self.assertEqual(len(self.fake.puts), 0)
+
     async def test_ruleset_only_pinned_squash_through_pr_api(self):
         self.fake.errors["/branches/main/protection"] = 404
         self.fake.rules = default_branch_rules()

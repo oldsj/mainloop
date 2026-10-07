@@ -27,11 +27,7 @@ The home chat is the user's native Claude Code main session, run by a kagent Age
 
 ## Identity and policy
 
-The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential injected by the Substrate egress gateway;
-the native agent holds only a placeholder. MCP discovery and calls are filtered by role:
-the main thread manages topics, pending intent and its child tree; children can call `whoami`,
-`note`, `decide` and `report`, and cannot delegate or inspect siblings. Inputs are validated
-and policy failures return tool errors. Terminal and archived bindings cannot authenticate.
+The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential reference injected by kagent's credential path; the native agent receives a placeholder, not the bearer. MCP discovery and calls use the binding role and persisted grant together. The main thread manages topics, pending intent and its child tree; children can call `whoami`, `note`, `decide` and `report`, and cannot delegate or inspect siblings. A newly created owner workspace can call `whoami` and `open_pull_request` within its stored project and branch scope. Merge tools remain behind the existing enablement gates. Workspace grants do not provide topic writes, reports or delegation. Ordinary standalone and retained legacy workspace bindings stay ungranted. Inputs are validated and policy failures return tool errors. Terminal, archived and revoked bindings cannot authenticate.
 The dedicated MCP origin exposes `/mcp` and the isolated `/mcp/merge-approval` tool surface; merge tools remain disabled pending the [merge enablement gates](pull-requests.md#enablement-remains-separate). REST remains unauthenticated and relies on the
 required NetworkPolicy isolation documented in the architecture guide. The channel is
 implemented with fake-backed tests; the joint gateway proof (native agent to MCP through the gateway,
@@ -39,11 +35,11 @@ blocked connections) passed on a Cilium cluster and needs a NetworkPolicy-enforc
 
 ## Initial installation and history boundary
 
-Slice a2 starts from a fresh database; upgrades from earlier slices are unsupported. Dev/spike
-data must be reset rather than migrated. Every main/child Session is created with its credential
-reference from the start, and the main thread uses the dedicated main Agent. There is no
-pre-a2 cutover or credential-less binding path, and earlier native session history is not
-carried into a2.
+New main and child sessions retain their coordination grants, and new owner workspaces enroll
+only through the normal workspace creation path. Migration preserves active main/child hashes
+and references but leaves existing `agent` workspaces ungranted; observed standalone sessions
+still receive no binding or credential. An unresolved create keeps its original grant and
+credential-reference contract. Existing native history is not rewritten or transferred.
 
 A definitively failed initial child start is terminal and revokes tool identity through durable
 Secret cleanup. An uncertain creation/readiness/deletion outcome is reconciled before startup

@@ -23,6 +23,10 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
 
 - `/agents` offers Claude Code and Codex. `POST /sessions` accepts `agent_kind`; when omitted, it defaults to Claude Code.
 - Each native session maps to one kagent Session (created on first use, resumed if suspended) on the configured kagent Agent for its kind. Mainloop does not create a Claude SDK worker for each session.
+- The ordinary `/agents` creation path creates an ungranted `agent` binding. The separate
+  validated `POST /workspaces` path enrolls a new owner workspace with a per-session MCP grant
+  and stored project/repository/branch scope. Existing workspace bindings are not enrolled by
+  migration; see [workspaces](workspaces.md) and [agent credentials](credentials.md).
 - If kagent has deleted that Session (its idle TTL, or out of band), the next message creates a new one under a fresh request id and sends the standing context again. The provider's earlier context is gone; Mainloop's conversation history is kept. Turns still open on the deleted Session become `uncertain`. A `failed` kagent Session is reported, not replaced.
 - Each user message is recorded with a delivery state before it is sent. Delivery states include `queued`, `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, and `uncertain`. kagent allows one non-quiescent task per Session, so Mainloop queues report messages itself. A task waiting for input (`input-required`) stays `delivered` and blocks further turns until it is answered or the turn is stopped; the shared HITL card can answer it when the server permits owner responses.
 - A message still `recorded` after a backend restart was never sent, so it is delivered then; this is its first send, not a replay. A `sending` message with no task after 60 seconds, including when the lookup itself keeps failing, becomes `uncertain`.
