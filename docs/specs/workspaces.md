@@ -272,3 +272,10 @@ Projects without a selection retain the legacy CreateSession request without tha
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
+
+## Git publication contract (disabled)
+
+The standalone [push gate contract](push-gate.md) defines feature-branch publication
+scope and protected branches. No listener or lifecycle integration is active yet;
+read-only publication status in the workspace API/UI is deferred to slice 1b. Current
+actor GitHub credentials remain unchanged until the infrastructure containment switch.

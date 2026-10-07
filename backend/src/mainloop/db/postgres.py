@@ -11,6 +11,7 @@ from mainloop.config import settings
 from mainloop.db.environment_schema import ENVIRONMENT_MIGRATION_SQL
 from mainloop.db.hitl_schema import HITL_MIGRATION_SQL
 from mainloop.db.merge_schema import MERGE_MIGRATION_SQL
+from mainloop.db.push_gate_schema import PUSH_GATE_MIGRATION_SQL
 from mainloop.services.github_repo import GithubRepo
 
 from models import (
@@ -491,6 +492,7 @@ CREATE TABLE IF NOT EXISTS pr_creation_requests (
 MIGRATION_SQL += HITL_MIGRATION_SQL
 MIGRATION_SQL += MERGE_MIGRATION_SQL
 MIGRATION_SQL += ENVIRONMENT_MIGRATION_SQL
+MIGRATION_SQL += PUSH_GATE_MIGRATION_SQL
 
 
 class Database:
