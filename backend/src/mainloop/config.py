@@ -39,6 +39,11 @@ class Settings(BaseSettings):
             raise ValueError("MAINLOOP_OWNER_ID must not be blank")
         return value
 
+    # Public OCI registries allowed for development environment metadata.
+    environment_registry_allowlist: list[str] = Field(
+        default_factory=lambda: ["ghcr.io"]
+    )
+
     # Workspace previews reach a dev server in the kagent harness through the Substrate router
     # (``CONNECT actor-upstream:<port>``, the target actor named by the ``ate-target-actor``
     # header). The router has no authentication; owner scoping happens in Mainloop.
