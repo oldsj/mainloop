@@ -12,6 +12,7 @@ from mainloop.db.environment_schema import ENVIRONMENT_MIGRATION_SQL
 from mainloop.db.hitl_schema import HITL_MIGRATION_SQL
 from mainloop.db.merge_schema import MERGE_MIGRATION_SQL
 from mainloop.db.push_gate_schema import PUSH_GATE_MIGRATION_SQL
+from mainloop.db.task_schema import TASK_MIGRATION_SQL
 from mainloop.services.github_repo import GithubRepo
 
 from models import (
@@ -177,6 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
 CREATE TABLE IF NOT EXISTS native_bindings (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id),
     kind TEXT NOT NULL,
+    role TEXT NOT NULL,
     kagent_session_id TEXT,      -- kagent Session id, equal to the A2A contextId; NULL until created
     kagent_request_id TEXT,      -- CreateSession request id of a replacement Session; NULL = derived
     model TEXT,
@@ -210,7 +212,7 @@ CREATE TABLE IF NOT EXISTS native_deliveries (
 CREATE INDEX IF NOT EXISTS idx_native_deliveries_session ON native_deliveries(session_id);
 
 -- Context model (main thread window, session tree, topics). Additive to the r6 tables.
-ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'agent';
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS role TEXT NOT NULL;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS topic_id TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS token_hash TEXT;
@@ -230,21 +232,6 @@ CREATE TABLE IF NOT EXISTS agent_credential_cleanup (
     credential_ref JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Existing authenticated main/child bindings remain coordination grants. Ordinary agent
--- bindings (including retained workspace Sessions) are never enrolled by migration.
-UPDATE native_bindings SET mcp_grant_kind='coordination'
- WHERE role IN ('main','child') AND token_hash IS NOT NULL AND mcp_grant_kind='none';
--- Freeze the already-supported reference for existing coordination bindings with a live hash.
-UPDATE native_bindings SET credential_ref=jsonb_build_object(
-    'origin','http://mainloop-mcp.mainloop.svc.cluster.local',
-    'header','Authorization','secret_name','mainloop-agent-tokens','secret_key',session_id)
- WHERE (mcp_grant_kind='coordination' AND token_hash IS NOT NULL
-        OR credential_cleanup_pending=TRUE) AND credential_ref IS NULL;
--- Carry forward any cleanup that was pending before cleanup records became deletion-safe.
-INSERT INTO agent_credential_cleanup(session_id,credential_ref)
- SELECT session_id,credential_ref FROM native_bindings
- WHERE credential_cleanup_pending=TRUE AND credential_ref IS NOT NULL
- ON CONFLICT(session_id) DO NOTHING;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='native_bindings_mcp_grant_kind_check') THEN
@@ -265,35 +252,11 @@ ALTER TABLE native_bindings DROP COLUMN IF EXISTS context_tokens;
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS baseline_tokens;
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS turns_in_lineage;
 ALTER TABLE native_bindings DROP COLUMN IF EXISTS continuations;
--- A delivery still open at the cutover has no kagent task and its binding has no kagent Session
--- yet, so nothing could resolve it and it would block the session for good. Settle it as unknown
--- (never replayed). The legacy cursor column marks the one run that sees Substrate-era rows.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_name='native_deliveries' AND column_name='cursor_before') THEN
-        UPDATE native_deliveries
-           SET state='uncertain',
-               detail='open at the kagent cutover, outcome unknown; not replayed',
-               updated_at=NOW()
-         WHERE state IN ('recorded','sending','delivered');
-    END IF;
-END $$;
 ALTER TABLE native_deliveries DROP COLUMN IF EXISTS cursor_before;
 ALTER TABLE native_deliveries DROP COLUMN IF EXISTS generation;
 DROP TABLE IF EXISTS native_lineage;
 DROP TABLE IF EXISTS native_events;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
--- Cancelling used to record status failed + this error text (and agent sync could then revive
--- it). Cancelled is its own status now; correct the old rows. Idempotent.
-UPDATE sessions SET status = 'cancelled', error = NULL
- WHERE error = 'Cancelled by user' AND status <> 'cancelled';
--- A child that has reported is done, not waiting on the user. New reports set this directly;
--- this corrects children that reported before that, which no sync would revisit. Idempotent.
-UPDATE sessions SET status = 'completed'
- WHERE status = 'waiting_on_user'
-   AND EXISTS (SELECT 1 FROM native_bindings b
-               WHERE b.session_id = sessions.id AND b.role = 'child' AND b.reported_at IS NOT NULL);
 ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'user';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_native_bindings_token ON native_bindings(token_hash) WHERE token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_native_bindings_parent ON native_bindings(parent_session_id);
@@ -493,6 +456,7 @@ MIGRATION_SQL += HITL_MIGRATION_SQL
 MIGRATION_SQL += MERGE_MIGRATION_SQL
 MIGRATION_SQL += ENVIRONMENT_MIGRATION_SQL
 MIGRATION_SQL += PUSH_GATE_MIGRATION_SQL
+MIGRATION_SQL += TASK_MIGRATION_SQL
 
 
 class Database:

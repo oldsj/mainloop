@@ -315,47 +315,6 @@ class SchemaTests(PostgresTestCase):
             await self.pool.fetchval("SELECT to_regclass('native_events')")
         )
 
-    async def test_upgrade_settles_open_substrate_deliveries_once(self):
-        """A delivery open at the cutover has no kagent task and its binding has no kagent
-        Session, so nothing could ever resolve it and it would block the session for good.
-        """
-        sid, cid = await self.session("active")
-        await self.pool.execute(
-            "ALTER TABLE native_deliveries ADD COLUMN IF NOT EXISTS cursor_before INTEGER"
-        )
-        await self.pool.execute(
-            "INSERT INTO native_bindings (session_id, kind, role) VALUES ($1,'claude','main')",
-            sid,
-        )
-        ids = {
-            state: await self.delivery(sid, cid, state)
-            for state in ("recorded", "sending", "delivered", "queued", "completed")
-        }
-        self.assertEqual(await ns.ledger.open_count(sid), 3)
-
-        await _init_schema(self.url)
-
-        self.assertEqual(await ns.ledger.open_count(sid), 0)
-        self.assertEqual(
-            {state: await self.state_of(mid) for state, mid in ids.items()},
-            {
-                "recorded": "uncertain",
-                "sending": "uncertain",
-                "delivered": "uncertain",
-                "queued": "queued",
-                "completed": "completed",
-            },
-        )
-        row = await self.pool.fetchrow(
-            "SELECT detail FROM native_deliveries WHERE message_id=$1", ids["sending"]
-        )
-        self.assertIn("not replayed", row["detail"])
-
-        # Only the cutover settles them: work recorded afterwards is left alone on a restart.
-        fresh = await self.delivery(sid, cid, "sending")
-        await _init_schema(self.url)
-        self.assertEqual(await self.state_of(fresh), "sending")
-
 
 class BindingTests(PostgresTestCase):
     async def test_create_lookup_and_update(self):
@@ -458,14 +417,14 @@ class BindingTests(PostgresTestCase):
         b, _ = await self.session()
         await ns.create_binding(a, "claude", role="child")
         await self.pool.execute(
-            "INSERT INTO native_bindings (session_id, kind, token_hash) VALUES ($1,'claude','dup')",
+            "INSERT INTO native_bindings (session_id, kind, role, token_hash) VALUES ($1,'claude','child','dup')",
             b,
         )
         await self.pool.execute("DELETE FROM native_bindings WHERE session_id=$1", b)
         token = (await ns.get_binding(a))["token_hash"]
         with self.assertRaises(asyncpg.UniqueViolationError):
             await self.pool.execute(
-                "INSERT INTO native_bindings (session_id, kind, token_hash) VALUES ($1,'claude',$2)",
+                "INSERT INTO native_bindings (session_id, kind, role, token_hash) VALUES ($1,'claude','child',$2)",
                 b,
                 token,
             )

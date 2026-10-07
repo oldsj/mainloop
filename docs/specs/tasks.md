@@ -1,0 +1,260 @@
+# Durable tasks (S0 contracts)
+
+Implemented: task/attempt/operation persistence, owner reads, project provider preferences,
+transactional admission helpers, and committed task notification dispatch. Native creation,
+task delegation tools, task cancellation, retry, handoff, publication completion and retention cleanup
+remain unavailable until their implementation slices connect the ports. This spec distinguishes
+these contracts from live capability qualification; no runtime proof follows from fixtures.
+
+The existing session-based MCP `delegate`, `report`, `status`, `read`, `cancel` and `clear`
+operations remain available with their existing schemas and behavior. S2 replaces that path
+in the same change that enables task tools. The new `TaskDelegate` and `TaskReportInput`
+schemas are separate contracts; they do not add aliases or change the production tools.
+
+## Identity and state
+
+A task records owner/project/topic, parent/root, creator binding, title/brief, code or
+coordination mode, selected profile/source, optional inherited owner provider constraint,
+status/reason, current attempt, version and timestamps. Code requires an owner-owned project
+and typed branch/ref/depth. Coordination has no checkout or repository authority.
+
+Public status is `queued`, `running`, `waiting`, `blocked`, `completed`, `failed` or
+`cancelled`. Reasons distinguish awaiting child, approval, CI, publication, handoff and
+reconciliation. Agent activity, delivery, workspace health, attention and publication remain
+separate observations. A provider report or finished turn cannot prove coding-task completion.
+Verified merged publication is the later completion gate.
+
+Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
+reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
+state, brief delivery, lineage, results/evidence and retention audit. SQL rejects routing
+mutation, duplicate task/number and duplicate session associations. A deferred composite FK
+requires the task's current attempt to belong to that task. Native deletion preserves audit IDs.
+
+Roles are main depth 0, supervisor depth 1 and child depth 2. Owner workspace agents are outside
+the delegated tree. Principal fields are resolved by the server, never accepted in public inputs.
+Main reads/manages its owner's tree; a supervisor manages direct children in its inherited
+project/root; a child reads its own task. Inactive, mismatched or superseded bindings are denied.
+An owner-selected provider constraint cannot be overridden by a supervisor.
+
+## REST
+
+Owner routes use the configured-owner dependency, ignoring caller identity headers. MCP never
+uses the owner REST listener.
+
+| Route                                    | S0 result                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| `GET /tasks?project_id=&parent_task_id=` | Array of task views within owner scope                                  |
+| `GET /tasks/{id}`                        | Task, attempt history, projection, action eligibility                   |
+| `POST /tasks`                            | 202, idempotent blocked operation; no task/runtime/capacity reservation |
+| `POST /tasks/{id}/retry`                 | 202, blocked handoff operation after authority/version check            |
+| `POST /tasks/{id}/reassign`              | Same, with explicit target profile                                      |
+| `POST /tasks/{id}/cancel`                | 202, blocked cancellation operation                                     |
+| `GET /task-operations/{id}`              | Durable operation, including step and reason                            |
+| `GET /projects/{id}/default-provider`    | Profile or null, preference version (initially 0)                       |
+| `PUT /projects/{id}/default-provider`    | Compare-and-swap preference; null removes selection                     |
+
+Example create input:
+
+```json
+{
+  "request_id": "create-1",
+  "title": "Fix task list",
+  "brief": "Implement the specified change",
+  "mode": "code",
+  "project_id": "project-1",
+  "provider_profile_id": "codex",
+  "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 1 }
+}
+```
+
+S0 action response (timestamps and digest shortened here for readability):
+
+```json
+{
+  "id": "operation-1",
+  "owner_id": "owner",
+  "principal_key": "owner",
+  "request_id": "create-1",
+  "request_digest": "sha256-digest",
+  "kind": "create",
+  "task_id": null,
+  "attempt_id": null,
+  "state": "blocked",
+  "last_confirmed_step": "requested",
+  "reason": "provisioning_unavailable",
+  "created_at": "2026-10-07T00:00:00Z",
+  "updated_at": "2026-10-07T00:00:00Z"
+}
+```
+
+Actions require `request_id`, `expected_version`, and `expected_attempt_id` (explicit null
+when no attempt exists). Reassign also requires `target_profile_id`. Same owner/principal/request
+and normalized payload return the same operation. Changed payload/kind/target returns 409;
+stale version/attempt returns 409; out-of-scope reads return 404. Authority fields, unknown
+fields and old delegation `kind`/session payload aliases are rejected with 422.
+
+Example read state:
+
+```json
+{
+  "task": {
+    "id": "task-1",
+    "owner_id": "owner",
+    "project_id": "project-1",
+    "topic_id": null,
+    "parent_task_id": null,
+    "root_task_id": "task-1",
+    "creator_binding_id": null,
+    "title": "Fix task list",
+    "brief": "Implement the specified change",
+    "mode": "code",
+    "assigned_profile_id": "codex",
+    "selection_source": "explicit",
+    "provider_constraint": "codex",
+    "status": "queued",
+    "reason": null,
+    "current_attempt_id": null,
+    "version": 1,
+    "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 1 },
+    "created_at": "2026-10-07T00:00:00Z",
+    "updated_at": "2026-10-07T00:00:00Z"
+  },
+  "attempts": [],
+  "projection": {
+    "agent_activity": null,
+    "delivery_state": null,
+    "workspace_health": null,
+    "environment_version_id": null,
+    "repository": null,
+    "branch": null,
+    "pr_url": null,
+    "pr_number": null,
+    "pr_head_sha": null,
+    "pr_state": "unknown",
+    "ci_state": "unknown",
+    "ci_head_sha": null,
+    "merge_state": null,
+    "merge_proposal_id": null,
+    "publication_state": null,
+    "pending_approval_ids": [],
+    "observed_at": null
+  },
+  "actions": {
+    "retry": { "available": false, "reason": "handoff_unavailable" },
+    "reassign": { "available": false, "reason": "handoff_unavailable" },
+    "cancel": { "available": false, "reason": "cancel_unavailable" }
+  }
+}
+```
+
+The read shape is identical for each task status. Examples of status/reason pairs:
+
+```json
+[
+  { "status": "queued", "reason": null },
+  { "status": "running", "reason": null },
+  { "status": "waiting", "reason": "approval" },
+  { "status": "blocked", "reason": "reconciliation" },
+  { "status": "completed", "reason": null },
+  { "status": "failed", "reason": null },
+  { "status": "cancelled", "reason": null }
+]
+```
+
+Frozen handoff operation states, not an implemented S0 handoff:
+
+```json
+[
+  { "state": "requested" },
+  { "state": "draining" },
+  { "state": "checkpoint_required" },
+  { "state": "checkpoint_verified" },
+  { "state": "source_fencing" },
+  { "state": "source_fenced" },
+  { "state": "target_creating" },
+  { "state": "target_ready" },
+  { "state": "completed" },
+  { "state": "blocked", "last_confirmed_step": "checkpoint_required", "reason": "handoff" },
+  { "state": "uncertain", "last_confirmed_step": "source_fencing", "reason": "reconciliation" }
+]
+```
+
+Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `failed`,
+`cancelled`, `completed`. Capacity remains held separately until confirmed fencing/termination;
+reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
+
+## Admission and integration ports
+
+All persistence mutations take the caller's asyncpg connection inside one transaction. Lock
+order is global admission key, request key, parent task, branch claim. Trusted cap settings
+(default 3 per parent, 6 globally) count held reservations including uncertain creates/drains.
+Idempotency is checked before reservation, and transaction rollback removes all admission rows.
+
+Writer claims key owner/canonical repository/exact branch, covering project URL/name aliases.
+Generations increase when a released claim is reused. Compare-and-swap release checks generation
+and durable fenced state for delegated attempts. Coordination has no claim. S1 must connect
+ordinary owner workspace creation to the same helper, pass confirmed fence evidence for owner
+release, and connect lifecycle guards; S0 does not claim existing native creation is fenced.
+No retained sessions, topics or claims are backfilled.
+
+Provisioning exposes `create`, `cancel`, `reconcile`; handoff exposes `start`, `reconcile`;
+projection exposes `refresh`. Disconnected mutations return stable reasons and cannot dispatch.
+Later ports must persist intent in the caller transaction before external operations, use the
+operation ID for reconciliation, consume the pinned attempt routing, and qualify readiness before
+releasing a brief. They must not issue native calls while holding the admission transaction.
+`update_projection` atomically updates observations/version and reserves an outbox event; it
+cannot complete a task or grant consent. S4 owns trusted publication completion.
+
+## Notifications and recovery
+
+```json
+{
+  "type": "task:updated",
+  "event_id": "event-1",
+  "task_id": "task-1",
+  "version": 2,
+  "attempt_id": "attempt-1",
+  "root_task_id": "task-1",
+  "parent_task_id": null,
+  "occurred_at": "2026-10-07T00:00:00Z"
+}
+```
+
+Task events are reserved in the mutation transaction. A separate connection publishes only
+committed rows to the existing owner SSE bus, with SSE event name `task:updated` and the same
+stable event ID. Delivery is at least once: duplicates and missed/disconnected events reconcile
+through GET, never replay agent prompts. The dispatcher also routes persisted pending operations
+to installed ports; blocked/unavailable operations never dispatch. No DBOS workflow sequence
+changed in S0.
+
+Retention settings reserve archive at 21 days and delete after two calendar months from
+supersession. Validation conservatively requires archive no later than 28 days times the deletion
+month count, guaranteeing order for any calendar. Destructive cleanup and holds are S3 behavior,
+not implemented by S0. No transcript conversion, snapshot import or automatic fallback exists.
+
+Task detail also includes `operations`, `artifacts` and `reports` arrays (empty before their
+producer slices connect). Artifacts include operation ID, kind, SHA-256 and canonical JSON
+payload. `unverified_provider_summary` remains a labelled claim; immutable manifests/checkpoints
+are capped at 32 KiB and summaries at 8 KiB. Task operation records retain the validated
+`request_payload` for durable recovery. Reports never imply completion or release capacity.
+Report and recipient delivery tables reserve stable request/event keys for S2's outbox routing.
+Writer release requires a server-supplied `fence_evidence_ref` as well as generation/identity CAS;
+S1 must verify that evidence, including ordinary owner workspace fencing, before calling it.
+
+Action eligibility may express an available action without a blocker:
+
+```json
+{ "available": true, "reason": null }
+```
+
+An unavailable action must carry a typed reason; omitting it or passing null is invalid:
+
+```json
+{ "available": false, "reason": "handoff_unavailable" }
+```
+
+For cancel/retry/reassign, mutation locks are acquired in global admission, request key,
+target task order. The target is authorized before any operation FK is inserted; missing or
+foreign-owner targets return the same scoped 404 `task_not_found`. An identical authorized
+request returns its existing operation before checking task version, preserving lost-response
+replay after a version change. A changed payload still returns 409.

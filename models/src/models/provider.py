@@ -18,7 +18,7 @@ KagentName = Annotated[
         pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
     ),
 ]
-ProviderRole = Literal["main", "child", "agent"]
+ProviderRole = Literal["main", "supervisor", "child", "agent"]
 
 
 class ProviderAgentRef(ContractModel):

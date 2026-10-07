@@ -43,6 +43,22 @@ from models.session import (
     SessionNotification,
     SessionStatus,
 )
+from models.task import (
+    ProjectProviderPreference,
+    ProjectProviderUpdate,
+    Task,
+    TaskAction,
+    TaskArtifact,
+    TaskAttempt,
+    TaskCheckout,
+    TaskCreate,
+    TaskOperation,
+    TaskProjection,
+    TaskReassign,
+    TaskReport,
+    TaskUpdated,
+    TaskView,
+)
 from models.workflow import (
     EventTypes,
     GitHubPR,
@@ -128,4 +144,22 @@ __all__ += [
     "PublicationState",
     "PushGrant",
     "RefUpdate",
+]
+
+
+__all__ += [
+    "Task",
+    "TaskAttempt",
+    "TaskArtifact",
+    "TaskCreate",
+    "TaskAction",
+    "TaskReassign",
+    "TaskReport",
+    "TaskOperation",
+    "TaskCheckout",
+    "TaskView",
+    "TaskProjection",
+    "TaskUpdated",
+    "ProjectProviderPreference",
+    "ProjectProviderUpdate",
 ]

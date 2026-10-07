@@ -26,6 +26,7 @@ from mainloop.models import (
 from mainloop.runtime import hitl_continuation
 from mainloop.runtime.kagent_client import KagentError
 from mainloop.runtime.preview_proxy import register_preview_proxy
+from mainloop.runtime.task_api import router as task_api_router
 from mainloop.runtime.workspace_api import router as workspace_api_router
 from mainloop.services.github_pr import (
     CommitSummary,
@@ -210,6 +211,9 @@ async def startup_event():
     from mainloop.runtime import native_sessions
 
     app.state.native_reconcile = asyncio.create_task(native_sessions.reconcile_loop())
+    from mainloop.tasks.service import reconciliation_dispatcher
+
+    app.state.task_reconcile = asyncio.create_task(reconciliation_dispatcher(db))
 
 
 @app.on_event("shutdown")
@@ -221,6 +225,10 @@ async def shutdown_event():
     if task is not None:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+    task_dispatcher = getattr(app.state, "task_reconcile", None)
+    if task_dispatcher is not None:
+        task_dispatcher.cancel()
+        await asyncio.gather(task_dispatcher, return_exceptions=True)
     from mainloop.runtime import native_sessions
 
     await native_sessions.close_client()
@@ -377,6 +385,7 @@ async def list_topics(user_id: str = Depends(current_user)):
 
 app.include_router(workspace_api_router)
 app.include_router(environment_api_router)
+app.include_router(task_api_router)
 register_preview_proxy(app)
 
 
