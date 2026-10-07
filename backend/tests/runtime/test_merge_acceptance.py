@@ -3,7 +3,7 @@
 import asyncio
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -174,7 +174,18 @@ class MergeAcceptanceTests(support.MergeFixture):
         return receipt
 
     async def approved_flow(self, provider, *, nested=False):
-        p = await self.prepare()
+        # This class owns an isolated scratch database. Backdate INSERT defaults
+        # rather than bypassing the immutable-proposal trigger or mocking an
+        # unused application clock. Preparation still uses the real service.
+        await self.pool.execute(
+            "ALTER TABLE merge_proposals ALTER COLUMN created_at SET DEFAULT (now() - interval '16 hours')"
+        )
+        try:
+            p = await self.prepare()
+        finally:
+            await self.pool.execute(
+                "ALTER TABLE merge_proposals ALTER COLUMN created_at SET DEFAULT now()"
+            )
         gateway, direct = await self.inventory(p, provider)
         projection = direct
         if nested:
@@ -227,10 +238,60 @@ class MergeAcceptanceTests(support.MergeFixture):
                         evidence_reference="fixture://verified-outer-leaf",
                     ),
                 )
+        # Represent the persisted unanswered observation at the start of the
+        # overnight pause, then let real recovery refresh it at database time.
+        await self.pool.execute(
+            "UPDATE native_hitl_requests SET observed_at=now()-interval '16 hours' WHERE owner_id=$1",
+            self.user,
+        )
+        await self.pool.execute(
+            "UPDATE native_hitl_inventory_state SET next_sweep=now()-interval '16 hours' WHERE owner_id=$1",
+            self.user,
+        )
+        ages = await self.pool.fetchrow(
+            "SELECT now()-p.created_at AS proposal_age, now()-h.observed_at AS request_age FROM merge_proposals p CROSS JOIN native_hitl_requests h WHERE p.id=$1 AND h.id=$2",
+            p["proposal_id"],
+            projection.id,
+        )
+        self.assertGreaterEqual(ages["proposal_age"], timedelta(hours=16))
+        self.assertGreaterEqual(ages["request_age"], timedelta(hours=16))
+        before = await self.pool.fetchrow(
+            "SELECT state,deadline,intent_id,receipt_action_id FROM merge_requests WHERE owner_id=$1",
+            self.user,
+        )
+        self.assertEqual(
+            dict(before),
+            {
+                "state": "prepared",
+                "deadline": None,
+                "intent_id": None,
+                "receipt_action_id": None,
+            },
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_hitl_responses WHERE owner_id=$1",
+                self.user,
+            ),
+            0,
+        )
+        self.assertEqual(gateway.sent, [])
+        self.assertEqual(self.fake.puts, [])
+        original_outer = projection.outer
+        original_leaf = direct.leaves[0]
         # Recreate the observer against suspended gateway snapshots and persisted state.
         await self.observe(self.observer(gateway))
         await self.observe(self.observer(gateway))
         projection = next(p for p in await self.projections() if p.id == projection.id)
+        self.assertEqual(projection.outer, original_outer)
+        self.assertEqual(projection.leaves[0], original_leaf)
+        self.assertGreaterEqual(
+            await self.pool.fetchval(
+                "SELECT now()-created_at FROM merge_proposals WHERE id=$1",
+                p["proposal_id"],
+            ),
+            timedelta(hours=16),
+        )
         inbox = await self.http(gateway, "GET", "/queue")
         self.assertEqual(inbox.status_code, 200)
         self.assertEqual(
@@ -256,9 +317,7 @@ class MergeAcceptanceTests(support.MergeFixture):
         if provider == "codex" and not nested:
             if target := os.environ.get("MERGE_UI_FIXTURE_PATH"):
                 Path(target).write_text(json.dumps(view))
-        with patch.object(merge, "datetime") as clock:
-            clock.now.return_value = datetime.now(UTC) + timedelta(hours=16)
-            result = await self.answer(gateway, projection)
+        result = await self.answer(gateway, projection)
         await self.assert_receipt(result, projection, p)
         self.assertIsNone(
             await self.pool.fetchval(
@@ -277,8 +336,29 @@ class MergeAcceptanceTests(support.MergeFixture):
             self.assertEqual(
                 (await self.answer(gateway, direct, action="mobile")).status_code, 409
             )
+        # Keep the first real evaluation pending so its fresh PostgreSQL window
+        # can be measured after the aged request is answered, before any PUT.
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        evaluation_started = await self.pool.fetchval("SELECT now()")
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        evaluation_observed = await self.pool.fetchval("SELECT now()")
+        deadline = await self.pool.fetchval(
+            "SELECT deadline FROM merge_requests WHERE owner_id=$1",
+            self.user,
+        )
+        self.assertGreaterEqual(deadline, evaluation_started + timedelta(minutes=30))
+        self.assertLessEqual(deadline, evaluation_observed + timedelta(minutes=30))
+        self.assertEqual(self.fake.puts, [])
+        self.fake.runs[0].update(status="completed", conclusion="success")
         self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
         self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT deadline FROM merge_requests WHERE owner_id=$1",
+                self.user,
+            ),
+            deadline,
+        )
         self.assertEqual(len(gateway.sent), 1)
         self.assertEqual(len(self.fake.puts), 1)
         candidate = await self.pool.fetchrow(
