@@ -999,3 +999,59 @@ class DelegatedWriterTests(PostgresTestCase):
                 agent["sid"],
             )
             await self.assert_denied(conn, token, agent, "grant_kind")
+
+    async def test_parent_revocation_or_drain_denies_old_and_new_child_grants(self):
+        async with self.pool.acquire() as conn:
+            token = await self.issue(conn, self.child)
+            await conn.execute(
+                "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1",
+                self.supervisor["sid"],
+            )
+            with self.assertRaises(ValueError):
+                await self.authorize(conn, token, self.child)
+            with self.assertRaises(ValueError):
+                await self.issue(conn, self.child)
+            await conn.execute(
+                "UPDATE native_bindings SET token_hash=$2 WHERE session_id=$1",
+                self.supervisor["sid"],
+                "mcp-" + self.supervisor["sid"],
+            )
+            await conn.execute(
+                "UPDATE task_attempts SET state='draining' WHERE id=$1",
+                self.supervisor["attempt"],
+            )
+            with self.assertRaises(ValueError):
+                await self.authorize(conn, token, self.child)
+            with self.assertRaises(ValueError):
+                await self.issue(conn, self.child)
+
+    async def test_forged_child_root_and_parent_claim_loss_deny_publication(self):
+        unrelated = await self.writer("supervisor", "feature/unrelated")
+        async with self.pool.acquire() as conn:
+            token = await self.issue(conn, self.child)
+            async with conn.transaction():
+                await conn.execute("SET LOCAL session_replication_role = replica")
+                await conn.execute(
+                    "UPDATE tasks SET root_task_id=$2 WHERE id=$1",
+                    self.child["task"],
+                    unrelated["task"],
+                )
+            with self.assertRaisesRegex(ValueError, "attempt_ancestry"):
+                await self.authorize(conn, token, self.child)
+            with self.assertRaisesRegex(ValueError, "attempt_ancestry"):
+                await self.issue(conn, self.child)
+            async with conn.transaction():
+                await conn.execute("SET LOCAL session_replication_role = replica")
+                await conn.execute(
+                    "UPDATE tasks SET root_task_id=$2 WHERE id=$1",
+                    self.child["task"],
+                    self.supervisor["task"],
+                )
+                await conn.execute(
+                    "UPDATE workspace_writer_claims SET held=FALSE WHERE attempt_id=$1",
+                    self.supervisor["attempt"],
+                )
+            with self.assertRaises(ValueError):
+                await self.authorize(conn, token, self.child)
+            with self.assertRaises(ValueError):
+                await self.issue(conn, self.child)

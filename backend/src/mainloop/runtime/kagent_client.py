@@ -986,7 +986,18 @@ class KagentClient:
         )
         if development_environment is not None:
             message += _field_bytes(8, development_environment.encode())
-        return await self._session_call("CreateSession", message)
+        session = await self._session_call("CreateSession", message)
+        if (
+            not session.id
+            or session.context_id != session.id
+            or session.agent != agent
+            or session.workspace != workspace
+            or session.development_environment != development_environment
+        ):
+            raise OutcomeUnknown(
+                "CreateSession returned a different frozen create contract"
+            )
+        return session
 
     async def list_sessions_page(
         self, cursor: str = "", limit: int = 100
@@ -1005,7 +1016,15 @@ class KagentClient:
                 return sessions
 
     async def get_session(self, session_id: str) -> KagentSession:
-        return await self._session_call("GetSession", _field_str(1, session_id))
+        return await self._identified_session_call("GetSession", session_id)
+
+    async def _identified_session_call(
+        self, method: str, session_id: str
+    ) -> KagentSession:
+        session = await self._session_call(method, _field_str(1, session_id))
+        if session.id != session_id or session.context_id != session_id:
+            raise OutcomeUnknown(f"{method} returned a different Session identity")
+        return session
 
     async def get_agent(self, agent: AgentRef) -> KagentAgent:
         """Read an Agent through the trusted kagent control-plane service."""
@@ -1016,13 +1035,13 @@ class KagentClient:
         return result
 
     async def suspend_session(self, session_id: str) -> KagentSession:
-        return await self._session_call("SuspendSession", _field_str(1, session_id))
+        return await self._identified_session_call("SuspendSession", session_id)
 
     async def resume_session(self, session_id: str) -> KagentSession:
-        return await self._session_call("ResumeSession", _field_str(1, session_id))
+        return await self._identified_session_call("ResumeSession", session_id)
 
     async def delete_session(self, session_id: str) -> KagentSession:
-        return await self._session_call("DeleteSession", _field_str(1, session_id))
+        return await self._identified_session_call("DeleteSession", session_id)
 
     async def ensure_ready(
         self, session: KagentSession, *, timeout: float = 120.0, interval: float = 1.0
@@ -1033,8 +1052,23 @@ class KagentClient:
         job when the turn arrives.
         """
         deadline = asyncio.get_running_loop().time() + timeout
+        contract = (
+            session.id,
+            session.agent,
+            session.workspace,
+            session.development_environment,
+        )
         resumed = False
         while True:
+            if (
+                session.id,
+                session.agent,
+                session.workspace,
+                session.development_environment,
+            ) != contract:
+                raise OutcomeUnknown(
+                    "Readiness returned a different frozen Session contract"
+                )
             if session.state == RuntimeState.READY and session.settled:
                 return session
             if session.state in (

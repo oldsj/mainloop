@@ -106,6 +106,9 @@ class WorkspaceEnvironmentPostgresTests(KagentFakeCase):
             self.assertEqual(wire[0], wire[1])
             binding = await ns.get_binding(wid)
             binding["kagent_request_id"] = "replacement"
+            binding["kagent_session_id"] = (
+                None  # replacement has no confirmed runtime yet
+            )
             await ns._create_session_with_credentials(binding, ())
         self.assertEqual(
             calls[2]["development_environment"], calls[0]["development_environment"]

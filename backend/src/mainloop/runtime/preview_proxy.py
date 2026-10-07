@@ -42,6 +42,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from mainloop.config import settings
 from mainloop.identity import current_user
 from mainloop.runtime import workspaces
+from mainloop.tasks import lifecycle
 
 _WORKSPACE_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 # One DNS label directly under the preview domain: `<port>--<workspace>--preview`.
@@ -191,6 +192,44 @@ async def _resolve_target(workspace_id: str, user_id: str) -> PreviewTarget | No
         actor=session_actor(row["kagent_session_id"]),
         ports=row["ports"],
     )
+
+
+@contextlib.asynccontextmanager
+async def _router_admission(parsed: PreviewHost):
+    """Re-resolve the owner, runtime identity and port at every CONNECT attempt."""
+    async with lifecycle.guard(parsed.workspace_id, "preview"):
+        target = await _resolve_target(parsed.workspace_id, current_user())
+        if target is None or parsed.port not in target.ports:
+            raise lifecycle.LifecycleDenied("preview_target_unavailable")
+        yield target
+
+
+async def _admit_http(parsed, timeout, **kwargs):
+    async with _router_admission(parsed) as target:
+        # Thread cancellation does not cancel sendall. Keep the fence until it exits.
+        connection = asyncio.create_task(
+            asyncio.to_thread(_connect_router, target, parsed.port, timeout, **kwargs)
+        )
+        try:
+            return await asyncio.shield(connection)
+        except asyncio.CancelledError:
+            # Repeated ASGI cancellations must not release the fence while a worker
+            # thread can still forward. Socket timeouts bound this wait.
+            while not connection.done():
+                try:
+                    await asyncio.shield(connection)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                upstream = connection.result()
+                upstream.close()
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "Preview cancellation cleanup failed (%s)", type(exc).__name__
+                )
+            raise
 
 
 async def workspace_preview_ports(
@@ -509,10 +548,8 @@ async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
     upstream = None
     for attempt in range(2):
         try:
-            upstream = await asyncio.to_thread(
-                _connect_router,
-                target,
-                parsed.port,
+            upstream = await _admit_http(
+                parsed,
                 timeout,
                 method=request.method,
                 path=path,
@@ -520,6 +557,8 @@ async def _preview_http(request: Request, parsed: PreviewHost) -> Response:
                 body=body,
             )
             break
+        except lifecycle.LifecycleDenied:
+            return Response("Workspace no longer admits preview", status_code=404)
         except _PreviewPreForwardFailure:
             if attempt == 1:
                 return _waking_page()
@@ -725,79 +764,86 @@ async def _preview_websocket(websocket: WebSocket, parsed: PreviewHost) -> None:
         writer = None
         forwarding_started = False
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(router.hostname, router.port or 80), timeout
-            )
-            writer.write(
-                (
-                    f"CONNECT actor-upstream:{parsed.port} HTTP/1.1\r\n"
-                    f"Host: actor-upstream:{parsed.port}\r\n"
-                    f"ate-target-actor: {target.atespace}/{target.actor}\r\n"
-                    "Connection: keep-alive\r\n\r\n"
-                ).encode("ascii")
-            )
-            await writer.drain()
-            connect_status, _ = await asyncio.wait_for(
-                _read_async_head(reader), timeout
-            )
-            if connect_status != 200:
-                if attempt == 0:
+            async with _router_admission(parsed) as target:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(router.hostname, router.port or 80), timeout
+                )
+                writer.write(
+                    (
+                        f"CONNECT actor-upstream:{parsed.port} HTTP/1.1\r\n"
+                        f"Host: actor-upstream:{parsed.port}\r\n"
+                        f"ate-target-actor: {target.atespace}/{target.actor}\r\n"
+                        "Connection: keep-alive\r\n\r\n"
+                    ).encode("ascii")
+                )
+                await writer.drain()
+                connect_status, _ = await asyncio.wait_for(
+                    _read_async_head(reader), timeout
+                )
+                if connect_status != 200:
+                    if attempt == 0:
+                        writer.close()
+                        await writer.wait_closed()
+                        continue
+                    break
+
+                upstream_host = f"actor-upstream:{parsed.port}"
+                handshake_headers = [
+                    ("Host", upstream_host),
+                    ("Upgrade", "websocket"),
+                    ("Connection", "Upgrade"),
+                    ("Sec-WebSocket-Key", key),
+                    ("Sec-WebSocket-Version", "13"),
+                ]
+                origin = websocket.headers.get("origin")
+                if origin:
+                    handshake_headers.append(("Origin", origin))
+                if offered_protocols:
+                    handshake_headers.append(
+                        ("Sec-WebSocket-Protocol", ", ".join(offered_protocols))
+                    )
+                excluded = {
+                    "host",
+                    "origin",
+                    "sec-websocket-key",
+                    "sec-websocket-version",
+                    "sec-websocket-protocol",
+                    "sec-websocket-extensions",
+                }
+                for name, value in websocket.headers.items():
+                    if _forwardable_header(name) and name.lower() not in excluded:
+                        handshake_headers.append((name, value))
+                wire = (
+                    f"GET {path} HTTP/1.1\r\n"
+                    + "".join(
+                        f"{name}: {value}\r\n" for name, value in handshake_headers
+                    )
+                    + "\r\n"
+                )
+                forwarding_started = True
+                writer.write(wire.encode("latin1"))
+                await writer.drain()
+                status, headers = await asyncio.wait_for(
+                    _read_async_head(reader), timeout
+                )
+                if status != 101:
                     writer.close()
                     await writer.wait_closed()
-                    continue
-                break
-
-            upstream_host = f"actor-upstream:{parsed.port}"
-            handshake_headers = [
-                ("Host", upstream_host),
-                ("Upgrade", "websocket"),
-                ("Connection", "Upgrade"),
-                ("Sec-WebSocket-Key", key),
-                ("Sec-WebSocket-Version", "13"),
-            ]
-            origin = websocket.headers.get("origin")
-            if origin:
-                handshake_headers.append(("Origin", origin))
-            if offered_protocols:
-                handshake_headers.append(
-                    ("Sec-WebSocket-Protocol", ", ".join(offered_protocols))
-                )
-            excluded = {
-                "host",
-                "origin",
-                "sec-websocket-key",
-                "sec-websocket-version",
-                "sec-websocket-protocol",
-                "sec-websocket-extensions",
-            }
-            for name, value in websocket.headers.items():
-                if _forwardable_header(name) and name.lower() not in excluded:
-                    handshake_headers.append((name, value))
-            wire = (
-                f"GET {path} HTTP/1.1\r\n"
-                + "".join(f"{name}: {value}\r\n" for name, value in handshake_headers)
-                + "\r\n"
-            )
-            forwarding_started = True
-            writer.write(wire.encode("latin1"))
-            await writer.drain()
-            status, headers = await asyncio.wait_for(_read_async_head(reader), timeout)
-            if status != 101:
-                writer.close()
-                await writer.wait_closed()
-                break
-            expected = base64.b64encode(
-                hashlib.sha1(
-                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode(),
-                    usedforsecurity=False,
-                ).digest()
-            ).decode("ascii")
-            if headers.get("sec-websocket-accept") != expected:
-                raise ValueError("upstream websocket handshake was invalid")
-            protocol = headers.get("sec-websocket-protocol")
-            if protocol and protocol not in offered_protocols:
-                raise ValueError("upstream selected an unoffered websocket protocol")
-            await websocket.accept(subprotocol=protocol)
+                    break
+                expected = base64.b64encode(
+                    hashlib.sha1(
+                        (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode(),
+                        usedforsecurity=False,
+                    ).digest()
+                ).decode("ascii")
+                if headers.get("sec-websocket-accept") != expected:
+                    raise ValueError("upstream websocket handshake was invalid")
+                protocol = headers.get("sec-websocket-protocol")
+                if protocol and protocol not in offered_protocols:
+                    raise ValueError(
+                        "upstream selected an unoffered websocket protocol"
+                    )
+                await websocket.accept(subprotocol=protocol)
             async with _preview_activity_lease(parsed.workspace_id):
                 await _relay_websocket(websocket, reader, writer)
             return

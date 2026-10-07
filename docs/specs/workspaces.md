@@ -209,9 +209,9 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 
 ## Scope and evidence
 
-Existing or legacy workspaces and standalone `/agents` sessions remain ungranted. Migration does
-not infer enrollment from a checkout or retrofit a credential-free kagent Session; a new
-workspace must go through this creation path.
+This is a fresh cutover: old sessions are deleted, with no data migration, backfill or
+credential retrofit. Standalone `/agents` sessions have no workspace grant. New owner and
+delegated workspaces use the shared enrollment path.
 
 Fake-backed unit tests and opt-in PostgreSQL tests cover these paths. Earlier revisions ran
 against a scratch PostgreSQL; the M7 continuation tests and manifests still require supervisor
@@ -281,3 +281,56 @@ push credential injection exists. Workspace responses include `publication_mode`
 `publication_reason`, independently of runtime state. The badge and detail page show
 read-only reasons (default/protected branch, missing metadata, no grant, or disabled). Current
 actor GitHub credentials remain unchanged until the infrastructure containment switch.
+
+## Task-backed workspaces
+
+Owner task creation and authenticated supervisor child creation use the same transaction-aware
+session enrollment as ordinary owner workspaces. A root task has a supervisor at depth 1; its
+direct child has a child attempt at depth 2. Children and owner workspace agents cannot delegate.
+Every coding attempt has its own session, binding, workspace, checkout branch and per-binding
+MCP Secret. Its environment is resolved and pinned before native creation. Claude and Codex
+attempts use their immutable role AgentRef, not a subsequently reloaded provider route.
+
+A canonical owner/repository/branch claim excludes another ordinary or delegated writer, including
+repository spelling variants. A creating or uncertain attempt retains its capacity and claim. A proven first-dispatch
+input/origin rejection or control-authentication refusal atomically records audit evidence and
+moves the attempt to draining, closing all later create admission, including workspace refresh.
+Recovery settles that rejected identity without another create; retry requires a successor attempt.
+A known runtime must still be deleted by exact identity before branch or capacity release,
+even if rejection evidence exists. A dispatch marker persisted before the call makes a lost outcome conservative; a
+later refusal cannot serve as no-start evidence.
+The first brief is recorded once, only after native readiness and a transaction that rechecks
+current attempt, writer generation, binding and parent authority. Provider capability evidence must
+qualify the configured role; unknown evidence cannot enable task creation. Test fixtures explicitly
+opt into fake qualification and are not live provider evidence.
+
+Cancellation records durable intent, drains the attempt, revokes MCP/push authority, confirms
+exact-identity native deletion (or proven no-start rejection), then fences and releases its pinned writer generation. A lost delete response
+keeps capacity and branch ownership. A create retry refused after an unknown reply (including a
+missing template or changed control authorization) does not prove runtime absence; its attempt
+stays draining until the original runtime can be found and deleted. The attempt audit remains even when a rejected, never-started
+workspace's resource rows are removed. API cancellation of a delegated session uses this same
+path. Runtime creation, turn dispatch, resume and preview admission consult the central attempt
+guard. Each HTTP/WebSocket router CONNECT and pre-forward retry re-resolves the target under
+that guard, after bounded request-body reading and before forwarding. Long response streams do
+not retain the admission lock. Runtime actions and scoped publication use the same persisted
+ancestry checks and root-tree authority lock as parent draining and credential revocation.
+Siblings serialize conservatively on that root key. Lock order is project policy → tree
+authority → publication → runtime → task admission → rows, on the caller connection.
+
+Delegated PR/merge scope requires the active current attempt, exact generation, owner/project,
+role/depth and ancestry. A sibling's or parent's branch confers no authority. Coordination attempts
+have no checkout, writer claim or repository authority. A native turn finishing does not complete
+its task or release its writer. Task tools and publication completion are separate slices.
+
+Push enrollment runs again after activation commits the delegated attempt proof. The create
+operation remains pending at `target_ready` until this idempotent step reconciles; restart
+recovery revalidates current authority without recording or replaying another first brief. `PUSH_GATE_ENABLED`
+remains false by default. The delegated-role push resolver is integrated with the same live parent authority checks;
+this slice does not install a Git bearer into an actor or claim live push prevention. The existing
+MCP credential envelope is frozen before create and retried unchanged after unknown outcomes.
+
+The guard denies new preview admissions after draining; it does not terminate already-open router
+connections. Write-enabled handoff remains unqualified until retained-source isolation and preview
+fencing are proven by the handoff/runtime slices. Superseded history cannot use the ordinary
+immediate-delete archive path; its retention is a separate slice.

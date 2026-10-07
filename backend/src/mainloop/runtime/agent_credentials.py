@@ -18,6 +18,20 @@ SECRET_KEY = "authorization"  # nosec B105 - Kubernetes data key, not a credenti
 SECRET_LABELS = {"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp"}
 logger = logging.getLogger(__name__)
 MCP_ORIGIN = "http://mainloop-mcp.mainloop.svc.cluster.local"
+# Pairs only a task attempt can own. Coordination children also exist outside tasks (session
+# delegation), so only a ``child``/``workspace`` or ``supervisor`` binding is delegated by its pair.
+DELEGATED_PAIRS = frozenset({("supervisor", "workspace"), ("child", "workspace")})
+VALID_GRANT_PAIRS = (
+    frozenset(
+        {
+            ("main", "coordination"),
+            ("child", "coordination"),
+            ("agent", "workspace"),
+            ("supervisor", "coordination"),
+        }
+    )
+    | DELEGATED_PAIRS
+)
 
 
 def credential_value(binding_id: str) -> str:
@@ -182,11 +196,33 @@ async def publish_for_binding(binding: dict) -> SessionCredential:
             if not row:
                 raise RuntimeError("agent credential binding is unavailable")
             grant = row["mcp_grant_kind"]
-            valid_pair = (row["role"], grant) in {
-                ("main", "coordination"),
-                ("child", "coordination"),
-                ("agent", "workspace"),
-            }
+            valid_pair = (row["role"], grant) in VALID_GRANT_PAIRS
+            attempt = await conn.fetchrow(
+                """SELECT a.state,a.writer_generation,t.mode,a.id,t.current_attempt_id,
+                          c.held AS claim_held,c.generation AS claim_generation
+                   FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+                   LEFT JOIN workspace_writer_claims c ON c.attempt_id=a.id
+                   WHERE a.binding_id=$1""",
+                binding_id,
+            )
+            if (row["role"], grant) in DELEGATED_PAIRS or row["role"] == "supervisor":
+                # These pairs exist only for a task attempt.
+                valid_pair = valid_pair and attempt is not None
+            if valid_pair and attempt is not None:
+                # A delegated bearer exists only for a live attempt that still holds its branch
+                # claim at the generation it was admitted with. Coordination tasks have no claim.
+                valid_pair = (
+                    attempt["id"] == attempt["current_attempt_id"]
+                    and attempt["state"] in ("creating", "active")
+                    and (
+                        attempt["mode"] == "coordination"
+                        or (
+                            attempt["claim_held"]
+                            and attempt["claim_generation"]
+                            == attempt["writer_generation"]
+                        )
+                    )
+                )
             if (
                 not valid_pair
                 or not row["token_hash"]

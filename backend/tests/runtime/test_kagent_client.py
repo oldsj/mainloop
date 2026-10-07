@@ -1,6 +1,8 @@
 """kagent client against a fake gateway (fixture-backed; no network, no live kagent)."""
 
 import unittest
+from dataclasses import replace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from mainloop.runtime.kagent_client import (
@@ -35,6 +37,70 @@ from tests.runtime.kagent_fake import (
 )
 
 AGENT = AgentRef("kagent", "claude-subscription")
+
+
+class ExactSessionIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_delete_resume_cannot_accept_another_session(self):
+        client, _ = make_client(FakeKagent())
+        live = await client.create_session(AGENT, request_id="identity-fixture")
+        wrong = replace(
+            live, id="other", context_id="other", state=RuntimeState.DELETED
+        )
+        for method in (
+            client.get_session,
+            client.delete_session,
+            client.resume_session,
+        ):
+            with (
+                self.subTest(method=method.__name__),
+                patch.object(client, "_session_call", AsyncMock(return_value=wrong)),
+            ):
+                with self.assertRaises(OutcomeUnknown):
+                    await method(live.id)
+
+    async def test_create_checks_returned_agent_workspace_and_environment(self):
+        client, _ = make_client(FakeKagent())
+        live = await client.create_session(AGENT, request_id="identity-fixture")
+        from mainloop.runtime.kagent_client import (
+            DevelopmentEnvironment,
+            SessionWorkspace,
+        )
+
+        for change in (
+            {"agent": AgentRef("wrong", "wrong")},
+            {
+                "workspace": SessionWorkspace(
+                    "https://github.com/example/wrong", "a" * 40, "wrong"
+                )
+            },
+            {
+                "development_environment": DevelopmentEnvironment(
+                    "wrong", "linux/arm64", "wrong"
+                )
+            },
+            {"context_id": "wrong"},
+        ):
+            with (
+                self.subTest(change=change),
+                patch.object(
+                    client,
+                    "_session_call",
+                    AsyncMock(return_value=replace(live, **change)),
+                ),
+            ):
+                with self.assertRaises(OutcomeUnknown):
+                    await client.create_session(AGENT, request_id="identity-fixture")
+
+    async def test_readiness_checks_known_create_contract_again(self):
+        client, _ = make_client(FakeKagent())
+        live = await client.create_session(AGENT, request_id="identity-fixture")
+        starting = replace(
+            live, state=RuntimeState.CREATING, operation=RuntimeOperation.CREATE
+        )
+        wrong = replace(live, agent=AgentRef("wrong", "wrong"))
+        with patch.object(client, "get_session", AsyncMock(return_value=wrong)):
+            with self.assertRaises(OutcomeUnknown):
+                await client.ensure_ready(starting, interval=0)
 
 
 def make_client(fake: FakeKagent, *, clock=None) -> tuple[KagentClient, list[float]]:
@@ -215,6 +281,9 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
             state=RuntimeState.CREATING,
             operation=RuntimeOperation.CREATE,
             context_id=session.context_id,
+            agent=session.agent,
+            workspace=session.workspace,
+            development_environment=session.development_environment,
         )
         ready = await client.ensure_ready(busy, interval=0.5)
         self.assertEqual(ready.state, RuntimeState.READY)

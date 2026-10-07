@@ -25,9 +25,9 @@ conflicts. The Secret publisher derives that binding's bearer, while
 PostgreSQL stores only its hash. MCP authentication checks the current binding and hash on every
 request, so revocation denies a cached bearer immediately even if Secret cleanup is delayed.
 
-Bindings persist an `mcp_grant_kind`: `coordination` for main and child bindings, `workspace` for
-new owner workspaces created through `POST /workspaces`, and `none` for ordinary standalone or
-retained legacy workspace bindings. Possessing a credential reference does not select tools;
+Bindings persist an `mcp_grant_kind`: `coordination` for main and coordination supervisor/child
+bindings, `workspace` for new owner and coding supervisor/child workspaces, and `none` for ordinary
+standalone sessions. Old sessions are deleted at the fresh cutover, without migration or backfill. Possessing a credential reference does not select tools;
 discovery and invocation use the binding's role and grant together. Workspace grants expose
 `whoami` and scoped PR creation. Merge tools still require the existing default-off enablement
 gate and the same server-side workspace scope checks.
@@ -83,3 +83,18 @@ trusted publication of the binding credential; revocation clears its current has
 and then removes its Secret best-effort. Publisher or reference configuration failure prevents
 creation/delivery and does not expose credentials to the owner API. Neither MCP credentials
 nor provider credentials may substitute for the control credential.
+
+## Delegated task grants
+
+Supervisor/coordination, supervisor/workspace and child/workspace are enrolled pairs. A delegated
+child/coordination binding is also task-backed; session-centric children remain available until
+the task tool slice replaces that interface. MCP authentication rechecks durable current attempt,
+role/depth, owner/project, exact task ancestry and, for code, the held writer generation. New
+supervisor and coding-child pairs without an attempt are rejected. Parent revocation denies
+child task authority. Credential publication requires a live current attempt and its code claim.
+
+Coordination task discovery currently exposes identity only; task-scoped delegation/report tools
+arrive in the next slice. It exposes no repository tools or legacy session-completion report.
+Coding supervisor/child discovery exposes identity and scoped PR tools, with merge still behind
+its existing flag. Push credentials are separate from MCP credentials: re-enrollment is an
+integration hook, not runtime Git bearer delivery in this slice.

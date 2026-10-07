@@ -96,6 +96,9 @@ class AgentService:
                 ("main", "coordination"),
                 ("child", "coordination"),
                 ("agent", "workspace"),
+                ("supervisor", "coordination"),
+                ("supervisor", "workspace"),
+                ("child", "workspace"),
             }
         )
         if (
@@ -105,11 +108,23 @@ class AgentService:
             or binding.get("status") in FINISHED_STATUSES
         ):
             raise HTTPException(status_code=401, detail="unknown agent token")
+        depth = None
+        if binding["role"] in ("supervisor", "child"):
+            from mainloop.tasks import lifecycle
+
+            try:
+                principal = await lifecycle.authenticate_session(binding)
+                if principal is not None:
+                    depth = principal.depth
+            except (lifecycle.LifecycleDenied, ValueError) as exc:
+                raise HTTPException(
+                    status_code=401, detail="unknown agent token"
+                ) from exc
         return Ctx(
             binding,
             Actor(
                 binding["role"],
-                await self._depth(binding),
+                depth if depth is not None else await self._depth(binding),
                 binding["mcp_grant_kind"],
             ),
         )

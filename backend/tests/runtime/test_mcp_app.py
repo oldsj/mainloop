@@ -21,6 +21,12 @@ from tests.runtime.test_context_model import KINDS, FakeStore
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        patcher = patch(
+            "mainloop.tasks.lifecycle.authenticate_session",
+            AsyncMock(return_value=None),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.store = FakeStore()
         self.service = AgentService(self.store, KINDS)
         self.ctx = await self.service.authenticate("tok-main")
@@ -359,6 +365,7 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         conn.execute = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=None)
         conn.fetch = AsyncMock(return_value=[{"session_id": "binding-id"}])
 
         @asynccontextmanager

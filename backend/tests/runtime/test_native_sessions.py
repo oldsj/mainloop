@@ -39,6 +39,7 @@ from tests.runtime.kagent_fake import (
     FakeKagent,
     unauthorized_envelope,
 )
+from tests.runtime.test_task_provisioning import ordinary_guard
 
 from models import SessionStatus
 
@@ -326,6 +327,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 self.updated.append(fields["status"])
 
         for patcher in (
+            patch("mainloop.tasks.lifecycle.guard", ordinary_guard),
+            patch("mainloop.tasks.lifecycle.check_session", AsyncMock()),
+            patch.object(ns, "attempt_row", AsyncMock(return_value=None)),
             patch(
                 "mainloop.runtime.agent_credentials.publish_for_binding",
                 AsyncMock(
@@ -493,6 +497,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 RuntimeState.DELETING,
                 RuntimeOperation.DELETE,
             )
+            self.fake.session_agents[session_id] = ns.agent_ref(
+                self.ledger.binding["kind"], self.ledger.binding["role"]
+            ).encode()
             raise OutcomeUnknown("delete response lost")
 
         with patch(
@@ -557,6 +564,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 RuntimeState.DELETING,
                 RuntimeOperation.DELETE,
             )
+            self.fake.session_agents[session_id] = ns.agent_ref(
+                self.ledger.binding["kind"], self.ledger.binding["role"]
+            ).encode()
             return await client.get_session(session_id)
 
         with patch(
@@ -688,6 +698,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                     RuntimeState.CREATING,
                     RuntimeOperation.CREATE,
                 )
+                self.fake.session_agents[session.id] = ns.agent_ref(
+                    self.ledger.binding["kind"], self.ledger.binding["role"]
+                ).encode()
                 with patch.object(
                     client._client,
                     "post",
@@ -695,6 +708,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     return await create(*args, **kwargs)
             self.fake.sessions[session.id] = (RuntimeState.READY, RuntimeOperation.NONE)
+            self.fake.session_agents[session.id] = ns.agent_ref(
+                self.ledger.binding["kind"], self.ledger.binding["role"]
+            ).encode()
             return await client.get_session(session.id)
 
         with patch.object(client, "create_session", contended):
@@ -718,6 +734,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.ledger.binding["kagent_session_id"] = actor.id
         self.fake.sessions[actor.id] = (RuntimeState.CREATING, RuntimeOperation.CREATE)
+        self.fake.session_agents[actor.id] = ns.agent_ref(
+            self.ledger.binding["kind"], self.ledger.binding["role"]
+        ).encode()
         create = client.create_session
         delete = client.delete_session
         creates, deletes = [], []
@@ -725,6 +744,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         async def retry_create(*args, **kwargs):
             creates.append(kwargs["request_id"])
             self.fake.sessions[actor.id] = (RuntimeState.READY, RuntimeOperation.NONE)
+            self.fake.session_agents[actor.id] = ns.agent_ref(
+                self.ledger.binding["kind"], self.ledger.binding["role"]
+            ).encode()
             return await create(*args, **kwargs)
 
         async def retry_delete(session_id):
@@ -734,6 +756,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                     RuntimeState.DELETED,
                     RuntimeOperation.DELETE,
                 )
+                self.fake.session_agents[actor.id] = ns.agent_ref(
+                    self.ledger.binding["kind"], self.ledger.binding["role"]
+                ).encode()
                 raise OutcomeUnknown("delete response lost after admission")
             return await delete(session_id)
 
@@ -820,6 +845,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             role="child", kagent_session_id=CONTEXT_ID, child_start_failure="timeout"
         )
         self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.SUSPEND)
+        self.fake.session_agents[CONTEXT_ID] = ns.agent_ref(
+            self.ledger.binding["kind"], self.ledger.binding["role"]
+        ).encode()
         with self.assertRaises(ns.ChildStartPending):
             await ns._settle_child_start_failure(self.ledger.binding)
         self.assertEqual(self.updated, [])
@@ -1118,6 +1146,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                             RuntimeState.READY,
                             RuntimeOperation.NONE,
                         )
+                        self.fake.session_agents[CONTEXT_ID] = ns.agent_ref(
+                            self.ledger.binding["kind"], self.ledger.binding["role"]
+                        ).encode()
                     method = {
                         "create": "create_session",
                         "observe": "get_session",
@@ -1159,6 +1190,9 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_error_fails_before_anything_is_sent(self):
         failed = "00000000-0000-4000-8000-0000000000ff"
         self.fake.sessions[failed] = (RuntimeState.FAILED, RuntimeOperation.NONE)
+        self.fake.session_agents[failed] = ns.agent_ref(
+            self.ledger.binding["kind"], self.ledger.binding["role"]
+        ).encode()
         self.ledger.binding["kagent_session_id"] = failed
         mid = await self.send()
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")

@@ -37,12 +37,17 @@ def token_hash(token: str) -> str:
 @asynccontextmanager
 async def publication_lock(conn, grant_id: str):
     """Cross-process serialization; lifecycle revocation must use this same lock."""
+    from mainloop.tasks.lifecycle import authority_locked
+
     key = f"push-grant:{grant_id}"
-    await conn.fetchval("SELECT pg_advisory_lock(hashtextextended($1,0))", key)
-    try:
-        yield
-    finally:
-        await conn.fetchval("SELECT pg_advisory_unlock(hashtextextended($1,0))", key)
+    async with authority_locked(conn, grant_id):
+        await conn.fetchval("SELECT pg_advisory_lock(hashtextextended($1,0))", key)
+        try:
+            yield
+        finally:
+            await conn.fetchval(
+                "SELECT pg_advisory_unlock(hashtextextended($1,0))", key
+            )
 
 
 @asynccontextmanager
@@ -148,6 +153,8 @@ async def _delegated_writer(
     Callers hold the grant lock; lifecycle fencing must hold it across its durable change
     so a fence cannot interleave between this read and a dispatched write.
     """
+    from mainloop.tasks.lifecycle import LifecycleDenied, authenticate_binding
+
     a = await conn.fetchrow(
         """SELECT a.id,a.state,a.role,a.depth,a.writer_generation,a.binding_id,a.session_id,
             t.owner_id,t.project_id,t.mode,t.status,t.current_attempt_id,
@@ -182,6 +189,13 @@ async def _delegated_writer(
         or a["writer_generation"] != a["claim_generation"]
     ):
         raise ValueError("stale_writer_generation")
+    binding = await conn.fetchrow(
+        "SELECT * FROM native_bindings WHERE session_id=$1", grant.session_id
+    )
+    try:
+        await authenticate_binding(conn, dict(binding))
+    except LifecycleDenied as exc:
+        raise ValueError(exc.code) from None
     # The grant must have been issued for exactly this attempt and claim generation, so an
     # older un-revoked bearer cannot survive the same attempt re-taking the claim.
     if bind:

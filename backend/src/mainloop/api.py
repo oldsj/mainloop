@@ -211,6 +211,9 @@ async def startup_event():
     from mainloop.runtime import native_sessions
 
     app.state.native_reconcile = asyncio.create_task(native_sessions.reconcile_loop())
+    from mainloop.tasks.provisioning import install
+
+    install()
     from mainloop.tasks.service import reconciliation_dispatcher
 
     app.state.task_reconcile = asyncio.create_task(reconciliation_dispatcher(db))
