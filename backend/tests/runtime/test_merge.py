@@ -26,7 +26,12 @@ from tests.runtime.test_context_model import KINDS, FakeStore
 from tests.runtime.test_hitl_observer import Gateway
 from tests.runtime.test_postgres_ledger import PostgresTestCase, _init_schema
 
-from models.hitl import HITLProjection, ToolApproval, ToolApprovalResponse
+from models.hitl import (
+    HITL_EXTENSION,
+    HITLProjection,
+    ToolApproval,
+    ToolApprovalResponse,
+)
 
 SHA = "a" * 40
 BASE = "b" * 40
@@ -62,15 +67,26 @@ class GitHub:
         self.pr = {
             "number": 17,
             "state": "open",
+            "title": "Update workspace deployment defaults",
+            "body": "Updates the defaults used by workspace deployments.",
             "draft": False,
             "changed_files": 1,
+            "additions": 3,
+            "deletions": 1,
             "mergeable": True,
             "mergeable_state": "clean",
             "merged": False,
             "head": {"ref": "feature", "sha": SHA, "repo": self.repo},
             "base": {"ref": "main", "sha": BASE, "repo": self.repo},
         }
-        self.files = [{"filename": "src/app.py", "status": "modified"}]
+        self.files = [
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "additions": 3,
+                "deletions": 1,
+            }
+        ]
         self.suites = [
             {
                 "id": 1,
@@ -413,10 +429,23 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_complete_files_protected_renames_and_deletions(self):
         self.fake.files = [
-            {"filename": "src/a", "status": "renamed", "previous_filename": "k8s/a"}
+            {
+                "filename": "src/a",
+                "status": "renamed",
+                "previous_filename": "k8s/a",
+                "additions": 3,
+                "deletions": 1,
+            }
         ]
         self.assertEqual((await self.evidence())["protected_matches"], ["k8s/a"])
-        self.fake.files = [{"filename": "migrations/001.sql", "status": "removed"}]
+        self.fake.files = [
+            {
+                "filename": "migrations/001.sql",
+                "status": "removed",
+                "additions": 3,
+                "deletions": 1,
+            }
+        ]
         self.assertEqual(
             (await self.evidence())["protected_matches"], ["migrations/001.sql"]
         )
@@ -733,7 +762,26 @@ class MergeFixture(PostgresTestCase):
         projection = HITLProjection.model_validate(merge.decode(raw))
         return observer, projection, gateway
 
-    async def decide(self, observer, projection, approved=True):
+    async def decide(self, observer, projection, approved=True, reviewed_context=None):
+        if approved and reviewed_context is None:
+            tools = (
+                projection.payload.nested.tools
+                if projection.payload.nested
+                else projection.payload.tools
+            )
+            merge_tool = next(
+                tool
+                for tool in tools
+                if tool.name.endswith("merge_pull_request_with_approval")
+            )
+            proposal_id = merge_tool.args["proposal_id"]
+            reviewed_context = {
+                merge_tool.id: await self.pool.fetchval(
+                    "SELECT summary_digest FROM merge_proposals WHERE id=$1",
+                    proposal_id,
+                )
+            }
+        reviewed_context = reviewed_context or {}
         return await hitl_continuation.submit(
             self.user,
             projection.id,
@@ -741,6 +789,7 @@ class MergeFixture(PostgresTestCase):
             ToolApprovalResponse(
                 type="tool_approval_response",
                 approvals=(ToolApproval(id="call", approved=approved),),
+                reviewed_context=reviewed_context,
             ),
             service=observer,
         )
@@ -839,6 +888,57 @@ class MergeTests(MergeFixture):
         )
         self.assertTrue(denied_default.isError)
         self.assertEqual(len(self.fake.puts), 0)
+
+    async def test_prepare_captures_immutable_bounded_presentation(self):
+        proposal = await self.prepare()
+        self.assertEqual(proposal["summary"]["title"], self.fake.pr["title"])
+        self.assertEqual(proposal["summary"]["availability"], "ready")
+        self.assertEqual(len(proposal["summary_digest"]), 64)
+        self.assertNotIn("files", proposal)
+        self.assertNotIn("description", proposal)
+        stored = await self.pool.fetchrow(
+            "SELECT presentation,summary_digest FROM merge_proposals WHERE id=$1",
+            proposal["proposal_id"],
+        )
+        self.assertEqual(merge.decode(stored["presentation"]), proposal["summary"])
+        self.assertEqual(stored["summary_digest"], proposal["summary_digest"])
+
+    async def test_positive_owner_decision_requires_exact_summary_digest(self):
+        proposal = await self.prepare()
+        observer, projection, gateway = await self.pause(proposal)
+        for reviewed_context, message in (
+            ({}, "Approve using the current merge summary"),
+            ({"call": "0" * 64}, "changed or is unavailable"),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                await self.decide(
+                    observer,
+                    projection,
+                    reviewed_context=reviewed_context,
+                )
+            self.assertEqual(
+                await self.pool.fetchval(
+                    "SELECT count(*) FROM native_hitl_responses WHERE owner_id=$1",
+                    self.user,
+                ),
+                0,
+            )
+        result = await self.decide(observer, projection)
+        self.assertEqual(result["transport_state"], "accepted")
+        native_payload = (
+            gateway.tasks[projection.outer.task_id].history[-1].metadata[HITL_EXTENSION]
+        )
+        self.assertNotIn("reviewed_context", native_payload)
+
+    async def test_incomplete_summary_blocks_approval_but_allows_rejection(self):
+        self.fake.pr["body"] = ""
+        proposal = await self.prepare()
+        self.assertEqual(proposal["summary"]["availability"], "unavailable")
+        observer, projection, _ = await self.pause(proposal)
+        with self.assertRaisesRegex(ValueError, "changed or is unavailable"):
+            await self.decide(observer, projection)
+        result = await self.decide(observer, projection, approved=False)
+        self.assertFalse(result["response"]["response"]["approvals"][0]["approved"])
 
     async def test_ruleset_only_pinned_squash_through_pr_api(self):
         self.fake.errors["/branches/main/protection"] = 404
@@ -939,7 +1039,7 @@ class MergeTests(MergeFixture):
         observer, projection, _ = await self.pause(
             p, tool="mcp__other__merge_pull_request_with_approval"
         )
-        await self.decide(observer, projection)
+        await self.decide(observer, projection, reviewed_context={})
         with self.assertRaises(PolicyError):
             await self.execute(p, approved=True)
         self.assertEqual(len(self.fake.puts), 0)
@@ -1089,7 +1189,7 @@ class MergeTests(MergeFixture):
             for task in gateway.tasks.values():
                 task.status.message.metadata["merge_approved"] = True
                 task.status.message.metadata["prepared_revision"] = "forged"
-            await self.decide(observer, projection)
+            await self.decide(observer, projection, reviewed_context={})
         self.assertIsNone(
             await self.pool.fetchval(
                 "SELECT call_snapshot->>'merge_key' FROM native_hitl_response_members WHERE owner_id=$1",

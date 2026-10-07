@@ -25,8 +25,22 @@ CREATE TABLE IF NOT EXISTS merge_proposals (
     binding_id TEXT NOT NULL,
     runtime_session_id TEXT NOT NULL,
     facts JSONB NOT NULL,
+    presentation JSONB,
+    summary_digest TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE merge_proposals ADD COLUMN IF NOT EXISTS presentation JSONB;
+ALTER TABLE merge_proposals ADD COLUMN IF NOT EXISTS summary_digest TEXT;
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname='merge_proposals_summary_digest_format'
+            AND conrelid='merge_proposals'::regclass
+    ) THEN
+        ALTER TABLE merge_proposals ADD CONSTRAINT merge_proposals_summary_digest_format
+            CHECK (summary_digest IS NULL OR summary_digest ~ '^[0-9a-f]{64}$');
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS merge_tool_requests (
     owner_id TEXT NOT NULL,
     request_id TEXT NOT NULL,

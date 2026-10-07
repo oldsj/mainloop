@@ -15,6 +15,19 @@ PROTECTED_GLOBS_VERSION = 1
 PROTECTED_GLOBS = ("k8s/**", ".github/**", "**/migrations/**")
 
 
+def matched_protected_globs(path: str) -> tuple[str, ...]:
+    """Return the fixed policy globs that match one repository-relative path."""
+    parts = path.split("/")
+    matches = []
+    if len(parts) > 1 and parts[0] == "k8s":
+        matches.append("k8s/**")
+    if len(parts) > 1 and parts[0] == ".github":
+        matches.append(".github/**")
+    if "migrations" in parts[:-1]:
+        matches.append("**/migrations/**")
+    return tuple(matches)
+
+
 class MergePolicyUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     merge_policy: MergePolicy
@@ -58,9 +71,7 @@ def protected_matches(paths: list[ChangedPath], *, complete: bool) -> tuple[str,
                 or any(ord(c) < 32 for c in name)
             ):
                 raise ValueError("Invalid repository-relative POSIX path")
-            if (
-                len(parts) > 1 and parts[0] in ("k8s", ".github")
-            ) or "migrations" in parts[:-1]:
+            if matched_protected_globs(name):
                 matches.add(name)
     return tuple(sorted(matches))
 

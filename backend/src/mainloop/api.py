@@ -6,10 +6,11 @@ import os
 import re
 from dataclasses import asdict
 from datetime import datetime
-from urllib.parse import urlsplit
+from typing import Literal
+from urllib.parse import quote, urlsplit
 
 from dbos import DBOS
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mainloop.config import settings
@@ -607,13 +608,85 @@ async def hitl_presentation(conn, result):
         )
         kinds.add(kind)
     context["provider"] = next(iter(kinds)) if len(kinds) == 1 else None
+    merge = []
+    for entry in result.get("merge_enrichment") or []:
+        summary_row = await conn.fetchrow(
+            "SELECT presentation,summary_digest FROM merge_proposals WHERE owner_id=$1 AND id=$2",
+            result["request"]["owner_id"],
+            entry.get("proposal_id"),
+        )
+        summary_value = summary_row["presentation"] if summary_row else None
+        if isinstance(summary_value, str):
+            summary_value = json.loads(summary_value)
+        summary = summary_value if isinstance(summary_value, dict) else None
+        stale = entry.get("stale") is True
+        reasons = (summary or {}).get("unavailable_reasons")
+        unavailable_reason = (
+            reasons[0]
+            if isinstance(reasons, list) and reasons and isinstance(reasons[0], str)
+            else None
+        )
+        availability = (
+            "stale"
+            if stale
+            else (
+                summary.get("availability", "unavailable") if summary else "unavailable"
+            )
+        )
+        repository = entry.get("repository")
+        number = entry.get("pr_number")
+        head = entry.get("head")
+        base = entry.get("base")
+        item = {
+            "tool_id": entry.get("tool_id"),
+            "proposal_id": entry.get("proposal_id"),
+            "summary": summary,
+            "summary_digest": summary_row["summary_digest"] if summary_row else None,
+            "availability": availability,
+            "freshness_reason": (
+                "The proposal is no longer current. Refresh and prepare a new proposal to approve."
+                if stale
+                else unavailable_reason
+            ),
+            "details_url": (
+                f"/hitl/{quote(result['request']['id'], safe='')}/merge/"
+                f"{quote(str(entry.get('proposal_id', '')), safe='')}/details"
+                if entry.get("proposal_id")
+                else None
+            ),
+            "repository": repository,
+            "pr_number": number,
+            "head": head,
+            "head_sha": entry.get("head_sha"),
+            "base": base,
+            "base_sha": entry.get("base_sha"),
+            "protected_matches": entry.get("protected_matches", []),
+            "stale": stale,
+        }
+        if (
+            isinstance(repository, str)
+            and re.fullmatch(r"[\w.-]+/[\w.-]+", repository)
+            and isinstance(number, int)
+            and number > 0
+        ):
+            item["pr_url"] = f"https://github.com/{repository}/pull/{number}"
+        if (
+            isinstance(repository, str)
+            and isinstance(base, str)
+            and isinstance(head, str)
+        ):
+            item["compare_url"] = (
+                f"https://github.com/{repository}/compare/"
+                f"{quote(base, safe='')}...{quote(head, safe='')}"
+            )
+        merge.append(item)
     return {
-        **result,
+        **{key: value for key, value in result.items() if key != "merge_enrichment"},
         "context": context,
         "writes_enabled": os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED")
         == "true",
         # Only the server resolver supplies this display data. Never use payload hints.
-        "merge": result.get("merge_enrichment") or None,
+        "merge": merge or None,
     }
 
 
@@ -647,6 +720,141 @@ async def get_hitl_request(request_id: str, user_id: str = Depends(current_user)
             return await hitl_presentation(
                 conn, await hitl_continuation.view(conn, projection)
             )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="HITL request not found") from exc
+
+
+@app.get("/hitl/{request_id}/merge/{proposal_id}/details")
+async def get_hitl_merge_details(
+    request_id: str,
+    proposal_id: str,
+    section: Literal["description", "files", "checks"],
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=50),
+    user_id: str = Depends(current_user),
+):
+    """Read bounded, immutable proposal details for this owner's exact HITL card."""
+    try:
+        async with db.connection() as conn:
+            projection = await hitl_continuation.load_projection(
+                conn, user_id, request_id
+            )
+            result = await hitl_continuation.view(conn, projection)
+            matches = [
+                item
+                for item in (result.get("merge_enrichment") or [])
+                if item.get("proposal_id") == proposal_id
+            ]
+            if not matches:
+                raise HTTPException(status_code=404, detail="Merge details not found")
+            # Enrichment is per native call. Multiple calls can reference this
+            # same immutable, owner-scoped proposal; its captured facts are shared.
+            facts = matches[0]
+            summary_row = await conn.fetchrow(
+                "SELECT presentation,summary_digest FROM merge_proposals WHERE owner_id=$1 AND id=$2",
+                user_id,
+                proposal_id,
+            )
+            summary = summary_row["presentation"] if summary_row else None
+            if isinstance(summary, str):
+                summary = json.loads(summary)
+            digest = summary_row["summary_digest"] if summary_row else None
+            if not isinstance(summary, dict) or not isinstance(digest, str):
+                raise HTTPException(status_code=404, detail="Merge details unavailable")
+            ci = facts.get("ci") if isinstance(facts.get("ci"), dict) else {}
+            captured_at = ci.get("captured_at")
+            if section == "description":
+                items = []
+                data = {
+                    "description": facts.get("description", ""),
+                    "description_digest": facts.get("description_digest"),
+                    "description_length": facts.get("description_length", 0),
+                    "description_truncated": facts.get("description_truncated") is True,
+                    "truncated": facts.get("description_truncated") is True,
+                }
+            elif section == "files":
+                items = (
+                    facts.get("files") if isinstance(facts.get("files"), list) else []
+                )
+                data = {
+                    "items": [],
+                    "truncated": len(items) != summary.get("file_count"),
+                }
+            else:
+                inventory = []
+                for kind, key in (
+                    ("suite", "suites"),
+                    ("check_run", "checks"),
+                    ("commit_status", "statuses"),
+                ):
+                    values = ci.get(key) if isinstance(ci.get(key), list) else []
+                    inventory.extend({"kind": kind, **value} for value in values)
+                required = ci.get("required")
+                if isinstance(required, list):
+                    for value in required:
+                        if isinstance(value, (list, tuple)) and len(value) == 2:
+                            inventory.append(
+                                {
+                                    "kind": "required_check",
+                                    "context": value[0],
+                                    "app_id": value[1],
+                                }
+                            )
+                items = inventory
+                data = {"items": [], "truncated": ci.get("complete") is not True}
+
+            start = cursor if section != "description" else 0
+            page = items[start : start + limit]
+            response = {
+                "request_id": request_id,
+                "proposal_id": proposal_id,
+                "section": section,
+                "summary_digest": digest,
+                "head": summary.get("head"),
+                "head_sha": summary.get("head_sha"),
+                "base": summary.get("base"),
+                "base_sha": summary.get("base_sha"),
+                "captured_at": captured_at,
+                "cursor": start,
+                "next_cursor": (
+                    str(start + len(page))
+                    if section != "description" and start + len(page) < len(items)
+                    else None
+                ),
+                **data,
+            }
+            if section != "description":
+                response["items"] = page
+                while (
+                    page
+                    and len(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+                    > 64 * 1024
+                ):
+                    page = page[:-1]
+                    response["items"] = page
+                    response["next_cursor"] = str(start + len(page))
+            elif (
+                len(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+                > 64 * 1024
+            ):
+                description = response.get("description", "")
+                while (
+                    description
+                    and len(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+                    > 64 * 1024
+                ):
+                    description = description[: len(description) // 2]
+                    response["description"] = description
+                    response["description_truncated"] = True
+                    response["truncated"] = True
+            if (
+                len(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+                > 64 * 1024
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Merge details exceed the response limit"
+                )
+            return response
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="HITL request not found") from exc
 

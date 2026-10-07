@@ -12,6 +12,7 @@ from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_merge import GitHubMergeClient
+from mainloop.services.merge_summary import build_summary
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
     resolve_project_authority,
@@ -129,15 +130,29 @@ async def proposal(conn, owner, proposal_id):
     )
     if not row:
         raise PolicyError("proposal", "unknown owned merge proposal")
-    return {**dict(row), "facts": decode(row["facts"])}
+    value = dict(row)
+    return {
+        **value,
+        "facts": decode(value["facts"]),
+        "presentation": (
+            decode(value.get("presentation")) if value.get("presentation") else None
+        ),
+    }
 
 
 def prepared_result(p):
+    facts = {
+        key: value
+        for key, value in p["facts"].items()
+        if key not in ("description", "files")
+    }
     return {
         "text": f"Merge proposal {p['id']}; required route: {p['facts']['route']}",
         "state": "prepared",
         "proposal_id": p["id"],
-        **p["facts"],
+        **facts,
+        "summary": p.get("presentation"),
+        "summary_digest": p.get("summary_digest"),
     }
 
 
@@ -208,6 +223,7 @@ async def prepare(binding, arguments):
             )
         cid = candidate["id"] if candidate else str(uuid.uuid4())
         pid = str(uuid.uuid4())
+        presentation, summary_digest = build_summary(facts, pid)
         await conn.execute(
             "UPDATE merge_requests SET state='superseded' WHERE owner_id=$1 AND repository_id=$2 AND pr_number=$3 AND head_sha<>$4 AND state IN ('prepared','evaluating','blocked','expired')",
             owner,
@@ -226,13 +242,15 @@ async def prepare(binding, arguments):
                 body.expected_sha,
             )
         await conn.execute(
-            "INSERT INTO merge_proposals(id,candidate_id,owner_id,binding_id,runtime_session_id,facts) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
+            "INSERT INTO merge_proposals(id,candidate_id,owner_id,binding_id,runtime_session_id,facts,presentation,summary_digest) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",
             pid,
             cid,
             owner,
             binding["session_id"],
             project["kagent_session_id"],
             json.dumps(facts),
+            json.dumps(presentation),
+            summary_digest,
         )
         await conn.execute(
             "UPDATE merge_requests SET active_proposal_id=$2,state='prepared',deadline=NULL WHERE id=$1",

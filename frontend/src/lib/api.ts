@@ -2,7 +2,13 @@
  * API client for backend communication
  */
 
-import type { HITLView, HITLResponse, MergePolicyView } from './hitl';
+import type {
+  HITLMergeDetailSection,
+  HITLMergeDetails,
+  HITLView,
+  HITLResponse,
+  MergePolicyView
+} from './hitl';
 import { API_URL } from '$lib/config';
 import { connection } from '$lib/stores/connection';
 
@@ -349,6 +355,25 @@ export const api = {
     });
     if (!response.ok)
       throw new ApiError(await errorDetail(response, 'Could not load request'), response.status);
+    return response.json();
+  },
+  async getHITLMergeDetails(
+    requestId: string,
+    proposalId: string,
+    section: HITLMergeDetailSection,
+    cursor = 0,
+    signal?: AbortSignal
+  ): Promise<HITLMergeDetails> {
+    const query = new URLSearchParams({ section, cursor: String(cursor), limit: '50' });
+    const response = await apiFetch(
+      `${API_URL}/hitl/${encodeURIComponent(requestId)}/merge/${encodeURIComponent(proposalId)}/details?${query}`,
+      { signal: readSignal(signal) }
+    );
+    if (!response.ok)
+      throw new ApiError(
+        await errorDetail(response, 'Could not load merge details'),
+        response.status
+      );
     return response.json();
   },
   async listSessionHITL(id: string, signal?: AbortSignal): Promise<string[]> {

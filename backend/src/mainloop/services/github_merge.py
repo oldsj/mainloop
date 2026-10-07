@@ -1,6 +1,7 @@
 """Bounded, fixed-origin merge evidence. No remote writes during preparation."""
 
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from mainloop.runtime.policy import PolicyError
@@ -11,9 +12,9 @@ from mainloop.services.github_creation import (
     PullRequest,
     Repo,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from mainloop.services.merge_summary import canonical_digest
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
-from models.hitl import normalized_hash
 from models.merge_policy import ChangedPath, protected_matches
 
 PENDING_CHECK_STATES = frozenset(
@@ -26,12 +27,25 @@ class MergeRepo(Repo):
 
 
 class MergePR(PullRequest):
+    title: str = Field(max_length=512)
+    body: str | None = Field(max_length=2_000_000)
     draft: bool
     changed_files: int = Field(ge=0, le=3000)
+    additions: int = Field(ge=0)
+    deletions: int = Field(ge=0)
     mergeable: bool | None
     mergeable_state: str
     merged: bool
     merge_commit_sha: str | None = None
+
+
+class ChangedFile(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    filename: str = Field(min_length=1, max_length=4096)
+    status: str = Field(min_length=1, max_length=32)
+    previous_filename: str | None = Field(default=None, min_length=1, max_length=4096)
+    additions: int = Field(ge=0)
+    deletions: int = Field(ge=0)
 
 
 class App(BaseModel):
@@ -55,6 +69,7 @@ class Check(BaseModel):
     status: str = Field(max_length=32)
     conclusion: str | None = Field(max_length=64)
     check_suite: SuiteRef
+    html_url: HttpUrl | None = None
 
 
 class Suite(BaseModel):
@@ -159,6 +174,7 @@ class Status(BaseModel):
     context: str = Field(min_length=1, max_length=512)
     state: str = Field(max_length=32)
     created_at: datetime
+    target_url: HttpUrl | None = None
 
 
 class GitHubMergeClient(GitHubCreationClient):
@@ -225,18 +241,43 @@ class GitHubMergeClient(GitHubCreationClient):
         if base.name != pr.base.ref or base.commit.sha != pr.base.sha:
             raise PolicyError("base", "default branch moved; prepare again")
         raw = await self.pages(f"/repos/{name}/pulls/{number}/files", limit=3000)
+        files = [
+            ChangedFile.model_validate(
+                {
+                    key: item[key]
+                    for key in (
+                        "filename",
+                        "status",
+                        "previous_filename",
+                        "additions",
+                        "deletions",
+                    )
+                    if key in item
+                }
+            )
+            for item in raw
+        ]
         paths = [
             ChangedPath.model_validate(
-                {k: p[k] for k in ("filename", "status", "previous_filename") if k in p}
+                item.model_dump(include={"filename", "status", "previous_filename"})
             )
-            for p in raw
+            for item in files
         ]
-        if len(paths) != pr.changed_files or len({p.filename for p in paths}) != len(
-            paths
+        if (
+            len(paths) != pr.changed_files
+            or len({p.filename for p in paths}) != len(paths)
+            or sum(item.additions for item in files) != pr.additions
+            or sum(item.deletions for item in files) != pr.deletions
         ):
             raise GitHubError
         matches = protected_matches(paths, complete=True)
         ci = await self.checks(name, sha, repo.default_branch)
+        ci["captured_at"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        ci["complete"] = True
+        description_source = (pr.body or "").encode("utf-8")
+        description = description_source[: 16 * 1024].decode("utf-8", errors="ignore")
         fresh = await self.pull(name, number)
         if fresh != pr or await self.repository(name) != repo:
             raise PolicyError(
@@ -250,11 +291,23 @@ class GitHubMergeClient(GitHubCreationClient):
             "head": pr.head.ref,
             "base": pr.base.ref,
             "base_sha": pr.base.sha,
-            "files_digest": normalized_hash(
-                sorted(
-                    (p.model_dump(mode="json") for p in paths),
-                    key=lambda p: p["filename"],
-                )
+            "title": pr.title,
+            "description": description,
+            "description_truncated": len(description_source) > 16 * 1024,
+            "description_digest": hashlib.sha256(description_source).hexdigest(),
+            "description_length": len(description_source),
+            "changed_files_count": pr.changed_files,
+            "additions": pr.additions,
+            "deletions": pr.deletions,
+            "files": [
+                item.model_dump(mode="json")
+                for item in sorted(files, key=lambda file: file.filename)
+            ],
+            "files_digest": canonical_digest(
+                [
+                    item.model_dump(mode="json")
+                    for item in sorted(files, key=lambda file: file.filename)
+                ]
             ),
             "protected_matches": list(matches),
             "ci": ci,
