@@ -23,6 +23,7 @@ test('a failed project detail read renders an error and retry instead of loading
       export const api = {
         getProjectDetail: async () => { throw new Error('Failed to get project detail'); }
       };
+      export const agentLabel = (kind) => kind ?? 'agent';
       export const goto = () => {};
       export const statusLabel = (status) => status;
       export default function MergePolicy() {}

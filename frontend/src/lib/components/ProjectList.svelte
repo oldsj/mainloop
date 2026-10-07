@@ -7,6 +7,7 @@
   let formOpen = $state(false);
   let repo = $state('');
   let branch = $state('');
+  let agentKind = $state<'claude' | 'codex'>('claude');
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -26,9 +27,12 @@
     busy = true;
     error = null;
     try {
-      const workspace = await api.createWorkspaceFromRepo(repo.trim(), branch.trim());
+      const workspace = await api.createWorkspaceFromRepo(repo.trim(), branch.trim(), {
+        agent_kind: agentKind
+      });
       repo = '';
       branch = '';
+      agentKind = 'claude';
       formOpen = false;
       await goto(`/workspaces/${workspace.workspace_id}`);
     } catch (e) {
@@ -83,6 +87,29 @@
         autocomplete="off"
         spellcheck="false"
       />
+      <fieldset class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" disabled={busy}>
+        <legend class="text-term-fg-muted mr-2">Agent</legend>
+        <label class="flex items-center gap-2">
+          <input
+            type="radio"
+            name="new-workspace-agent-kind"
+            value="claude"
+            bind:group={agentKind}
+            data-testid="new-workspace-kind-claude"
+          />
+          Claude Code
+        </label>
+        <label class="flex items-center gap-2">
+          <input
+            type="radio"
+            name="new-workspace-agent-kind"
+            value="codex"
+            bind:group={agentKind}
+            data-testid="new-workspace-kind-codex"
+          />
+          Codex
+        </label>
+      </fieldset>
       <button
         type="submit"
         class="border-term-accent text-term-accent hover:bg-term-accent hover:text-term-bg border px-3 py-1.5 text-sm disabled:opacity-50"
