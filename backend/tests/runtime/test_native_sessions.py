@@ -170,6 +170,12 @@ class MemoryLedger:
         if text and self.rows[message_id]["state"] in ns._RESOLVABLE:
             self.rows[message_id]["partial_text"] = text
 
+    async def get_development_environment(self, session_id):
+        return getattr(self, "development_environment", None)
+
+    async def record_composition(self, session_id, session):
+        self.reported_composition = session
+
     async def get_workspace(self, session_id, *, conn=None):
         return self.workspace
 

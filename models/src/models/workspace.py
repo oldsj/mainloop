@@ -76,6 +76,20 @@ class WorkspaceDev(WorkspaceContractModel):
         return values
 
 
+class WorkspaceEnvironment(WorkspaceContractModel):
+    environment_id: StrictStr
+    version_id: StrictStr
+    image: Annotated[
+        StrictStr,
+        Field(
+            max_length=512,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$",
+        ),
+    ]
+    platform: Annotated[StrictStr, Field(pattern=r"^linux/(amd64|arm64)$")]
+    policy_identity: Annotated[StrictStr, Field(min_length=1, max_length=256)]
+
+
 class WorkspaceManifest(WorkspaceContractModel):
     """What kagent clones into the harness (``repo_url``/``ref``/``branch``/``depth``), which
     agent runs there, and the dev server settings.
@@ -93,6 +107,7 @@ class WorkspaceManifest(WorkspaceContractModel):
     depth: Annotated[int, Field(ge=0, le=1000, strict=True)] = 0
     agent_kind: ProviderProfileId = "claude"
     dev: WorkspaceDev = WorkspaceDev()
+    development_environment: WorkspaceEnvironment | None = None
 
     @field_validator("repo_url")
     @classmethod

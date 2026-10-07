@@ -59,7 +59,7 @@ _REJECTED = (3, 7, 16)
 
 _SELECT = """
 SELECT w.session_id, w.repo, w.ref, w.branch, w.depth, w.ports, w.idle_timeout_minutes,
-       w.last_active_at, w.idle_suspended_at, w.created_at,
+       w.last_active_at, w.idle_suspended_at, w.created_at, w.development_environment,
        s.user_id, s.conversation_id, n.kind, n.kagent_session_id,
        GREATEST(w.last_active_at, w.created_at,
                 (SELECT max(d.updated_at) FROM native_deliveries d
@@ -101,6 +101,11 @@ def _manifest(row) -> WorkspaceManifest:
         branch=row["branch"],
         depth=row["depth"],
         agent_kind=row["kind"],
+        development_environment=(
+            json.loads(row["development_environment"])
+            if isinstance(row.get("development_environment"), str)
+            else row.get("development_environment")
+        ),
         dev=WorkspaceDev(
             ports=tuple(WorkspacePort(**port) for port in ports or []),
             idle_timeout_minutes=row["idle_timeout_minutes"],
@@ -137,7 +142,10 @@ def state_of(session: KagentSession) -> tuple[WorkspaceObservedState, str | None
 
 
 async def _observe(
-    kagent_session_id: str | None, session: KagentSession | None = None
+    kagent_session_id: str | None,
+    session: KagentSession | None = None,
+    *,
+    workspace_id: str | None = None,
 ) -> tuple[WorkspaceObservedState, str | None]:
     if session is None:
         if kagent_session_id is None:
@@ -156,11 +164,18 @@ async def _observe(
             return WorkspaceObservedState.UNKNOWN, f"kagent: {exc}"
         except KagentError as exc:
             return WorkspaceObservedState.UNKNOWN, f"kagent unreachable: {exc}"
+    if workspace_id is not None and (
+        session.development_environment is not None
+        or session.runtime_composition is not None
+    ):
+        await ns.ledger.record_composition(workspace_id, session)
     return state_of(session)
 
 
 async def _lifecycle(row, session: KagentSession | None = None) -> WorkspaceLifecycle:
-    state, detail = await _observe(row["kagent_session_id"], session)
+    state, detail = await _observe(
+        row["kagent_session_id"], session, workspace_id=row["session_id"]
+    )
     return WorkspaceLifecycle(
         workspace_id=row["session_id"],
         session_id=row["session_id"],
@@ -289,7 +304,7 @@ async def create(
     async with db.connection() as conn:
         async with conn.transaction():
             project = await conn.fetchrow(
-                "SELECT id,full_name,html_url FROM projects WHERE id=$1 AND user_id=$2 FOR SHARE",
+                "SELECT id,full_name,html_url FROM projects WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE",
                 project_id,
                 user_id,
             )
@@ -312,6 +327,14 @@ async def create(
                 raise WorkspaceConflict(
                     "Workspace repository must match an owner-owned GitHub project."
                 )
+            from mainloop.db.environments import EnvironmentError
+            from mainloop.environments.resolution import resolve
+
+            try:
+                resolved = await resolve(conn, project_id, user_id)
+            except EnvironmentError as exc:
+                raise WorkspaceRejected(str(exc)) from exc
+            manifest = manifest.model_copy(update={"development_environment": resolved})
             thread = await conn.fetchrow(
                 "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
                 user_id,
@@ -349,8 +372,8 @@ async def create(
             )
             await conn.execute(
                 """INSERT INTO workspaces
-                   (session_id,repo,ref,branch,depth,ports,idle_timeout_minutes,created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)""",
+                   (session_id,repo,ref,branch,depth,ports,idle_timeout_minutes,created_at,development_environment)
+                   VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb)""",
                 workspace_id,
                 manifest.repo_url,
                 manifest.ref,
@@ -359,6 +382,7 @@ async def create(
                 json.dumps([p.model_dump(mode="json") for p in manifest.dev.ports]),
                 manifest.dev.idle_timeout_minutes,
                 now,
+                resolved.model_dump_json() if resolved else None,
             )
             await ns.create_binding(
                 workspace_id,

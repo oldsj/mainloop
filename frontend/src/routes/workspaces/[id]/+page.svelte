@@ -260,6 +260,15 @@
             <dt class="text-term-fg-muted text-xs">Branch</dt>
             <dd class="mt-1 font-mono text-sm break-all">{workspace.manifest.branch}</dd>
           </div>
+          {#if workspace.manifest.development_environment}
+            <div class="border-term-border border-b py-3">
+              <dt class="text-term-fg-muted text-xs">Development environment</dt>
+              <dd class="mt-1 font-mono text-sm break-all" title={workspace.manifest.development_environment.image}>
+                {workspace.manifest.development_environment.image.split('@')[1].slice(0, 19)}
+                · {workspace.manifest.development_environment.platform}
+              </dd>
+            </div>
+          {/if}
           <div class="border-term-border border-b py-3">
             <dt class="text-term-fg-muted text-xs">Base ref</dt>
             <dd class="mt-1 font-mono text-sm break-all">{workspace.manifest.ref || 'Default'}</dd>
