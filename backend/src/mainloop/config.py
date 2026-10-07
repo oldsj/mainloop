@@ -12,6 +12,12 @@ from models.provider import ProviderProfile
 class Settings(BaseSettings):
     """Application settings."""
 
+    # Reserved contract only; this slice installs no listener even when enabled.
+    push_gate_enabled: bool = Field(False, validation_alias="PUSH_GATE_ENABLED")
+    push_gate_origin: str = ""
+    push_gate_max_command_bytes: int = Field(262144, ge=1)
+    push_gate_max_body_bytes: int = Field(268435456, ge=1)
+
     # Database (PostgreSQL) - constructed from parts
     db_host: str = "localhost"
     db_port: str = "5432"

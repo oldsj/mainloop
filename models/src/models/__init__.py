@@ -28,6 +28,13 @@ from models.native_agent import (
     ReconciliationEvidence,
 )
 from models.provider import ProviderAgentRef, ProviderProfile, ProviderProfileId
+from models.push_gate import (
+    ProtectedBranchPolicy,
+    PublicationAttempt,
+    PublicationState,
+    PushGrant,
+    RefUpdate,
+)
 from models.session import (
     NativeDeliveryInfo,
     NativeSessionInfo,
@@ -116,4 +123,9 @@ __all__ += [
     "ProjectEnvironmentSelection",
     "RegisterEnvironment",
     "SelectEnvironment",
+    "ProtectedBranchPolicy",
+    "PublicationAttempt",
+    "PublicationState",
+    "PushGrant",
+    "RefUpdate",
 ]
