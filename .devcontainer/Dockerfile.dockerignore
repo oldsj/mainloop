@@ -1,0 +1,7 @@
+**
+!.devcontainer/
+!.devcontainer/**
+!.trunk/
+!.trunk/trunk.yaml
+!.trunk/configs/
+!.trunk/configs/**
