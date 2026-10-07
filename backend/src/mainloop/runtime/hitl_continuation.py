@@ -131,7 +131,17 @@ async def submit(owner, request_id, action_id, response, *, service=None):
         ):
             raise store.HITLConflict("Pending request or verified relationship changed")
         outer, request, leaf, leaf_request, binding, associations = resolved
-        receipt = build_decision_receipt(
+        from mainloop.runtime.policy import PolicyError
+        from mainloop.services.merge_authorization import decision_inputs, lock_decision
+
+        try:
+            async with asyncio.timeout(60):
+                configuration, proposals = await decision_inputs(
+                    conn, owner, leaf, leaf_request, binding, response
+                )
+        except PolicyError as exc:
+            raise ValueError(exc.message) from None
+        receipt_arguments = dict(
             action_id=action_id,
             owner_id=owner,
             outbound_message_id=str(
@@ -146,6 +156,12 @@ async def submit(owner, request_id, action_id, response, *, service=None):
             associations=associations,
         )
         async with conn.transaction():
+            validate_proposal = await lock_decision(conn, owner, proposals)
+            receipt = build_decision_receipt(
+                **receipt_arguments,
+                configuration=configuration,
+                validate_proposal=validate_proposal,
+            )
             for key in sorted(leaf.key() for leaf in projection.leaves):
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", key
@@ -199,7 +215,10 @@ async def view(conn, projection, receipt=None):
             reason = selected.unavailable_reason
         except ValueError as exc:
             reason = str(exc)
+    from mainloop.services.merge_authorization import enrichment
+
     return {
+        "merge_enrichment": await enrichment(conn, projection),
         "request": projection.model_dump(mode="json"),
         "response": receipt.model_dump(mode="json") if receipt else None,
         "transport_state": state,

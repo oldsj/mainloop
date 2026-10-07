@@ -77,3 +77,15 @@ class OpenPullRequest(ToolInput):
         ):
             raise ValueError("invalid feature branch")
         return value
+
+
+class PreparePullRequestMerge(ToolInput):
+    project_id: Annotated[str, Field(min_length=1, max_length=100)]
+    pr_number: Annotated[int, Field(strict=True, gt=0)]
+    expected_sha: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+    request_id: Annotated[str, Field(min_length=1, max_length=100)]
+
+
+class MergePullRequestWithApproval(ToolInput):
+    proposal_id: Annotated[str, Field(min_length=1, max_length=100)]
+    request_id: Annotated[str, Field(min_length=1, max_length=100)]

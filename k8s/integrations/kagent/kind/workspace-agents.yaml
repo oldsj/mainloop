@@ -25,6 +25,14 @@ metadata:
 spec:
   modelConfig: { name: claude-subscription-model }
   systemPrompt: Work in the supplied repository and follow the owner's instructions.
+  # Disabled source candidate: workspace bindings still need MCP identity proof.
+  # tools:
+  #   - mcp:
+  #       server: { kind: RemoteMCPServer, name: mainloop }
+  #   - mcp:
+  #       server: { kind: RemoteMCPServer, name: mainloop-merge-approval }
+  #       tools: [merge_pull_request_with_approval]
+  #       requireApproval: true
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
@@ -60,6 +68,14 @@ metadata:
 spec:
   modelConfig: { name: codex-subscription-model }
   systemPrompt: Work in the supplied repository and follow the owner's instructions.
+  # Disabled source candidate: workspace bindings still need MCP identity proof.
+  # tools:
+  #   - mcp:
+  #       server: { kind: RemoteMCPServer, name: mainloop }
+  #   - mcp:
+  #       server: { kind: RemoteMCPServer, name: mainloop-merge-approval }
+  #       tools: [merge_pull_request_with_approval]
+  #       requireApproval: true
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent

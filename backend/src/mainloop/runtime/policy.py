@@ -6,6 +6,7 @@ here against control-plane state. Pure functions; callers pass in the counts the
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 # Depth counts edges below the main thread: main=0, its child=1, a grandchild=2.
@@ -110,8 +111,29 @@ ROLE_TOOLS = {
 }
 
 
+MERGE_TOOLS = frozenset(
+    {
+        "prepare_pull_request_merge",
+        "merge_pull_request",
+        "merge_pull_request_with_approval",
+    }
+)
+
+
 def tools_for(actor: Actor) -> frozenset[str]:
-    return ROLE_TOOLS.get(actor.role, frozenset())
+    tools = ROLE_TOOLS.get(actor.role, frozenset())
+    if tools and os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true":
+        tools |= MERGE_TOOLS
+    return tools
+
+
+def surface_tools(actor: Actor, surface: str = "ordinary") -> frozenset[str]:
+    tools = tools_for(actor)
+    if surface == "approval":
+        return tools & {"merge_pull_request_with_approval"}
+    if surface == "ordinary":
+        return tools - {"merge_pull_request_with_approval"}
+    return frozenset()
 
 
 def may_call(actor: Actor, tool: str) -> None:

@@ -32,7 +32,7 @@ the native agent holds only a placeholder. MCP discovery and calls are filtered 
 the main thread manages topics, pending intent and its child tree; children can call `whoami`,
 `note`, `decide` and `report`, and cannot delegate or inspect siblings. Inputs are validated
 and policy failures return tool errors. Terminal and archived bindings cannot authenticate.
-The dedicated MCP origin exposes only `/mcp`. REST remains unauthenticated and relies on the
+The dedicated MCP origin exposes `/mcp` and the isolated `/mcp/merge-approval` tool surface; merge tools remain disabled pending the [merge enablement gates](pull-requests.md#enablement-remains-separate). REST remains unauthenticated and relies on the
 required NetworkPolicy isolation documented in the architecture guide. The channel is
 implemented with fake-backed tests; the joint gateway proof (native agent to MCP through the gateway,
 blocked connections) passed on a Cilium cluster and needs a NetworkPolicy-enforcing CNI to repeat.

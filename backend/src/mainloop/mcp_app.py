@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from fastapi import HTTPException
 from mainloop.db import db
 from mainloop.runtime.agent_tools import AgentService, Ctx
-from mainloop.runtime.policy import PolicyError, may_call, tools_for
+from mainloop.runtime.policy import PolicyError, may_call, surface_tools
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, Tool
@@ -15,9 +15,11 @@ from starlette.responses import Response
 
 from models.agent_tools import (
     Delegate,
+    MergePullRequestWithApproval,
     OpenPullRequest,
     OptionalSession,
     PendingDone,
+    PreparePullRequestMerge,
     Read,
     Record,
     Report,
@@ -30,6 +32,18 @@ _context: ContextVar[Ctx] = ContextVar("mainloop_agent")
 
 # Registry is shared by discovery and invocation; future approval groups can select subsets.
 TOOLS = {
+    "prepare_pull_request_merge": (
+        PreparePullRequestMerge,
+        "Prepare immutable PR merge facts and required route; creates no approval card.",
+    ),
+    "merge_pull_request": (
+        PreparePullRequestMerge,
+        "Merge an auto-policy unprotected PR or return an approval proposal. Reuse request_id to reconcile.",
+    ),
+    "merge_pull_request_with_approval": (
+        MergePullRequestWithApproval,
+        "Merge an exact proposal with its recorded owner HITL decision and fresh gates.",
+    ),
     "open_pull_request": (
         OpenPullRequest,
         "Open a same-repository feature-branch PR against the current default branch. "
@@ -52,10 +66,17 @@ TOOLS = {
 
 
 async def invoke(
-    service: AgentService, ctx: Ctx, name: str, arguments: dict
+    service: AgentService,
+    ctx: Ctx,
+    name: str,
+    arguments: dict,
+    *,
+    surface: str = "ordinary",
 ) -> CallToolResult:
     try:
         may_call(ctx.actor, name)
+        if name not in surface_tools(ctx.actor, surface):
+            raise PolicyError("surface", "tool is unavailable on this MCP surface")
         body = TOOLS[name][0].model_validate(arguments)
         if name == "whoami":
             b = ctx.binding
@@ -101,7 +122,7 @@ class AgentAuth:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        if scope["path"] != "/mcp":
+        if scope["path"] not in ("/mcp", "/mcp/merge-approval"):
             return await Response(status_code=404)(scope, receive, send)
         headers = dict(scope["headers"])
         scheme, _, token = (
@@ -126,39 +147,50 @@ def create_app(service: AgentService | None = None):
         from mainloop.runtime.delegation import PgStore
 
         service = AgentService(PgStore())
-    server = FastMCP(
-        "mainloop",
-        stateless_http=True,
-        json_response=True,
-        transport_security=TransportSecuritySettings(
-            allowed_hosts=[
-                "mainloop-mcp.mainloop.svc.cluster.local",
-                "mainloop-mcp.mainloop.svc.cluster.local:*",
-                "localhost:*",
-                "127.0.0.1:*",
-                "testserver",
-            ],
-            allowed_origins=[],
-        ),
-    )
 
-    @server._mcp_server.list_tools()
-    async def list_tools():
-        return [
-            Tool(
-                name=name,
-                description=description,
-                inputSchema=model.model_json_schema(),
+    def make_server(surface, path):
+        server = FastMCP(
+            "mainloop-merge-approval" if surface == "approval" else "mainloop",
+            stateless_http=True,
+            json_response=True,
+            streamable_http_path=path,
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=[
+                    "mainloop-mcp.mainloop.svc.cluster.local",
+                    "mainloop-mcp.mainloop.svc.cluster.local:*",
+                    "localhost:*",
+                    "127.0.0.1:*",
+                    "testserver",
+                ],
+                allowed_origins=[],
+            ),
+        )
+
+        @server._mcp_server.list_tools()
+        async def list_tools():
+            return [
+                Tool(
+                    name=name,
+                    description=description,
+                    inputSchema=model.model_json_schema(),
+                )
+                for name, (model, description) in TOOLS.items()
+                if name in surface_tools(_context.get().actor, surface)
+            ]
+
+        @server._mcp_server.call_tool(validate_input=False)
+        async def call_tool(name, arguments):
+            return await invoke(
+                service, _context.get(), name, arguments, surface=surface
             )
-            for name, (model, description) in TOOLS.items()
-            if name in tools_for(_context.get().actor)
-        ]
 
-    @server._mcp_server.call_tool(validate_input=False)
-    async def call_tool(name, arguments):
-        return await invoke(service, _context.get(), name, arguments)
+        return server
 
+    server = make_server("ordinary", "/mcp")
+    protected = make_server("approval", "/mcp/merge-approval")
     http_app = server.streamable_http_app()
+    protected_app = protected.streamable_http_app()
+    http_app.router.routes.extend(protected_app.router.routes)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -168,7 +200,7 @@ def create_app(service: AgentService | None = None):
             require_token_key()
             await db.connect()
         try:
-            async with server.session_manager.run():
+            async with server.session_manager.run(), protected.session_manager.run():
                 yield
         finally:
             if managed:
