@@ -544,7 +544,7 @@ export const api = {
   async createWorkspace(
     projectId: string,
     branch: string,
-    options: { ref?: string; dev?: WorkspaceDev } = {}
+    options: { ref?: string; dev?: WorkspaceDev; agent_kind?: WorkspaceManifest['agent_kind'] } = {}
   ): Promise<WorkspaceLifecycle> {
     return postWorkspace({ project_id: projectId, branch, ...options });
   },
@@ -556,7 +556,7 @@ export const api = {
   async createWorkspaceFromRepo(
     repo: string,
     branch = '',
-    options: { ref?: string; dev?: WorkspaceDev } = {}
+    options: { ref?: string; dev?: WorkspaceDev; agent_kind?: WorkspaceManifest['agent_kind'] } = {}
   ): Promise<WorkspaceLifecycle> {
     return postWorkspace({ repo, branch, ...options });
   },

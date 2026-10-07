@@ -4,11 +4,13 @@
   import { projects, currentProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
   import { statusLabel } from '$lib/sessionStatus';
+  import { agentLabel } from '$lib/agentLabel';
   import { api, type WorkspaceLifecycle } from '$lib/api';
 
   // The route is reused when only [id] changes, so load per id rather than once on mount.
   const projectId = $derived($page.params.id);
   let branch = $state('');
+  let agentKind = $state<'claude' | 'codex'>('claude');
   let workspaceRows = $state<WorkspaceLifecycle[]>([]);
   let workspaceBusy = $state(false);
   let workspaceError = $state<string | null>(null);
@@ -73,7 +75,8 @@
     try {
       const workspace = await api.createWorkspace(
         project.id,
-        branch.trim() || project.default_branch
+        branch.trim() || project.default_branch,
+        { agent_kind: agentKind }
       );
       await goto(`/workspaces/${workspace.workspace_id}`);
     } catch (error) {
@@ -199,6 +202,32 @@
                 disabled={workspaceBusy}
               />
             </label>
+            <fieldset
+              class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+              disabled={workspaceBusy}
+            >
+              <legend class="text-term-fg-muted">Agent</legend>
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="project-workspace-agent-kind"
+                  value="claude"
+                  bind:group={agentKind}
+                  data-testid="project-workspace-kind-claude"
+                />
+                Claude Code
+              </label>
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="project-workspace-agent-kind"
+                  value="codex"
+                  bind:group={agentKind}
+                  data-testid="project-workspace-kind-codex"
+                />
+                Codex
+              </label>
+            </fieldset>
             <button
               type="submit"
               class="border-term-accent text-term-accent hover:bg-term-accent hover:text-term-bg border px-3 py-1.5 text-sm disabled:opacity-50"
@@ -223,6 +252,8 @@
                     >{workspace.manifest.branch}</span
                   >
                   <span class="text-term-fg-muted mt-1 block text-xs">
+                    <span data-testid="workspace-agent-kind">{workspace.manifest.agent_kind}</span>
+                    ·
                     {workspace.last_activity_at
                       ? `Active ${formatDate(workspace.last_activity_at)}`
                       : 'No activity recorded'}
@@ -271,6 +302,7 @@
         {#if projectSessions.length > 0}
           <div class="space-y-2">
             {#each projectSessions as session (session.id)}
+              {@const workspace = workspaceRows.find((item) => item.session_id === session.id)}
               <a
                 href="/sessions/{session.id}"
                 class="border-term-border bg-term-bg hover:border-term-accent block border p-3"
@@ -282,6 +314,10 @@
                     </p>
                     <p class="text-term-fg-muted mt-1 text-xs">
                       {formatDate(session.created_at)}
+                      ·
+                      <span data-testid="session-kind">
+                        {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
+                      </span>
                     </p>
                   </div>
                   <span class="shrink-0 text-xs {getStatusColor(session.status)}">

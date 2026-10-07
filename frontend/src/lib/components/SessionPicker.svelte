@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
+  import { agentLabel } from '$lib/agentLabel';
   import { navigationContext, sessionsByUrgency, getUrgencyScore } from '$lib/stores/navigationContext';
   import { workspaces } from '$lib/stores/workspaces';
   import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
@@ -162,6 +163,9 @@
         ></span>
         <span class="min-w-0 flex-1 truncate text-sm text-term-fg">
           {session.title}
+        </span>
+        <span class="shrink-0 text-xs text-term-fg-muted" data-testid="session-kind">
+          {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
         </span>
         <span
           class="shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention

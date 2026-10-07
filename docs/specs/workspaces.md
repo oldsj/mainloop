@@ -32,8 +32,10 @@ workspace operations.
   creates one, in the same request. Repository names are matched case-insensitively (GitHub's
   rule): `Foo/Bar` and `foo/bar` are one project, shown with the case it was first created with.
   The desktop sidebar's **New workspace** control (next to the project list) takes a repository
-  and an optional branch, creates the workspace and opens it; a `422` and other API errors show
-  inline. The project page creates one from an existing project.
+  and an optional branch, and both it and the project page let the owner choose Claude Code
+  (the default) or Codex. The selected agent kind is stored in the workspace manifest and shown
+  in workspace and session lists. Creation opens the workspace; a `422` and other API errors show
+  inline.
 - A project created this way stores the canonical `https://github.com/owner/name` URL and no
   default branch: nothing asks GitHub at this point. With no `ref` the clone uses the remote's
   default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch

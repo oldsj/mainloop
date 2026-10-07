@@ -98,7 +98,9 @@
       >
         {statusLabel(session.status)}
       </span>
-      <span class="text-xs text-term-fg-muted" data-testid="session-kind">{agentLabel(session.agent_kind)}</span>
+      <span class="text-xs text-term-fg-muted" data-testid="session-kind">
+        {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
+      </span>
       {#if workspace}
         <WorkspaceLifecycleBadge {workspace} />
       {/if}
