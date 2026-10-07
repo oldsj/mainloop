@@ -1,0 +1,102 @@
+#!/bin/bash
+# Run a command against disposable PG16; always stop and remove the cluster.
+set -euo pipefail
+if [[ ${1-} != run || $# -lt 2 ]]; then
+	echo 'Usage: dev-postgres run COMMAND [ARG...]; DEV_POSTGRES_ROOT=/data/test-postgres, DEV_POSTGRES_PORT=5432' >&2
+	exit 2
+fi
+shift
+root=${DEV_POSTGRES_ROOT:-/data/test-postgres}
+port=${DEV_POSTGRES_PORT:-5432}
+if [[ ${root} != /* || ${root} == / || ${root} == *"'"* || ${root} == *$'\n'* || ! ${port} =~ ^[0-9]+$ ]] || ((port < 1024 || port > 65535)); then
+	echo 'Use an absolute scratch root and an unprivileged TCP port.' >&2
+	exit 2
+fi
+socket=${root}-socket
+tmp=${root}-tmp
+pg=(/usr/lib/postgresql/16/bin)
+pg_user=$(id -un)
+uid=$(id -u)
+as_pg=()
+if [[ ${uid} == 0 ]]; then
+	pg_user=nonroot
+	as_pg=(runuser -u "${pg_user}" --)
+fi
+# Claim the directory atomically; never remove an existing cluster or user data.
+parent=$(dirname "${root}")
+mkdir -p "${parent}"
+mkdir -m 700 "${root}"
+owned_socket=false
+owned_tmp=false
+started=false
+cleanup() {
+	status=$?
+	trap '' INT QUIT TERM
+	trap - EXIT
+	if ${started}; then
+		"${as_pg[@]}" "${pg[0]}/pg_ctl" -D "${root}" -m immediate -w stop || status=1
+	fi
+	rm -rf -- "${root}"
+	if ${owned_socket}; then rm -rf -- "${socket}"; fi
+	if ${owned_tmp}; then rm -rf -- "${tmp}"; fi
+	exit "${status}"
+}
+trap cleanup EXIT
+command_pid=
+launching=false
+pending_signal=()
+on_signal() {
+	# Keep cancellation pending until the asynchronous child's PID is recorded.
+	if ${launching}; then
+		if ((${#pending_signal[@]} == 0)); then pending_signal=("$1" "$2"); fi
+		return
+	fi
+	trap '' INT QUIT TERM
+	if [[ -n ${command_pid} ]]; then
+		kill -"$1" -- "-${command_pid}" 2>/dev/null || kill -"$1" "${command_pid}" 2>/dev/null || true
+		# Allow a short grace period, then terminate even uncooperative commands.
+		for phase in TERM KILL; do
+			for ((attempt = 0; attempt < 10; attempt++)); do
+				if ! kill -0 -- "-${command_pid}" 2>/dev/null; then break; fi
+				sleep 0.1
+			done
+			kill -"${phase}" -- "-${command_pid}" 2>/dev/null || kill -"${phase}" "${command_pid}" 2>/dev/null || true
+		done
+	fi
+	exit "$2"
+}
+trap 'on_signal INT 130' INT
+trap 'on_signal QUIT 131' QUIT
+trap 'on_signal TERM 143' TERM
+mkdir -m 700 "${socket}"
+owned_socket=true
+mkdir -m 700 "${tmp}"
+owned_tmp=true
+if [[ ${uid} == 0 ]]; then
+	chown "${pg_user}":65532 "${root}" "${socket}" "${tmp}"
+fi
+"${as_pg[@]}" "${pg[0]}/initdb" -D "${root}" -U mainloop --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 >"${tmp}/initdb.log"
+cat >>"${root}/postgresql.conf" <<CONFIG
+listen_addresses = '127.0.0.1'
+port = ${port}
+unix_socket_directories = '${socket}'
+max_connections = 30
+shared_buffers = '64MB'
+work_mem = '4MB'
+max_wal_size = '256MB'
+log_temp_files = 0
+temp_tablespaces = ''
+CONFIG
+# pg_ctl waits for startup; cleanup also covers partial startup failure.
+started=true
+"${as_pg[@]}" env TMPDIR="${tmp}" "${pg[0]}/pg_ctl" -D "${root}" -l "${root}/server.log" -w -t 30 start
+"${pg[0]}/pg_isready" -h 127.0.0.1 -p "${port}" -U mainloop -d postgres
+export MAINLOOP_TEST_DATABASE_URL="postgresql://mainloop@127.0.0.1:${port}/postgres"
+echo "MAINLOOP_TEST_DATABASE_URL=${MAINLOOP_TEST_DATABASE_URL}"
+# Bash background jobs inherit ignored INT/QUIT; restore them before exec.
+launching=true
+setsid env --default-signal=INT,QUIT "$@" &
+command_pid=$!
+launching=false
+if ((${#pending_signal[@]})); then on_signal "${pending_signal[@]}"; fi
+wait "${command_pid}"

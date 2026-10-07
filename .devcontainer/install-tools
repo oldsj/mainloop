@@ -1,0 +1,59 @@
+#!/bin/bash
+set -euo pipefail
+arch=${1-}
+if [[ -z ${arch} ]]; then
+	arch=$(dpkg --print-architecture)
+fi
+case "${arch}" in
+amd64)
+	node_arch=x64
+	uv_arch=x86_64
+	trunk_arch=x86_64
+	node_sha=2598641d188b41793930917f1a99a81c9615856b4205d408a44ab676c1acbb3d
+	uv_sha=741ff1f5742c5a4a25d2f829e8395355e43f7a5ae2ebc6368e9ae2df0efb69cf
+	trunk_sha=3845ff76a70cebb10e61a267ff719ffdccfa3ef6d877d51870a2c62b79603ab9
+	kubectl_sha=7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
+	;;
+arm64)
+	node_arch=arm64
+	uv_arch=aarch64
+	trunk_arch=arm64
+	node_sha=323e6bc34bfe82a21f42d9eb94d9a2b6c8082d8c03cb510cf2f95dd1dcaa1531
+	uv_sha=726b72a137fda33565143325f7d31c42cd30ff9ccdf067e00d124d37b4081cb2
+	trunk_sha=cc210d2185cf95bedbec06384be6ef342bdb7dcf3ff72dd08fe0e69859516887
+	kubectl_sha=420e6110e3ba7ee5a3927b5af868d18df17aae36b720529ffa4e9e945aa95450
+	;;
+*)
+	echo "Unsupported architecture: ${arch}" >&2
+	exit 1
+	;;
+esac
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+fetch() {
+	curl --fail --silent --show-error --location --retry 3 "$1" -o "${scratch}/$3"
+	echo "$2  ${scratch}/$3" | sha256sum --check --strict
+}
+fetch "https://nodejs.org/dist/v24.8.0/node-v24.8.0-linux-${node_arch}.tar.xz" "${node_sha}" node.tar.xz
+tar -xJf "${scratch}/node.tar.xz" -C /usr/local --strip-components=1
+fetch "https://github.com/astral-sh/uv/releases/download/0.8.22/uv-${uv_arch}-unknown-linux-gnu.tar.gz" "${uv_sha}" uv.tar.gz
+tar -xzf "${scratch}/uv.tar.gz" -C "${scratch}"
+install "${scratch}/uv-${uv_arch}-unknown-linux-gnu/uv" "${scratch}/uv-${uv_arch}-unknown-linux-gnu/uvx" /usr/local/bin/
+fetch "https://trunk.io/releases/1.25.0/trunk-1.25.0-linux-${trunk_arch}.tar.gz" "${trunk_sha}" trunk.tar.gz
+tar -xzf "${scratch}/trunk.tar.gz" -C "${scratch}"
+install "${scratch}/trunk" /usr/local/bin/trunk
+fetch "https://dl.k8s.io/release/v1.34.1/bin/linux/${arch}/kubectl" "${kubectl_sha}" kubectl
+install "${scratch}/kubectl" /usr/local/bin/kubectl
+fetch https://registry.npmjs.org/pnpm/-/pnpm-9.15.9.tgz cf86a7ad764406395d4286a6d09d730711720acc6d93e9dce9ac7ac4dc4a28a7 pnpm.tgz
+mkdir -p /opt/pnpm
+tar -xzf "${scratch}/pnpm.tgz" -C /opt/pnpm --strip-components=1
+ln -s /opt/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm
+ln -s /opt/pnpm/bin/pnpx.cjs /usr/local/bin/pnpx
+fetch https://www.postgresql.org/media/keys/ACCC4CF8.asc 0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76 pgdg.asc
+install -m 644 "${scratch}/pgdg.asc" /usr/share/keyrings/pgdg.asc
+echo 'deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' >/etc/apt/sources.list.d/pgdg.list
+# Prevent package installation from creating or starting a cluster.
+mkdir -p /etc/postgresql-common
+echo 'create_main_cluster = false' >/etc/postgresql-common/createcluster.conf
+apt-get update
+apt-get install -y --no-install-recommends postgresql-16=16.15-1.pgdg12+2 postgresql-client-16=16.15-1.pgdg12+2
