@@ -50,14 +50,51 @@ export interface HITLView {
     provider?: string | null;
     role?: string;
   };
-  merge?: {
-    pr_url: string;
-    head: string;
-    base: string;
-    protected_matches: string[];
-    ci_evidence: string;
-  } | null;
+  merge?: VerifiedMergeContext[] | null;
 }
+export interface VerifiedMergeContext {
+  tool_id: string;
+  proposal_id: string;
+  repository: string;
+  pr_number: number;
+  head: string;
+  head_sha: string;
+  base: string;
+  base_sha: string;
+  protected_matches: string[];
+  ci: Record<string, unknown> | null;
+  stale: boolean;
+}
+
+/** Missing, malformed or ambiguous resolver evidence must not look verified. */
+export function mergeContexts(view: HITLView) {
+  const payload = parseHITL(view.request.payload);
+  const entries: unknown[] = Array.isArray(view.merge) ? view.merge : [];
+  return (payload ? requestTools(payload) : []).flatMap((tool) => {
+    const matches = entries.filter((v) => record(v) && v.tool_id === tool.id);
+    // A public name is only a hint to show an unavailable notice, never evidence.
+    if (!matches.length && !tool.name.endsWith('merge_pull_request_with_approval')) return [];
+    const v = matches.length === 1 ? matches[0] : null;
+    const valid =
+      record(v) &&
+      bounded(v.proposal_id) &&
+      typeof v.repository === 'string' &&
+      /^[\w.-]+\/[\w.-]+$/.test(v.repository) &&
+      Number.isSafeInteger(v.pr_number) &&
+      (v.pr_number as number) > 0 &&
+      bounded(v.head) &&
+      bounded(v.base) &&
+      typeof v.head_sha === 'string' &&
+      /^[a-f0-9]{40}$/.test(v.head_sha) &&
+      typeof v.base_sha === 'string' &&
+      /^[a-f0-9]{40}$/.test(v.base_sha) &&
+      Array.isArray(v.protected_matches) &&
+      v.protected_matches.every((p) => typeof p === 'string') &&
+      typeof v.stale === 'boolean';
+    return [{ toolId: tool.id, facts: valid ? (v as unknown as VerifiedMergeContext) : null }];
+  });
+}
+
 export interface MergePolicyView {
   merge_policy: 'auto' | 'approval';
   merge_policy_version: number;

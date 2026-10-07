@@ -243,6 +243,16 @@ class MergeAcceptanceTests(support.MergeFixture):
         view = (await self.http(gateway, "GET", f"/hitl/{projection.id}")).json()
         self.assertEqual(view["merge_enrichment"][0]["proposal_id"], p["proposal_id"])
         self.assertEqual(view["merge_enrichment"][0]["head_sha"], support.SHA)
+        self.assertEqual(view["merge"], view["merge_enrichment"])
+        self.assertEqual(
+            view["merge"][0]["tool_id"], projection.leaves[0].pending_request_id
+        )
+        with patch.dict(os.environ, MAINLOOP_MERGE_CONFIGURATIONS="[]"):
+            unavailable = (
+                await self.http(gateway, "GET", f"/hitl/{projection.id}")
+            ).json()
+        self.assertIsNone(unavailable["merge"])
+        self.assertEqual(unavailable["merge_enrichment"], [])
         if provider == "codex" and not nested:
             if target := os.environ.get("MERGE_UI_FIXTURE_PATH"):
                 Path(target).write_text(json.dumps(view))

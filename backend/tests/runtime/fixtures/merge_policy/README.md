@@ -17,9 +17,10 @@ pnpm --dir frontend test:unit
 ```
 
 The backend exports the actual owner API response from the Codex protected-rename
-scenario. The frontend consumes it without adapting the API shape. The new renderer
-test currently fails because the API supplies `merge_enrichment` while the shared
-component reads `merge`; slice d deliberately leaves this product defect unfixed.
+scenario. The frontend consumes it without adapting the API shape. The renderer
+test verifies the owner API maps server-resolved `merge_enrichment` into the shared
+component’s per-call `merge` display. It originally reproduced D1 and now guards
+the repaired integration.
 Without the export environment variable, that cross-process test is skipped, just
 like the existing `HITL_UI_FIXTURE_PATH` integration. Set both variables during full
 acceptance runs to exercise both contracts. This is server-renderer evidence, not

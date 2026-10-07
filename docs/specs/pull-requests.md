@@ -108,8 +108,13 @@ An already-claimed intent cannot be retroactively rejected. Approving stale fact
 fails; rejecting stale owned proposals remains possible before claim.
 
 The HITL view includes a `merge_enrichment` array of server-resolved proposal facts
-keyed by tool/proposal ID. It supplies no separate approval controls. UI integration
-with the shared b3 renderer remains a clean enrichment slot until that slice lands.
+keyed by tool/proposal ID. The owner API exposes these verified facts in its `merge`
+display array. The shared inbox/chat renderer shows each call's repository/PR, exact
+head/base branches and SHAs, protected paths, and recorded CI checks/statuses.
+This is read-only evidence, not approval or a promise of current CI success; it adds
+no actions. Missing, malformed or ambiguous evidence is shown as unavailable, and
+stale observations/proposals label displayed facts as historical. Agent-supplied
+names may trigger an unavailable notice but cannot supply verified merge context.
 Staleness includes proposal replacement/policy changes; GitHub head/base/diff freshness
 is checked on submission and invocation, not inferred from a stored card.
 

@@ -263,13 +263,10 @@ test('shared renderer: read-only states, escaped metadata, provider reasons and 
     assert.match(html, /<fieldset disabled/);
     v.request.payload = { type: 'bad' };
     assert.match(r.html(state(v)), /Malformed or unsupported/);
-    v.merge = {
-      pr_url: 'javascript:alert(1)',
-      head: 'abc',
-      base: 'def',
-      protected_matches: ['k8s/a'],
-      ci_evidence: 'pending'
-    };
+    v.request.payload = payload;
+    v.merge = [{ tool_id: 'a', repository: 'javascript:alert(1)' }] as unknown as NonNullable<
+      HITLView['merge']
+    >;
     html = r.html(state(v));
     assert.match(html, /Merge context/);
     assert.doesNotMatch(html, /href="javascript/);
@@ -422,3 +419,54 @@ test(
     }
   }
 );
+
+test('merge display handles batches, stale evidence, and missing or untrusted facts', async () => {
+  const r = await renderer();
+  try {
+    const v = view();
+    v.request.payload = {
+      type: 'tool_approval_request',
+      tools: ['a', 'b'].map((id) => ({
+        id,
+        call_id: id,
+        name: 'unverified.merge_pull_request_with_approval',
+        args: { merge: { ci: { green: true } } }
+      }))
+    };
+    let html = r.html(state(v));
+    assert.equal((html.match(/Verified merge context unavailable/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /Checks passed/);
+    const facts = {
+      tool_id: 'a',
+      proposal_id: 'proposal-a',
+      repository: 'owner/repo',
+      pr_number: 17,
+      head: 'feature',
+      head_sha: 'a'.repeat(40),
+      base: 'main',
+      base_sha: 'b'.repeat(40),
+      protected_matches: ['k8s/<script>.yaml'],
+      ci: { green: false, checks: [{ name: 'build', conclusion: 'failure' }] },
+      stale: true
+    };
+    v.merge = [
+      facts,
+      { ...facts, tool_id: 'b', proposal_id: 'proposal-b', pr_number: 18, ci: null, stale: false }
+    ];
+    html = r.html(state(v));
+    assert.match(html, /owner\/repo #17/);
+    assert.match(html, /owner\/repo #18/);
+    assert.match(html, /Current merge context unavailable/);
+    assert.match(html, /Checks not passing at preparation/);
+    assert.match(html, /CI evidence unavailable/);
+    assert.match(html, /&lt;script>/);
+    assert.doesNotMatch(html, /<script>/);
+    assert.doesNotMatch(html, />Merge</);
+    v.merge = [facts, facts];
+    html = r.html(state(v));
+    assert.doesNotMatch(html, /owner\/repo #17/);
+    assert.equal((html.match(/Verified merge context unavailable/g) ?? []).length, 2);
+  } finally {
+    await r.close();
+  }
+});

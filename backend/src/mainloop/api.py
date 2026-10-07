@@ -612,8 +612,8 @@ async def hitl_presentation(conn, result):
         "context": context,
         "writes_enabled": os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED")
         == "true",
-        # Reserved for a server-verified merge resolver; payload hints never fill this.
-        "merge": None,
+        # Only the server resolver supplies this display data. Never use payload hints.
+        "merge": result.get("merge_enrichment") or None,
     }
 
 
