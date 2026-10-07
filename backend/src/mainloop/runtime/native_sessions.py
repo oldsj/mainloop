@@ -56,6 +56,7 @@ from mainloop.runtime.kagent_client import (
 )
 from mainloop.runtime.standing import content_hash
 from mainloop.sse import notify_session_message
+from mainloop.tasks import lifecycle
 
 from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
 
@@ -202,6 +203,49 @@ def agent_ref(kind: str, role: str = "agent") -> AgentRef:
 
     ref = registry().resolve(kind, role).agents[role]
     return AgentRef(ref.namespace, ref.name)
+
+
+# Roles a task attempt can own. A ``child`` binding is also what a session-spawned child is, so
+# only the attempt row (never the role alone) says a binding is delegated.
+DELEGATED_ROLES = ("supervisor", "child")
+
+
+async def attempt_row(binding: dict, *, conn=None) -> dict | None:
+    """Read the task attempt owning this binding, or return None for ordinary sessions."""
+    if binding["role"] not in DELEGATED_ROLES:
+        return None
+    query = (
+        "SELECT id,state,agent_ref,role,depth,task_id,writer_generation "
+        "FROM task_attempts WHERE binding_id=$1"
+    )
+    if conn is None:
+        async with db.connection() as connection:
+            row = await connection.fetchrow(query, binding["session_id"])
+    else:
+        row = await conn.fetchrow(query, binding["session_id"])
+    return dict(row) if row else None
+
+
+async def is_delegated(binding: dict) -> bool:
+    return await attempt_row(binding) is not None
+
+
+async def binding_agent_ref(binding: dict) -> AgentRef:
+    """Resolve the AgentRef for this binding's turns.
+
+    A delegated attempt routes to the AgentRef pinned when it was admitted, never to the live
+    registry, so a later provider configuration change cannot move a running attempt. Every
+    other binding keeps the registry-resolved ref. A supervisor is delegated by definition, so a
+    missing attempt is an error rather than a fall back to the registry.
+    """
+    attempt = await attempt_row(binding)
+    if attempt is None:
+        if binding["role"] == "supervisor":
+            raise RuntimeError("supervisor binding has no task attempt")
+        return agent_ref(binding["kind"], binding["role"])
+    data = attempt["agent_ref"]
+    data = json.loads(data) if isinstance(data, str) else data
+    return AgentRef(data["namespace"], data["name"])
 
 
 def create_request_id(session_id: str) -> str:
@@ -384,6 +428,9 @@ class Ledger:
         messages then follow it, one turn at a time.
         """
         async with db.connection() as conn, conn.transaction():
+            # A delegated session takes work only while its attempt is active and holds its claim;
+            # the share lock keeps a fence from committing between this check and the insert.
+            await lifecycle.check(conn, session_id, "submit", lock=True)
             await self._lock_deliveries(conn, session_id)
             busy = await conn.fetchval(
                 """SELECT EXISTS(SELECT 1 FROM native_deliveries
@@ -409,6 +456,15 @@ class Ledger:
                 conn, session_id, conversation_id, text, state, source
             )
         return message_id, state
+
+    async def insert_brief(
+        self, conn, *, session_id: str, conversation_id: str, text: str
+    ) -> str:
+        """Record a task attempt's one first brief in the caller's transaction."""
+        await self._lock_deliveries(conn, session_id)
+        return await self._insert_message(
+            conn, session_id, conversation_id, text, "recorded", "brief"
+        )
 
     async def delivery_state(self, message_id: str) -> str | None:
         async with db.connection() as conn:
@@ -506,12 +562,33 @@ class Ledger:
         return [dict(r) for r in rows]
 
     async def mark_kagent_deleted(self, session_id: str) -> None:
+        from mainloop.db import tasks as task_store
+
         async with db.connection() as conn:
             async with push_lifecycle.locked(conn, session_id, revoke=True):
-                await conn.execute(
-                    "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
-                    session_id,
-                )
+                async with conn.transaction():
+                    await task_store.admission_lock(conn)
+                    await conn.execute(
+                        "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+                        session_id,
+                    )
+                    # Delegated claims belong to settlement. Ordinary workspace claims
+                    # also need release after confirmed archive deletion.
+                    claim = await conn.fetchrow(
+                        """SELECT owner_id,repository,branch,generation
+                           FROM workspace_writer_claims WHERE binding_id=$1 AND held""",
+                        session_id,
+                    )
+                    if claim is not None:
+                        await task_store.release_writer(
+                            conn,
+                            owner_id=claim["owner_id"],
+                            repository=claim["repository"],
+                            branch=claim["branch"],
+                            generation=claim["generation"],
+                            binding_id=session_id,
+                            fence_evidence_ref=f"kagent-deleted:{session_id}",
+                        )
 
     async def transition(
         self,
@@ -782,6 +859,7 @@ async def create_binding(
 
     kind = registry().resolve(kind, role, selecting=True).id
     from mainloop.runtime.agent_credentials import (
+        VALID_GRANT_PAIRS,
         credential_reference,
         reference_data,
     )
@@ -789,11 +867,7 @@ async def create_binding(
     grant_kind = mcp_grant_kind or (
         "coordination" if role in ("main", "child") else "none"
     )
-    valid_grant = (role, grant_kind) in {
-        ("main", "coordination"),
-        ("child", "coordination"),
-        ("agent", "workspace"),
-    }
+    valid_grant = (role, grant_kind) in VALID_GRANT_PAIRS
     if grant_kind not in ("none", "coordination", "workspace") or (
         grant_kind != "none" and not valid_grant
     ):
@@ -844,12 +918,17 @@ async def submit_message(session_id: str, text: str, *, source: str = "user") ->
         # Read again here: the archive may have landed since the read above.
         if source == "user" and (await db.get_session(session_id)).archived_at:
             raise ValueError("This session is archived; start a new one.")
-        message_id, state = await ledger.record_submission(
-            session_id=session_id,
-            conversation_id=session.conversation_id,
-            text=text,
-            source=source,
-        )
+        try:
+            message_id, state = await ledger.record_submission(
+                session_id=session_id,
+                conversation_id=session.conversation_id,
+                text=text,
+                source=source,
+            )
+        except lifecycle.LifecycleDenied as exc:
+            raise ValueError(
+                f"This session's task attempt is not live ({exc.code})."
+            ) from exc
     if state == "recorded":
         _spawn_deliver(session_id, message_id, text)
     return message_id
@@ -874,12 +953,20 @@ async def _live_session(session_id: str) -> KagentSession | None:
         if exc.grpc_status == 5:  # NOT_FOUND
             return None
         raise
+    if session.id != session_id or session.context_id != session_id:
+        raise OutcomeUnknown("GetSession returned a different Session identity")
     if session.state in (RuntimeState.DELETING, RuntimeState.DELETED):
         return None
     return session
 
 
 async def _replace_kagent_session(binding: dict) -> None:
+    if await is_delegated(binding):
+        # A lost runtime is the end of that attempt's writer; a handoff creates its successor
+        # with its own checkout, environment and grant.
+        raise RuntimeError(
+            "the delegated attempt's kagent Session is gone and is not replaced in place"
+        )
     old = binding["kagent_session_id"]
     logger.warning(
         "kagent Session %s of %s is gone; creating a new one",
@@ -986,17 +1073,53 @@ async def _create_session_with_credentials(
 
     value = await ledger.get_development_environment(binding["session_id"])
     options = {}
+    agent = await binding_agent_ref(binding)
     if value is not None:
         options["development_environment"] = DevelopmentEnvironment(
             value["image"], value["platform"], value["policy_identity"]
         )
-    session = await get_client().create_session(
-        agent_ref(binding["kind"], binding["role"]),
-        request_id=_request_id(binding),
-        credentials=refs,
-        workspace=workspace,
-        **options,
+    # Commit the dispatch marker before the call. A crash, even before bytes leave,
+    # is conservatively unknown on recovery; later refusals cannot erase that fact.
+    first_dispatch = (
+        await lifecycle.create_dispatch(binding["session_id"])
+        if await attempt_row(binding) is not None
+        else False
     )
+    try:
+        session = await get_client().create_session(
+            agent,
+            request_id=_request_id(binding),
+            credentials=refs,
+            workspace=workspace,
+            **options,
+        )
+    except SessionError as exc:
+        if first_dispatch and exc.grpc_status in (3, 7, 16):
+            # Companion Service.create returns INVALID_ARGUMENT only before reservation
+            # (input/origin validation or a rolled-back reservation transaction).
+            # Workflow failures after reservation use ABORTED/NOT_FOUND/UNAVAILABLE.
+            await lifecycle.create_rejected(binding["session_id"])
+        raise
+    except ServiceConfigurationError:
+        # The control client's local credential check or gateway/service authentication
+        # rejected this first dispatch before reservation. Later refusals prove nothing.
+        if first_dispatch:
+            await lifecycle.create_rejected(binding["session_id"])
+        raise
+    if (
+        not session.id
+        or (
+            binding.get("kagent_session_id") is not None
+            and session.id != binding["kagent_session_id"]
+        )
+        or session.context_id != session.id
+        or session.agent != agent
+        or session.workspace != workspace
+        or session.development_environment != options.get("development_environment")
+    ):
+        raise OutcomeUnknown(
+            "CreateSession returned a different frozen create contract"
+        )
     if (
         session.development_environment is not None
         or session.runtime_composition is not None
@@ -1006,6 +1129,33 @@ async def _create_session_with_credentials(
 
 
 async def _create_bound_session(binding: dict) -> KagentSession:
+    async with lifecycle.guard(binding["session_id"], "create"):
+        return await _create_bound_session_guarded(binding)
+
+
+async def validate_bound_session(binding: dict, session: KagentSession) -> None:
+    """Validate persisted routing and checkout before treating a known runtime as ready."""
+    from mainloop.runtime.kagent_client import DevelopmentEnvironment
+
+    value = await ledger.get_development_environment(binding["session_id"])
+    environment = (
+        DevelopmentEnvironment(
+            value["image"], value["platform"], value["policy_identity"]
+        )
+        if value
+        else None
+    )
+    if (
+        session.id != binding["kagent_session_id"]
+        or session.context_id != session.id
+        or session.agent != await binding_agent_ref(binding)
+        or session.workspace != await ledger.get_workspace(binding["session_id"])
+        or session.development_environment != environment
+    ):
+        raise OutcomeUnknown("Known Session differs from the persisted create contract")
+
+
+async def _create_bound_session_guarded(binding: dict) -> KagentSession:
     from mainloop.runtime.agent_credentials import publish_for_binding
 
     refs = ()
@@ -1067,12 +1217,13 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
     """
     client = get_client()
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
+    legacy_child = binding["role"] == "child" and not await is_delegated(binding)
     for replaced in (False, True):
         if binding["kagent_session_id"] is None:
             try:
                 session = await _create_bound_session(binding)
             except OutcomeUnknown as exc:
-                if binding["role"] == "child" and not binding["turns"]:
+                if legacy_child and not binding["turns"]:
                     await _remember_child_start_failure(
                         binding, f"creation outcome unknown: {exc}"
                     )
@@ -1086,7 +1237,7 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
                     raise ChildStartPending(str(exc)) from exc
                 if replaced or not _create_hit_deleted(exc):
                     if (
-                        binding["role"] == "child"
+                        legacy_child
                         and not binding["turns"]
                         and exc.grpc_status in (3, 7, 16)
                     ):
@@ -1112,16 +1263,18 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
                 await _replace_kagent_session(binding)
                 continue
             session = live
+            await validate_bound_session(binding, session)
         if binding.get("child_start_failure"):
             await _settle_child_start_failure(binding)
         try:
-            return await client.ensure_ready(
-                session, timeout=settings.kagent_session_ready_timeout_seconds
-            )
+            async with lifecycle.guard(binding["session_id"], "submit"):
+                return await client.ensure_ready(
+                    session, timeout=settings.kagent_session_ready_timeout_seconds
+                )
         except ServiceConfigurationError:
             raise
         except KagentError as exc:
-            if binding["role"] != "child" or binding["turns"]:
+            if not legacy_child or binding["turns"]:
                 raise
             if not await _remember_child_start_failure(
                 binding, f"readiness failed: {exc}"
@@ -1137,12 +1290,36 @@ async def _with_standing(binding: dict, text: str) -> tuple[str, str | None]:
 
     Returns the prompt and the standing hash to record once kagent has accepted it.
     """
-    if binding["role"] == "agent" or binding["standing_hash"]:
+    if (
+        binding["role"] == "agent"
+        or binding["standing_hash"]
+        or await is_delegated(binding)
+    ):
         return text, None
     from mainloop.runtime.delegation import render_for_binding
 
     standing = await render_for_binding(binding)
     return f"{standing}\n\n---\n\n{text}", content_hash(standing)
+
+
+async def _guarded_send(binding, agent, **kwargs):
+    """Hold runtime admission until the first server receipt; stream afterwards.
+
+    Draining cannot race dispatch, and a stalled reply never admits a second writer.
+    Cancellation can fence an already accepted turn without waiting for its full stream.
+    """
+    events = get_client().send_message(agent, **kwargs).__aiter__()
+    try:
+        async with lifecycle.guard(binding["session_id"], "submit"):
+            try:
+                first = await anext(events)
+            except StopAsyncIteration:
+                return
+        yield first
+        async for event in events:
+            yield event
+    finally:
+        await events.aclose()
 
 
 async def _deliver(session_id: str, message_id: str, text: str) -> None:
@@ -1157,8 +1334,17 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
             binding = None
             try:
                 binding = await get_binding(session_id)
+                await lifecycle.check_session(session_id, "submit")
                 await _ensure_kagent_session(binding)  # not attempted => nothing sent
                 prompt, standing_hash = await _with_standing(binding, text)
+            except lifecycle.LifecycleDenied as exc:
+                await ledger.transition(
+                    message_id,
+                    "failed",
+                    from_states=("recorded",),
+                    detail=f"not sent: task attempt is not live ({exc.code})",
+                )
+                prompt = None
             except ChildStartPending as exc:
                 await ledger.transition(
                     message_id,
@@ -1181,6 +1367,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     binding is not None
                     and binding["role"] == "child"
                     and not binding["turns"]
+                    and not await is_delegated(binding)
                 ):
                     if isinstance(exc, ChildStartDisposed):
                         return
@@ -1221,8 +1408,9 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
             ):
                 return
         if prompt is not None:
-            events = get_client().send_message(
-                agent_ref(binding["kind"], binding["role"]),
+            events = _guarded_send(
+                binding,
+                await binding_agent_ref(binding),
                 text=prompt,
                 message_id=message_id,
                 context_id=binding["kagent_session_id"],
@@ -1284,6 +1472,14 @@ async def _consume(
             "failed",
             from_states=_RESOLVABLE + ("recorded",),
             detail=describe_error(exc),
+        )
+        return None
+    except lifecycle.LifecycleDenied as exc:
+        await ledger.transition(
+            message_id,
+            "failed",
+            from_states=_RESOLVABLE,
+            detail=f"not sent: task attempt is not live ({exc.code})",
         )
         return None
     except TaskNotFound:
@@ -1355,7 +1551,7 @@ async def _resolve(
     With a task id the current task replaces the projection. Without one, ``ListTasks`` is
     searched for the message id; if nothing shows the message, the delivery is ``uncertain``.
     """
-    agent = agent_ref(binding["kind"], binding["role"])
+    agent = await binding_agent_ref(binding)
     try:
         client = get_client()
         if proj.task_id:
@@ -1493,7 +1689,9 @@ async def _after(session_id: str, reply: str | None) -> None:
     if binding is None or session is None:
         return
     open_n = await ledger.open_count(session_id)
-    is_child = binding["role"] == "child"
+    # Only a session-spawned child reports on its own and completes with its report. A delegated
+    # attempt finishes through its task report, never through this fallback.
+    is_child = binding["role"] == "child" and not await is_delegated(binding)
     new_status = next_status(
         session.status,
         turn_open=bool(open_n),
@@ -1550,7 +1748,7 @@ async def sync(session_id: str) -> None:
 
 async def _observe(session_id: str, binding: dict, delivery: dict) -> str | None:
     message_id = delivery["message_id"]
-    agent = agent_ref(binding["kind"], binding["role"])
+    agent = await binding_agent_ref(binding)
     client = get_client()
     try:
         if delivery["task_id"]:
@@ -1629,7 +1827,7 @@ async def _follow(
     """Reattach to a running task after a restart or a dropped stream (SubscribeToTask)."""
     try:
         events = get_client().subscribe_to_task(
-            agent_ref(binding["kind"], binding["role"]), task_id
+            await binding_agent_ref(binding), task_id
         )
         reply = await _consume(session_id, message_id, binding, events, snapshot=True)
     finally:
@@ -1707,7 +1905,7 @@ async def _stop_delivery(
         raise StopUnconfirmed(
             "The agent session is not ready, so the turn cannot be stopped."
         )
-    agent = agent_ref(binding["kind"], binding["role"])
+    agent = await binding_agent_ref(binding)
     client = get_client()
     task_id = delivery["task_id"]
     if task_id is None:
@@ -1777,12 +1975,46 @@ async def cancel(session_id: str) -> str:
     binding = await get_binding(session_id)
     if binding is not None and binding["role"] == "main":
         raise ValueError("The main thread cannot be cancelled.")
+    if binding is not None and await is_delegated(binding):
+        from mainloop.tasks.principal import TaskPrincipal
+        from mainloop.tasks.provisioning import Provisioning
+        from mainloop.tasks.service import mutate
+
+        from models.task import TaskAction
+
+        async with db.connection() as conn, conn.transaction():
+            task_id = await conn.fetchval(
+                "SELECT task_id FROM task_attempts WHERE binding_id=$1", session_id
+            )
+            task = await lifecycle.load_task(conn, task_id)
+            current = await conn.fetchval(
+                "SELECT id FROM task_attempts WHERE binding_id=$1", session_id
+            )
+            if task.current_attempt_id != current:
+                return "not_running"
+            operation = await mutate(
+                conn,
+                TaskPrincipal(task.owner_id),
+                "cancel",
+                TaskAction(
+                    request_id=f"session-cancel:{session_id}",
+                    expected_version=task.version,
+                    expected_attempt_id=task.current_attempt_id,
+                ),
+                task_id=task.id,
+            )
+        worker = Provisioning()
+        await worker.reconcile(db, operation)
+        async with db.connection() as conn:
+            attempt = await lifecycle.load_attempt(conn, operation.attempt_id)
+        return "stopped" if attempt.state in lifecycle.FINAL else "unknown"
     async with _lock(session_id):
+        await lifecycle.check_session(session_id, "terminal")
         await db.update_session(session_id, status=SessionStatus.CANCELLED)
         opened = await ledger.fail_open(session_id, "cancelled by user")
         if binding is None or binding["kagent_session_id"] is None:
             return "not_running"
-        agent = agent_ref(binding["kind"], binding["role"])
+        agent = await binding_agent_ref(binding)
         client = get_client()
         outcome = "not_running"
         for delivery in opened:
@@ -1824,11 +2056,19 @@ async def delete_kagent_session(session_id: str) -> bool:
         binding = await get_binding(session_id)
         if binding is None or binding["kagent_session_id"] is None:
             return True
+        if not await lifecycle.permitted(session_id, "runtime_delete"):
+            return False
         if await ledger.active_count(session_id):
             logger.info("kagent delete of %s waits for its open turn", session_id)
             return False
         try:
-            await get_client().delete_session(binding["kagent_session_id"])
+            deleted = await get_client().delete_session(binding["kagent_session_id"])
+            if (
+                deleted.id != binding["kagent_session_id"]
+                or deleted.state != RuntimeState.DELETED
+                or not deleted.settled
+            ):
+                return False
         except SessionError as exc:
             if exc.grpc_status != 5:  # NOT_FOUND: already gone
                 _log_step_failure("archived_delete", session_id, exc)
@@ -1957,7 +2197,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         role=binding["role"],
         parent_session_id=binding["parent_session_id"],
         topic=topic,
-        agent_name=agent_name(binding["kind"], binding["role"]),
+        agent_name=(await binding_agent_ref(binding)).name,
         kagent_session_id=binding["kagent_session_id"],
         session_state=state,
         model=binding["model"],

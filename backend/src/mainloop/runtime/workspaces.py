@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from mainloop.db import db
@@ -43,6 +44,7 @@ from mainloop.services.github_repo import (
     parse_github_repo,
 )
 from mainloop.sse import notify_workspace_updated
+from mainloop.tasks import lifecycle
 
 from models import (
     WorkspaceDev,
@@ -267,7 +269,9 @@ async def preview_row(workspace_id: str, user_id: str) -> dict | None:
         row = await _owned_row(workspace_id, user_id)
     except WorkspaceNotFound:
         return None
-    if row["kagent_session_id"] is None:
+    if row["kagent_session_id"] is None or not await lifecycle.permitted(
+        workspace_id, "preview"
+    ):
         return None
     ports = row["ports"]
     if isinstance(ports, str):
@@ -314,6 +318,171 @@ async def project_for_repo(user_id: str, repo: GithubRepo) -> dict:
     }
 
 
+_RESOLVE = object()
+
+
+@dataclass(frozen=True)
+class Enrolled:
+    workspace_id: str
+    manifest: WorkspaceManifest | None
+    generation: int | None
+
+
+async def enroll_session(
+    conn,
+    *,
+    user_id: str,
+    kind: str,
+    role: str,
+    mcp_grant_kind: str,
+    manifest: WorkspaceManifest | None = None,
+    project_id: str | None = None,
+    session_id: str | None = None,
+    parent_session_id: str | None = None,
+    topic_id: str | None = None,
+    title: str | None = None,
+    description: str = "Branch development workspace",
+    prompt: str = "Development workspace",
+    environment=_RESOLVE,
+    claim_branch: bool = False,
+) -> Enrolled:
+    """Write the session, checkout and native identity rows in the caller's transaction.
+
+    This is the one enrollment path: ordinary workspace creation and task provisioning both use
+    it, so the checkout, environment, identity and branch claim are always written together.
+    Role, parent, topic and grant come from the caller's server-side context, never from a
+    request body. ``manifest`` is None for a coordination session, which has no checkout.
+    ``environment`` is resolved from the project unless the caller supplies the one a task
+    accepted. ``claim_branch`` takes the owner workspace's writer claim (a delegated attempt's
+    claim is taken by its admission instead).
+
+    Nothing here calls kagent or publishes a credential; those happen after the commit.
+    """
+    from mainloop.db import tasks as store
+
+    store.require_transaction(conn)
+    workspace_id = session_id or str(uuid.uuid4())
+    conversation_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    generation = None
+    resolved = None
+    repository = None
+    if manifest is not None:
+        if project_id is None:
+            raise WorkspaceConflict("A workspace needs a project.")
+        if claim_branch:
+            # Same order as task admission: the global admission lock first, then the project.
+            await store.admission_lock(conn)
+        project = await conn.fetchrow(
+            "SELECT id,full_name,html_url FROM projects WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE",
+            project_id,
+            user_id,
+        )
+        if project is None:
+            raise WorkspaceConflict(
+                "Workspace project must belong to the current owner."
+            )
+        try:
+            project_repo = parse_github_repo(project["full_name"])
+            url_repo = parse_github_repo(manifest.repo_url)
+            html_repo = parse_github_repo(project["html_url"])
+        except (InvalidGithubRepo, TypeError):
+            raise WorkspaceConflict(
+                "Workspace repository must match an owner-owned GitHub project."
+            ) from None
+        if (
+            project_repo.full_name.lower() != url_repo.full_name.lower()
+            or project_repo.full_name.lower() != html_repo.full_name.lower()
+        ):
+            raise WorkspaceConflict(
+                "Workspace repository must match an owner-owned GitHub project."
+            )
+        repository = project_repo.full_name.lower()
+        if environment is _RESOLVE:
+            from mainloop.db.environments import EnvironmentError
+            from mainloop.environments.resolution import resolve
+
+            try:
+                resolved = await resolve(conn, project_id, user_id)
+            except EnvironmentError as exc:
+                raise WorkspaceRejected(str(exc)) from exc
+        else:
+            resolved = environment
+        manifest = manifest.model_copy(update={"development_environment": resolved})
+    thread = await conn.fetchrow(
+        "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
+        user_id,
+    )
+    thread_id = thread["id"] if thread else str(uuid.uuid4())
+    if thread is None:
+        await conn.execute(
+            "INSERT INTO main_threads (id,user_id) VALUES ($1,$2)", thread_id, user_id
+        )
+    title = title or (f"{project_id} · {manifest.branch}" if manifest else "Task")
+    await conn.execute(
+        "INSERT INTO conversations (id,user_id,title) VALUES ($1,$2,$3)",
+        conversation_id,
+        user_id,
+        title,
+    )
+    await conn.execute(
+        """INSERT INTO sessions
+           (id,user_id,main_thread_id,title,description,prompt,conversation_id,
+            status,created_at,repo_url,project_id,branch_name,base_branch)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,$11,$12)""",
+        workspace_id,
+        user_id,
+        thread_id,
+        title,
+        description,
+        prompt,
+        conversation_id,
+        now,
+        manifest.repo_url if manifest else None,
+        project_id,
+        manifest.branch if manifest else None,
+        manifest.ref if manifest else "main",
+    )
+    if manifest is not None:
+        await conn.execute(
+            """INSERT INTO workspaces
+               (session_id,repo,ref,branch,depth,ports,idle_timeout_minutes,created_at,development_environment)
+               VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb)""",
+            workspace_id,
+            manifest.repo_url,
+            manifest.ref,
+            manifest.branch,
+            manifest.depth,
+            json.dumps([p.model_dump(mode="json") for p in manifest.dev.ports]),
+            manifest.dev.idle_timeout_minutes,
+            now,
+            resolved.model_dump_json() if resolved else None,
+        )
+    await ns.create_binding(
+        workspace_id,
+        kind,
+        role=role,
+        parent_session_id=parent_session_id,
+        topic_id=topic_id,
+        mcp_grant_kind=mcp_grant_kind,
+        conn=conn,
+    )
+    if claim_branch and manifest is not None:
+        try:
+            generation = await store.reserve_writer(
+                conn,
+                owner_id=user_id,
+                repository=repository,
+                branch=manifest.branch,
+                binding_id=workspace_id,
+            )
+        except store.TaskError as exc:
+            raise WorkspaceConflict(
+                f"Another writer already owns branch {manifest.branch} ({exc.code})."
+            ) from exc
+    return Enrolled(workspace_id, manifest, generation)
+
+
 async def create(
     user_id: str, project_id: str, manifest: WorkspaceManifest
 ) -> WorkspaceLifecycle:
@@ -322,7 +491,9 @@ async def create(
     The rows are durable before kagent is called, and the create request id is stable, so a
     create whose outcome is unknown is reconciled by ``refresh`` rather than repeated. kagent
     refusing the request (for example a repository host outside the harness's allowed origins)
-    removes the rows again and raises ``WorkspaceRejected``.
+    removes the rows again and raises ``WorkspaceRejected``. The workspace takes the branch's
+    writer claim in the same transaction, so a second writer on the branch (the default branch
+    included) is refused with ``WorkspaceConflict``.
     """
     from mainloop.providers import registry
 
@@ -331,99 +502,19 @@ async def create(
     except ValueError as exc:
         raise WorkspaceRejected(str(exc)) from exc
     manifest = manifest.model_copy(update={"agent_kind": profile.id})
-    workspace_id = str(uuid.uuid4())
-    conversation_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
-    title = f"{project_id} · {manifest.branch}"
     async with db.connection() as conn:
         async with conn.transaction():
-            project = await conn.fetchrow(
-                "SELECT id,full_name,html_url FROM projects WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE",
-                project_id,
-                user_id,
-            )
-            if project is None:
-                raise WorkspaceConflict(
-                    "Workspace project must belong to the current owner."
-                )
-            try:
-                project_repo = parse_github_repo(project["full_name"])
-                url_repo = parse_github_repo(manifest.repo_url)
-                html_repo = parse_github_repo(project["html_url"])
-            except (InvalidGithubRepo, TypeError):
-                raise WorkspaceConflict(
-                    "Workspace repository must match an owner-owned GitHub project."
-                ) from None
-            if (
-                project_repo.full_name.lower() != url_repo.full_name.lower()
-                or project_repo.full_name.lower() != html_repo.full_name.lower()
-            ):
-                raise WorkspaceConflict(
-                    "Workspace repository must match an owner-owned GitHub project."
-                )
-            from mainloop.db.environments import EnvironmentError
-            from mainloop.environments.resolution import resolve
-
-            try:
-                resolved = await resolve(conn, project_id, user_id)
-            except EnvironmentError as exc:
-                raise WorkspaceRejected(str(exc)) from exc
-            manifest = manifest.model_copy(update={"development_environment": resolved})
-            thread = await conn.fetchrow(
-                "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
-                user_id,
-            )
-            thread_id = thread["id"] if thread else str(uuid.uuid4())
-            if thread is None:
-                await conn.execute(
-                    "INSERT INTO main_threads (id,user_id) VALUES ($1,$2)",
-                    thread_id,
-                    user_id,
-                )
-            await conn.execute(
-                "INSERT INTO conversations (id,user_id,title) VALUES ($1,$2,$3)",
-                conversation_id,
-                user_id,
-                title,
-            )
-            await conn.execute(
-                """INSERT INTO sessions
-                   (id,user_id,main_thread_id,title,description,prompt,conversation_id,
-                    status,created_at,repo_url,project_id,branch_name,base_branch)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,$10,$11,$12)""",
-                workspace_id,
-                user_id,
-                thread_id,
-                title,
-                "Branch development workspace",
-                "Development workspace",
-                conversation_id,
-                now,
-                manifest.repo_url,
-                project_id,
-                manifest.branch,
-                manifest.ref,
-            )
-            await conn.execute(
-                """INSERT INTO workspaces
-                   (session_id,repo,ref,branch,depth,ports,idle_timeout_minutes,created_at,development_environment)
-                   VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9::jsonb)""",
-                workspace_id,
-                manifest.repo_url,
-                manifest.ref,
-                manifest.branch,
-                manifest.depth,
-                json.dumps([p.model_dump(mode="json") for p in manifest.dev.ports]),
-                manifest.dev.idle_timeout_minutes,
-                now,
-                resolved.model_dump_json() if resolved else None,
-            )
-            await ns.create_binding(
-                workspace_id,
-                manifest.agent_kind,
+            enrolled = await enroll_session(
+                conn,
+                user_id=user_id,
+                kind=manifest.agent_kind,
+                role="agent",
                 mcp_grant_kind="workspace",
-                conn=conn,
+                manifest=manifest,
+                project_id=project_id,
+                claim_branch=True,
             )
+    workspace_id = enrolled.workspace_id
     await _create_session(workspace_id, user_id, reject_removes_rows=True)
     return await get(workspace_id, user_id)
 
@@ -443,10 +534,16 @@ async def _create_session(
                 session = await ns.reconcile_revoked_workspace_creation(binding)
             else:
                 session = await ns._create_bound_session(binding)
+        except lifecycle.LifecycleDenied as exc:
+            raise WorkspaceConflict(
+                f"This workspace's task attempt is not live ({exc.code})."
+            ) from exc
         except SessionError as exc:
             if exc.grpc_status in _REJECTED:
                 if reject_removes_rows:
-                    await _delete_rows(workspace_id)
+                    await _delete_rows(
+                        workspace_id, evidence=f"kagent-rejected:{exc.grpc_status}"
+                    )
                 raise WorkspaceRejected(str(exc)) from exc
             logger.warning(
                 "kagent create for workspace %s unconfirmed: %s", workspace_id, exc
@@ -471,15 +568,44 @@ async def refresh(workspace_id: str, user_id: str) -> WorkspaceLifecycle:
     return await _lifecycle(row)
 
 
-async def _delete_rows(workspace_id: str) -> None:
+async def _delete_rows(workspace_id: str, *, evidence: str | None = None) -> None:
+    """Delete the session rows and release the workspace's branch claim.
+
+    ``evidence`` is the confirmed absence of the runtime (kagent deleted the Session or refused
+    the create); the claim is released only with it. Task attempt rows are not touched: the
+    attempt keeps its audit after its workspace resources are gone.
+    """
+    if evidence is None:
+        # A direct cleanup caller must confirm deletion through the same safe path.
+        # Never fabricate fence evidence merely to make a branch claim releasable.
+        session = await db.get_session(workspace_id)
+        if session is not None:
+            await delete(workspace_id, session.user_id)
+        return
     # Revoke before deleting the binding. Cleanup has an independent durable tombstone, so a
     # Kubernetes Secret outage cannot leave an active bearer or erase the retry record.
+    from mainloop.db import tasks as store
     from mainloop.runtime.agent_credentials import revoke
 
     await revoke(workspace_id)
     async with db.connection() as conn:
         async with push_lifecycle.locked(conn, workspace_id, revoke=True):
             async with conn.transaction():
+                claim = await conn.fetchrow(
+                    """SELECT owner_id,repository,branch,generation
+                       FROM workspace_writer_claims WHERE binding_id=$1 AND held""",
+                    workspace_id,
+                )
+                if claim is not None:
+                    await store.release_writer(
+                        conn,
+                        owner_id=claim["owner_id"],
+                        repository=claim["repository"],
+                        branch=claim["branch"],
+                        generation=claim["generation"],
+                        binding_id=workspace_id,
+                        fence_evidence_ref=evidence,
+                    )
                 conversation_id = await conn.fetchval(
                     "SELECT conversation_id FROM sessions WHERE id=$1", workspace_id
                 )
@@ -515,6 +641,10 @@ async def delete(workspace_id: str, user_id: str) -> None:
     orphaning a Session. DeleteSession is idempotent and NotFound counts as deleted.
     """
     await _owned_row(workspace_id, user_id)
+    if not await lifecycle.permitted(workspace_id, "delete"):
+        raise WorkspaceConflict(
+            "A task attempt's workspace is deleted only after the attempt has ended."
+        )
     # A create whose outcome is unknown may have made a Session Mainloop never recorded. The
     # create is idempotent on its stored request id, so repeat it (as ``refresh`` does) and
     # delete what it returns. A rejected retry does not prove an earlier unknown request
@@ -539,13 +669,25 @@ async def delete(workspace_id: str, user_id: str) -> None:
                 "kagent did not confirm whether this workspace's Session exists; "
                 "refresh before retrying."
             )
+        evidence = "no-kagent-session"
         if binding is not None and binding["kagent_session_id"] is not None:
             from mainloop.runtime.agent_credentials import revoke
 
+            evidence = f"kagent-deleted:{binding['kagent_session_id']}"
             # Stop accepting the cached bearer before asking kagent to delete its runtime.
             await revoke(workspace_id)
             try:
-                await ns.get_client().delete_session(binding["kagent_session_id"])
+                deleted = await ns.get_client().delete_session(
+                    binding["kagent_session_id"]
+                )
+                if (
+                    deleted.id != binding["kagent_session_id"]
+                    or deleted.state != RuntimeState.DELETED
+                    or not deleted.settled
+                ):
+                    raise WorkspaceUnconfirmed(
+                        "kagent workspace deletion is still pending."
+                    )
             except SessionError as exc:
                 if exc.grpc_status != 5:
                     raise WorkspaceUnconfirmed(
@@ -555,7 +697,7 @@ async def delete(workspace_id: str, user_id: str) -> None:
                 raise WorkspaceUnconfirmed(
                     "kagent did not confirm workspace deletion; refresh before retrying."
                 ) from exc
-        await _delete_rows(workspace_id)
+        await _delete_rows(workspace_id, evidence=evidence)
 
 
 # --------------------------------------------------------------------------------------------
@@ -617,6 +759,10 @@ async def _kagent_call(workspace_id: str, user_id: str, call):
         )
     try:
         session = await call(row)
+    except lifecycle.LifecycleDenied as exc:
+        raise WorkspaceConflict(
+            f"This workspace's task attempt is not live ({exc.code})."
+        ) from exc
     except SessionError as exc:
         raise WorkspaceConflict(f"kagent refused: {exc}") from exc
     except KagentError as exc:
@@ -640,13 +786,22 @@ async def suspend(workspace_id: str, user_id: str) -> WorkspaceLifecycle:
 
 async def _resume_if_suspended(row) -> tuple[KagentSession, bool]:
     """Return the Session, resumed first when suspended, and whether this call resumed it."""
-    async with ns._lock(row["session_id"]):
+    async with (
+        ns._lock(row["session_id"]),
+        lifecycle.guard(row["session_id"], "resume"),
+    ):
         client = ns.get_client()
         session = await client.get_session(row["kagent_session_id"])
+        binding = await ns.get_binding(row["session_id"])
+        if binding is None:
+            raise WorkspaceUnconfirmed("Persisted workspace binding is unavailable.")
+        await ns.validate_bound_session(binding, session)
         # Only a suspended Session is resumed. ResumeSession on a Ready one does not wake a
         # quiesced actor (kagent); a turn or a preview request wakes it.
         if session.state == RuntimeState.SUSPENDED:
-            return await client.resume_session(row["kagent_session_id"]), True
+            resumed = await client.resume_session(row["kagent_session_id"])
+            await ns.validate_bound_session(binding, resumed)
+            return resumed, True
         return session, False
 
 

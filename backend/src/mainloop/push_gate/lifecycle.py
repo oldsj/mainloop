@@ -13,19 +13,18 @@ from models.push_gate import ProtectedBranchPolicy, PushGrant
 @asynccontextmanager
 async def locked(conn, session_id: str, *, revoke: bool = False):
     """Keep a dedicated connection and ordered locks through the durable mutation."""
-    if not settings.push_gate_enabled:
-        yield
-        return
     project_id = await conn.fetchval(
         "SELECT project_id FROM sessions WHERE id=$1", session_id
     )
     if project_id is None:
-        yield
+        async with store.publication_lock(conn, session_id):
+            yield
         return
-    async with store.policy_lock(conn, project_id), store.publication_lock(
-        conn, session_id
+    async with (
+        store.policy_lock(conn, project_id),
+        store.publication_lock(conn, session_id),
     ):
-        if revoke:
+        if revoke and settings.push_gate_enabled:
             await store.revoke(conn, session_id)
         yield
 

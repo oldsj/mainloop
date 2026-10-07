@@ -114,6 +114,7 @@ class CredentialPostgresTests(PostgresTestCase):
             await native_sessions._remember_child_start_failure(binding, "timeout")
         )
         actor = KagentSession(
+            agent=await native_sessions.binding_agent_ref(binding),
             id="reserved-actor",
             context_id="reserved-actor",
             state=RuntimeState.CREATING,
@@ -240,6 +241,7 @@ class CredentialPostgresTests(PostgresTestCase):
         sid, cid = await self.bound_session(role="child", status="active")
         mid = await self.delivery(sid, cid, "recorded", source="brief")
         actor = KagentSession(
+            agent=native_sessions.agent_ref("claude", "child"),
             id="context-failure-actor",
             context_id="context-failure-actor",
             state=RuntimeState.READY,

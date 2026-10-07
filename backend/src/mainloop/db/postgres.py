@@ -1680,55 +1680,58 @@ class Database:
         """
         if not self._pool:
             return []
-        from mainloop.config import settings
         from mainloop.push_gate import lifecycle as push_lifecycle
+        from mainloop.tasks import lifecycle
 
         async with self.connection() as conn:
-            if not settings.push_gate_enabled:
-                rows = await conn.fetch(
-                    """UPDATE sessions SET archived_at = NOW()
-                       WHERE user_id = $1 AND archived_at IS NULL
-                         AND status IN ('completed', 'failed', 'cancelled')
-                         AND NOT EXISTS (SELECT 1 FROM native_bindings m
-                                         WHERE m.session_id = sessions.id AND m.role = 'main')
-                         AND ($2::text[] IS NULL OR id = ANY($2))
-                         AND ($3::text IS NULL OR EXISTS (
-                                SELECT 1 FROM native_bindings c
-                                WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
-                       RETURNING id""",
-                    user_id,
-                    session_ids,
-                    parent_session_id,
-                )
-            else:
-                candidates = await conn.fetch(
-                    """SELECT id FROM sessions
-                       WHERE user_id = $1 AND archived_at IS NULL
-                         AND status IN ('completed', 'failed', 'cancelled')
-                         AND NOT EXISTS (SELECT 1 FROM native_bindings m
-                                         WHERE m.session_id = sessions.id AND m.role = 'main')
-                         AND ($2::text[] IS NULL OR id = ANY($2))
-                         AND ($3::text IS NULL OR EXISTS (
-                                SELECT 1 FROM native_bindings c
-                                WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
-                       ORDER BY id""",
-                    user_id,
-                    session_ids,
-                    parent_session_id,
-                )
-                rows = []
-                for candidate in candidates:
-                    async with push_lifecycle.locked(
-                        conn, candidate["id"], revoke=True
-                    ):
+            candidates = await conn.fetch(
+                """SELECT id FROM sessions
+                   WHERE user_id = $1 AND archived_at IS NULL
+                     AND status IN ('completed', 'failed', 'cancelled')
+                     AND NOT EXISTS (SELECT 1 FROM native_bindings m
+                                     WHERE m.session_id = sessions.id AND m.role = 'main')
+                     AND ($2::text[] IS NULL OR id = ANY($2))
+                     AND ($3::text IS NULL OR EXISTS (
+                            SELECT 1 FROM native_bindings c
+                            WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
+                   ORDER BY id""",
+                user_id,
+                session_ids,
+                parent_session_id,
+            )
+            rows = []
+            for candidate in candidates:
+                async with push_lifecycle.locked(conn, candidate["id"], revoke=False):
+                    async with lifecycle.locked(
+                        conn, candidate["id"]
+                    ), conn.transaction():
+                        # Match settlement's row-lock order, before the session projection.
+                        try:
+                            await lifecycle.check(
+                                conn, candidate["id"], "archive", lock=True
+                            )
+                        except lifecycle.LifecycleDenied:
+                            continue
                         row = await conn.fetchrow(
-                            """UPDATE sessions SET archived_at=NOW() WHERE id=$1
-                               AND archived_at IS NULL AND status IN ('completed','failed','cancelled')
-                               RETURNING id""",
+                            "SELECT id FROM sessions WHERE id=$1 AND user_id=$2 FOR UPDATE",
                             candidate["id"],
+                            user_id,
                         )
-                        if row:
-                            rows.append(row)
+                        if row is None:
+                            continue
+                        # The outer context already holds policy/grant locks. Re-enter on
+                        # this connection to revoke only after the archive guard admitted it.
+                        async with push_lifecycle.locked(
+                            conn, candidate["id"], revoke=True
+                        ):
+                            row = await conn.fetchrow(
+                                """UPDATE sessions SET archived_at=NOW() WHERE id=$1
+                                   AND archived_at IS NULL AND status IN ('completed','failed','cancelled')
+                                   RETURNING id""",
+                                candidate["id"],
+                            )
+                            if row:
+                                rows.append(row)
         from mainloop.runtime.agent_credentials import revoke
         from mainloop.runtime.native_sessions import delete_kagent_session
 

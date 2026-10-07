@@ -74,3 +74,22 @@ of ordinary deliveries. Repeated observations do not duplicate a card. Successiv
 replace superseded controls; recorded responses remain read-only. The visibility-aware UI refresh
 reads existing observations and does not start Actors. Unbound observed sessions remain in the
 inbox and are not assigned a synthetic conversation or project. See [chat](chat.md#native-structured-input).
+
+## Delegated task sessions
+
+Task attempts pin native provider revision and role AgentRef. A task supervisor (depth 1) and
+its direct child (depth 2) have independent native identities; no provider history, filesystem or
+credentials are inherited. Lost create replies reconcile the same persisted request. A deleted
+runtime is not recreated in place for a delegated attempt; retry or handoff needs a successor
+attempt through the task lifecycle. The ordinary owner-session replacement behavior above remains.
+
+Finishing a native turn records delivery/activity and the mirrored response, not task completion.
+Task-backed children do not invoke the session-child automatic completion report. Cancelling a
+delegated session goes through task cancellation and confirmed runtime fencing; an uncertain
+fence keeps writer and capacity reservations. Clearing checks the attempt before archiving on the
+same locked database connection; a terminal session badge alone is insufficient. Superseded
+attempts cannot take this immediate-delete clearing path.
+
+Fresh cutover deletes old sessions; there is no old-shape migration, legacy workspace enrollment,
+or transcript conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
+there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.

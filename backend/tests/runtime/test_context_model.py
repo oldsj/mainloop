@@ -28,6 +28,19 @@ def spawn(actor, own=0, glob=0, kind="claude"):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_delegated_workspace_roles_are_scoped_and_coordination_has_no_repository_tools(
+        self,
+    ):
+        for actor in (
+            Actor("supervisor", 1, "workspace"),
+            Actor("child", 2, "workspace"),
+        ):
+            self.assertEqual(tools_for(actor), {"whoami", "open_pull_request"})
+        for actor in (Actor("supervisor", 1), Actor("child", 2)):
+            self.assertEqual(tools_for(actor), {"whoami"})
+        self.assertEqual(tools_for(Actor("supervisor", 2, "workspace")), frozenset())
+        self.assertEqual(tools_for(Actor("child", 1, "workspace")), frozenset())
+
     def test_workspace_tools_require_the_workspace_grant_and_keep_merge_gated(self):
         workspace = Actor("agent", 0, "workspace")
         self.assertEqual(tools_for(workspace), {"whoami", "open_pull_request"})

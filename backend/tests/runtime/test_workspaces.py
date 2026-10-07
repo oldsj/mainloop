@@ -30,6 +30,7 @@ from mainloop.runtime.kagent_client import (
 )
 from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
 from tests.runtime.test_native_sessions import SESSION, MemoryLedger
+from tests.runtime.test_task_provisioning import ordinary_guard
 
 from models import SessionStatus, WorkspaceObservedState
 
@@ -99,6 +100,9 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
         ns._streaming.clear()
         ns._locks.clear()
         for patcher in (
+            patch("mainloop.tasks.lifecycle.guard", ordinary_guard),
+            patch("mainloop.tasks.lifecycle.check_session", AsyncMock()),
+            patch.object(ns, "attempt_row", AsyncMock(return_value=None)),
             patch(
                 "mainloop.runtime.agent_credentials.publish_for_binding",
                 AsyncMock(
@@ -131,6 +135,10 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
         """Give the binding a live, ready kagent Session."""
         self.ledger.binding["kagent_session_id"] = CONTEXT_ID
         self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
+        self.fake.session_agents[CONTEXT_ID] = ns.agent_ref(
+            self.ledger.binding["kind"], self.ledger.binding["role"]
+        ).encode()
+        self.fake.workspaces[CONTEXT_ID] = WORKSPACE.encode()
 
 
 class SuspendRacingATurnStartTests(WorkspaceTestCase):
@@ -388,7 +396,7 @@ class CreateAndReplacementTests(WorkspaceTestCase):
                 await workspaces._create_session(
                     SESSION, "user-1", reject_removes_rows=True
                 )
-        delete_rows.assert_awaited_once_with(SESSION)
+        delete_rows.assert_awaited_once_with(SESSION, evidence="kagent-rejected:3")
 
     async def test_an_unknown_create_outcome_keeps_the_rows_for_refresh(self):
         delete_rows = AsyncMock()
@@ -428,7 +436,9 @@ class DeleteTests(WorkspaceTestCase):
         ):
             await workspaces.delete(SESSION, "user-1")
         self.assertEqual(self.fake.sessions[CONTEXT_ID][0], RuntimeState.DELETED)
-        delete_rows.assert_awaited_once_with(SESSION)
+        delete_rows.assert_awaited_once_with(
+            SESSION, evidence=f"kagent-deleted:{CONTEXT_ID}"
+        )
 
     async def test_workspace_delete_with_kagent_unreachable_keeps_rows(self):
         await self.with_session()
@@ -451,6 +461,10 @@ class DeleteTests(WorkspaceTestCase):
     ):
         # The create's reply was lost: Mainloop has no Session id, kagent has the Session.
         self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
+        self.fake.session_agents[CONTEXT_ID] = ns.agent_ref(
+            self.ledger.binding["kind"], self.ledger.binding["role"]
+        ).encode()
+        self.fake.workspaces[CONTEXT_ID] = WORKSPACE.encode()
         self.fake.created_request_ids[ns._request_id(self.ledger.binding)] = CONTEXT_ID
         self.assertIsNone(self.ledger.binding["kagent_session_id"])
         delete_rows = AsyncMock()
@@ -461,7 +475,9 @@ class DeleteTests(WorkspaceTestCase):
             await workspaces.delete(SESSION, "user-1")
         self.assertEqual(self.fake.sessions[CONTEXT_ID][0], RuntimeState.DELETED)
         self.assertEqual(self.fake.calls(), ["CreateSession", "DeleteSession"])
-        delete_rows.assert_awaited_once_with(SESSION)
+        delete_rows.assert_awaited_once_with(
+            SESSION, evidence=f"kagent-deleted:{CONTEXT_ID}"
+        )
 
     async def test_delete_keeps_the_rows_while_the_create_is_still_unknown(self):
         delete_rows = AsyncMock()

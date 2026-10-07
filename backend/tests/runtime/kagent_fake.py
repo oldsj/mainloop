@@ -64,6 +64,8 @@ def session_message(
     state: RuntimeState = RuntimeState.READY,
     operation: RuntimeOperation = RuntimeOperation.NONE,
     workspace: bytes = b"",
+    agent: bytes = b"",
+    environment: bytes = b"",
 ) -> bytes:
     session = (
         _field_str(1, session_id)
@@ -73,6 +75,8 @@ def session_message(
         + _varint(int(operation))
         + _field_str(14, session_id)
         + (_field_bytes(16, workspace) if workspace else b"")
+        + (_field_bytes(15, agent) if agent else b"")
+        + (_field_bytes(18, environment) if environment else b"")
     )
     return _field_bytes(1, session)
 
@@ -120,6 +124,8 @@ class FakeKagent:
         self.created_request_ids: dict[str, str] = {}
         # Workspace bytes (CreateSession field 6) persisted per Session id, as kagent does.
         self.workspaces: dict[str, bytes] = {}
+        self.session_agents: dict[str, bytes] = {}
+        self.session_environments: dict[str, bytes] = {}
         self.tasks: dict[str, dict] = {}
         self.accepted_message_ids: list[str] = []
         self.subscribe_events: list[str] | None = None
@@ -263,6 +269,8 @@ class FakeKagent:
                     None, status=6, detail="workspace differs for this request_id"
                 )
             self.workspaces.setdefault(session_id, workspace)
+            self.session_agents.setdefault(session_id, fields.get(5, [b""])[0])
+            self.session_environments.setdefault(session_id, fields.get(8, [b""])[0])
             self.sessions.setdefault(
                 session_id, (RuntimeState.READY, RuntimeOperation.NONE)
             )
@@ -271,6 +279,8 @@ class FakeKagent:
                     session_id,
                     *self.sessions[session_id],
                     workspace=self.workspaces[session_id],
+                    agent=self.session_agents[session_id],
+                    environment=self.session_environments[session_id],
                 )
             )
         if method == "ListSessions":
@@ -288,7 +298,12 @@ class FakeKagent:
         state, op = self.sessions[session_id]
         return grpc_response(
             session_message(
-                session_id, state, op, workspace=self.workspaces.get(session_id, b"")
+                session_id,
+                state,
+                op,
+                workspace=self.workspaces.get(session_id, b""),
+                agent=self.session_agents.get(session_id, b""),
+                environment=self.session_environments.get(session_id, b""),
             )
         )
 

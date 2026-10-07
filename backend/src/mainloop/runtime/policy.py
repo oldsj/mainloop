@@ -124,9 +124,17 @@ MERGE_TOOLS = frozenset(
 
 
 def tools_for(actor: Actor) -> frozenset[str]:
-    if actor.mcp_grant_kind == "coordination":
+    if actor.mcp_grant_kind == "coordination" and (
+        (actor.role, actor.depth) in (("supervisor", 1), ("child", 2))
+    ):
+        # Task report/delegation tools arrive in S2; never expose the session report shortcut.
+        tools = frozenset({"whoami"})
+    elif actor.mcp_grant_kind == "coordination":
         tools = ROLE_TOOLS.get(actor.role, frozenset())
-    elif actor.role == "agent" and actor.mcp_grant_kind == "workspace":
+    elif actor.mcp_grant_kind == "workspace" and (
+        actor.role == "agent"
+        or (actor.role, actor.depth) in (("supervisor", 1), ("child", 2))
+    ):
         tools = WORKSPACE_TOOLS
     else:
         tools = frozenset()

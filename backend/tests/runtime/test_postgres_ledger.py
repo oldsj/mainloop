@@ -2370,6 +2370,9 @@ class DeliveryFailureReasonTests(PostgresTestCase):
         sid, _ = await self.bound_session()
         failed = "00000000-0000-4000-8000-0000000000ff"
         self.fake.sessions[failed] = (RuntimeState.FAILED, RuntimeOperation.NONE)
+        self.fake.session_agents[failed] = (
+            await ns.binding_agent_ref(await ns.get_binding(sid))
+        ).encode()
         await ns.ledger.update_binding(sid, kagent_session_id=failed)
         mid = await self.send(sid)
         row = await self.stored(mid)
@@ -2511,6 +2514,9 @@ class DeliveryFailureReasonTests(PostgresTestCase):
         main = await ensure_main_session(self.user)
         sid = main["session_id"]
         self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
+        self.fake.session_agents[CONTEXT_ID] = (
+            await ns.binding_agent_ref(await ns.get_binding(sid))
+        ).encode()
         await ns.ledger.update_binding(sid, kagent_session_id=CONTEXT_ID)
         self.fake.send_script = ["unreachable"]
         mid = await self.send(sid)

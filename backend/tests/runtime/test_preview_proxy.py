@@ -13,6 +13,7 @@ from mainloop.config import settings
 from mainloop.runtime import preview_proxy
 from starlette.requests import Request
 from starlette.websockets import WebSocket
+from tests.runtime.test_task_provisioning import ordinary_guard
 
 _PREVIEW_HOST = "5173--workspace-1--preview.localhost:8001"
 _OWNER = "the-owner"
@@ -94,6 +95,9 @@ class PreviewProxyTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        guard = patch("mainloop.tasks.lifecycle.guard", ordinary_guard)
+        guard.start()
+        self.addCleanup(guard.stop)
 
     def test_preview_host_is_one_label_under_the_base_domain(self):
         base = "http://localhost:8001"
@@ -561,7 +565,7 @@ class PreviewProxyTests(unittest.TestCase):
                     self.assertEqual(
                         response.status_code, 502
                     )  # got past the Origin gate
-                    resolve.assert_awaited_once()
+                    self.assertEqual(resolve.await_count, 2)
                     connect_router.assert_called_once()
                 with self.subTest(origin=origin, kind="websocket"):
                     resolve = AsyncMock(return_value=target)
@@ -583,7 +587,7 @@ class PreviewProxyTests(unittest.TestCase):
                         await preview_proxy._preview_websocket(
                             websocket, preview_proxy.PreviewHost(5173, "workspace-1")
                         )
-                    resolve.assert_awaited_once()
+                    self.assertGreaterEqual(resolve.await_count, 2)
                     open_connection.assert_awaited()
                     self.assertNotEqual(sent[0].get("code"), 4403)
 

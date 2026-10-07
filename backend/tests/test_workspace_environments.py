@@ -114,9 +114,16 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
 class WireTests(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_bytes_and_selected_field(self):
         client = KagentClient("http://kagent.test", user_id="mainloop")
-        call = AsyncMock()
-        client._session_call = call
         agent = AgentRef("kagent", "dev")
+        session = KagentSession(
+            "wire-session",
+            RuntimeState.READY,
+            RuntimeOperation.NONE,
+            "wire-session",
+            agent=agent,
+        )
+        call = AsyncMock(return_value=session)
+        client._session_call = call
         legacy = (
             _field_bytes(5, agent.encode())
             + _field_str(3, "request")
@@ -126,6 +133,14 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call.call_args.args[1], legacy)
         env = DevelopmentEnvironment(
             "ghcr.io/example/dev@sha256:" + "a" * 64, "linux/arm64", "v1:oci-static-v1"
+        )
+        call.return_value = KagentSession(
+            "wire-session",
+            RuntimeState.READY,
+            RuntimeOperation.NONE,
+            "wire-session",
+            agent=agent,
+            development_environment=env,
         )
         await client.create_session(
             agent, request_id="request", development_environment=env
@@ -162,6 +177,7 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
             RuntimeState.READY,
             RuntimeOperation.NONE,
             "session",
+            agent=ns.agent_ref("claude", "agent"),
             development_environment=DevelopmentEnvironment(
                 **ledger.development_environment
             ),
