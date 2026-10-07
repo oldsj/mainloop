@@ -57,6 +57,27 @@ make dev
 
 The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and example overlays. Supply environment-specific images, domains, credentials, and storage through your deployment configuration, and apply production changes through your GitOps workflow.
 
+The [Publish images workflow](.github/workflows/images.yml) builds and pushes
+`linux/arm64` production images on every push to `main`, using native
+`ubuntu-24.04-arm` runners. It can also be started with `workflow_dispatch` for a
+selected ref. It uses the repository-root build context with `backend/Dockerfile`
+and `frontend/Dockerfile`; the frontend receives
+`VITE_API_URL=https://mainloop-api.olds.network` at build time.
+
+Images are published to `ghcr.io/oldsj/mainloop-backend` and
+`ghcr.io/oldsj/mainloop-frontend`, tagged with the first seven characters of the
+source commit SHA. Each image's job summary records the full source SHA, tag,
+digest, and copyable `image@sha256:...` reference. Wait for both image jobs to
+succeed, then copy their digest references into a manually reviewed infrastructure
+PR that updates the Mainloop Application's `kustomize.images` pins. Publishing
+images does not update pins or deploy them.
+
+The workflow authenticates with `GITHUB_TOKEN` (`contents: read`,
+`packages: write`) and uses separate GitHub Actions caches for each image. Existing
+GHCR packages must grant this repository Actions write access. New pushes cancel
+older image builds for the same ref; a cancelled run may have published only one
+image, so use a fully successful run for a pin update.
+
 ## Project Structure
 
 ```text

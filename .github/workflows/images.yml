@@ -1,0 +1,82 @@
+name: Publish images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.image }} (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            file: backend/Dockerfile
+            build-args: ''
+          - image: frontend
+            file: frontend/Dockerfile
+            build-args: VITE_API_URL=https://mainloop-api.olds.network
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Compute image tag
+        id: tag
+        shell: bash
+        run: echo "sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/arm64
+          push: true
+          build-args: ${{ matrix.build-args }}
+          tags: ghcr.io/oldsj/mainloop-${{ matrix.image }}:${{ steps.tag.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=publish-${{ matrix.image }}-arm64
+          cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}-arm64
+
+      - name: Record published digest
+        shell: bash
+        env:
+          IMAGE: ghcr.io/oldsj/mainloop-${{ matrix.image }}
+          TAG: ${{ steps.tag.outputs.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            printf '### %s (linux/arm64)\n\n' "$IMAGE"
+            printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Tag: `%s:%s`\n\n' "$IMAGE" "$TAG"
+            printf 'Digest: `%s`\n\n' "$DIGEST"
+            printf 'Infra pin: `%s@%s`\n\n' "$IMAGE" "$DIGEST"
+            printf 'Update the production pin through a manually reviewed infra PR.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
