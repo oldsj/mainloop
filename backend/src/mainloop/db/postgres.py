@@ -1,6 +1,7 @@
 """PostgreSQL client for durable workflow persistence."""
 
 import json
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -21,6 +22,10 @@ from models import (
     SessionNotification,
     SessionStatus,
 )
+
+
+class PRCreationConflict(Exception):
+    """A request ID or repo/head/base intent already has a different payload."""
 
 
 def _parse_json_field(value: Any) -> list | dict | None:
@@ -410,6 +415,30 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_sessions_repo_url ON sessions(repo_url);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_anchor ON sessions(anchor_message_id);
+
+-- PR creation intent survives process/transport failure. Only the inserting caller may POST;
+-- duplicates reconcile by listing, never by taking over an expired lease.
+CREATE TABLE IF NOT EXISTS pr_creations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    repo_id BIGINT NOT NULL,
+    head TEXT NOT NULL,
+    base TEXT NOT NULL,
+    expected_sha TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'uncertain' CHECK (state IN ('uncertain', 'created')),
+    result JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, repo_id, head, base)
+);
+CREATE TABLE IF NOT EXISTS pr_creation_requests (
+    user_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    creation_id TEXT NOT NULL REFERENCES pr_creations(id),
+    PRIMARY KEY (user_id, request_id)
+);
 """
 
 
@@ -450,6 +479,118 @@ class Database:
         async with self.connection() as conn:
             await conn.execute(SCHEMA_SQL)
             await conn.execute(MIGRATION_SQL)
+
+    async def pr_project_authority(self, binding: dict, project_id: str) -> dict | None:
+        """Resolve current session, owner, role and workspace from server state."""
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """SELECT p.*, b.role, s.project_id AS session_project_id,
+                          s.repo_url AS session_repo, w.repo AS workspace_repo,
+                          w.branch AS workspace_branch
+                   FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+                   JOIN projects p ON p.user_id=s.user_id AND p.id=$4
+                   LEFT JOIN workspaces w ON w.session_id=s.id
+                   WHERE b.session_id=$1 AND s.user_id=$2 AND b.token_hash=$3
+                     AND b.role IN ('main','child') AND b.kagent_deleted_at IS NULL
+                     AND s.archived_at IS NULL
+                     AND s.status NOT IN ('completed','failed','cancelled')""",
+                binding["session_id"],
+                binding["user_id"],
+                binding.get("token_hash"),
+                project_id,
+            )
+        return dict(row) if row else None
+
+    async def claim_pr_creation(
+        self,
+        *,
+        user_id: str,
+        project_id: str,
+        request_id: str,
+        payload_hash: str,
+        repo_id: int,
+        head: str,
+        base: str,
+        expected_sha: str,
+    ) -> tuple[dict, bool]:
+        """Serialize request IDs and repo/head/base. A conflict rolls back both inserts."""
+        async with self.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    f"pr-request:{user_id}:{request_id}",
+                )
+                request = await conn.fetchrow(
+                    "SELECT * FROM pr_creation_requests WHERE user_id=$1 AND request_id=$2",
+                    user_id,
+                    request_id,
+                )
+                if request:
+                    if request["payload_hash"] != payload_hash:
+                        raise PRCreationConflict
+                    row = await conn.fetchrow(
+                        "SELECT * FROM pr_creations WHERE id=$1", request["creation_id"]
+                    )
+                    if row["repo_id"] != repo_id:
+                        raise PRCreationConflict
+                    return dict(row), False
+                creation_id = str(uuid.uuid4())
+                inserted = await conn.fetchrow(
+                    """INSERT INTO pr_creations
+                       (id,user_id,project_id,repo_id,head,base,expected_sha,payload_hash)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                       ON CONFLICT (user_id,repo_id,head,base) DO NOTHING RETURNING *""",
+                    creation_id,
+                    user_id,
+                    project_id,
+                    repo_id,
+                    head,
+                    base,
+                    expected_sha,
+                    payload_hash,
+                )
+                row = inserted or await conn.fetchrow(
+                    """SELECT * FROM pr_creations
+                       WHERE user_id=$1 AND repo_id=$2 AND head=$3 AND base=$4""",
+                    user_id,
+                    repo_id,
+                    head,
+                    base,
+                )
+                if row["payload_hash"] != payload_hash:
+                    raise PRCreationConflict
+                await conn.execute(
+                    "INSERT INTO pr_creation_requests VALUES ($1,$2,$3,$4)",
+                    user_id,
+                    request_id,
+                    payload_hash,
+                    row["id"],
+                )
+                return dict(row), inserted is not None
+
+    async def get_pr_creation_request(
+        self, user_id: str, request_id: str, payload_hash: str
+    ) -> dict | None:
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """SELECT c.*, r.payload_hash AS request_hash
+                   FROM pr_creation_requests r JOIN pr_creations c ON c.id=r.creation_id
+                   WHERE r.user_id=$1 AND r.request_id=$2""",
+                user_id,
+                request_id,
+            )
+        if row and row["request_hash"] != payload_hash:
+            raise PRCreationConflict
+        return dict(row) if row else None
+
+    async def finish_pr_creation(self, creation_id: str, result: dict) -> None:
+        async with self.connection() as conn:
+            await conn.execute(
+                """UPDATE pr_creations SET state='created', result=$2::jsonb
+                   WHERE id=$1 AND state='uncertain'""",
+                creation_id,
+                json.dumps(result),
+            )
 
     # ============= Main Thread Operations =============
 

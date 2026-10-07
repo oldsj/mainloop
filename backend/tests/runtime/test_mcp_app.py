@@ -33,7 +33,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
     async def test_delegate_report_policy_and_idempotency(self):
         child = (await self.call("delegate", kind="codex", brief="do it"))["session_id"]
         ctx = await self.service.authenticate(f"tok-{child}")
-        self.assertEqual(tools_for(ctx.actor), {"whoami", "note", "decide", "report"})
+        self.assertEqual(
+            tools_for(ctx.actor),
+            {"whoami", "note", "decide", "report", "open_pull_request"},
+        )
         for name in TOOLS.keys() - tools_for(ctx.actor):
             r = await invoke(self.service, ctx, name, {})
             self.assertTrue(r.isError)

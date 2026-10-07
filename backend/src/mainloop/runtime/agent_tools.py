@@ -59,6 +59,12 @@ class AgentService:
             k.strip() for k in settings.native_child_kinds.split(",") if k.strip()
         )
 
+    async def open_pull_request(self, ctx: Ctx, **arguments) -> dict:
+        from mainloop.services.github_creation import open_pull_request
+
+        policy.may_call(ctx.actor, "open_pull_request")
+        return await open_pull_request(ctx.binding, arguments)
+
     async def authenticate(self, token: str) -> Ctx:
         binding = await self.store.binding_by_token_hash(hash_token(token))
         if (
