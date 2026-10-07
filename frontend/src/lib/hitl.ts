@@ -21,6 +21,7 @@ export type HITLResponse =
   | {
       type: 'tool_approval_response';
       approvals: { id: string; approved: boolean; rejection_reason?: string }[];
+      reviewed_context?: Record<string, string>;
     }
   | { type: 'ask_user_response'; id: string; answers: { answer: string[] }[] };
 export interface HITLView {
@@ -52,9 +53,57 @@ export interface HITLView {
   };
   merge?: VerifiedMergeContext[] | null;
 }
+export interface MergeSummary {
+  version: number;
+  proposal_id: string;
+  repository: string;
+  pr_number: number;
+  title: string;
+  description_excerpt: string;
+  description_truncated: boolean;
+  description_digest: string;
+  description_length: number;
+  file_count: number;
+  additions: number;
+  deletions: number;
+  paths_digest: string;
+  paths_preview: string[];
+  paths_preview_truncated: boolean;
+  protected_matches: string[];
+  approval_reasons: (
+    | { type: 'project_policy' }
+    | { type: 'protected_path'; glob: string; path: string }
+  )[];
+  policy: 'auto' | 'approval';
+  policy_version: number;
+  globs_version: number;
+  head: string;
+  head_sha: string;
+  base: string;
+  base_sha: string;
+  ci: {
+    complete: boolean;
+    captured_at: string;
+    result_count: number;
+    passed_count: number;
+    failed_count: number;
+    pending_count: number;
+    green_at_preparation: boolean;
+    inventory_digest: string;
+  } | null;
+  availability: 'ready' | 'unavailable';
+  unavailable_reasons: string[];
+}
 export interface VerifiedMergeContext {
   tool_id: string;
   proposal_id: string;
+  summary: MergeSummary | null;
+  summary_digest: string | null;
+  availability: 'ready' | 'unavailable' | 'stale';
+  freshness_reason: string | null;
+  details_url: string | null;
+  pr_url?: string;
+  compare_url?: string;
   repository: string;
   pr_number: number;
   head: string;
@@ -62,8 +111,18 @@ export interface VerifiedMergeContext {
   base: string;
   base_sha: string;
   protected_matches: string[];
-  ci: Record<string, unknown> | null;
   stale: boolean;
+}
+export type HITLMergeDetailSection = 'description' | 'files' | 'checks';
+export interface HITLMergeDetails {
+  section: HITLMergeDetailSection;
+  summary_digest: string;
+  captured_at: string | null;
+  description?: string;
+  description_truncated?: boolean;
+  truncated: boolean;
+  items?: Record<string, unknown>[];
+  next_cursor: string | null;
 }
 
 /** Missing, malformed or ambiguous resolver evidence must not look verified. */
@@ -82,6 +141,12 @@ export function mergeContexts(view: HITLView) {
       /^[\w.-]+\/[\w.-]+$/.test(v.repository) &&
       Number.isSafeInteger(v.pr_number) &&
       (v.pr_number as number) > 0 &&
+      typeof v.summary_digest === 'string' &&
+      /^[a-f0-9]{64}$/.test(v.summary_digest) &&
+      validSummary(v.summary) &&
+      (v.summary as MergeSummary).proposal_id === v.proposal_id &&
+      ['ready', 'unavailable', 'stale'].includes(String(v.availability)) &&
+      (v.freshness_reason === null || typeof v.freshness_reason === 'string') &&
       bounded(v.head) &&
       bounded(v.base) &&
       typeof v.head_sha === 'string' &&
@@ -95,6 +160,62 @@ export function mergeContexts(view: HITLView) {
   });
 }
 
+function validSummary(value: unknown): value is MergeSummary {
+  return (
+    record(value) &&
+    value.version === 1 &&
+    bounded(value.proposal_id) &&
+    typeof value.title === 'string' &&
+    typeof value.description_excerpt === 'string' &&
+    typeof value.description_truncated === 'boolean' &&
+    typeof value.description_digest === 'string' &&
+    /^[a-f0-9]{64}$/.test(value.description_digest) &&
+    Number.isSafeInteger(value.description_length) &&
+    Number.isSafeInteger(value.file_count) &&
+    Number.isSafeInteger(value.additions) &&
+    Number.isSafeInteger(value.deletions) &&
+    typeof value.paths_digest === 'string' &&
+    /^[a-f0-9]{64}$/.test(value.paths_digest) &&
+    Array.isArray(value.paths_preview) &&
+    value.paths_preview.every((path) => typeof path === 'string') &&
+    typeof value.paths_preview_truncated === 'boolean' &&
+    Array.isArray(value.protected_matches) &&
+    value.protected_matches.every((path) => typeof path === 'string') &&
+    Array.isArray(value.approval_reasons) &&
+    value.approval_reasons.every(
+      (reason) =>
+        record(reason) &&
+        (reason.type === 'project_policy' ||
+          (reason.type === 'protected_path' &&
+            typeof reason.glob === 'string' &&
+            typeof reason.path === 'string'))
+    ) &&
+    (value.policy === 'auto' || value.policy === 'approval') &&
+    Number.isSafeInteger(value.policy_version) &&
+    Number.isSafeInteger(value.globs_version) &&
+    bounded(value.head) &&
+    typeof value.head_sha === 'string' &&
+    /^[a-f0-9]{40}$/.test(value.head_sha) &&
+    bounded(value.base) &&
+    typeof value.base_sha === 'string' &&
+    /^[a-f0-9]{40}$/.test(value.base_sha) &&
+    (value.ci === null ||
+      (record(value.ci) &&
+        typeof value.ci.complete === 'boolean' &&
+        typeof value.ci.captured_at === 'string' &&
+        Number.isSafeInteger(value.ci.result_count) &&
+        Number.isSafeInteger(value.ci.passed_count) &&
+        Number.isSafeInteger(value.ci.failed_count) &&
+        Number.isSafeInteger(value.ci.pending_count) &&
+        typeof value.ci.green_at_preparation === 'boolean' &&
+        typeof value.ci.inventory_digest === 'string' &&
+        /^[a-f0-9]{64}$/.test(value.ci.inventory_digest))) &&
+    (value.availability === 'ready' || value.availability === 'unavailable') &&
+    Array.isArray(value.unavailable_reasons) &&
+    value.unavailable_reasons.every((reason) => typeof reason === 'string')
+  );
+}
+
 export interface MergePolicyView {
   merge_policy: 'auto' | 'approval';
   merge_policy_version: number;
@@ -106,6 +227,7 @@ export interface HITLDraft {
   decisions: Record<string, 'approve' | 'reject'>;
   reasons: Record<string, string>;
   answers: string[][];
+  reviewedContext?: Record<string, string>;
 }
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
@@ -188,7 +310,10 @@ export function buildHITLResponse(payload: unknown, draft: HITLDraft): HITLRespo
           approved: decision === 'approve',
           ...(decision === 'reject' && reason ? { rejection_reason: reason } : {})
         };
-      })
+      }),
+      ...(Object.keys(draft.reviewedContext ?? {}).length
+        ? { reviewed_context: draft.reviewedContext }
+        : {})
     };
   }
   if (draft.answers.length !== p.questions.length) throw new Error('Answer every question.');

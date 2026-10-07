@@ -11,8 +11,11 @@ import {
   parseHITL,
   reasonNotice,
   hitlStatus,
+  type HITLMergeDetails,
   type HITLView,
-  type HITLState
+  type HITLState,
+  type MergeSummary,
+  type VerifiedMergeContext
 } from './hitl.ts';
 
 const payload = {
@@ -54,6 +57,67 @@ const state = (v: HITLView): HITLState => ({
   uncertain: false,
   stale: false
 });
+const mergeSummary = (proposalId: string, path = 'k8s/protected.yaml'): MergeSummary => ({
+  version: 1,
+  proposal_id: proposalId,
+  repository: 'owner/repo',
+  pr_number: 17,
+  title: 'Update workspace defaults',
+  description_excerpt: 'Updates workspace defaults for <script> safety.',
+  description_truncated: false,
+  description_digest: 'd'.repeat(64),
+  description_length: 40,
+  file_count: 1,
+  additions: 38,
+  deletions: 11,
+  paths_digest: 'c'.repeat(64),
+  paths_preview: [path],
+  paths_preview_truncated: false,
+  protected_matches: [path],
+  approval_reasons: [{ type: 'protected_path', glob: 'k8s/**', path }],
+  policy: 'auto',
+  policy_version: 2,
+  globs_version: 1,
+  head: 'feature',
+  head_sha: 'a'.repeat(40),
+  base: 'main',
+  base_sha: 'b'.repeat(40),
+  ci: {
+    complete: true,
+    captured_at: '2026-10-07T10:00:00Z',
+    result_count: 1,
+    passed_count: 1,
+    failed_count: 0,
+    pending_count: 0,
+    green_at_preparation: true,
+    inventory_digest: 'e'.repeat(64)
+  },
+  availability: 'ready',
+  unavailable_reasons: []
+});
+const mergeContext = (
+  toolId: string,
+  proposalId: string,
+  { stale = false, path = 'k8s/protected.yaml' }: { stale?: boolean; path?: string } = {}
+): VerifiedMergeContext => ({
+  tool_id: toolId,
+  proposal_id: proposalId,
+  summary: mergeSummary(proposalId, path),
+  summary_digest: 'f'.repeat(64),
+  availability: stale ? 'stale' : 'ready',
+  freshness_reason: stale ? 'The proposal is no longer current.' : null,
+  details_url: `/hitl/request/merge/${proposalId}/details`,
+  pr_url: 'https://github.com/owner/repo/pull/17',
+  compare_url: 'https://github.com/owner/repo/compare/main...feature',
+  repository: 'owner/repo',
+  pr_number: 17,
+  head: 'feature',
+  head_sha: 'a'.repeat(40),
+  base: 'main',
+  base_sha: 'b'.repeat(40),
+  protected_matches: [path],
+  stale
+});
 
 test('complete per-call choices, exact nested IDs, and no contradictory reasons', () => {
   assert.deepEqual(parseHITL(payload), payload);
@@ -65,6 +129,20 @@ test('complete per-call choices, exact nested IDs, and no contradictory reasons'
       { id: 'b', approved: false, rejection_reason: 'Keep tests' }
     ]
   });
+  assert.deepEqual(
+    buildHITLResponse(payload, {
+      ...input,
+      reviewedContext: { a: 'f'.repeat(64) }
+    }),
+    {
+      type: 'tool_approval_response',
+      approvals: [
+        { id: 'a', approved: true },
+        { id: 'b', approved: false, rejection_reason: 'Keep tests' }
+      ],
+      reviewed_context: { a: 'f'.repeat(64) }
+    }
+  );
   assert.throws(
     () => buildHITLResponse(payload, { ...input, decisions: { a: 'approve' } }),
     /every call/
@@ -234,7 +312,25 @@ async function renderer() {
   const component = (await import(pathToFileURL(file).href)).default;
   return {
     html: (s: HITLState) =>
-      render(component, { props: { snapshot: s, onRespond: () => {}, onRefresh: () => {} } }).body,
+      render(component, {
+        props: {
+          snapshot: s,
+          onRespond: () => {},
+          onRefresh: () => {},
+          onLoadMergeDetails: async (
+            _proposalId: string,
+            section: 'description' | 'files' | 'checks'
+          ): Promise<HITLMergeDetails> => ({
+            section,
+            summary_digest: 'f'.repeat(64),
+            captured_at: null,
+            description: '',
+            truncated: false,
+            items: [],
+            next_cursor: null
+          })
+        }
+      }).body,
     close: () => rm(dir, { recursive: true, force: true })
   };
 }
@@ -434,38 +530,45 @@ test('merge display handles batches, stale evidence, and missing or untrusted fa
       }))
     };
     let html = r.html(state(v));
-    assert.equal((html.match(/Verified merge context unavailable/g) ?? []).length, 2);
+    assert.equal((html.match(/Verified merge context is unavailable/g) ?? []).length, 2);
     assert.doesNotMatch(html, /Checks passed/);
-    const facts = {
-      tool_id: 'a',
-      proposal_id: 'proposal-a',
-      repository: 'owner/repo',
-      pr_number: 17,
-      head: 'feature',
-      head_sha: 'a'.repeat(40),
-      base: 'main',
-      base_sha: 'b'.repeat(40),
-      protected_matches: ['k8s/<script>.yaml'],
-      ci: { green: false, checks: [{ name: 'build', conclusion: 'failure' }] },
-      stale: true
-    };
+    const facts = mergeContext('a', 'proposal-a', {
+      stale: true,
+      path: 'k8s/<script>.yaml'
+    });
     v.merge = [
       facts,
-      { ...facts, tool_id: 'b', proposal_id: 'proposal-b', pr_number: 18, ci: null, stale: false }
+      {
+        ...mergeContext('b', 'proposal-b'),
+        pr_number: 18,
+        summary: {
+          ...mergeSummary('proposal-b'),
+          ci: null,
+          availability: 'unavailable',
+          unavailable_reasons: ['CI evidence unavailable']
+        },
+        availability: 'unavailable',
+        freshness_reason: 'CI evidence unavailable'
+      }
     ];
     html = r.html(state(v));
+    assert.match(html, /Update workspace defaults/);
+    assert.match(html, /Approval required because/);
+    assert.match(html, /Project policy requires approval|Protected path matched k8s\/\*\*/);
     assert.match(html, /owner\/repo #17/);
     assert.match(html, /owner\/repo #18/);
-    assert.match(html, /Current merge context unavailable/);
-    assert.match(html, /Checks not passing at preparation/);
+    assert.match(html, /The proposal is no longer current/);
+    assert.match(html, /CI results recorded at/);
     assert.match(html, /CI evidence unavailable/);
+    assert.match(html, /button[^>]*disabled[^>]*>Approve/);
+    assert.match(html, />Reject</);
     assert.match(html, /&lt;script>/);
     assert.doesNotMatch(html, /<script>/);
     assert.doesNotMatch(html, />Merge</);
     v.merge = [facts, facts];
     html = r.html(state(v));
     assert.doesNotMatch(html, /owner\/repo #17/);
-    assert.equal((html.match(/Verified merge context unavailable/g) ?? []).length, 2);
+    assert.equal((html.match(/Verified merge context is unavailable/g) ?? []).length, 2);
   } finally {
     await r.close();
   }

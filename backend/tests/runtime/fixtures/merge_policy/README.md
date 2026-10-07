@@ -18,7 +18,7 @@ pnpm --dir frontend test:unit
 
 The backend exports the actual owner API response from the Codex protected-rename
 scenario. The frontend consumes it without adapting the API shape. The renderer
-test verifies the owner API maps server-resolved `merge_enrichment` into the shared
+test verifies the owner API maps server-resolved merge context into the shared
 component’s per-call `merge` display. It originally reproduced D1 and now guards
 the repaired integration.
 Without the export environment variable, that cross-process test is skipped, just

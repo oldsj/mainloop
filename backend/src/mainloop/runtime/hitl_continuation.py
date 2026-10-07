@@ -13,11 +13,14 @@ from mainloop.runtime.hitl_correlation import (
 )
 from mainloop.runtime.hitl_observer import Unavailable, agent_for, observer
 from mainloop.runtime.kagent_client import KagentError, SendNotAccepted, Unreachable
+from mainloop.services.merge_summary import validate_reviewed_context
 
 from models.hitl import (
     HITL_EXTENSION,
     DecisionReceipt,
     HITLProjection,
+    ToolApprovalRequest,
+    ToolApprovalResponse,
     VerifiedAssociation,
     normalized_hash,
 )
@@ -82,6 +85,53 @@ async def routes(conn, projection):
     return outermost[0], candidates
 
 
+def native_response(response):
+    """Remove Mainloop review metadata before sending the native HITL response."""
+    payload = response.model_dump(mode="json", exclude_none=True)
+    payload.pop("reviewed_context", None)
+    return payload
+
+
+def proposal_tools(leaf_request, response, proposals, configuration):
+    """Correlate immutable proposal calls to native tool IDs without granting authority."""
+    if not isinstance(leaf_request, ToolApprovalRequest) or not isinstance(
+        response, ToolApprovalResponse
+    ):
+        if isinstance(response, ToolApprovalResponse) and response.reviewed_context:
+            raise ValueError("Reviewed context is not valid for this request")
+        return {}
+    from mainloop.services.merge_authorization import canonical_operation
+
+    approvals = {approval.id: approval.approved for approval in response.approvals}
+    matches = {}
+    for tool in leaf_request.tools:
+        if not configuration:
+            continue
+        if canonical_operation(tool.name, configuration) is None:
+            continue
+        proposal_id = tool.args.get("proposal_id")
+        request_id = tool.args.get("request_id")
+        key = (proposal_id, request_id)
+        if (
+            isinstance(proposal_id, str)
+            and isinstance(request_id, str)
+            and proposal_id in proposals
+        ):
+            matches.setdefault(key, []).append(tool.id)
+    required = {
+        ids[0]
+        for (proposal_id, request_id), ids in matches.items()
+        if len(ids) == 1 and approvals.get(ids[0]) is True
+    }
+    if set(response.reviewed_context) != required:
+        raise ValueError("Approve using the current merge summary, or reject the call")
+    return {
+        key: ids[0]
+        for key, ids in matches.items()
+        if len(ids) == 1 and ids[0] in required
+    }
+
+
 async def submit(owner, request_id, action_id, response, *, service=None):
     service = service or observer()
     if owner != service.owner:
@@ -132,7 +182,10 @@ async def submit(owner, request_id, action_id, response, *, service=None):
             raise store.HITLConflict("Pending request or verified relationship changed")
         outer, request, leaf, leaf_request, binding, associations = resolved
         from mainloop.runtime.policy import PolicyError
-        from mainloop.services.merge_authorization import decision_inputs, lock_decision
+        from mainloop.services.merge_authorization import (
+            decision_inputs,
+            lock_decision,
+        )
 
         try:
             async with asyncio.timeout(60):
@@ -141,6 +194,9 @@ async def submit(owner, request_id, action_id, response, *, service=None):
                 )
         except PolicyError as exc:
             raise ValueError(exc.message) from None
+        reviewed_tools = proposal_tools(
+            leaf_request, response, proposals, configuration
+        )
         receipt_arguments = dict(
             action_id=action_id,
             owner_id=owner,
@@ -157,10 +213,28 @@ async def submit(owner, request_id, action_id, response, *, service=None):
         )
         async with conn.transaction():
             validate_proposal = await lock_decision(conn, owner, proposals)
+
+            def validate_context(key, approved):
+                validate_proposal(key, approved)
+                if approved:
+                    tool_id = reviewed_tools.get(
+                        (key.proposal_id, key.invocation_request_id)
+                    )
+                    if tool_id is None:
+                        raise ValueError("Merge approval context is unavailable")
+                    proposal, _ = proposals[key.proposal_id]
+                    validate_reviewed_context(
+                        proposal["facts"],
+                        proposal["id"],
+                        response.reviewed_context[tool_id],
+                        proposal.get("presentation"),
+                        proposal.get("summary_digest"),
+                    )
+
             receipt = build_decision_receipt(
                 **receipt_arguments,
                 configuration=configuration,
-                validate_proposal=validate_proposal,
+                validate_proposal=validate_context,
             )
             for key in sorted(leaf.key() for leaf in projection.leaves):
                 await conn.execute(
@@ -281,7 +355,7 @@ async def dispatch(receipt, *, service):
                         and m.task_id in (None, receipt.outer.task_id)
                         and m.context_id in (None, receipt.outer.context_id)
                         and m.metadata.get(HITL_EXTENSION)
-                        == receipt.response.model_dump(mode="json", exclude_none=True)
+                        == native_response(receipt.response)
                         for m in task.history
                     ):
                         await transport_state(conn, receipt, "accepted")
@@ -336,7 +410,7 @@ async def dispatch(receipt, *, service):
                     and any(
                         m.message_id == receipt.outbound_message_id
                         and m.metadata.get(HITL_EXTENSION)
-                        == receipt.response.model_dump(mode="json", exclude_none=True)
+                        == native_response(receipt.response)
                         for m in task.history
                     )
                 )

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { api } from '../api';
   import { hitlClient, watchHITL } from '../hitlClient';
   import type { HITLState } from '../hitl';
   import HITLRequest from './HITLRequest.svelte';
@@ -21,5 +22,7 @@
     snapshot={state}
     onRespond={(draft) => void hitlClient.respond(requestId, draft)}
     onRefresh={() => void hitlClient.refresh(requestId)}
+    onLoadMergeDetails={(proposalId, section, cursor) =>
+      api.getHITLMergeDetails(requestId, proposalId, section, cursor)}
   />
 {/key}

@@ -55,7 +55,7 @@ class MergeAcceptanceTests(support.MergeFixture):
             creator="gateway-owner",
         )
 
-    async def inventory(self, proposal, provider="claude"):
+    async def inventory(self, proposal, provider="claude", *, duplicate_proposal=False):
         await self.pool.execute(
             "UPDATE native_bindings SET kind=$2 WHERE session_id=$1", self.sid, provider
         )
@@ -66,9 +66,14 @@ class MergeAcceptanceTests(support.MergeFixture):
         wire["contextId"] = session.context_id
         message = wire["status"]["message"]
         message.update(taskId=wire["id"], contextId=session.context_id)
-        message["metadata"][HITL_EXTENSION]["tools"][0]["args"]["proposal_id"] = (
-            proposal["proposal_id"]
-        )
+        tools = message["metadata"][HITL_EXTENSION]["tools"]
+        tools[0]["args"]["proposal_id"] = proposal["proposal_id"]
+        if duplicate_proposal:
+            duplicate = json.loads(json.dumps(tools[0]))
+            duplicate["id"] = "call-2"
+            duplicate["call_id"] = "native-call-2"
+            duplicate["args"]["request_id"] = "invoke-2"
+            tools.append(duplicate)
         task = Task.model_validate(wire)
         gateway.tasks[task.id] = task
         self.assertEqual(session.state, RuntimeState.SUSPENDED)
@@ -119,6 +124,25 @@ class MergeAcceptanceTests(support.MergeFixture):
                 return await client.request(method, path, json=body)
 
     async def answer(self, gateway, projection, *, approved=True, action="desktop"):
+        reviewed_context = {}
+        if approved:
+            tools = list(projection.payload.tools)
+            if projection.payload.nested:
+                tools.extend(projection.payload.nested.tools)
+            tool = next(
+                (
+                    value
+                    for value in tools
+                    if value.name.endswith("merge_pull_request_with_approval")
+                ),
+                None,
+            )
+            if tool is not None:
+                digest = await self.pool.fetchval(
+                    "SELECT summary_digest FROM merge_proposals WHERE id=$1",
+                    tool.args["proposal_id"],
+                )
+                reviewed_context = {tool.id: digest}
         return await self.http(
             gateway,
             "POST",
@@ -138,6 +162,7 @@ class MergeAcceptanceTests(support.MergeFixture):
                             ),
                         }
                     ],
+                    "reviewed_context": reviewed_context,
                 },
             },
         )
@@ -302,18 +327,27 @@ class MergeAcceptanceTests(support.MergeFixture):
             1,
         )
         view = (await self.http(gateway, "GET", f"/hitl/{projection.id}")).json()
-        self.assertEqual(view["merge_enrichment"][0]["proposal_id"], p["proposal_id"])
-        self.assertEqual(view["merge_enrichment"][0]["head_sha"], support.SHA)
-        self.assertEqual(view["merge"], view["merge_enrichment"])
         self.assertEqual(
             view["merge"][0]["tool_id"], projection.leaves[0].pending_request_id
+        )
+        self.assertEqual(view["merge"][0]["proposal_id"], p["proposal_id"])
+        self.assertEqual(view["merge"][0]["head_sha"], support.SHA)
+        self.assertEqual(
+            view["merge"][0]["summary"]["title"], support.GitHub().pr["title"]
+        )
+        self.assertEqual(
+            view["merge"][0]["summary_digest"],
+            await self.pool.fetchval(
+                "SELECT summary_digest FROM merge_proposals WHERE id=$1",
+                p["proposal_id"],
+            ),
         )
         with patch.dict(os.environ, MAINLOOP_MERGE_CONFIGURATIONS="[]"):
             unavailable = (
                 await self.http(gateway, "GET", f"/hitl/{projection.id}")
             ).json()
         self.assertIsNone(unavailable["merge"])
-        self.assertEqual(unavailable["merge_enrichment"], [])
+        self.assertNotIn("merge_enrichment", unavailable)
         if provider == "codex" and not nested:
             if target := os.environ.get("MERGE_UI_FIXTURE_PATH"):
                 Path(target).write_text(json.dumps(view))
@@ -328,6 +362,7 @@ class MergeAcceptanceTests(support.MergeFixture):
             (gateway.sent[0][1]["task_id"], gateway.sent[0][1]["context_id"]),
             (projection.outer.task_id, projection.outer.context_id),
         )
+
         if nested:
             self.assertNotEqual(
                 projection.outer.runtime_session_id,
@@ -377,6 +412,83 @@ class MergeAcceptanceTests(support.MergeFixture):
             await self.pool.fetchval("SELECT count(*) FROM native_deliveries"), 0
         )
 
+    async def test_summary_details_are_owner_and_proposal_scoped_and_bounded(self):
+        proposal = await self.prepare()
+        gateway, projection = await self.inventory(proposal)
+        summary = (await self.http(gateway, "GET", f"/hitl/{projection.id}")).json()[
+            "merge"
+        ][0]
+        self.assertEqual(summary["availability"], "ready")
+        self.assertTrue(
+            summary["pr_url"].startswith("https://github.com/owner/repo/pull/17")
+        )
+        self.assertTrue(
+            summary["compare_url"].startswith("https://github.com/owner/repo/compare/")
+        )
+
+        for section in ("description", "files", "checks"):
+            response = await self.http(
+                gateway,
+                "GET",
+                f"/hitl/{projection.id}/merge/{proposal['proposal_id']}/details?section={section}&limit=1",
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertLessEqual(len(response.content), 64 * 1024)
+            self.assertEqual(
+                response.json()["summary_digest"], proposal["summary_digest"]
+            )
+        description = (
+            await self.http(
+                gateway,
+                "GET",
+                f"/hitl/{projection.id}/merge/{proposal['proposal_id']}/details?section=description",
+            )
+        ).json()
+        self.assertIn("workspace deployments", description["description"])
+        files = (
+            await self.http(
+                gateway,
+                "GET",
+                f"/hitl/{projection.id}/merge/{proposal['proposal_id']}/details?section=files",
+            )
+        ).json()
+        self.assertEqual(files["items"][0]["filename"], "src/app.py")
+        denied = await self.http(
+            gateway,
+            "GET",
+            f"/hitl/{projection.id}/merge/another-proposal/details?section=files",
+        )
+        self.assertEqual(denied.status_code, 404)
+
+    async def test_summary_details_accept_two_calls_for_one_proposal(self):
+        proposal = await self.prepare()
+        gateway, projection = await self.inventory(proposal, duplicate_proposal=True)
+        merge_cards = (
+            await self.http(gateway, "GET", f"/hitl/{projection.id}")
+        ).json()["merge"]
+        self.assertEqual(len(merge_cards), 2)
+        self.assertEqual({item["tool_id"] for item in merge_cards}, {"call", "call-2"})
+        self.assertEqual(
+            {item["proposal_id"] for item in merge_cards}, {proposal["proposal_id"]}
+        )
+
+        for card in merge_cards:
+            for section in ("description", "files", "checks"):
+                response = await self.http(
+                    gateway,
+                    "GET",
+                    f"/hitl/{projection.id}/merge/{card['proposal_id']}/details?section={section}",
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                details = response.json()
+                self.assertEqual(details["section"], section)
+                self.assertEqual(details["proposal_id"], proposal["proposal_id"])
+                self.assertEqual(details["summary_digest"], proposal["summary_digest"])
+                if section == "description":
+                    self.assertIn("workspace deployments", details["description"])
+                else:
+                    self.assertTrue(details["items"])
+
     async def test_claude_explicit_approval_inventory_restart_overnight(self):
         await self.pool.execute(
             "UPDATE projects SET merge_policy='approval',merge_policy_version=2 WHERE id=$1",
@@ -390,16 +502,32 @@ class MergeAcceptanceTests(support.MergeFixture):
                 "filename": "src/moved.py",
                 "previous_filename": "k8s/protected.yaml",
                 "status": "renamed",
+                "additions": 3,
+                "deletions": 1,
             }
         ]
         await self.approved_flow("codex")
 
     async def test_claude_protected_delete_nested_duplicate_observation(self):
-        self.fake.files = [{"filename": "migrations/001.sql", "status": "removed"}]
+        self.fake.files = [
+            {
+                "filename": "migrations/001.sql",
+                "status": "removed",
+                "additions": 3,
+                "deletions": 1,
+            }
+        ]
         await self.approved_flow("claude", nested=True)
 
     async def test_codex_nested_duplicate_observation(self):
-        self.fake.files = [{"filename": "k8s/protected.yaml", "status": "removed"}]
+        self.fake.files = [
+            {
+                "filename": "k8s/protected.yaml",
+                "status": "removed",
+                "additions": 3,
+                "deletions": 1,
+            }
+        ]
         await self.approved_flow("codex", nested=True)
 
     async def test_denial_reason_and_simultaneous_decisions(self):
@@ -449,7 +577,8 @@ class MergeAcceptanceTests(support.MergeFixture):
         newer = await self.prepare(request_id="replacement")
         self.assertNotEqual(p["proposal_id"], newer["proposal_id"])
         view = (await self.http(gateway, "GET", f"/hitl/{projection.id}")).json()
-        self.assertTrue(view["merge_enrichment"][0]["stale"])
+        self.assertEqual(view["merge"][0]["availability"], "stale")
+        self.assertTrue(view["merge"][0]["stale"])
         self.assertEqual((await self.answer(gateway, projection)).status_code, 409)
         self.assertEqual(gateway.sent, [])
         self.assertEqual(self.fake.puts, [])

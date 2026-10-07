@@ -118,9 +118,9 @@ IDs. Generic tool decisions with similar arguments impose no merge barrier or co
 An already-claimed intent cannot be retroactively rejected. Approving stale facts
 fails; rejecting stale owned proposals remains possible before claim.
 
-The HITL view includes a `merge_enrichment` array of server-resolved proposal facts
-keyed by tool/proposal ID. The owner API exposes these verified facts in its `merge`
-display array. The shared inbox/chat renderer shows each call's repository/PR, exact
+The owner API returns server-resolved merge context keyed by tool/proposal ID in its
+bounded `merge` display array. Raw inventories stay behind the owner-scoped details route.
+The shared inbox/chat renderer shows each call's repository/PR, exact
 head/base branches and SHAs, protected paths, and recorded CI checks/statuses.
 This is read-only evidence, not approval or a promise of current CI success; it adds
 no actions. Missing, malformed or ambiguous evidence is shown as unavailable, and
@@ -128,6 +128,37 @@ stale observations/proposals label displayed facts as historical. Agent-supplied
 names may trigger an unavailable notice but cannot supply verified merge context.
 Staleness includes proposal replacement/policy changes; GitHub head/base/diff freshness
 is checked on submission and invocation, not inferred from a stored card.
+
+### Approval-card summary
+
+Each immutable proposal also stores a deterministic presentation snapshot. It uses the
+verified GitHub PR title and bounded plain-text description, the complete changed-file
+inventory and per-file additions/deletions, protected-path matches, policy/glob versions,
+and the captured CI inventory. No model writes this summary. The native HITL hint remains
+separate and is labelled as an agent note.
+
+The snapshot includes the repository and PR, exact head/base refs and SHAs, proposal ID,
+description digest, changed-path digest and statistics, approval reasons, CI inventory
+digest/completeness/time, and policy versions. Mainloop stores its canonical SHA-256 digest
+with the immutable proposal. The owner card labels CI as historical evidence and says that
+it does not establish that a merge is safe or complete. Current evidence is read again by
+the response and merge paths.
+
+`GET /hitl/{request_id}` returns the summary, digest, freshness state, and verified PR,
+compare, and conversation links. The owner-only read route
+`GET /hitl/{request_id}/merge/{proposal_id}/details` accepts `section=description|files|checks`,
+an offset cursor, and a page size of at most 50 records. Pages are limited to 64 KiB. Saved
+PR descriptions are limited to 16 KiB; changed-file inventories retain the existing 3,000
+file cap. The UI renders descriptions as escaped text and does not store patches or raw
+GitHub response bodies. Truncated details carry an explicit marker and digest/count.
+
+`POST /hitl/{request_id}/respond` may include `reviewed_context`, a map from native tool ID
+to summary digest. Positive merge decisions require the digest currently stored with the
+exact proposal and a complete fresh GitHub evidence read. Missing context, a changed digest,
+an unavailable summary, a superseded proposal, or a changed pending leaf refuses the positive
+decision before consent is recorded. Rejections do not require the digest. This field is
+Mainloop receipt metadata and is stripped from the native kagent response. The existing merge
+path still checks current policy, identity, diff, CI and mergeability before any merge intent.
 
 A 30-minute deadline starts on the first authorized evaluation, after human waiting.
 Repeated invocations continue the same attempt without extending it. Pending CI or

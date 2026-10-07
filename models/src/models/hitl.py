@@ -110,6 +110,10 @@ class ToolApprovalResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     type: Literal["tool_approval_response"]
     approvals: tuple[ToolApproval, ...] = Field(min_length=1, max_length=100)
+    # Mainloop-only acknowledgement of the exact summary rendered by the owner.
+    reviewed_context: dict[Identifier, Digest] = Field(
+        default_factory=dict, max_length=100
+    )
 
 
 class AskUserAnswer(BaseModel):

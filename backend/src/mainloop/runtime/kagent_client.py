@@ -929,7 +929,9 @@ class KagentClient:
                     "extensions": [HITL_EXTENSION],
                     "metadata": {
                         HITL_EXTENSION: response.model_dump(
-                            mode="json", exclude_none=True
+                            mode="json",
+                            exclude_none=True,
+                            exclude={"reviewed_context"},
                         )
                     },
                 }

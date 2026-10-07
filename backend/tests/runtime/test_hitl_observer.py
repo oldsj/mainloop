@@ -133,16 +133,14 @@ class Gateway:
         if self.send_failure:
             raise self.send_failure
         task = self.tasks[kwargs["task_id"]]
+        response_body = kwargs["response"].model_dump(mode="json", exclude_none=True)
+        response_body.pop("reviewed_context", None)
         task.history.append(
             Message(
                 message_id=kwargs["message_id"],
                 task_id=task.id,
                 context_id=task.context_id,
-                metadata={
-                    HITL_EXTENSION: kwargs["response"].model_dump(
-                        mode="json", exclude_none=True
-                    )
-                },
+                metadata={HITL_EXTENSION: response_body},
             )
         )
         task.status = TaskStatus(state="working")
@@ -700,9 +698,7 @@ class HITLObserverTests(PostgresTestCase):
                     task_id=task.id,
                     context_id=task.context_id,
                     metadata={
-                        HITL_EXTENSION: self.response().model_dump(
-                            mode="json", exclude_none=True
-                        )
+                        HITL_EXTENSION: continuation.native_response(self.response())
                     },
                 )
             )
@@ -1060,9 +1056,7 @@ class HITLObserverTests(PostgresTestCase):
                     task_id=task.id,
                     context_id=task.context_id,
                     metadata={
-                        HITL_EXTENSION: sent["response"].model_dump(
-                            mode="json", exclude_none=True
-                        )
+                        HITL_EXTENSION: continuation.native_response(sent["response"])
                     },
                 )
             )

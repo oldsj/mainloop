@@ -224,10 +224,14 @@ save re-reads the current policy before another explicit save.
 HITL GET/POST responses include display context from owner-scoped observed/bound session rows,
 a verified leaf provider when available, and `writes_enabled`. `GET /sessions/{id}/hitl` lists
 up to 100 non-superseded request IDs for that owned session, including read-only receipts and
-alias links. Display context never grants response authority. The shared renderer reserves an
-optional server-resolved merge context slot (PR, head/base, protected matches, CI evidence).
-The API currently returns `merge: null`; tool arguments and metadata never populate that slot.
-No merge actions or merge execution are added.
+alias links. Display context never grants response authority. The shared renderer shows a
+server-resolved merge summary and bounded proposal details; tool arguments and metadata never
+populate that slot. A positive merge response carries the reviewed summary digest in the
+immutable Mainloop receipt, and the server checks it against the exact proposal before recording
+consent. That digest is removed from the native kagent response. Rejections remain available
+without a current summary. This presentation does not add a separate approval queue or merge
+execution action; see [Pull requests](pull-requests.md#approval-card-summary) for its sources,
+limits, and API contract.
 
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,

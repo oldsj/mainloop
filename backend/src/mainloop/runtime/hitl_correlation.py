@@ -244,6 +244,11 @@ def validate_receipt(receipt: DecisionReceipt) -> None:
                 raise ValueError("Receipt tool snapshot mismatch")
         if len(receipt.response.approvals) != len(receipt.calls):
             raise ValueError("Receipt decision coverage mismatch")
+        approved_ids = {
+            approval.id for approval in receipt.response.approvals if approval.approved
+        }
+        if not set(receipt.response.reviewed_context).issubset(approved_ids):
+            raise ValueError("Reviewed context must belong to an approved tool")
     elif (
         len(receipt.calls) != 1
         or receipt.calls[0].leaf.pending_request_id != receipt.response.id
