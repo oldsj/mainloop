@@ -45,7 +45,7 @@ def grants_secrets(rule: dict) -> bool:
 
 class BaseRBACTests(unittest.TestCase):
     def test_base_grants_no_cluster_scoped_secret_verbs(self):
-        """The backend only patches one Secret in the kagent namespace, through a Role."""
+        """The trusted publisher manages binding Secrets through a namespace Role."""
         docs = [
             doc
             for path in sorted(BASE.glob("*.yaml"))
@@ -111,9 +111,28 @@ class KindOverlayTests(unittest.TestCase):
         self.resource("StatefulSet", "mainloop-postgres")
         self.resource("NetworkPolicy", "mainloop-backend-ingress")
 
+    def test_binding_secret_publisher_permissions(self):
+        role = self.resource("Role", "mainloop-agent-tokens")
+        self.assertEqual(
+            role["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["secrets"],
+                    "verbs": ["get", "create", "delete"],
+                }
+            ],
+        )
+        self.assertFalse(
+            any(
+                d["kind"] == "Secret"
+                and d["metadata"]["name"] == "mainloop-agent-tokens"
+                for d in self.docs
+            )
+        )
+
     def test_integration_keeps_its_namespace_and_has_no_embedded_credentials(self):
         for kind, name in (
-            ("Secret", "mainloop-agent-tokens"),
             ("Role", "mainloop-agent-tokens"),
             ("RoleBinding", "mainloop-agent-tokens"),
             ("RemoteMCPServer", "mainloop"),

@@ -14,9 +14,8 @@ from mainloop.config import settings
 from mainloop.runtime.agent_identity import hash_token, token_for
 from mainloop.runtime.kagent_client import SessionCredential
 
-SECRET_NAME = (
-    "mainloop-agent-tokens"  # nosec B105 - Kubernetes object name, not a credential
-)
+SECRET_KEY = "authorization"  # nosec B105 - Kubernetes data key, not a credential
+SECRET_LABELS = {"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp"}
 logger = logging.getLogger(__name__)
 MCP_ORIGIN = "http://mainloop-mcp.mainloop.svc.cluster.local"
 
@@ -35,36 +34,76 @@ class CredentialStore:
             self.api = client.CoreV1Api()
         return self.api
 
-    def _write(
-        self,
-        binding_id: str,
-        value: str | None,
-        reference: SessionCredential | None = None,
-    ):
-        # A merge patch touches one key only, so concurrent bindings cannot overwrite others.
-        data = base64.b64encode(value.encode()).decode() if value is not None else None
-        reference = reference or credential_reference(binding_id)
+    def _reference(self, binding_id, reference):
+        expected = credential_reference(binding_id)
+        if reference is not None and reference != expected:
+            raise RuntimeError("agent credential reference does not match binding")
+        return expected
+
+    def _publish(self, binding_id, reference):
+        body = {
+            "metadata": {"name": reference.secret_name, "labels": SECRET_LABELS},
+            "type": "Opaque",
+            "data": {
+                SECRET_KEY: base64.b64encode(
+                    credential_value(binding_id).encode()
+                ).decode()
+            },
+        }
+        api = self._api()
         try:
-            self._api().patch_namespaced_secret(
+            api.create_namespaced_secret(
+                settings.kagent_namespace, body, _request_timeout=(5, 15)
+            )
+        except ApiException as exc:
+            if exc.status != 409:
+                raise RuntimeError(
+                    "could not publish Mainloop agent credential"
+                ) from None
+            # A retry after an uncertain create must observe the existing object.
+            # Never overwrite a conflicting Secret or enroll an unrelated object.
+            try:
+                existing = api.read_namespaced_secret(
+                    reference.secret_name,
+                    settings.kagent_namespace,
+                    _request_timeout=(5, 15),
+                )
+            except ApiException:
+                raise RuntimeError(
+                    "could not reconcile Mainloop agent credential"
+                ) from None
+            if (
+                existing.data != body["data"]
+                or existing.type != "Opaque"
+                or existing.metadata.labels != SECRET_LABELS
+            ):
+                raise RuntimeError(
+                    "Mainloop agent credential Secret conflicts with binding"
+                ) from None
+
+    def _remove(self, reference):
+        try:
+            self._api().delete_namespaced_secret(
                 reference.secret_name,
                 settings.kagent_namespace,
-                {"data": {reference.secret_key: data}},
                 _request_timeout=(5, 15),
             )
-        except ApiException:
-            raise RuntimeError("could not update Mainloop agent credential") from None
+        except ApiException as exc:
+            if exc.status != 404:
+                raise RuntimeError(
+                    "could not delete Mainloop agent credential"
+                ) from None
 
     async def publish(
         self, binding_id: str, reference: SessionCredential | None = None
     ) -> SessionCredential:
-        reference = reference or credential_reference(binding_id)
-        await asyncio.to_thread(
-            self._write, binding_id, credential_value(binding_id), reference
-        )
+        reference = self._reference(binding_id, reference)
+        await asyncio.to_thread(self._publish, binding_id, reference)
         return reference
 
     async def remove(self, binding_id: str, reference: SessionCredential | None = None):
-        await asyncio.to_thread(self._write, binding_id, None, reference)
+        reference = self._reference(binding_id, reference)
+        await asyncio.to_thread(self._remove, reference)
 
 
 credentials = CredentialStore()
@@ -75,8 +114,8 @@ def credential_reference(binding_id: str) -> SessionCredential:
     return SessionCredential(
         origin=MCP_ORIGIN,
         header="Authorization",
-        secret_name=SECRET_NAME,
-        secret_key=binding_id,
+        secret_name=f"mainloop-mcp-{binding_id}",
+        secret_key=SECRET_KEY,
     )
 
 

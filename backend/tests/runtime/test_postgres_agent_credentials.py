@@ -38,6 +38,69 @@ class CredentialPostgresTests(PostgresTestCase):
         finally:
             await conn.close()
 
+    async def test_binding_secret_publication_and_durable_delete_retry(self):
+        import base64
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from kubernetes.client.exceptions import ApiException
+
+        sid, _ = await self.bound_session(role="child")
+        binding = await self.reload_binding(sid)
+        api = Mock()
+        objects = {}
+
+        def create(namespace, body, **kwargs):
+            name = body["metadata"]["name"]
+            if name in objects:
+                raise ApiException(status=409)
+            objects[name] = body
+
+        def read(name, namespace, **kwargs):
+            body = objects[name]
+            return SimpleNamespace(
+                data=body["data"],
+                type=body["type"],
+                metadata=SimpleNamespace(labels=body["metadata"]["labels"]),
+            )
+
+        def delete(name, namespace, **kwargs):
+            if name not in objects:
+                raise ApiException(status=404)
+            del objects[name]
+
+        api.create_namespaced_secret.side_effect = create
+        api.read_namespaced_secret.side_effect = read
+        api.delete_namespaced_secret.side_effect = ApiException(status=500)
+        with patch.object(credentials, "credentials", credentials.CredentialStore(api)):
+            reference = await credentials.publish_for_binding(binding)
+            # A new pool/process observes the persisted reference and reconciles create.
+            await self.pool.expire_connections()
+            self.assertEqual(await credentials.publish_for_binding(binding), reference)
+            body = objects[reference.secret_name]
+            self.assertEqual(body["metadata"]["labels"], credentials.SECRET_LABELS)
+            self.assertEqual(
+                body["data"],
+                {
+                    "authorization": base64.b64encode(
+                        ("Bearer " + token_for(sid)).encode()
+                    ).decode()
+                },
+            )
+            await credentials.revoke(sid)
+            self.assertIsNone((await self.reload_binding(sid))["token_hash"])
+            with self.assertRaises(HTTPException):
+                await self.auth(sid)
+            self.assertIn(reference.secret_name, objects)
+            api.delete_namespaced_secret.side_effect = delete
+            await self.pool.expire_connections()
+            await credentials.reconcile_cleanup()
+            self.assertFalse(objects)
+            self.assertFalse(
+                (await self.reload_binding(sid))["credential_cleanup_pending"]
+            )
+            await credentials.credentials.remove(sid, reference)
+
     async def test_startup_intent_reloads_and_retries_create_then_delete(self):
         sid, cid = await self.bound_session(role="child", status="active")
         mid = await self.delivery(sid, cid, "recorded", source="brief")
@@ -88,8 +151,8 @@ class CredentialPostgresTests(PostgresTestCase):
         ref = SessionCredential(
             credentials.MCP_ORIGIN,
             "Authorization",
-            credentials.SECRET_NAME,
-            sid,
+            f"mainloop-mcp-{sid}",
+            "authorization",
         )
         with patch.object(
             native_sessions, "get_client", return_value=client
@@ -256,7 +319,7 @@ class CredentialPostgresTests(PostgresTestCase):
     async def auth(self, sid):
         return await AgentService(PgStore()).authenticate(token_for(sid))
 
-    async def test_terminal_transitions_revoke_hash_and_remove_key(self):
+    async def test_terminal_transitions_revoke_hash_and_remove_secret(self):
         for status in (
             SessionStatus.COMPLETED,
             SessionStatus.FAILED,
@@ -322,7 +385,8 @@ class CredentialPostgresTests(PostgresTestCase):
             reference = await publishing
             await revoking
 
-        self.assertEqual(reference.secret_key, sid)
+        self.assertEqual(reference.secret_key, "authorization")
+        self.assertEqual(reference.secret_name, f"mainloop-mcp-{sid}")
         publish_call.assert_awaited_once()
         remove.assert_awaited_once()
         self.assertEqual(remove.await_args.args[0], sid)

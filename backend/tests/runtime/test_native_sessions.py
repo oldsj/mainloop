@@ -332,8 +332,8 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                     return_value=SessionCredential(
                         "http://mainloop-mcp.mainloop.svc.cluster.local",
                         "Authorization",
-                        "mainloop-agent-tokens",
-                        SESSION,
+                        f"mainloop-mcp-{SESSION}",
+                        "authorization",
                     )
                 ),
             ),
@@ -389,8 +389,8 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             return SessionCredential(
                 "http://mainloop-mcp.mainloop.svc.cluster.local",
                 "Authorization",
-                "mainloop-agent-tokens",
-                binding_id,
+                f"mainloop-mcp-{binding_id}",
+                "authorization",
             )
 
         with patch("mainloop.runtime.agent_credentials.publish_for_binding", publish):
