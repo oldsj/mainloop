@@ -3,7 +3,7 @@
 import ipaddress
 import re
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, ConfigDict, Field, StrictStr, field_validator
@@ -164,6 +164,17 @@ class WorkspaceLifecycle(WorkspaceContractModel):
 
     workspace_id: WorkspaceIdentifier
     session_id: WorkspaceIdentifier
+    publication_mode: Literal["read_only", "branch"] = "read_only"
+    publication_reason: (
+        Literal[
+            "default_branch",
+            "protected_branch",
+            "missing_metadata",
+            "no_grant",
+            "disabled",
+        ]
+        | None
+    ) = "disabled"
     observed_state: WorkspaceObservedState
     # Why the state is what it is, when kagent said (a failure, an operation in progress).
     detail: StrictStr | None = None

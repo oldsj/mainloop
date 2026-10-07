@@ -33,6 +33,7 @@ from typing import Any
 
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.push_gate import lifecycle as push_lifecycle
 from mainloop.runtime.agent_identity import hash_token, token_for
 from mainloop.runtime.kagent_client import (
     A2AError,
@@ -264,11 +265,23 @@ class Ledger:
         sets = [f"{k}=${i + 2}" for i, k in enumerate(fields)]
         sets.append("updated_at=NOW()")
         async with db.connection() as conn:
-            await conn.execute(
-                f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
-                session_id,
-                *fields.values(),
-            )
+            async with push_lifecycle.locked(conn, session_id, revoke=False):
+                if "kagent_session_id" in fields and settings.push_gate_enabled:
+                    current = await conn.fetchval(
+                        "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+                        session_id,
+                    )
+                    if current != fields["kagent_session_id"]:
+                        from mainloop.push_gate import store
+
+                        await store.revalidate_on_runtime_replacement(conn, session_id)
+                await conn.execute(
+                    f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
+                    session_id,
+                    *fields.values(),
+                )
+                if fields.get("kagent_session_id"):
+                    await push_lifecycle.enroll(conn, session_id)
 
     async def replace_kagent_session(
         self, session_id: str, old_kagent_session_id: str | None, request_id: str
@@ -281,28 +294,43 @@ class Ledger:
         already replaced it.
         """
         async with db.connection() as conn:
-            async with conn.transaction():
-                moved = await conn.fetchval(
-                    """UPDATE native_bindings
-                       SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
-                           updated_at=NOW()
-                       WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
-                         AND child_start_failure IS NULL
-                       RETURNING session_id""",
-                    session_id,
-                    old_kagent_session_id,
-                    request_id,
-                )
-                if moved is None:
-                    return False
-                await conn.execute(
-                    """UPDATE native_deliveries
-                       SET state='uncertain',
-                           detail='the kagent Session was deleted; not replaying',
-                           updated_at=NOW()
-                       WHERE session_id=$1 AND state IN ('sending','delivered')""",
-                    session_id,
-                )
+            async with push_lifecycle.locked(conn, session_id):
+                if settings.push_gate_enabled:
+                    current = await conn.fetchrow(
+                        "SELECT kagent_session_id,child_start_failure FROM native_bindings WHERE session_id=$1",
+                        session_id,
+                    )
+                    if (
+                        not current
+                        or current["kagent_session_id"] != old_kagent_session_id
+                        or current["child_start_failure"] is not None
+                    ):
+                        return False
+                    from mainloop.push_gate import store
+
+                    await store.revalidate_on_runtime_replacement(conn, session_id)
+                async with conn.transaction():
+                    moved = await conn.fetchval(
+                        """UPDATE native_bindings
+                           SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
+                               updated_at=NOW()
+                           WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
+                             AND child_start_failure IS NULL
+                           RETURNING session_id""",
+                        session_id,
+                        old_kagent_session_id,
+                        request_id,
+                    )
+                    if moved is None:
+                        return False
+                    await conn.execute(
+                        """UPDATE native_deliveries
+                           SET state='uncertain',
+                               detail='the kagent Session was deleted; not replaying',
+                               updated_at=NOW()
+                           WHERE session_id=$1 AND state IN ('sending','delivered')""",
+                        session_id,
+                    )
         return True
 
     async def bump_turns(self, session_id: str) -> None:
@@ -479,10 +507,11 @@ class Ledger:
 
     async def mark_kagent_deleted(self, session_id: str) -> None:
         async with db.connection() as conn:
-            await conn.execute(
-                "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
-                session_id,
-            )
+            async with push_lifecycle.locked(conn, session_id, revoke=True):
+                await conn.execute(
+                    "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+                    session_id,
+                )
 
     async def transition(
         self,

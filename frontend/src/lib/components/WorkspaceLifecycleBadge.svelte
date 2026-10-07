@@ -26,3 +26,7 @@
 >
   <span class="truncate">WS {label}</span>
 </span>
+
+<span class="inline-flex border px-2 py-0.5 text-xs text-term-fg-muted" title={workspace.publication_reason ?? 'Branch publication granted'} data-testid="workspace-publication-badge">
+  {workspace.publication_mode === 'branch' ? 'Branch publication' : `Read only · ${workspace.publication_reason?.replaceAll('_', ' ') ?? 'no grant'}`}
+</span>

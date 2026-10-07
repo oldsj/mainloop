@@ -164,10 +164,13 @@ async def publish_for_binding(binding: dict) -> SessionCredential:
 
 async def revoke(binding_id: str):
     from mainloop.db import db
+    from mainloop.push_gate import lifecycle as push_lifecycle
 
     revoked = False
     async with db.connection() as conn:
-        async with _binding_lock(conn, binding_id):
+        async with push_lifecycle.locked(conn, binding_id, revoke=True), _binding_lock(
+            conn, binding_id
+        ):
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """SELECT mcp_grant_kind,credential_ref,token_hash,

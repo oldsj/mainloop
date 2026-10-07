@@ -981,11 +981,46 @@ class Database:
             param_idx += 1
 
             params.append(project_id)
+            from mainloop.config import settings
+            from mainloop.push_gate import store
+
+            from models.push_gate import ProtectedBranchPolicy
+
             async with self.connection() as conn:
-                await conn.execute(
-                    f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
-                    *params,
-                )
+                if settings.push_gate_enabled and default_branch:
+                    async with store.policy_lock(conn, project_id):
+                        async with conn.transaction():
+                            previous = await conn.fetchrow(
+                                "SELECT policy FROM push_branch_policies WHERE project_id=$1",
+                                project_id,
+                            )
+                            await conn.execute(
+                                f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
+                                *params,
+                            )
+                            policy = (
+                                store._decode(previous["policy"], ProtectedBranchPolicy)
+                                if previous
+                                else None
+                            )
+                            if (
+                                policy is None
+                                or policy.default_branch != default_branch
+                            ):
+                                await store.set_policy(
+                                    conn,
+                                    ProtectedBranchPolicy(
+                                        project_id=project_id,
+                                        version=policy.version + 1 if policy else 1,
+                                        default_branch=default_branch,
+                                        patterns=policy.patterns if policy else (),
+                                    ),
+                                )
+                else:
+                    await conn.execute(
+                        f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
+                        *params,
+                    )
 
     async def touch_project(self, project_id: str):
         """Update last_used_at timestamp."""
@@ -1681,22 +1716,55 @@ class Database:
         """
         if not self._pool:
             return []
+        from mainloop.config import settings
+        from mainloop.push_gate import lifecycle as push_lifecycle
+
         async with self.connection() as conn:
-            rows = await conn.fetch(
-                """UPDATE sessions SET archived_at = NOW()
-                   WHERE user_id = $1 AND archived_at IS NULL
-                     AND status IN ('completed', 'failed', 'cancelled')
-                     AND NOT EXISTS (SELECT 1 FROM native_bindings m
-                                     WHERE m.session_id = sessions.id AND m.role = 'main')
-                     AND ($2::text[] IS NULL OR id = ANY($2))
-                     AND ($3::text IS NULL OR EXISTS (
-                            SELECT 1 FROM native_bindings c
-                            WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
-                   RETURNING id""",
-                user_id,
-                session_ids,
-                parent_session_id,
-            )
+            if not settings.push_gate_enabled:
+                rows = await conn.fetch(
+                    """UPDATE sessions SET archived_at = NOW()
+                       WHERE user_id = $1 AND archived_at IS NULL
+                         AND status IN ('completed', 'failed', 'cancelled')
+                         AND NOT EXISTS (SELECT 1 FROM native_bindings m
+                                         WHERE m.session_id = sessions.id AND m.role = 'main')
+                         AND ($2::text[] IS NULL OR id = ANY($2))
+                         AND ($3::text IS NULL OR EXISTS (
+                                SELECT 1 FROM native_bindings c
+                                WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
+                       RETURNING id""",
+                    user_id,
+                    session_ids,
+                    parent_session_id,
+                )
+            else:
+                candidates = await conn.fetch(
+                    """SELECT id FROM sessions
+                       WHERE user_id = $1 AND archived_at IS NULL
+                         AND status IN ('completed', 'failed', 'cancelled')
+                         AND NOT EXISTS (SELECT 1 FROM native_bindings m
+                                         WHERE m.session_id = sessions.id AND m.role = 'main')
+                         AND ($2::text[] IS NULL OR id = ANY($2))
+                         AND ($3::text IS NULL OR EXISTS (
+                                SELECT 1 FROM native_bindings c
+                                WHERE c.session_id = sessions.id AND c.parent_session_id = $3))
+                       ORDER BY id""",
+                    user_id,
+                    session_ids,
+                    parent_session_id,
+                )
+                rows = []
+                for candidate in candidates:
+                    async with push_lifecycle.locked(
+                        conn, candidate["id"], revoke=True
+                    ):
+                        row = await conn.fetchrow(
+                            """UPDATE sessions SET archived_at=NOW() WHERE id=$1
+                               AND archived_at IS NULL AND status IN ('completed','failed','cancelled')
+                               RETURNING id""",
+                            candidate["id"],
+                        )
+                        if row:
+                            rows.append(row)
         from mainloop.runtime.agent_credentials import revoke
         from mainloop.runtime.native_sessions import delete_kagent_session
 
@@ -1735,6 +1803,8 @@ class Database:
         result: dict | None = None,
     ):
         """Update session fields."""
+        from mainloop.push_gate import lifecycle as push_lifecycle
+
         if not self._pool:
             return
         updates = []
@@ -1834,10 +1904,20 @@ class Database:
 
         if updates:
             async with self.connection() as conn:
-                await conn.execute(
-                    f"UPDATE sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
-                    *params,
-                )
+                async with push_lifecycle.locked(
+                    conn,
+                    session_id,
+                    revoke=status
+                    in (
+                        SessionStatus.COMPLETED,
+                        SessionStatus.FAILED,
+                        SessionStatus.CANCELLED,
+                    ),
+                ):
+                    await conn.execute(
+                        f"UPDATE sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
+                        *params,
+                    )
             if status in (
                 SessionStatus.COMPLETED,
                 SessionStatus.FAILED,

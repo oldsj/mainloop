@@ -290,6 +290,14 @@ export interface WorkspaceManifest {
 }
 
 export interface WorkspaceLifecycle {
+  publication_mode: 'read_only' | 'branch';
+  publication_reason:
+    | 'default_branch'
+    | 'protected_branch'
+    | 'missing_metadata'
+    | 'no_grant'
+    | 'disabled'
+    | null;
   workspace_id: string;
   session_id: string;
   observed_state: WorkspaceObservedState;

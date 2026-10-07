@@ -1,6 +1,6 @@
 # Git publication authority
 
-## Implemented: disabled standalone contract
+## Implemented: disabled lifecycle contract
 
 `PUSH_GATE_ENABLED` defaults to `false`. There is no Git listener, upstream writer,
 credential injection or enforcement on actor Git traffic in this slice. The origin and
@@ -49,14 +49,33 @@ for that grant, including after bearer rotation. Request identity reuse with dif
 retried automatically; future reconciliation requires remote evidence and owner resolution.
 A process crash leaving `dispatching` must be reconciled to unknown, never replayed.
 
-## Deferred: slice 1b and activation
+## Implemented: lifecycle wiring and publication projection
 
-Workspace lifecycle wiring and read-only API/UI exposure are deferred to slice 1b.
-Protected-branch workspaces remain readable but must receive no push grant. The current
-workspace API has no new publication status yet. Issue/revoke/runtime-replacement
-primitives exist for that integration, but no lifecycle caller uses them today.
+Confirmed workspace creation enrolls a push grant only when `PUSH_GATE_ENABLED=true`.
+The flag remains off by default. Protected/default branches and missing metadata receive no
+grant. Version-1 policy initialization uses the stored project default; custom patterns come
+from the trusted per-project policy store (there is no owner policy editor in this slice).
+Runtime replacement revokes before changing the association, then enrolls a fresh bearer and
+next version only after confirmation. Unknown creation has no grant; snapshot resume keeps
+the existing association. Revoked MCP enrollment cannot receive push authority.
 
-Before enabling any listener: wire and test lifecycle locks; replace actor GitHub write
+Credential revocation, terminal status, owner archive, deletion and failed-creation cleanup
+hold a dedicated connection's project policy lock followed by publication lock across revoke
+and the durable mutation. Remote credential cleanup and runtime calls use no DB transaction.
+Cached default updates serialize policy and stored metadata in one short transaction, retaining
+previous defaults. Existing grants immediately obey the latest protected policy.
+
+Create/list/get/refresh expose `publication_mode` (`read_only` or `branch`) and a separate
+`publication_reason`: `default_branch`, `protected_branch`, `missing_metadata`, `no_grant`,
+or `disabled`; branch mode has no reason. Protection and missing metadata take precedence
+over the disabled reason. API reads do not initialize policy or issue grants. The lifecycle
+badge and workspace detail display publication separately from runtime health and activity.
+Branch mode reports a live scoped grant, not evidence of a working publication endpoint.
+No push bearer is injected or published to the runtime; only its hash is stored.
+
+## Deferred: activation
+
+Before enabling any listener: replace actor GitHub write
 PATs with read-only PATs; isolate service-only write PATs; close actor access to kagent
 control APIs, secret resolution and owner routes; bind verified runtime identity;
 implement bounded smart-HTTP parsing, disk spooling,
