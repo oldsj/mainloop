@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Coroutine
 from datetime import UTC, datetime, timedelta
@@ -68,6 +69,64 @@ ENDED_STATUSES = frozenset({SessionStatus.CANCELLED, SessionStatus.FAILED})
 
 # The conversation note written when a turn ends as ``cancelled``.
 TURN_STOPPED_NOTE = "This turn was stopped before it finished."
+
+# A delivery's ``detail`` is shown to the owner next to the message, so it is short and carries
+# best-effort credential redaction. Error text from kagent, the harness or the stack is untrusted input.
+DETAIL_MAX_CHARS = 300
+_CREDENTIAL_FIELD_PATTERN = r"(?:authorization|token|secret|password|passwd|api[_-]?key|[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD))"
+# Quoted values may contain whitespace and escaped quotes (JSON or Python repr).
+_ASSIGNMENT_VALUE_PATTERN = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)"""
+_SECRETS = (
+    (
+        re.compile(
+            r"(?i)(\bAuthorization[\"']?\s*[:=]\s*)(?:[\"']?)[A-Za-z][A-Za-z0-9_-]*\s+[^\s\"',;}\]]+[\"']?"
+        ),
+        r"\1[redacted]",
+    ),
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer [redacted]"),
+    (
+        re.compile(
+            rf"(?i)(\b{_CREDENTIAL_FIELD_PATTERN}[\"']?\s*[=:]\s*){_ASSIGNMENT_VALUE_PATTERN}"
+        ),
+        r"\1[redacted]",
+    ),
+    (re.compile(r"(://)[^/\s:@]+:[^/\s@]+@"), r"\1[redacted]@"),  # credentials in a URL
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"),
+        "[redacted]",
+    ),  # JWT
+    (
+        re.compile(
+            r"\b(?:sk|ghp|gho|ghs|ghu|github_pat|xox[a-z])[-_][A-Za-z0-9_-]{8,}"
+        ),
+        "[redacted]",
+    ),
+    (
+        re.compile(r"\b[A-Za-z0-9_-]{40,}\b"),
+        "[redacted]",
+    ),  # any other long opaque token
+)
+
+
+def safe_detail(text: str | None) -> str | None:
+    """Return ``text`` as a one-line, length-bounded delivery detail with best-effort credential redaction."""
+    if text is None:
+        return None
+    text = " ".join(str(text).split())
+    for pattern, replacement in _SECRETS:
+        text = pattern.sub(replacement, text)
+    if len(text) > DETAIL_MAX_CHARS:
+        text = text[: DETAIL_MAX_CHARS - 1].rstrip() + "…"
+    return text or None
+
+
+def describe_error(exc: BaseException) -> str:
+    """Return the error class and message of a kagent or A2A failure, for a delivery's detail."""
+    if isinstance(exc, A2AError):
+        reason = f" ({exc.reason})" if exc.reason else ""
+        return f"{type(exc).__name__}{reason}: {exc.message}"
+    return f"{type(exc).__name__}: {exc}"
+
 
 _locks: dict[str, asyncio.Lock] = {}
 # Deliveries this process is currently reading a stream for; sync leaves them to the stream.
@@ -416,6 +475,7 @@ class Ledger:
         detail: str | None = None,
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
+        detail = safe_detail(detail)
         async with db.connection() as conn, conn.transaction():
             if state in OPEN_STATES:
                 session_id = await conn.fetchval(
@@ -476,6 +536,7 @@ class Ledger:
         one transaction. True when this call moved it; false (nothing written) when the delivery
         was no longer in ``from_states``. The note id is deterministic, so a replay adds nothing.
         """
+        detail = safe_detail(detail)
         async with db.connection() as conn, conn.transaction():
             session_id = await conn.fetchval(
                 "SELECT session_id FROM native_deliveries WHERE message_id=$1",
@@ -607,6 +668,7 @@ class Ledger:
     async def fail_open(self, session_id: str, detail: str) -> list[dict]:
         """Close every open or queued delivery as failed; return what was open, with the state each
         had before (``state``) and its task id."""
+        detail = safe_detail(detail)
         async with db.connection() as conn:
             rows = await conn.fetch(
                 """WITH prior AS (
@@ -1004,7 +1066,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     message_id,
                     "failed",
                     from_states=("recorded",),
-                    detail=f"not sent: {type(exc).__name__}: {exc}",
+                    detail=f"not sent: {describe_error(exc)}",
                 )
                 prompt = None
             # The claim is atomic, so a cancel or a second process cannot also send it.
@@ -1082,16 +1144,18 @@ async def _consume(
                 message_id,
                 "failed",
                 from_states=_RESOLVABLE + ("recorded",),
-                detail=f"not sent: {exc}",
+                detail=f"not sent: {describe_error(exc)}",
             )
             return None
         if proj.task_id:
             return await _resolve(session_id, message_id, binding, proj, str(exc))
         if isinstance(exc, SendNotAccepted):
             # kagent accepted nothing, even after the same-message retries: a definite non-delivery.
-            detail = f"not sent: kagent did not accept the message ({exc.message})"
+            detail = (
+                f"not sent: kagent did not accept the message ({describe_error(exc)})"
+            )
         else:
-            detail = f"send rejected: {exc.message}"
+            detail = f"send rejected: {describe_error(exc)}"
         await ledger.transition(
             message_id,
             "failed",
@@ -1236,7 +1300,7 @@ async def _finalize(
         new_state, detail = "completed", None
     else:
         new_state = "failed"
-        detail = f"task {state}: {proj.failure_text}".rstrip(": ")
+        detail = f"task {state}: {proj.failure_text.strip() or 'kagent gave no reason'}"
     moved = await ledger.transition(
         message_id,
         new_state,
@@ -1705,7 +1769,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
             state=r["state"],
             task_id=r["task_id"],
             evidence_ref=r["evidence_ref"],
-            detail=r["detail"],
+            detail=safe_detail(r["detail"]),
             source=r["source"],
         )
         for r in rows

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { Message, Session } from '$lib/api';
+  import type { DeliveryNotice } from '$lib/delivery';
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
   import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
@@ -20,7 +21,9 @@
     context = 'main',
     error = null,
     inputDisabled = false,
-    onDismissError
+    onDismissError,
+    deliveryNotices = undefined,
+    onRetry = undefined
   }: {
     messages: Message[];
     isLoading: boolean;
@@ -35,6 +38,10 @@
     /** Disable sending without implying a running turn (e.g. while the connection is offline). */
     inputDisabled?: boolean;
     onDismissError?: () => void;
+    /** Failed or unconfirmed deliveries by message id, shown next to the message. */
+    deliveryNotices?: Map<string, DeliveryNotice>;
+    /** Send a failed message's text again as a new message. */
+    onRetry?: (message: Message) => void;
   } = $props();
 
   // Map of anchor_message_id -> sessions for inline rendering
@@ -159,9 +166,21 @@
     {:else}
       {#each timeline() as item (item.type === 'thread-reply' ? `thread-${item.message.id}` : item.message.id)}
         {#if item.type === 'message'}
-          <MessageBubble message={item.message} {context} />
+          <MessageBubble
+            message={item.message}
+            {context}
+            notice={deliveryNotices?.get(item.message.id)}
+            retryDisabled={isLoading || inputDisabled}
+            {onRetry}
+          />
         {:else if item.type === 'session-anchor'}
-          <MessageBubble message={item.message} {context} />
+          <MessageBubble
+            message={item.message}
+            {context}
+            notice={deliveryNotices?.get(item.message.id)}
+            retryDisabled={isLoading || inputDisabled}
+            {onRetry}
+          />
         {:else if item.type === 'thread-reply'}
           <!-- Thread reply notification (Slack-style "replied in thread") -->
           {@const sessionColor = item.session.color}

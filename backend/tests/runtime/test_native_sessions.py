@@ -15,6 +15,7 @@ import httpx
 from mainloop.config import settings
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import (
+    A2AError,
     KagentClient,
     KagentError,
     OutcomeUnknown,
@@ -898,6 +899,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         row = self.ledger.rows[mid]
         self.assertEqual(row["state"], "failed")
         self.assertIn("not sent", row["detail"])
+        self.assertIn("SendNotAccepted", row["detail"])
         self.assertEqual(self.ledger.replies, {})
         # Retried with the same message for at most the 30s budget, never requeued.
         self.assertLessEqual(self.now, 30.0)
@@ -910,6 +912,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.fake.send_script = ["unreachable"]
         mid = await self.send()
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+        self.assertIn("Unreachable", self.ledger.rows[mid]["detail"])
         self.assertEqual(self.fake.accepted_message_ids, [])
 
     async def test_session_error_fails_before_anything_is_sent(self):
@@ -918,7 +921,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.ledger.binding["kagent_session_id"] = failed
         mid = await self.send()
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
-        self.assertIn("not sent", self.ledger.rows[mid]["detail"])
+        self.assertIn("not sent: SessionError", self.ledger.rows[mid]["detail"])
         self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
         # A failed Session is reported, not silently replaced.
         self.assertEqual(self.ledger.binding["kagent_session_id"], failed)
@@ -1634,6 +1637,74 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_identity_of_an_unbound_session_is_none(self):
         self.assertIsNone(await ns.identity("other"))
+
+
+class DeliveryDetailTests(unittest.TestCase):
+    """What the owner is shown as the reason for a failed delivery."""
+
+    def test_the_text_is_one_bounded_line(self):
+        self.assertEqual(ns.safe_detail("a\n\n  b\tc "), "a b c")
+        long = ns.safe_detail("word " * 500)
+        self.assertEqual(len(long), ns.DETAIL_MAX_CHARS)
+        self.assertTrue(long.endswith("…"))
+        self.assertIsNone(ns.safe_detail(None))
+        self.assertIsNone(ns.safe_detail("  \n "))
+
+    def test_credentials_are_redacted(self):
+        for secret in (
+            "Authorization: Bearer abc.DEF_123-x",
+            "token=hunter2",
+            "password: hunter2",
+            "api_key = hunter2",
+            "https://user:hunter2@example.test/path",
+            "sk-ant-api03-abcdefghijkl",
+            "ghp_abcdefghijklmnop",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig",
+            "A" * 48,
+        ):
+            with self.subTest(secret=secret):
+                out = ns.safe_detail(f"failed: {secret} at the end")
+                self.assertIn("[redacted]", out)
+                self.assertTrue(out.startswith("failed: "))
+                self.assertTrue(out.endswith(" at the end") or "[redacted]" in out)
+                for leak in ("hunter2", "abc.DEF", "abcdefghijkl", "sig", "AAAA"):
+                    self.assertNotIn(leak, out)
+
+    def test_common_credential_formats_leave_no_secret_value(self):
+        for credential, value in (
+            ('{"password": "synthetic secret value"}', "synthetic secret value"),
+            ("{'token': 'synthetic-token'}", "synthetic-token"),
+            ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+            ("Authorization: Digest synthetic-auth", "synthetic-auth"),
+            ("SERVICE_TOKEN=synthetic-token", "synthetic-token"),
+            ('OPENAI_API_KEY="synthetic key value"', "synthetic key value"),
+            ("CLIENT_SECRET=synthetic-secret", "synthetic-secret"),
+            ("PASSWORD=synthetic-password", "synthetic-password"),
+            ("Bearer synthetic-bearer", "synthetic-bearer"),
+            ("sk-proj-abcdefghijk", "sk-proj-abcdefghijk"),
+            ('{"password": "escaped \\"quote\\" secret"}', "secret"),
+        ):
+            with self.subTest(credential=credential):
+                result = ns.safe_detail(f"task failed: {credential} end")
+                self.assertNotIn(value, result)
+                self.assertIn("[redacted]", result)
+                self.assertTrue(result.endswith(" end"))
+
+    def test_ordinary_error_text_is_left_alone(self):
+        text = "not sent: SessionError: SessionService CreateSession failed (grpc 9): Agent does not have a ready prepared revision"
+        self.assertEqual(ns.safe_detail(text), text)
+
+    def test_the_error_class_and_a2a_reason_are_kept(self):
+        self.assertEqual(
+            ns.describe_error(
+                A2AError(-32602, "invalid params", reason="INVALID_PARAMS")
+            ),
+            "A2AError (INVALID_PARAMS): invalid params",
+        )
+        self.assertEqual(ns.describe_error(A2AError(-32603, "boom")), "A2AError: boom")
+        self.assertEqual(
+            ns.describe_error(Unreachable("no route")), "Unreachable: no route"
+        )
 
 
 class NextAgentTests(unittest.TestCase):
