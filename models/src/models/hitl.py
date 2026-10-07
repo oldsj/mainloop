@@ -189,8 +189,40 @@ class VerifiedAssociation(Snapshot):
     evidence_reference: Identifier
 
 
+class TemplateMergeConfiguration(Snapshot):
+    """One operator-reviewed protected mapping for a named AgentTemplate/provider."""
+
+    template_name: Identifier
+    provider: Literal["claude", "codex"]
+    compiled_alias: Identifier
+    endpoint: Identifier
+    tool: Literal["merge_pull_request_with_approval"]
+    require_approval: Literal[True]
+    operation: Literal["mainloop.merge_pull_request_with_approval.v1"] = MERGE_OPERATION
+
+    def public_name(self) -> str:
+        if self.provider == "claude":
+            return f"mcp__{self.compiled_alias}__{self.tool}"
+        return f"{self.compiled_alias}.{self.tool}"
+
+    def evidence(self) -> "TemplateMappingEvidence":
+        return TemplateMappingEvidence(
+            template_name=self.template_name,
+            provider=self.provider,
+            config_digest=normalized_hash(self.model_dump(mode="json")),
+        )
+
+
+class TemplateMappingEvidence(Snapshot):
+    """Server-computed reference included in an approval proposal snapshot."""
+
+    template_name: Identifier
+    provider: Literal["claude", "codex"]
+    config_digest: Digest
+
+
 class TrustedToolMapping(Snapshot):
-    """One entry from a verified immutable prepared-revision configuration snapshot."""
+    """Retained decoder for immutable receipts written before template mappings."""
 
     provider: Literal["claude", "codex"]
     prepared_revision: Identifier
@@ -208,6 +240,8 @@ class TrustedToolMapping(Snapshot):
 
 
 class VerifiedLeafConfiguration(Snapshot):
+    """Retained decoder for immutable per-session receipts; never accepted as config."""
+
     owner_id: Identifier
     binding_id: Identifier
     runtime_session_id: Identifier
@@ -237,8 +271,9 @@ class CallSnapshot(Snapshot):
     tool_name: Identifier | None = None
     arguments_hash: Digest
     approved: bool | None = None
-    configuration: VerifiedLeafConfiguration | None = None
-    mapping: TrustedToolMapping | None = None
+    configuration: TemplateMergeConfiguration | VerifiedLeafConfiguration | None = None
+    mapping: TemplateMergeConfiguration | TrustedToolMapping | None = None
+    mapping_evidence: TemplateMappingEvidence | None = None
     merge_key: MergeReceiptKey | None = None
 
 

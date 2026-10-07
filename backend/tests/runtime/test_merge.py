@@ -19,7 +19,7 @@ from mainloop.runtime.agent_tools import AgentService
 from mainloop.runtime.delegation import PgStore
 from mainloop.runtime.hitl_observer import HITLObserver
 from mainloop.runtime.policy import PolicyError
-from mainloop.services import github_merge, merge
+from mainloop.services import github_merge, merge, merge_authorization
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_repo import parse_github_repo
 from tests.runtime.test_context_model import KINDS, FakeStore
@@ -675,6 +675,36 @@ class MergeFixture(PostgresTestCase):
             "request_id": "prepare-1",
         }
         self.fake = GitHub()
+        self.gateway = Gateway()
+        self.gateway.add(f"runtime-{self.sid}")
+        self.hitl_service = HITLObserver(
+            self.gateway,
+            gateway=f"https://gateway/{self.user}",
+            owner=self.user,
+            creator="gateway-owner",
+        )
+        patcher = patch.object(
+            merge_authorization, "observer", return_value=self.hitl_service
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        configurations = [
+            {
+                "template_name": "merge-template",
+                "provider": provider,
+                "compiled_alias": "mainloop-merge-approval",
+                "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
+                "tool": "merge_pull_request_with_approval",
+                "require_approval": True,
+                "operation": "mainloop.merge_pull_request_with_approval.v1",
+            }
+            for provider in ("claude", "codex")
+        ]
+        patcher = patch.dict(
+            os.environ, MAINLOOP_MERGE_CONFIGURATIONS=json.dumps(configurations)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         cls = github_merge.GitHubMergeClient
         for p in (
             patch.dict(os.environ, MAINLOOP_MERGE_TOOLS_ENABLED="true"),
@@ -702,7 +732,7 @@ class MergeFixture(PostgresTestCase):
         await self.pool.execute(
             "UPDATE native_bindings SET kind=$2 WHERE session_id=$1", self.sid, provider
         )
-        gateway = Gateway()
+        gateway = self.gateway
         name = tool or (
             "mcp__mainloop-merge-approval__merge_pull_request_with_approval"
             if provider == "claude"
@@ -732,23 +762,13 @@ class MergeFixture(PostgresTestCase):
             creator="gateway-owner",
         )
         config = {
-            "owner_id": self.user,
-            "binding_id": self.sid,
-            "runtime_session_id": session.id,
+            "template_name": "merge-template",
             "provider": provider,
-            "prepared_revision": session.prepared_revision,
-            "evidence_reference": "fixture://verified-config",
-            "mappings": [
-                {
-                    "provider": provider,
-                    "prepared_revision": session.prepared_revision,
-                    "compiled_alias": "mainloop-merge-approval",
-                    "remote_server_id": "kagent/mainloop-merge-approval",
-                    "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
-                    "tool": "merge_pull_request_with_approval",
-                    "require_approval": True,
-                }
-            ],
+            "compiled_alias": "mainloop-merge-approval",
+            "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
+            "tool": "merge_pull_request_with_approval",
+            "require_approval": True,
+            "operation": "mainloop.merge_pull_request_with_approval.v1",
         }
         patcher = patch.dict(
             os.environ, MAINLOOP_MERGE_CONFIGURATIONS=json.dumps([config])
@@ -1027,6 +1047,9 @@ class MergeTests(MergeFixture):
 
     async def test_codex_exact_receipt_and_wrong_invocation_denied(self):
         self.fake.files[0]["filename"] = "k8s/protected.yaml"
+        await self.pool.execute(
+            "UPDATE native_bindings SET kind='codex' WHERE session_id=$1", self.sid
+        )
         p = await self.prepare()
         observer, projection, _ = await self.pause(p, provider="codex")
         await self.decide(observer, projection)
@@ -1039,10 +1062,47 @@ class MergeTests(MergeFixture):
         observer, projection, _ = await self.pause(
             p, tool="mcp__other__merge_pull_request_with_approval"
         )
-        await self.decide(observer, projection, reviewed_context={})
+        with self.assertRaisesRegex(ValueError, "context is unavailable"):
+            await self.decide(observer, projection, reviewed_context={})
         with self.assertRaises(PolicyError):
             await self.execute(p, approved=True)
         self.assertEqual(len(self.fake.puts), 0)
+
+    async def test_mapping_changed_while_card_open_blocks_approval_but_allows_rejection(
+        self,
+    ):
+        self.fake.files[0]["filename"] = "k8s/protected.yaml"
+        p = await self.prepare()
+        observer, projection, _ = await self.pause(p)
+        changed = {
+            "template_name": "merge-template",
+            "provider": "claude",
+            "compiled_alias": "mainloop-merge-approval",
+            "endpoint": "http://replacement.mainloop.svc/mcp/merge-approval",
+            "tool": "merge_pull_request_with_approval",
+            "require_approval": True,
+            "operation": "mainloop.merge_pull_request_with_approval.v1",
+        }
+        with patch.dict(
+            os.environ, MAINLOOP_MERGE_CONFIGURATIONS=json.dumps([changed])
+        ):
+            async with db.connection() as conn:
+                current = await hitl_continuation.view(
+                    conn, projection, service=observer
+                )
+            self.assertTrue(current["merge_enrichment"][0]["mapping_unavailable"])
+            with self.assertRaisesRegex(ValueError, "changed or is unavailable"):
+                await self.decide(observer, projection)
+            rejected = await self.decide(
+                observer, projection, approved=False, reviewed_context={}
+            )
+            self.assertEqual(rejected["transport_state"], "accepted")
+        self.assertTrue(
+            await self.pool.fetchval(
+                "SELECT 1 FROM native_hitl_response_members m JOIN merge_proposals p ON p.id=m.call_snapshot->'merge_key'->>'proposal_id' WHERE p.id=$1 AND m.call_snapshot->>'approved'='false'",
+                p["proposal_id"],
+            )
+        )
 
     async def test_rejection_bars_auto_and_new_request_ids(self):
         p = await self.prepare()
@@ -1189,7 +1249,8 @@ class MergeTests(MergeFixture):
             for task in gateway.tasks.values():
                 task.status.message.metadata["merge_approved"] = True
                 task.status.message.metadata["prepared_revision"] = "forged"
-            await self.decide(observer, projection, reviewed_context={})
+            with self.assertRaisesRegex(ValueError, "context is unavailable"):
+                await self.decide(observer, projection, reviewed_context={})
         self.assertIsNone(
             await self.pool.fetchval(
                 "SELECT call_snapshot->>'merge_key' FROM native_hitl_response_members WHERE owner_id=$1",

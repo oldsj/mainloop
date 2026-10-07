@@ -644,9 +644,13 @@ async def hitl_presentation(conn, result):
             "summary_digest": summary_row["summary_digest"] if summary_row else None,
             "availability": availability,
             "freshness_reason": (
-                "The proposal is no longer current. Refresh and prepare a new proposal to approve."
-                if stale
-                else unavailable_reason
+                entry.get("freshness_reason")
+                if isinstance(entry.get("freshness_reason"), str)
+                else (
+                    "The proposal is no longer current. Refresh and prepare a new proposal to approve."
+                    if stale
+                    else unavailable_reason
+                )
             ),
             "details_url": (
                 f"/hitl/{quote(result['request']['id'], safe='')}/merge/"

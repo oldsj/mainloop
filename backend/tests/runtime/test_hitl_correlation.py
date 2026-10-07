@@ -19,11 +19,10 @@ from models.hitl import (
     HITLMessageMetadata,
     NestedHITLRequest,
     TaskIdentity,
+    TemplateMergeConfiguration,
     ToolApprovalRequest,
     ToolApprovalResponse,
-    TrustedToolMapping,
     VerifiedAssociation,
-    VerifiedLeafConfiguration,
     normalized_hash,
 )
 from models.merge_policy import (
@@ -45,23 +44,14 @@ def task(session="leaf", task_id="task"):
 
 
 def configuration(provider="claude", binding="binding", session="leaf"):
-    mapping = TrustedToolMapping(
+    del binding, session
+    return TemplateMergeConfiguration(
+        template_name="claude-workspace-template",
         provider=provider,
-        prepared_revision="pinned-revision",
         compiled_alias="mainloop-merge-approval",
-        remote_server_id="namespace/protected",
         endpoint="http://mainloop-mcp/merge-approval",
         tool="merge_pull_request_with_approval",
         require_approval=True,
-    )
-    return VerifiedLeafConfiguration(
-        owner_id="owner",
-        binding_id=binding,
-        runtime_session_id=session,
-        provider=provider,
-        prepared_revision="pinned-revision",
-        evidence_reference="fixture://verified-config",
-        mappings=(mapping,),
     )
 
 
@@ -72,7 +62,7 @@ def request(name=None, request_id="invoke-1"):
             {
                 "id": "pending-1",
                 "call_id": "native-call",
-                "name": name or configuration().mappings[0].public_name(),
+                "name": name or configuration().public_name(),
                 "args": {"proposal_id": "proposal-1", "request_id": request_id},
             }
         ],
@@ -137,6 +127,7 @@ def receipt(
             if nested
             else ()
         )
+    selected_config = config if config is not None else configuration()
     return build_decision_receipt(
         action_id=action,
         owner_id="owner",
@@ -147,7 +138,8 @@ def receipt(
         leaf_request=req,
         leaf_binding_id="binding",
         response=response(approved),
-        configuration=config or configuration(),
+        configuration=selected_config,
+        mapping_evidence=(selected_config.evidence() if selected_config else None),
         associations=associations,
         validate_proposal=lambda key, approved: None,
     )
@@ -157,42 +149,32 @@ class CorrelationTests(unittest.TestCase):
     def test_exact_provider_names_and_unknown_mapping(self):
         for provider in ("claude", "codex"):
             config = configuration(provider)
-            mapping = config.mappings[0]
-            result = receipt(req=request(mapping.public_name()), config=config)
-            self.assertEqual(result.calls[0].mapping, mapping)
+            result = receipt(req=request(config.public_name()), config=config)
+            self.assertEqual(result.calls[0].mapping, config)
             validate_receipt(result)
             for name in (
                 "merge_pull_request_with_approval",
                 "other.merge_pull_request_with_approval",
                 "mcp__other__merge_pull_request_with_approval",
-                mapping.public_name() + "extra",
-                mapping.public_name().replace(
+                config.public_name() + "extra",
+                config.public_name().replace(
                     "merge_pull_request_with_approval", "different_tool"
                 ),
             ):
                 self.assertIsNone(
                     receipt(req=request(name), config=config).calls[0].merge_key
                 )
-            self.assertIsNone(canonical_operation(mapping.public_name(), None))
-            unknown = config.model_copy(update={"prepared_revision": "unknown"})
-            self.assertIsNone(
-                receipt(req=request(mapping.public_name()), config=unknown)
-                .calls[0]
-                .merge_key
+            self.assertIsNone(canonical_operation(config.public_name(), None))
+            other_provider = configuration(
+                "codex" if provider == "claude" else "claude"
             )
-            collision = config.model_copy(
-                update={
-                    "mappings": (
-                        mapping,
-                        mapping.model_copy(update={"remote_server_id": "other"}),
-                    )
-                }
-            )
-            self.assertIsNone(canonical_operation(mapping.public_name(), collision))
+            self.assertIsNone(canonical_operation(config.public_name(), other_provider))
+            changed_alias = config.model_copy(update={"compiled_alias": "other"})
+            self.assertIsNone(canonical_operation(config.public_name(), changed_alias))
 
     def test_hint_and_metadata_cannot_mint_consent(self):
         req = request("mcp__other__merge_pull_request_with_approval")
-        req.hint = configuration().mappings[0].public_name()
+        req.hint = configuration().public_name()
         req.__pydantic_extra__["canonical_operation"] = (
             "mainloop.merge_pull_request_with_approval.v1"
         )
@@ -227,13 +209,46 @@ class CorrelationTests(unittest.TestCase):
         self.assertEqual(first.calls[0].call_id, second.calls[0].call_id)
         self.assertNotEqual(first.calls[0].leaf.key(), second.calls[0].leaf.key())
 
-    def test_wrong_binding_or_runtime_configuration_rejected(self):
-        for config in (
-            configuration(binding="sibling"),
-            configuration(session="replacement"),
-        ):
-            with self.assertRaisesRegex(ValueError, "does not belong"):
-                receipt(config=config)
+    def test_configuration_contains_no_session_or_revision_identity(self):
+        fields = set(type(configuration()).model_fields)
+        self.assertEqual(
+            fields,
+            {
+                "template_name",
+                "provider",
+                "compiled_alias",
+                "endpoint",
+                "tool",
+                "require_approval",
+                "operation",
+            },
+        )
+
+    def test_legacy_immutable_receipt_shape_remains_readable(self):
+        saved = json.loads(receipt().model_dump_json())
+        legacy_mapping = {
+            "provider": "claude",
+            "prepared_revision": "pinned-revision",
+            "compiled_alias": "mainloop-merge-approval",
+            "remote_server_id": "namespace/protected",
+            "endpoint": "http://mainloop-mcp/merge-approval",
+            "tool": "merge_pull_request_with_approval",
+            "require_approval": True,
+            "operation": "mainloop.merge_pull_request_with_approval.v1",
+        }
+        saved["calls"][0]["configuration"] = {
+            "owner_id": "owner",
+            "binding_id": "binding",
+            "runtime_session_id": "leaf",
+            "provider": "claude",
+            "prepared_revision": "pinned-revision",
+            "evidence_reference": "fixture://verified-config",
+            "mappings": [legacy_mapping],
+        }
+        saved["calls"][0]["mapping"] = legacy_mapping
+        saved["calls"][0]["mapping_evidence"] = None
+        old_receipt = type(receipt()).model_validate_json(json.dumps(saved))
+        validate_receipt(old_receipt)
 
     def test_arguments_and_response_completeness(self):
         req = request()
@@ -369,6 +384,7 @@ class CorrelationTests(unittest.TestCase):
                 leaf_binding_id="binding",
                 response=invalid,
                 configuration=configuration(),
+                mapping_evidence=configuration().evidence(),
                 validate_proposal=lambda key, approved: None,
             )
         with self.assertRaises(ValidationError):

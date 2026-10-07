@@ -79,23 +79,13 @@ class MergeAcceptanceTests(support.MergeFixture):
         self.assertEqual(session.state, RuntimeState.SUSPENDED)
         self.assertEqual(task.status.state, "input-required")
         config = {
-            "owner_id": self.user,
-            "binding_id": self.sid,
-            "runtime_session_id": session.id,
+            "template_name": "merge-template",
             "provider": provider,
-            "prepared_revision": session.prepared_revision,
-            "evidence_reference": "fixture://operator-config",
-            "mappings": [
-                {
-                    "provider": provider,
-                    "prepared_revision": session.prepared_revision,
-                    "compiled_alias": "mainloop-merge-approval",
-                    "remote_server_id": "kagent/mainloop-merge-approval",
-                    "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
-                    "tool": "merge_pull_request_with_approval",
-                    "require_approval": True,
-                }
-            ],
+            "compiled_alias": "mainloop-merge-approval",
+            "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
+            "tool": "merge_pull_request_with_approval",
+            "require_approval": True,
+            "operation": "mainloop.merge_pull_request_with_approval.v1",
         }
         p = patch.dict(os.environ, MAINLOOP_MERGE_CONFIGURATIONS=json.dumps([config]))
         p.start()
@@ -204,6 +194,11 @@ class MergeAcceptanceTests(support.MergeFixture):
         # unused application clock. Preparation still uses the real service.
         await self.pool.execute(
             "ALTER TABLE merge_proposals ALTER COLUMN created_at SET DEFAULT (now() - interval '16 hours')"
+        )
+        await self.pool.execute(
+            "UPDATE native_bindings SET kind=$2 WHERE session_id=$1",
+            self.sid,
+            provider,
         )
         try:
             p = await self.prepare()
@@ -346,7 +341,8 @@ class MergeAcceptanceTests(support.MergeFixture):
             unavailable = (
                 await self.http(gateway, "GET", f"/hitl/{projection.id}")
             ).json()
-        self.assertIsNone(unavailable["merge"])
+        self.assertEqual(unavailable["merge"][0]["availability"], "stale")
+        self.assertIn("template mapping", unavailable["merge"][0]["freshness_reason"])
         self.assertNotIn("merge_enrichment", unavailable)
         if provider == "codex" and not nested:
             if target := os.environ.get("MERGE_UI_FIXTURE_PATH"):
@@ -623,6 +619,9 @@ class MergeAcceptanceTests(support.MergeFixture):
 
     async def test_uncertain_merge_after_owner_approval_never_replays_put(self):
         self.fake.files[0]["filename"] = "k8s/app.yaml"
+        await self.pool.execute(
+            "UPDATE native_bindings SET kind='codex' WHERE session_id=$1", self.sid
+        )
         p = await self.prepare()
         gateway, projection = await self.inventory(p, "codex")
         await self.assert_receipt(await self.answer(gateway, projection), projection, p)

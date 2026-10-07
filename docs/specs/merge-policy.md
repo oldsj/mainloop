@@ -93,21 +93,42 @@ cannot erase consent or uncertainty. Transport state is separate (`recorded`, `s
 
 ## Frozen merge receipt contract
 
-`canonical_operation(public_name: str, configuration: VerifiedLeafConfiguration | None)
--> TrustedToolMapping | None` performs exact matching against one verified prepared-revision
-snapshot. Configuration includes owner, binding, runtime, provider, revision and evidence
-reference. A mapping includes compiled alias, RemoteMCPServer identity, endpoint, selected
-`merge_pull_request_with_approval` tool, `require_approval=True`, and the canonical operation
-`mainloop.merge_pull_request_with_approval.v1`. Unknown revision, alias, or ambiguous mapping
-returns no merge authority. The merge service consumes an operator-only pinned configuration allowlist; no live configuration snapshot importer is implemented.
+`MAINLOOP_MERGE_CONFIGURATIONS` is a bounded operator-owned JSON array keyed by
+`template_name` and `provider`. Each entry contains the configured compiled alias, endpoint,
+the `merge_pull_request_with_approval` tool, `require_approval: true`, and canonical operation
+`mainloop.merge_pull_request_with_approval.v1`. It contains no Mainloop binding, kagent Session,
+or prepared-revision IDs. The base ConfigMap keeps the merge gate false and this array empty.
+
+When resolving a pending owner decision, Mainloop reads the bound kagent Session through its
+trusted client, verifies its configured creator, Session identity, Agent reference, and live
+Mainloop binding, then reads that Agent and uses only its named `templateRef`. Inline-template
+Agents and unknown or ambiguous `(template, provider)` entries receive no merge authority.
+`canonical_operation(public_name, configuration)` requires the exact provider-qualified public
+tool name derived from the configured alias, along with the configured endpoint, tool, approval
+flag, and canonical operation. Claude uses `mcp__<alias>__merge_pull_request_with_approval`;
+Codex uses `<alias>.merge_pull_request_with_approval`.
+
+Each proposal presentation snapshot and summary digest includes a server-computed mapping
+reference containing template name, provider, and a digest of the matched config entry. Mainloop
+re-reads the Session, Agent, and config when the owner responds. A changed or missing mapping
+reference makes positive approval unavailable; rejection remains available. Pending requests
+using the retired per-session config are not migrated and must be reissued. Existing immutable
+receipts remain readable for reconciliation.
+
+This simple mapping does not pin AgentTemplate contents or RemoteMCPServer identity. A reviewed
+template edit can point the configured alias at a different server without changing this
+reference. GitOps review governs template contents; the protected server's route filtering and
+the recorded-consent gate still apply. This is a residual risk of the simple variant.
 
 For the verified alias `mainloop-merge-approval`, the only valid public names are:
 
 - Claude: `mcp__mainloop-merge-approval__merge_pull_request_with_approval`
 - Codex: `mainloop-merge-approval.merge_pull_request_with_approval`
 
-Other aliases require explicit pinned configuration entries. Bare names, suffix matches,
-another server's same tool, and other tools with identical proposal arguments remain generic.
+Other aliases require explicit template/provider entries. Bare names, suffix matches, another
+server's same tool, and other tools with identical proposal arguments remain generic. A suffix
+may show an unavailable merge notice and block positive response when mapping evidence is
+missing, but it never establishes the canonical operation.
 The approved merge arguments contain exactly `proposal_id` and `request_id`. Hashing uses
 UTF-8 JSON, sorted keys, compact separators, unescaped Unicode, no NaN, then SHA-256.
 
@@ -208,10 +229,11 @@ A status-message-ID refresh alone does not invalidate an already-recorded decisi
 still requires the exact original task/context, pending payload hash and verified leaf keys,
 and never rewrites the receipt's original status snapshot or destination.
 
-Observed tool names alone mint **no merge authorization**. The disabled merge service now wires the exact operator-pinned configuration and proposal validation into this route. Unknown prepared
-revisions can still support generic questions/decisions; the separate merge handler refuses execution without the frozen exact receipt/configuration contract and proposal gates. Production
-nested evidence import, pinned configuration import, provider restoration/retention, owner-route
-isolation, and same-turn provider capabilities remain enablement prerequisites. These are fake
+Observed tool names alone mint **no merge authorization**. The merge service resolves the
+template/provider entry using trusted read-only Session and Agent lookups, then records its
+mapping reference with positive consent. The separate merge handler still requires the exact
+receipt and proposal gates. Production nested evidence import, provider restoration/retention,
+owner-route isolation, and same-turn provider capabilities remain enablement prerequisites. These are fake
 transport/PostgreSQL proofs, not deployed Actor restoration. Shared UI controls are described in [inbox](inbox.md) and [chat](chat.md#native-structured-input).
 
 ## Shared UI and policy controls

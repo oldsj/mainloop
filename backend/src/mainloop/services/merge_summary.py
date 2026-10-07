@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 
+from models.hitl import TemplateMappingEvidence
 from models.merge_policy import matched_protected_globs
 
 MAX_DESCRIPTION_LENGTH = 16 * 1024
@@ -80,6 +81,16 @@ def _ci_summary(ci):
 
 def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
     """Return the display snapshot and its digest from proposal-captured facts."""
+    mapping_evidence = facts.get("mapping_evidence")
+    mapping_required = facts.get("route") == "approval"
+    mapping_valid = False
+    if isinstance(mapping_evidence, dict):
+        try:
+            mapping_evidence = TemplateMappingEvidence.model_validate(mapping_evidence)
+            mapping_evidence = mapping_evidence.model_dump(mode="json")
+            mapping_valid = True
+        except ValueError:
+            mapping_evidence = None
     title = facts.get("title")
     description = facts.get("description")
     files = facts.get("files")
@@ -127,6 +138,8 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         missing.append("Complete changed-file details are unavailable")
     if ci is None or not ci["complete"]:
         missing.append("Complete recorded CI evidence is unavailable")
+    if mapping_required and not mapping_valid:
+        missing.append("Reviewed template mapping evidence is unavailable")
 
     file_rows = files if isinstance(files, list) else []
     protected_paths = facts.get("protected_matches")
@@ -196,6 +209,7 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         "base": facts.get("base"),
         "base_sha": facts.get("base_sha"),
         "ci": ci,
+        "mapping_evidence": mapping_evidence,
         "availability": "unavailable" if missing else "ready",
         "unavailable_reasons": missing,
     }

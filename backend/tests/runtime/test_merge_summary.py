@@ -134,6 +134,41 @@ class MergeSummaryTests(unittest.TestCase):
                 facts(), proposal_id, "0" * 64, presentation, digest
             )
 
+    def test_approval_snapshot_binds_template_mapping_evidence(self):
+        proposal_id = "proposal-17"
+        proposal_facts = facts()
+        proposal_facts["route"] = "approval"
+        proposal_facts["mapping_evidence"] = {
+            "template_name": "claude-workspace",
+            "provider": "claude",
+            "config_digest": "c" * 64,
+        }
+        presentation, digest = build_summary(proposal_facts, proposal_id)
+        self.assertEqual(
+            presentation["mapping_evidence"], proposal_facts["mapping_evidence"]
+        )
+        changed = {
+            **proposal_facts,
+            "mapping_evidence": {
+                **proposal_facts["mapping_evidence"],
+                "config_digest": "d" * 64,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "changed or is unavailable"):
+            validate_reviewed_context(
+                changed, proposal_id, digest, presentation, digest
+            )
+
+    def test_approval_snapshot_without_mapping_evidence_is_unavailable(self):
+        proposal_facts = facts()
+        proposal_facts["route"] = "approval"
+        presentation, _ = build_summary(proposal_facts, "proposal-17")
+        self.assertEqual(presentation["availability"], "unavailable")
+        self.assertIn(
+            "Reviewed template mapping evidence is unavailable",
+            presentation["unavailable_reasons"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

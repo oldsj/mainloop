@@ -40,7 +40,11 @@ def decode(value):
 
 
 def pinned(facts):
-    return {k: v for k, v in facts.items() if k not in ("ci", "mergeable")}
+    return {
+        k: v
+        for k, v in facts.items()
+        if k not in ("ci", "mergeable", "mapping_evidence")
+    }
 
 
 async def authority(conn, binding, project_id, branch=None):
@@ -175,6 +179,21 @@ async def prepare(binding, arguments):
             await validate_binding(conn, binding, p)
             return prepared_result(p)
     project, facts = await read_evidence(binding, body)
+    # Capture the template mapping reference when the immutable proposal is made.
+    # The same trusted reads run again when the owner responds. With an empty config,
+    # the resolver returns before contacting kagent.
+    from mainloop.services.merge_authorization import resolve_template_mapping
+
+    async with db.connection() as conn:
+        resolved = await resolve_template_mapping(
+            conn,
+            owner,
+            binding["session_id"],
+            project["kagent_session_id"],
+        )
+    facts["mapping_evidence"] = (
+        resolved[1].model_dump(mode="json") if resolved else None
+    )
     async with db.connection() as conn, conn.transaction():
         await lock_candidate(
             conn, owner, body.project_id, facts["repository_id"], body.pr_number

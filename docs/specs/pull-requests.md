@@ -103,12 +103,22 @@ Caller-supplied mode, base, URL, token or
 ### Proposals, decisions and retries
 
 The operator-only `MAINLOOP_MERGE_CONFIGURATIONS` environment value is a bounded JSON
-array of `models.hitl.VerifiedLeafConfiguration` snapshots. Each records owner,
-binding/runtime, provider, pinned prepared revision, evidence reference, and exact
-compiled alias/RemoteMCPServer/endpoint/tool/requireApproval mapping. The default is
-empty. Unknown, conflicting or mismatched entries leave generic HITL usable but
-mint no merge authority. This is a narrow allowlist input, not a live importer or
-proof of deployed configuration. No API accepts these records from an actor.
+array keyed by `template_name` and `provider`, with the compiled alias, endpoint,
+protected tool, `require_approval: true`, and canonical operation. It contains no
+binding, Session, or prepared-revision IDs; the default is empty. Before resolving
+authority, Mainloop reads the owned kagent Session and its Agent through the trusted
+client and uses the Agent's named `templateRef`. Inline templates, unknown or duplicate
+template/provider entries, public-name mismatches, and failed reads mint no authority.
+Claude and Codex public tool names are derived exactly from the configured alias.
+
+The proposal presentation snapshot and summary digest include a server-computed
+template/provider/config-entry digest. Mainloop compares it with fresh Session, Agent,
+and config reads when the owner responds; a changed or missing mapping blocks positive
+approval while leaving rejection available. Legacy per-session config is rejected and
+pending requests using it must be reissued. The template contents and RemoteMCPServer
+identity are not pinned by this simple mapping, so a reviewed template edit can redirect
+the alias. GitOps review, protected-route filtering, and the recorded-consent gate still
+apply. No API accepts these records from an actor.
 
 The existing HITL response route resolves these records and proposal facts before
 recording a merge decision. Recognized proposals and policy changes serialize with
@@ -244,7 +254,7 @@ stronger guarantees require GitHub enforcement. These fixtures are not live proo
 
 Before enabling either binding/tool or owner write routes, verify both repository
 revisions, exact-head remote CI, direct and gateway owner-route isolation, GitHub
-credential confinement, both route credentials, per-revision compiled mappings and
+credential confinement, both route credentials, per-template compiled mappings and
 retained native-session compatibility. Prove provider full-snapshot pause/restore and
 retention separately. Manifest binding/server additions are commented candidates,
 not rendered production resources. Deploy only through GitOps after those gates.
