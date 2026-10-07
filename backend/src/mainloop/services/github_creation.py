@@ -171,7 +171,7 @@ def _verify_repo(repo: Repo, full_name: str, body: OpenPullRequest) -> None:
             "ownership", "GitHub repository identity does not match project"
         )
     if body.branch == repo.default_branch:
-        raise PolicyError("branch", "the default branch cannot be a PR head")
+        raise PolicyError("branch", "default branch is not allowed")
 
 
 def _verify_head(branch: Branch, body: OpenPullRequest) -> None:

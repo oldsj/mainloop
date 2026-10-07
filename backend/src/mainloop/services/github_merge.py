@@ -1,11 +1,15 @@
 """Bounded, fixed-origin merge evidence. No remote writes during preparation."""
 
+import asyncio
 import hashlib
+import json
 from datetime import datetime, timezone
 from urllib.parse import quote
 
+import httpx
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import (
+    REQUEST_TIMEOUT_SECONDS,
     GitHubCreationClient,
     GitHubError,
     GitHubNotFound,
@@ -177,7 +181,47 @@ class Status(BaseModel):
     target_url: HttpUrl | None = None
 
 
+class GitHubPlanUnavailable(GitHubError):
+    """Branch rules are explicitly unavailable on the repository's GitHub plan."""
+
+
 class GitHubMergeClient(GitHubCreationClient):
+    async def branch_rules_request(self, path, **kwargs):
+        # Only these read endpoints may interpret the specific plan refusal.
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS), self.client.stream(
+                "GET", path, **kwargs
+            ) as response:
+                if response.status_code == 404:
+                    raise GitHubNotFound
+                if response.status_code not in (200, 403):
+                    raise GitHubError
+                data = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    data.extend(chunk)
+                    if len(data) > 2_000_000:
+                        raise GitHubError
+                payload = json.loads(data)
+                if response.status_code == 403:
+                    if (
+                        isinstance(payload, dict)
+                        and kwargs.get("params", {}).get("page", 1) == 1
+                        and payload.get("message")
+                        == "Upgrade to GitHub Pro or make this repository public to enable this feature."
+                    ):
+                        raise GitHubPlanUnavailable
+                    raise GitHubError
+                return payload
+        except (httpx.HTTPError, ValueError, TimeoutError):
+            raise GitHubError from None
+
+    async def _request(self, method, path, **kwargs):
+        if method == "GET" and (
+            path.endswith("/protection") or "/rules/branches/" in path
+        ):
+            return await self.branch_rules_request(path, **kwargs)
+        return await super()._request(method, path, **kwargs)
+
     async def repository(self, name):
         return MergeRepo.model_validate(await self._request("GET", f"/repos/{name}"))
 
@@ -226,7 +270,6 @@ class GitHubMergeClient(GitHubCreationClient):
             or pr.draft
             or pr.merged
             or pr.head.sha != sha
-            or pr.head.ref == repo.default_branch
             or pr.base.ref != repo.default_branch
             or any(
                 ref.repo.id != repo.id or ref.repo.full_name.lower() != name.lower()
@@ -237,6 +280,8 @@ class GitHubMergeClient(GitHubCreationClient):
                 "identity",
                 "PR must be an open same-repository feature head at the expected SHA and default base with squash enabled",
             )
+        if pr.head.ref == repo.default_branch:
+            raise PolicyError("branch", "default branch is not allowed")
         base = await self.branch(name, repo.default_branch)
         if base.name != pr.base.ref or base.commit.sha != pr.base.sha:
             raise PolicyError("base", "default branch moved; prepare again")
@@ -365,12 +410,16 @@ class GitHubMergeClient(GitHubCreationClient):
             old = statuses.get(status.context)
             if old is None or (status.created_at, status.id) > (old.created_at, old.id):
                 statuses[status.context] = status
+        unavailable = []
         # The protection endpoint returns 404 for ruleset-only/unprotected
         # branches. Other reads, including active rules, must still succeed.
         try:
             protection = await self._request(
                 "GET", f"{root}/branches/{quote(base, safe='')}/protection"
             )
+        except GitHubPlanUnavailable:
+            unavailable.append("protection")
+            protection = {"required_status_checks": None}
         except GitHubNotFound:
             protection = {"required_status_checks": None}
         try:
@@ -402,7 +451,11 @@ class GitHubMergeClient(GitHubCreationClient):
                 raise PolicyError("rules", "unsupported classic strict status checks")
             required.extend((c.context, c.app_id) for c in classic.checks)
             required.extend((c, None) for c in classic.contexts)
-        rules = await self.pages(f"{root}/rules/branches/{quote(base, safe='')}")
+        try:
+            rules = await self.pages(f"{root}/rules/branches/{quote(base, safe='')}")
+        except GitHubPlanUnavailable:
+            unavailable.append("rules")
+            rules = []
         for raw_rule in rules:
             rule = Rule.model_validate(raw_rule)
             if rule.type == "required_status_checks" and rule.parameters is not None:
@@ -488,6 +541,7 @@ class GitHubMergeClient(GitHubCreationClient):
             "checks": [r.model_dump(mode="json") for _, r in latest.values()],
             "statuses": [s.model_dump(mode="json") for s in statuses.values()],
             "required": required,
+            "github_rules_unavailable_on_plan": unavailable,
         }
 
     async def merge(self, name, number, sha):

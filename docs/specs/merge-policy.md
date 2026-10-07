@@ -258,3 +258,11 @@ limits, and API contract.
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
+
+## GitHub plan availability
+
+Mainloop merge policy does not require GitHub paid branch protection or rulesets.
+Only the exact plan-unavailable 403 described in [Pull requests](pull-requests.md)
+is accepted as absence of rules from that endpoint and recorded in proposal CI evidence.
+Readable GitHub rules remain enforced. Mainloop policy, protected paths, complete green CI,
+head SHA pinning and approval requirements remain mandatory.

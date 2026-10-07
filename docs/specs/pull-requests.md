@@ -210,7 +210,13 @@ See [GitHub check-run API](https://docs.github.com/en/rest/checks/runs).
 Classic protection returning 404 is supported as no classic protection; ruleset-only
 and unprotected branches can proceed. This exception applies only to that endpoint:
 repository, branch, PR, CI and active branch-rule inventories must still succeed.
-Other protection errors fail closed. Since a 404 can also conceal missing access,
+An HTTP 403 with the exact GitHub message "Upgrade to GitHub Pro or make this
+repository public to enable this feature." on either branch-rule read is treated as
+no rules from that endpoint. The CI proposal evidence records the affected endpoints
+in `github_rules_unavailable_on_plan` (`protection` and/or `rules`), so summaries can
+identify plan limitations. Readable rules from the other endpoint still apply.
+Other protection and rules errors, including permission failures and malformed responses,
+fail closed. Since a 404 can also conceal missing access,
 operators must supply appropriate read permissions; GitHub remains the enforcement
 boundary at merge time.
 
@@ -258,3 +264,9 @@ credential confinement, both route credentials, per-template compiled mappings a
 retained native-session compatibility. Prove provider full-snapshot pause/restore and
 retention separately. Manifest binding/server additions are commented candidates,
 not rendered production resources. Deploy only through GitOps after those gates.
+
+Workspace branch mismatches report "branch does not match this workspace"; a mismatch
+with the stored project default branch reports "default branch is not allowed".
+These reasons are returned only after verifying the owned project and workspace scope;
+missing or unauthorized bindings retain the generic ownership refusal. Live GitHub default
+branch checks still reject a default PR head.

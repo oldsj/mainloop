@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_repo import InvalidGithubRepo, parse_github_repo
 
 
@@ -81,9 +82,6 @@ def repository_scope(
         stored_branch = authority.get("workspace_branch")
         if not stored_branch:
             raise ScopeUnavailable
-        if branch is not None and branch != stored_branch:
-            raise ScopeUnavailable
-
         if role == "agent":
             if (
                 not _feature_branch(stored_branch)
@@ -91,6 +89,11 @@ def repository_scope(
                 or not authority.get("kagent_session_id")
             ):
                 raise ScopeUnavailable
+        if branch is not None and branch != stored_branch:
+            if branch == authority.get("default_branch"):
+                raise PolicyError("branch", "default branch is not allowed")
+            raise PolicyError("branch", "branch does not match this workspace")
+
         return canonical.full_name
     except (KeyError, TypeError, InvalidGithubRepo):
         raise ScopeUnavailable from None
