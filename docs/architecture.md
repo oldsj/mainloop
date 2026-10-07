@@ -97,10 +97,20 @@ current task (`GetTask`, or the first event of `SubscribeToTask`) and replaces i
 with it. `KAGENT_SEND_NOT_ACCEPTED` is retried with the same `messageId`; any other uncertain
 outcome is resolved by finding the task that holds that `messageId`, never by sending again.
 
-Mainloop calls kagent as one fixed service identity, `KAGENT_USER_ID`, and kagent scopes Sessions
-to the identity that created them. A Session kagent reports as not found is treated as deleted and
-replaced by a new one on the next message. Changing `KAGENT_USER_ID` is therefore a migration:
-every existing kagent Session becomes not found and is replaced, losing its native context.
+Mainloop calls kagent as the fixed service principal `mainloop`. With
+`KAGENT_CONTROL_TOKEN_FILE` configured, the backend validates a bounded mounted Secret file
+at startup and rereads it for every lifecycle, discovery and A2A request/reconnect. It sends
+only a bearer Authorization header, and requires `KAGENT_USER_ID=mainloop` as expected
+principal configuration. Auth refusals are service configuration failures: they never mean
+a Session was deleted, and cannot cause replacement or turn resend. Unknown delivery still
+requires observation. With the token file unset, legacy insecure `x-user-id: KAGENT_USER_ID`
+behavior is preserved; changing that legacy identity loses access to existing Sessions.
+
+Server enforcement depends on enabling kagent's `service-token` mode and default-deny policy
+in deployment, with a trusted HTTPS control endpoint and actor exclusion. This enforcement
+is not yet deployed. The control bearer is backend-only, separate from provider authentication
+and per-binding MCP grants; see [credentials](specs/credentials.md). A genuine NOT_FOUND or
+deleted Session can still be replaced on the next message under the existing lifecycle rules.
 
 ## Development workspaces and previews
 

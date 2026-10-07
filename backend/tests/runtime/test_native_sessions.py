@@ -6,8 +6,11 @@ Fixture-backed. No database, network or live kagent.
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +25,7 @@ from mainloop.runtime.kagent_client import (
     OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
+    ServiceConfigurationError,
     SessionCredential,
     SessionError,
     SessionWorkspace,
@@ -29,7 +33,12 @@ from mainloop.runtime.kagent_client import (
     assistant_message_id,
 )
 from mainloop.sse import notify_session_message
-from tests.runtime.kagent_fake import CONTEXT_ID, TASK_ID, FakeKagent
+from tests.runtime.kagent_fake import (
+    CONTEXT_ID,
+    TASK_ID,
+    FakeKagent,
+    unauthorized_envelope,
+)
 
 from models import SessionStatus
 
@@ -935,6 +944,211 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
         self.assertIn("Unreachable", self.ledger.rows[mid]["detail"])
         self.assertEqual(self.fake.accepted_message_ids, [])
+
+    async def enable_control_token(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        token_file = Path(directory.name) / "token"
+        token_file.write_text("a" * 32)
+        headers = []
+
+        def handle(request):
+            headers.append(dict(request.headers))
+            return self.fake.handle(request)
+
+        http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), base_url="http://kagent.test"
+        )
+        self.addAsyncCleanup(http.aclose)
+        ns._client = KagentClient(
+            "http://kagent.test",
+            user_id="mainloop",
+            client=http,
+            control_token_file=str(token_file),
+        )
+        return token_file, headers
+
+    async def test_control_rotation_preserves_persisted_create_recovery(self):
+        token_file, headers = await self.enable_control_token()
+        self.as_role("main")
+        client = ns.get_client()
+        create = client.create_session
+
+        async def lost(*args, **kwargs):
+            await create(*args, **kwargs)
+            raise OutcomeUnknown("create response lost")
+
+        with patch.object(client, "create_session", lost):
+            with self.assertRaises(OutcomeUnknown):
+                await ns._ensure_kagent_session(self.ledger.binding)
+        request_id = self.ledger.binding["kagent_request_id"]
+        token_file.write_text("b" * 32)
+        session = await ns._ensure_kagent_session(self.ledger.binding)
+        self.assertEqual(session.id, CONTEXT_ID)
+        self.assertEqual(self.ledger.binding["kagent_request_id"], request_id)
+        creates = self.fake.session_calls("CreateSession")
+        self.assertEqual(len(creates), 2)
+        self.assertEqual(creates[0], creates[1])
+        self.assertEqual(headers[0]["authorization"], "Bearer " + "a" * 32)
+        self.assertEqual(headers[1]["authorization"], "Bearer " + "b" * 32)
+
+    async def test_control_auth_preserves_unknown_delivery_reconciliation(self):
+        await self.enable_control_token()
+        await self.test_lost_response_is_resolved_by_listing_tasks_for_the_message_id()
+
+    async def test_startup_auth_refusal_runs_followups_and_drains_queued_report(self):
+        token_file, headers = await self.enable_control_token()
+        client = ns.get_client()
+        original_handle = client._client._transport.handler
+
+        def handle(request):
+            if (
+                request.url.path.endswith("CreateSession")
+                and request.headers["authorization"] == "Bearer " + "a" * 32
+            ):
+                headers.append(dict(request.headers))
+                return httpx.Response(403)
+            return original_handle(request)
+
+        client._client._transport.handler = handle
+        after = ns._after
+        followups = []
+        first = queued = None
+
+        async def checked_after(session_id, reply):
+            self.assertFalse(ns._lock(session_id).locked())
+            self.assertNotIn(first, ns._streaming)
+            followups.append(session_id)
+            if len(followups) == 1:
+                self.assertEqual(self.ledger.rows[first]["state"], "failed")
+                self.assertEqual(self.ledger.rows[queued]["state"], "queued")
+                self.assertIsNone(self.ledger.binding["kagent_session_id"])
+                token_file.write_text("b" * 32)
+            await after(session_id, reply)
+
+        with patch.object(ns, "_after", checked_after):
+            first = await ns.submit_message(SESSION, "first")
+            queued = await ns.submit_message(SESSION, "report", source="report")
+            await self.settle()
+        self.assertGreaterEqual(len(followups), 2)
+        self.assertEqual(self.ledger.rows[first]["state"], "failed")
+        self.assertEqual(self.ledger.rows[queued]["state"], "completed")
+        await ns.sync(SESSION)
+        await self.settle()
+        self.assertEqual(self.sent_message_ids(), [queued])
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+        self.assertIsNone(self.ledger.binding.get("child_start_failure"))
+        self.assertEqual(headers[0]["authorization"], "Bearer " + "a" * 32)
+        self.assertTrue(
+            all(h["authorization"] == "Bearer " + "b" * 32 for h in headers[1:])
+        )
+
+    async def test_companion_auth_refusal_after_task_preserves_evidence(self):
+        self.as_role("child")
+        requests = []
+        secret = "a" * 32
+        envelope = unauthorized_envelope("remote echoed Bearer " + secret)
+
+        def handle(request):
+            requests.append(request)
+            if request.url.path.startswith("/agents/"):
+                body = json.loads(request.content)
+                if body["method"] == "SendStreamingMessage":
+                    task = {
+                        "id": TASK_ID,
+                        "contextId": CONTEXT_ID,
+                        "status": {"state": "TASK_STATE_WORKING"},
+                    }
+                    events = [
+                        {"jsonrpc": "2.0", "id": body["id"], "result": {"task": task}},
+                        envelope,
+                    ]
+                    return httpx.Response(
+                        200,
+                        headers={"content-type": "text/event-stream"},
+                        text="".join("data: " + json.dumps(e) + "\n\n" for e in events),
+                    )
+                return httpx.Response(200, json=envelope)
+            return self.fake.handle(request)
+
+        http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), base_url="http://kagent.test"
+        )
+        self.addAsyncCleanup(http.aclose)
+        ns._client = KagentClient("http://kagent.test", user_id="mainloop", client=http)
+        with self.assertLogs(ns.logger, level="INFO") as captured:
+            mid = await self.send(source="brief")
+        row = self.ledger.rows[mid].copy()
+        self.assertEqual(row["state"], "delivered")
+        self.assertEqual(row["task_id"], TASK_ID)
+        self.assertEqual(row["evidence_ref"], "a2a:task/" + TASK_ID)
+        self.assertNotIn(secret, " ".join(captured.output))
+        await ns.sync(SESSION)  # JSON-RPC refusal while observing the same task.
+        await self.settle()
+        self.assertEqual(self.ledger.rows[mid], row)
+        methods = [
+            json.loads(r.content)["method"]
+            for r in requests
+            if r.url.path.startswith("/agents/")
+        ]
+        self.assertEqual(methods, ["SendStreamingMessage", "GetTask"])
+        self.assertEqual(len(self.fake.session_calls("CreateSession")), 1)
+        self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        self.assertIsNone(self.ledger.binding.get("child_start_failure"))
+
+    async def test_control_refusal_never_replaces_deletes_or_resends(self):
+        for role in ("agent", "child"):
+            for stage in ("create", "observe", "ready", "send"):
+                with self.subTest(role=role, stage=stage):
+                    self.ledger = MemoryLedger()
+                    ns.ledger = self.ledger
+                    self.as_role(role)
+                    self.fake.requests.clear()
+                    if stage != "create":
+                        self.ledger.binding["kagent_session_id"] = CONTEXT_ID
+                        self.fake.sessions[CONTEXT_ID] = (
+                            RuntimeState.READY,
+                            RuntimeOperation.NONE,
+                        )
+                    method = {
+                        "create": "create_session",
+                        "observe": "get_session",
+                        "ready": "ensure_ready",
+                        "send": "_stream",
+                    }[stage]
+                    if stage == "send":
+
+                        async def refused(*args, **kwargs):
+                            raise ServiceConfigurationError(
+                                "kagent control service configuration failure"
+                            )
+                            yield
+
+                        replacement = refused
+                    else:
+                        replacement = AsyncMock(
+                            side_effect=ServiceConfigurationError(
+                                "kagent control service configuration failure"
+                            )
+                        )
+                    with patch.object(ns.get_client(), method, replacement):
+                        mid = await self.send()
+                        self.assertEqual(self.ledger.rows[mid]["state"], "failed")
+                        self.assertIn(
+                            "ServiceConfigurationError", self.ledger.rows[mid]["detail"]
+                        )
+                        await ns.sync(SESSION)
+                        await self.settle()
+                    self.assertIsNone(self.ledger.binding.get("child_start_failure"))
+                    self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+                    self.assertEqual(self.fake.session_calls("CreateSession"), [])
+                    self.assertEqual(self.fake.rpc_calls("SendStreamingMessage"), [])
+                    self.assertEqual(
+                        self.ledger.binding["kagent_session_id"],
+                        None if stage == "create" else CONTEXT_ID,
+                    )
 
     async def test_session_error_fails_before_anything_is_sent(self):
         failed = "00000000-0000-4000-8000-0000000000ff"

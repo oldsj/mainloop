@@ -34,6 +34,10 @@ from enum import IntEnum
 from typing import Any
 
 import httpx
+from mainloop.runtime.control_credentials import (
+    ControlCredentialError,
+    read_control_token,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
@@ -69,6 +73,10 @@ TASK_NOT_FOUND = "TASK_NOT_FOUND"
 
 class KagentError(Exception):
     """A kagent call failed with a definite outcome (the request was rejected or not made)."""
+
+
+class ServiceConfigurationError(KagentError):
+    """Control authentication/configuration refused the call; never replace or resend."""
 
 
 class Unreachable(KagentError):
@@ -122,7 +130,7 @@ class SessionError(KagentError):
         self.grpc_status = grpc_status
 
 
-def a2a_error_from_json(error: dict[str, Any]) -> A2AError:
+def a2a_error_from_json(error: dict[str, Any]) -> KagentError:
     """Classify a JSON-RPC error object by its ErrorInfo, never by the JSON-RPC code."""
     code = error.get("code") if isinstance(error.get("code"), int) else -32603
     message = str(error.get("message") or "")
@@ -139,6 +147,10 @@ def a2a_error_from_json(error: dict[str, Any]) -> A2AError:
             if isinstance(raw, dict):
                 metadata = {str(k): str(v) for k, v in raw.items()}
             break
+    if reason in ("UNAUTHENTICATED", "PERMISSION_DENIED", "UNAUTHORIZED"):
+        return ServiceConfigurationError(
+            "kagent control service configuration failure (A2A auth refusal)"
+        )
     cls: type[A2AError] = A2AError
     # kagent reports the rejection as an UNSUPPORTED_OPERATION whose own reason travels in
     # ``ErrorInfo.metadata.reason``; the top-level ``reason`` is the generic A2A one.
@@ -748,6 +760,7 @@ class KagentClient:
         base_url: str,
         *,
         user_id: str,
+        control_token_file: str | None = None,
         client: httpx.AsyncClient | None = None,
         request_timeout: float = 30.0,
         stream_timeout: float = 900.0,
@@ -755,6 +768,13 @@ class KagentClient:
         sleep: Sleep = asyncio.sleep,
         clock: Clock = time.monotonic,
     ):
+        self._control_token_file = control_token_file
+        if control_token_file is not None:
+            if user_id != "mainloop":
+                raise ServiceConfigurationError(
+                    "service-token mode requires KAGENT_USER_ID=mainloop"
+                )
+            self._control_token()
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(base_url=base_url)
         self._user_id = user_id
@@ -768,9 +788,26 @@ class KagentClient:
         if self._owns_client:
             await self._client.aclose()
 
+    def _control_token(self) -> str:
+        try:
+            return read_control_token(self._control_token_file)
+        except ControlCredentialError as exc:
+            raise ServiceConfigurationError(str(exc)) from None
+
+    @staticmethod
+    def _check_auth(response: httpx.Response) -> None:
+        if response.status_code in (401, 403):
+            raise ServiceConfigurationError(
+                f"kagent control service configuration failure (HTTP {response.status_code})"
+            )
+
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         return {
-            "x-user-id": self._user_id,
+            **(
+                {"Authorization": f"Bearer {self._control_token()}"}
+                if self._control_token_file is not None
+                else {"x-user-id": self._user_id}
+            ),
             "A2A-Extensions": HITL_EXTENSION,
             **(extra or {}),
         }
@@ -818,6 +855,7 @@ class KagentClient:
             raise OutcomeUnknown(
                 f"{label} {method} outcome unknown: {type(exc).__name__}"
             ) from exc
+        self._check_auth(response)
         if response.status_code >= 500:
             raise OutcomeUnknown(
                 f"{label} {method} outcome unknown (HTTP {response.status_code})"
@@ -831,6 +869,10 @@ class KagentClient:
         status = trailers.get("grpc-status", response.headers.get("grpc-status", "0"))
         # The companion can return Aborted after reserving a Session, when its
         # lifecycle workflow contends. It does not prove that nothing was admitted.
+        if status in ("7", "16"):
+            raise ServiceConfigurationError(
+                f"kagent control service configuration failure (grpc {status})"
+            )
         if status in ("4", "10", "13", "14"):
             raise OutcomeUnknown(f"{label} {method} outcome unknown (grpc {status})")
         if status != "0":
@@ -973,6 +1015,7 @@ class KagentClient:
 
     @staticmethod
     def _envelope(response: httpx.Response, method: str) -> dict[str, Any]:
+        KagentClient._check_auth(response)
         try:
             document = response.json()
         except ValueError:
@@ -1153,6 +1196,7 @@ class KagentClient:
                 f"A2A {method} outcome unknown: {type(exc).__name__}"
             ) from exc
         try:
+            self._check_auth(response)
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" not in content_type:
                 # A rejection arrives as a plain JSON-RPC body rather than an SSE error event.
