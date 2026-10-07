@@ -100,14 +100,18 @@ def proposal_tools(leaf_request, response, proposals, configuration):
         if isinstance(response, ToolApprovalResponse) and response.reviewed_context:
             raise ValueError("Reviewed context is not valid for this request")
         return {}
-    from mainloop.services.merge_authorization import canonical_operation
+    from mainloop.services.merge_authorization import (
+        canonical_operation,
+        possible_merge_tool,
+    )
 
     approvals = {approval.id: approval.approved for approval in response.approvals}
     matches = {}
     for tool in leaf_request.tools:
-        if not configuration:
-            continue
+        approved = approvals.get(tool.id) is True
         if canonical_operation(tool.name, configuration) is None:
+            if approved and possible_merge_tool(tool):
+                raise ValueError("Merge approval context is unavailable")
             continue
         proposal_id = tool.args.get("proposal_id")
         request_id = tool.args.get("request_id")
@@ -151,7 +155,7 @@ async def submit(owner, request_id, action_id, response, *, service=None):
                 c.leaf.key() for c in receipt.calls
             } != {leaf.key() for leaf in projection.leaves}:
                 raise store.HITLConflict("Action ID already has another decision")
-            return await view(conn, projection, receipt)
+            return await view(conn, projection, receipt, service=service)
         if projection.availability != "pending":
             raise Unavailable(projection.unavailable_reason or "Request is unavailable")
         if not projection.leaves:
@@ -189,8 +193,8 @@ async def submit(owner, request_id, action_id, response, *, service=None):
 
         try:
             async with asyncio.timeout(60):
-                configuration, proposals = await decision_inputs(
-                    conn, owner, leaf, leaf_request, binding, response
+                configuration, mapping_evidence, proposals = await decision_inputs(
+                    conn, owner, leaf, leaf_request, binding, response, service=service
                 )
         except PolicyError as exc:
             raise ValueError(exc.message) from None
@@ -224,7 +228,14 @@ async def submit(owner, request_id, action_id, response, *, service=None):
                         raise ValueError("Merge approval context is unavailable")
                     proposal, _ = proposals[key.proposal_id]
                     validate_reviewed_context(
-                        proposal["facts"],
+                        {
+                            **proposal["facts"],
+                            "mapping_evidence": (
+                                mapping_evidence.model_dump(mode="json")
+                                if mapping_evidence
+                                else None
+                            ),
+                        },
                         proposal["id"],
                         response.reviewed_context[tool_id],
                         proposal.get("presentation"),
@@ -234,6 +245,7 @@ async def submit(owner, request_id, action_id, response, *, service=None):
             receipt = build_decision_receipt(
                 **receipt_arguments,
                 configuration=configuration,
+                mapping_evidence=mapping_evidence,
                 validate_proposal=validate_context,
             )
             for key in sorted(leaf.key() for leaf in projection.leaves):
@@ -255,10 +267,10 @@ async def submit(owner, request_id, action_id, response, *, service=None):
             receipt = await store.record_response(conn, receipt)
     await dispatch(receipt, service=service)
     async with db.connection() as conn:
-        return await view(conn, projection, receipt)
+        return await view(conn, projection, receipt, service=service)
 
 
-async def view(conn, projection, receipt=None):
+async def view(conn, projection, receipt=None, *, service=None):
     if receipt is None:
         raw = await conn.fetchval(
             """SELECT r.snapshot FROM native_hitl_responses r
@@ -292,7 +304,7 @@ async def view(conn, projection, receipt=None):
     from mainloop.services.merge_authorization import enrichment
 
     return {
-        "merge_enrichment": await enrichment(conn, projection),
+        "merge_enrichment": await enrichment(conn, projection, service=service),
         "request": projection.model_dump(mode="json"),
         "response": receipt.model_dump(mode="json") if receipt else None,
         "transport_state": state,

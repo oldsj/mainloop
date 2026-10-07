@@ -16,14 +16,23 @@ from mainloop.runtime.kagent_client import (
     TaskNotFound,
     TaskProjection,
     Unreachable,
+    _field_bytes,
+    _field_str,
     assistant_message_id,
+    decode_agent_response,
     decode_fields,
     is_parked,
     is_terminal,
     normalise_state,
     parse_grpc_web,
 )
-from tests.runtime.kagent_fake import CONTEXT_ID, TASK_ID, FakeKagent, stream_chunks
+from tests.runtime.kagent_fake import (
+    CONTEXT_ID,
+    TASK_ID,
+    FakeKagent,
+    grpc_response,
+    stream_chunks,
+)
 
 AGENT = AgentRef("kagent", "claude-subscription")
 
@@ -231,6 +240,71 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(SessionError) as ctx:
             await client.get_session("00000000-0000-4000-8000-0000000000ff")
         self.assertEqual(ctx.exception.grpc_status, 5)
+
+    async def test_get_agent_reads_named_template_ref(self):
+        def field(number, value):
+            return _field_bytes(number, value)
+
+        def text(number, value):
+            return _field_str(number, value)
+
+        def struct_value(value):
+            return field(5, value)
+
+        def struct(items):
+            return b"".join(
+                field(1, text(1, key) + field(2, value)) for key, value in items
+            )
+
+        template_ref = struct([("name", text(3, "claude-workspace"))])
+        spec = struct([("templateRef", struct_value(template_ref))])
+        resource = struct([("spec", struct_value(spec))])
+        ref = text(1, "kagent") + text(2, "claude-subscription")
+        structured = (
+            text(1, "kagent.dev/v1alpha3") + text(2, "Agent") + field(3, resource)
+        )
+        agent = field(1, ref) + field(2, structured)
+
+        def handler(request):
+            self.assertTrue(
+                request.url.path.endswith("AgentService/GetAgent"),
+                request.url.path,
+            )
+            return grpc_response(field(1, agent))
+
+        client = KagentClient(
+            "http://k.test",
+            user_id="mainloop",
+            client=httpx.AsyncClient(
+                transport=httpx.MockTransport(handler), base_url="http://k.test"
+            ),
+        )
+        found = await client.get_agent(AGENT)
+        self.assertEqual(found.ref, AGENT)
+        self.assertEqual(found.template_name, "claude-workspace")
+        self.assertFalse(found.inline_template)
+
+    async def test_agent_lookup_rejects_inline_template(self):
+        def field(number, value):
+            return _field_bytes(number, value)
+
+        def text(number, value):
+            return _field_str(number, value)
+
+        def struct_value(value):
+            return field(5, value)
+
+        inline = b""
+        spec = field(1, text(1, "template") + field(2, struct_value(inline)))
+        resource = field(1, text(1, "spec") + field(2, struct_value(spec)))
+        ref = text(1, "kagent") + text(2, "claude-subscription")
+        structured = (
+            text(1, "kagent.dev/v1alpha3") + text(2, "Agent") + field(3, resource)
+        )
+        response = field(1, field(1, ref) + field(2, structured))
+        decoded = decode_agent_response(response)
+        self.assertTrue(decoded.inline_template)
+        self.assertIsNone(decoded.template_name)
 
     async def test_ambiguous_session_errors_are_not_definitive_rejections(self):
         from tests.runtime.kagent_fake import grpc_response

@@ -1,13 +1,13 @@
-"""Operator-pinned merge configuration and server-resolved proposal enrichment.
+"""Template-keyed merge mappings and server-resolved proposal enrichment."""
 
-No observed tool name, gateway metadata or agent argument imports configuration.
-The allowlist is an operator-supplied JSON array of VerifiedLeafConfiguration snapshots,
-including evidence references for each retained binding/runtime/prepared revision.
-"""
-
+import asyncio
+import json
+import logging
 import os
 
 from mainloop.runtime.hitl_correlation import canonical_operation
+from mainloop.runtime.hitl_observer import observer
+from mainloop.runtime.kagent_client import KagentError
 from mainloop.runtime.policy import PolicyError
 from mainloop.services import merge
 from pydantic import TypeAdapter, ValidationError
@@ -15,63 +15,153 @@ from pydantic import TypeAdapter, ValidationError
 from models.agent_tools import PreparePullRequestMerge
 from models.hitl import (
     MergeInvocation,
-    ObservedSession,
+    TemplateMappingEvidence,
+    TemplateMergeConfiguration,
     ToolApprovalRequest,
-    VerifiedLeafConfiguration,
 )
 
+logger = logging.getLogger(__name__)
+MAX_CONFIG_BYTES = 131072
+MAX_CONFIGURATIONS = 100
+MERGE_TOOL_SUFFIX = "merge_pull_request_with_approval"
 
-async def configuration(conn, owner, leaf, binding):
-    if not merge.enabled() or not binding:
-        return None
-    raw = os.environ.get("MAINLOOP_MERGE_CONFIGURATIONS", "[]")
-    if len(raw.encode()) > 131072:
+
+def parse_configurations(raw: str | None = None) -> list[TemplateMergeConfiguration]:
+    """Parse the bounded operator allowlist, explicitly rejecting the retired shape."""
+    raw = os.environ.get("MAINLOOP_MERGE_CONFIGURATIONS", "[]") if raw is None else raw
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_CONFIG_BYTES:
+        raise ValueError("MAINLOOP_MERGE_CONFIGURATIONS exceeds 128 KiB")
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ValueError("MAINLOOP_MERGE_CONFIGURATIONS must be a JSON array") from exc
+    if not isinstance(value, list):
+        raise ValueError("MAINLOOP_MERGE_CONFIGURATIONS must be a JSON array")
+    if any(
+        isinstance(item, dict)
+        and {"owner_id", "binding_id", "runtime_session_id", "prepared_revision"}
+        & item.keys()
+        for item in value
+    ):
+        raise ValueError(
+            "legacy per-session merge configuration is unsupported; use template_name and provider mappings"
+        )
+    if len(value) > MAX_CONFIGURATIONS:
+        raise ValueError("MAINLOOP_MERGE_CONFIGURATIONS exceeds 100 entries")
+    try:
+        return TypeAdapter(list[TemplateMergeConfiguration]).validate_python(value)
+    except ValidationError as exc:
+        raise ValueError(
+            "MAINLOOP_MERGE_CONFIGURATIONS contains an invalid template mapping"
+        ) from exc
+
+
+async def resolve_template_mapping(
+    conn,
+    owner: str,
+    binding_id: str | None,
+    runtime_session_id: str | None,
+    *,
+    leaf=None,
+    service=None,
+) -> tuple[TemplateMergeConfiguration, TemplateMappingEvidence] | None:
+    """Resolve a template mapping only from a live owned Session and its Agent."""
+    if not merge.enabled() or not owner or not binding_id or not runtime_session_id:
         return None
     try:
-        configs = TypeAdapter(list[VerifiedLeafConfiguration]).validate_json(raw)
-        if len(configs) > 100:
+        configurations = parse_configurations()
+        if not configurations:
             return None
-        stored = await conn.fetchval(
-            "SELECT snapshot FROM native_observed_sessions WHERE gateway=$1 AND runtime_session_id=$2 AND owner_id=$3",
-            leaf.gateway,
-            leaf.runtime_session_id,
-            owner,
-        )
-        if not stored:
+        service = service or observer()
+        if service.owner != owner or not service.creator:
             return None
-        session = ObservedSession.model_validate(merge.decode(stored))
-        matches = [
-            c
-            for c in configs
-            if c.owner_id == owner
-            and c.binding_id == binding
-            and c.runtime_session_id == leaf.runtime_session_id
-            and c.prepared_revision == session.prepared_revision
-        ]
-        live = await conn.fetchrow(
-            "SELECT b.*,s.user_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 AND s.user_id=$2",
-            binding,
-            owner,
+        live_binding = await conn.fetchrow(
+            """SELECT b.*,s.user_id,s.archived_at FROM native_bindings b
+            JOIN sessions s ON s.id=b.session_id
+            WHERE b.session_id=$1""",
+            binding_id,
         )
         if (
-            len(matches) != 1
-            or session.binding_id != binding
-            or session.endpoint != leaf.endpoint
-            or not live
-            or live["kagent_session_id"] != leaf.runtime_session_id
-            or live["kind"] != matches[0].provider
+            not live_binding
+            or live_binding["user_id"] != owner
+            or live_binding["archived_at"]
+            or live_binding["kagent_deleted_at"]
+            or live_binding["kagent_session_id"] != runtime_session_id
+            or live_binding["kind"] not in ("claude", "codex")
         ):
             return None
-        return matches[0]
-    except (ValidationError, ValueError, TypeError):
+        async with asyncio.timeout(10):
+            live = await service.client.get_session(runtime_session_id)
+            if live.id != runtime_session_id:
+                return None
+            observed = await service.owned(conn, live)
+            if (
+                observed.owner_id != owner
+                or observed.runtime_session_id != runtime_session_id
+                or observed.binding_id != binding_id
+                or (
+                    leaf is not None
+                    and (
+                        observed.endpoint != leaf.endpoint
+                        or observed.context_id != leaf.context_id
+                    )
+                )
+                or live.agent is None
+            ):
+                return None
+            agent = await service.client.get_agent(live.agent)
+        if agent.ref != live.agent or agent.inline_template or not agent.template_name:
+            return None
+        matches = [
+            config
+            for config in configurations
+            if config.template_name == agent.template_name
+            and config.provider == live_binding["kind"]
+        ]
+        if len(matches) != 1:
+            return None
+        config = matches[0]
+        return config, config.evidence()
+    except (
+        KagentError,
+        ValidationError,
+        ValueError,
+        TypeError,
+        TimeoutError,
+        OSError,
+    ) as exc:
+        # Config and kagent reads are fail-closed. Do not include values from the config in logs.
+        logger.warning("Merge template mapping is unavailable (%s)", type(exc).__name__)
         return None
 
 
-async def decision_inputs(conn, owner, leaf, request, binding, response):
-    config = await configuration(conn, owner, leaf, binding)
+async def configuration(conn, owner, leaf, binding, *, service=None):
+    if not binding:
+        return None
+    resolved = await resolve_template_mapping(
+        conn,
+        owner,
+        binding,
+        leaf.runtime_session_id,
+        leaf=leaf,
+        service=service,
+    )
+    return resolved
+
+
+def possible_merge_tool(tool) -> bool:
+    """Suffix is only a fail-closed warning; canonical authority uses an exact mapping."""
+    return isinstance(tool.name, str) and tool.name.endswith(MERGE_TOOL_SUFFIX)
+
+
+async def decision_inputs(
+    conn, owner, leaf, request, binding, response, *, service=None
+):
+    resolved = await configuration(conn, owner, leaf, binding, service=service)
+    config, mapping_evidence = resolved if resolved else (None, None)
     prepared = {}
-    if not config or not isinstance(request, ToolApprovalRequest):
-        return config, prepared
+    if not isinstance(request, ToolApprovalRequest):
+        return config, mapping_evidence, prepared
     if not hasattr(response, "approvals"):
         raise ValueError("Wrong response kind")
     decisions = {d.id: d.approved for d in response.approvals}
@@ -102,7 +192,7 @@ async def decision_inputs(conn, owner, leaf, request, binding, response):
                 ),
             )
         prepared[p["id"]] = (p, fresh)
-    return config, prepared
+    return config, mapping_evidence, prepared
 
 
 async def lock_decision(conn, owner, prepared):
@@ -170,19 +260,22 @@ async def lock_decision(conn, owner, prepared):
     return validate
 
 
-async def enrichment(conn, projection):
-    # Shared HITL view data only; no alternative decision actions or lifecycle.
+async def enrichment(conn, projection, *, service=None):
+    """Shared HITL view data; merge suffixes only locate unavailable display context."""
     values = []
+    request = projection.payload
+    if not isinstance(request, ToolApprovalRequest):
+        return values
     for leaf in projection.leaves:
-        config = await configuration(conn, projection.owner_id, leaf, leaf.binding_id)
-        request = projection.payload
-        if not config or not isinstance(request, ToolApprovalRequest):
-            continue
+        resolved = await configuration(
+            conn, projection.owner_id, leaf, leaf.binding_id, service=service
+        )
+        config, mapping_evidence = resolved if resolved else (None, None)
         for tool in (request.nested.tools if request.nested else request.tools):
-            if (
-                tool.id != leaf.pending_request_id
-                or canonical_operation(tool.name, config) is None
-            ):
+            if tool.id != leaf.pending_request_id:
+                continue
+            mapped = canonical_operation(tool.name, config) is not None
+            if not mapped and not possible_merge_tool(tool):
                 continue
             try:
                 args = MergeInvocation.model_validate(tool.args)
@@ -200,13 +293,27 @@ async def enrichment(conn, projection):
                     "SELECT merge_policy_version FROM projects WHERE id=$1",
                     p["facts"]["project_id"],
                 )
+                stored_evidence = p["facts"].get("mapping_evidence")
+                evidence_changed = (
+                    not mapped
+                    or mapping_evidence is None
+                    or stored_evidence != mapping_evidence.model_dump(mode="json")
+                )
+                freshness_reason = (
+                    "The reviewed template mapping changed or is unavailable. Reject the call or refresh the request."
+                    if evidence_changed
+                    else None
+                )
                 values.append(
                     {
                         "tool_id": tool.id,
                         "proposal_id": p["id"],
                         **p["facts"],
-                        "stale": candidate["active_proposal_id"] != p["id"]
+                        "stale": evidence_changed
+                        or candidate["active_proposal_id"] != p["id"]
                         or policy != p["facts"]["policy_version"],
+                        "mapping_unavailable": evidence_changed,
+                        "freshness_reason": freshness_reason,
                     }
                 )
             except (ValueError, PolicyError):

@@ -14,6 +14,7 @@ from mainloop.runtime.hitl_correlation import task_identity
 from mainloop.runtime.hitl_observer import HITLObserver
 from mainloop.runtime.kagent_client import (
     AgentRef,
+    KagentAgent,
     KagentSession,
     Message,
     OutcomeUnknown,
@@ -111,6 +112,11 @@ class Gateway:
         if sid not in self.sessions:
             raise SessionError("deleted", grpc_status=5)
         return self.sessions[sid]
+
+    async def get_agent(self, agent):
+        return KagentAgent(
+            ref=agent, template_name="merge-template", inline_template=False
+        )
 
     async def list_tasks_page(self, agent, context, cursor="", limit=100):
         tasks = [t for t in self.tasks.values() if t.context_id == context]
@@ -463,11 +469,19 @@ class HITLObserverTests(PostgresTestCase):
         self.gateway.add("one", payload)
         await self.cycle()
         projection = (await self.projections())[0]
+        with self.assertRaisesRegex(ValueError, "context is unavailable"):
+            await continuation.submit(
+                self.user,
+                projection.id,
+                "unknown-config",
+                self.response(),
+                service=self.service,
+            )
         result = await continuation.submit(
             self.user,
             projection.id,
-            "unknown-config",
-            self.response(),
+            "reject-unknown-config",
+            self.response(approved=False),
             service=self.service,
         )
         self.assertIsNone(result["response"]["calls"][0]["merge_key"])

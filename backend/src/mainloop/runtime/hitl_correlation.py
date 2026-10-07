@@ -18,6 +18,8 @@ from models.hitl import (
     MergeInvocation,
     MergeReceiptKey,
     TaskIdentity,
+    TemplateMappingEvidence,
+    TemplateMergeConfiguration,
     ToolApprovalRequest,
     ToolApprovalResponse,
     TrustedToolMapping,
@@ -34,12 +36,20 @@ def task_identity(value: TaskIdentity) -> TaskIdentity:
 
 
 def canonical_operation(
-    public_name: str, configuration: VerifiedLeafConfiguration | None
-) -> TrustedToolMapping | None:
+    public_name: str, configuration: TemplateMergeConfiguration | None
+) -> TemplateMergeConfiguration | None:
     """Exact match only; unknown or colliding aliases cannot authorize a merge."""
     if configuration is None:
         return None
-    matches = [m for m in configuration.mappings if m.public_name() == public_name]
+    return configuration if configuration.public_name() == public_name else None
+
+
+def _legacy_canonical_operation(
+    public_name: str, configuration: VerifiedLeafConfiguration
+) -> TrustedToolMapping | None:
+    matches = [
+        item for item in configuration.mappings if item.public_name() == public_name
+    ]
     if len(matches) != 1:
         return None
     match = matches[0]
@@ -89,7 +99,8 @@ def build_decision_receipt(
     leaf_binding_id: str | None,
     response: HITLResponse,
     associations: tuple[VerifiedAssociation, ...] = (),
-    configuration: VerifiedLeafConfiguration | None = None,
+    configuration: TemplateMergeConfiguration | None = None,
+    mapping_evidence: TemplateMappingEvidence | None = None,
     validate_proposal: Callable[[MergeReceiptKey, bool], None] | None = None,
 ) -> DecisionReceipt:
     """Build a complete immutable decision after fresh server-side task resolution.
@@ -118,12 +129,6 @@ def build_decision_receipt(
         raise ValueError("Resolve to the terminal leaf request")
     if nested is None and request != leaf_request:
         raise ValueError("Direct request mismatch")
-    if configuration is not None and (
-        configuration.owner_id != owner_id
-        or configuration.binding_id != leaf_binding_id
-        or configuration.runtime_session_id != leaf_task.runtime_session_id
-    ):
-        raise ValueError("Configuration does not belong to the leaf")
     leaf_hash = normalized_hash(leaf_request.model_dump(mode="json"))
 
     def leaf(pending_id: str) -> LeafIdentity:
@@ -173,6 +178,7 @@ def build_decision_receipt(
                     approved=decisions[tool.id].approved,
                     configuration=configuration if mapping else None,
                     mapping=mapping,
+                    mapping_evidence=mapping_evidence if mapping else None,
                     merge_key=merge_key,
                 )
             )
@@ -270,21 +276,41 @@ def validate_receipt(receipt: DecisionReceipt) -> None:
         elif call.merge_key is not None or call.approved is not None:
             raise ValueError("Questions cannot authorize merges")
         if call.merge_key is None:
-            if call.mapping is not None:
+            if (
+                call.mapping is not None
+                or call.configuration is not None
+                or call.mapping_evidence is not None
+            ):
                 raise ValueError("Mapping without merge identity")
             continue
         key, config = call.merge_key, call.configuration
         if config is None or call.mapping is None or call.tool_name is None:
             raise ValueError("Missing merge configuration")
-        if (
-            key.owner_id != receipt.owner_id
+        if isinstance(config, VerifiedLeafConfiguration):
+            if (
+                call.mapping_evidence is not None
+                or key.owner_id != receipt.owner_id
+                or key.leaf_binding_id != call.leaf.binding_id
+                or key.leaf_runtime_session_id != call.leaf.runtime_session_id
+                or config.owner_id != key.owner_id
+                or config.binding_id != key.leaf_binding_id
+                or config.runtime_session_id != key.leaf_runtime_session_id
+                or _legacy_canonical_operation(call.tool_name, config) != call.mapping
+            ):
+                raise ValueError("Legacy merge receipt identity mismatch")
+        elif (
+            not isinstance(config, TemplateMergeConfiguration)
+            or not isinstance(call.mapping, TemplateMergeConfiguration)
+            or key.owner_id != receipt.owner_id
             or key.leaf_binding_id != call.leaf.binding_id
             or key.leaf_runtime_session_id != call.leaf.runtime_session_id
-            or config.owner_id != key.owner_id
-            or config.binding_id != key.leaf_binding_id
-            or config.runtime_session_id != key.leaf_runtime_session_id
             or canonical_operation(call.tool_name, config) != call.mapping
-            or normalized_hash(
+            or call.mapping_evidence is None
+            or call.mapping_evidence != config.evidence()
+        ):
+            raise ValueError("Merge receipt mapping evidence mismatch")
+        if (
+            normalized_hash(
                 {
                     "proposal_id": key.proposal_id,
                     "request_id": key.invocation_request_id,

@@ -505,6 +505,103 @@ class AgentRef:
 
 
 @dataclass(frozen=True)
+class KagentAgent:
+    """The trusted Agent identity and whether it references a named template."""
+
+    ref: AgentRef
+    template_name: str | None
+    inline_template: bool
+
+
+def _single_bytes(
+    fields: dict[int, list[int | bytes]], number: int, label: str
+) -> bytes:
+    values = fields.get(number, [])
+    if len(values) != 1 or not isinstance(values[0], bytes):
+        raise SessionError(f"AgentService returned an invalid {label}")
+    return values[0]
+
+
+def _single_text(fields: dict[int, list[int | bytes]], number: int, label: str) -> str:
+    raw = _single_bytes(fields, number, label)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SessionError(f"AgentService returned an invalid {label}") from exc
+
+
+def _struct_entry(raw: bytes, name: str) -> tuple[bool, bytes | None]:
+    """Find one key in a google.protobuf.Struct without interpreting unrelated values."""
+    entries: set[str] = set()
+    found = None
+    for value in decode_fields(raw).get(1, []):
+        if not isinstance(value, bytes):
+            raise SessionError("AgentService returned an invalid Agent resource")
+        pair = decode_fields(value)
+        key = _single_text(pair, 1, "Agent resource key")
+        if key in entries:
+            raise SessionError("AgentService returned a duplicate Agent resource key")
+        entries.add(key)
+        if key == name:
+            found = _single_bytes(pair, 2, "Agent resource value")
+    return name in entries, found
+
+
+def _struct_child(raw: bytes, name: str) -> bytes | None:
+    exists, value = _struct_entry(raw, name)
+    if not exists or value is None:
+        return None
+    fields = decode_fields(value)
+    nested = fields.get(5, [])  # google.protobuf.Value.struct_value
+    if len(nested) != 1 or not isinstance(nested[0], bytes):
+        raise SessionError(f"AgentService returned an invalid {name} reference")
+    return nested[0]
+
+
+def _struct_text(raw: bytes, name: str) -> str | None:
+    exists, value = _struct_entry(raw, name)
+    if not exists or value is None:
+        return None
+    fields = decode_fields(value)
+    values = fields.get(3, [])  # google.protobuf.Value.string_value
+    if len(values) != 1 or not isinstance(values[0], bytes):
+        raise SessionError(f"AgentService returned an invalid {name} value")
+    try:
+        return values[0].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SessionError(f"AgentService returned an invalid {name} value") from exc
+
+
+def decode_agent_response(message: bytes) -> KagentAgent:
+    """Decode GetAgentResponse and extract only its trusted template reference."""
+    response = decode_fields(message)
+    agent_fields = decode_fields(_single_bytes(response, 1, "Agent response"))
+    ref_fields = decode_fields(_single_bytes(agent_fields, 1, "Agent reference"))
+    ref = AgentRef(
+        _single_text(ref_fields, 1, "Agent namespace"),
+        _single_text(ref_fields, 2, "Agent name"),
+    )
+    structured = decode_fields(_single_bytes(agent_fields, 2, "Agent resource"))
+    resource = _single_bytes(structured, 3, "Agent resource value")
+    spec = _struct_child(resource, "spec")
+    if spec is None:
+        raise SessionError("AgentService returned an Agent without a spec")
+    inline, _ = _struct_entry(spec, "template")
+    has_reference, _ = _struct_entry(spec, "templateRef")
+    if inline and has_reference:
+        raise SessionError("Agent has both inline template and templateRef")
+    if inline:
+        return KagentAgent(ref=ref, template_name=None, inline_template=True)
+    if not has_reference:
+        raise SessionError("Agent has no templateRef")
+    template_ref = _struct_child(spec, "templateRef")
+    template_name = _struct_text(template_ref, "name") if template_ref else None
+    if not template_name:
+        raise SessionError("Agent templateRef has no name")
+    return KagentAgent(ref=ref, template_name=template_name, inline_template=False)
+
+
+@dataclass(frozen=True)
 class SessionWorkspace:
     """The repository kagent clones into the harness before the first turn.
 
@@ -631,6 +728,7 @@ def _decode_session(raw: bytes) -> KagentSession:
 # --------------------------------------------------------------------------------------------
 
 _SESSION_SERVICE = "/kagent.api.v1alpha1.SessionService"
+_AGENT_SERVICE = "/kagent.api.v1alpha1.AgentService"
 # How long "send not accepted" is retried with the identical message before it counts as a
 # definite non-delivery. kagent itself holds each attempt for up to 10s while the Session is busy.
 SEND_RETRY_BUDGET = 30.0
@@ -686,9 +784,24 @@ class KagentClient:
         return decode_session_response(messages[0])
 
     async def _session_frames(self, method: str, message: bytes) -> list[bytes]:
+        return await self._grpc_web_frames(
+            _SESSION_SERVICE, "SessionService", method, message
+        )
+
+    async def _agent_call(self, method: str, message: bytes) -> KagentAgent:
+        messages = await self._grpc_web_frames(
+            _AGENT_SERVICE, "AgentService", method, message
+        )
+        if not messages:
+            raise OutcomeUnknown(f"AgentService {method} returned no message")
+        return decode_agent_response(messages[0])
+
+    async def _grpc_web_frames(
+        self, service: str, label: str, method: str, message: bytes
+    ) -> list[bytes]:
         try:
             response = await self._client.post(
-                f"{_SESSION_SERVICE}/{method}",
+                f"{service}/{method}",
                 content=grpc_web_frame(message),
                 headers=self._headers(
                     {
@@ -703,31 +816,27 @@ class KagentClient:
             raise Unreachable(f"kagent gateway unreachable: {exc}") from exc
         except httpx.HTTPError as exc:
             raise OutcomeUnknown(
-                f"SessionService {method} outcome unknown: {type(exc).__name__}"
+                f"{label} {method} outcome unknown: {type(exc).__name__}"
             ) from exc
         if response.status_code >= 500:
             raise OutcomeUnknown(
-                f"SessionService {method} outcome unknown (HTTP {response.status_code})"
+                f"{label} {method} outcome unknown (HTTP {response.status_code})"
             )
         if response.status_code != 200:
-            raise SessionError(
-                f"SessionService {method} failed (HTTP {response.status_code})"
-            )
+            raise SessionError(f"{label} {method} failed (HTTP {response.status_code})")
         try:
             messages, trailers = parse_grpc_web(response.content)
         except ValueError as exc:
-            raise OutcomeUnknown(f"SessionService {method} sent a bad frame") from exc
+            raise OutcomeUnknown(f"{label} {method} sent a bad frame") from exc
         status = trailers.get("grpc-status", response.headers.get("grpc-status", "0"))
         # The companion can return Aborted after reserving a Session, when its
         # lifecycle workflow contends. It does not prove that nothing was admitted.
         if status in ("4", "10", "13", "14"):
-            raise OutcomeUnknown(
-                f"SessionService {method} outcome unknown (grpc {status})"
-            )
+            raise OutcomeUnknown(f"{label} {method} outcome unknown (grpc {status})")
         if status != "0":
             detail = trailers.get("grpc-message", response.headers.get("grpc-message"))
             raise SessionError(
-                f"SessionService {method} failed (grpc {status}): {detail or ''}".strip(),
+                f"{label} {method} failed (grpc {status}): {detail or ''}".strip(),
                 grpc_status=int(status) if status.isdigit() else None,
             )
         return messages
@@ -772,6 +881,14 @@ class KagentClient:
 
     async def get_session(self, session_id: str) -> KagentSession:
         return await self._session_call("GetSession", _field_str(1, session_id))
+
+    async def get_agent(self, agent: AgentRef) -> KagentAgent:
+        """Read an Agent through the trusted kagent control-plane service."""
+        ref = _field_str(1, agent.namespace) + _field_str(2, agent.name)
+        result = await self._agent_call("GetAgent", _field_bytes(1, ref))
+        if result.ref != agent:
+            raise SessionError("AgentService returned a different Agent")
+        return result
 
     async def suspend_session(self, session_id: str) -> KagentSession:
         return await self._session_call("SuspendSession", _field_str(1, session_id))
