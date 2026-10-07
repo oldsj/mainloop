@@ -103,7 +103,7 @@
       <div class="flex flex-col items-center justify-center p-8 text-term-fg-muted">
         <p class="text-term-accent">$ sessions --list</p>
         <p class="mt-2 text-sm">No sessions yet</p>
-        <p class="text-xs">Sessions appear when Claude spawns background work</p>
+        <p class="text-xs">Start an agent with + agent, or delegate work from the home thread</p>
       </div>
     {:else}
       <div class="space-y-2 p-3">

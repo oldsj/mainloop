@@ -127,6 +127,7 @@
   emptyStateMessage="This session's conversation will appear here"
   showInlineSessions={false}
   context={session?.title ?? 'session'}
+  agentKind={native?.kind ?? session?.agent_kind}
   error={sendError ?? loadError}
   inputDisabled={offline || ended}
   deliveryNotices={notices}

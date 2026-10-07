@@ -313,6 +313,7 @@
       onSendMessage={handleSendMessage}
       {placeholder}
       showInlineSessions={!native}
+      agentKind={mainThread?.native?.kind}
       error={sendError}
       inputDisabled={busy || offline}
       onDismissError={() => (sendError = null)}

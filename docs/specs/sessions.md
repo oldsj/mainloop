@@ -6,7 +6,7 @@ Sessions are native Claude Code or Codex work started from the home thread or th
 
 Desktop shows sessions in a sidebar. Mobile shows sessions in a tab.
 
-When no sessions exist, the list explains that sessions appear when work is delegated or started. Each session shows its title and status. Workspace health and controls appear separately from session status.
+The list includes standalone sessions created on `/agents` and delegated child sessions, excluding the native main thread and archived sessions. Starting an agent adds it to the list immediately. When no sessions exist, the list points to **+ agent** or delegating work from the home thread. Each session shows its title, native runtime kind (Claude or Codex), and status. Workspace health and controls appear separately from session status.
 
 | Status          | Meaning                                           |
 | --------------- | ------------------------------------------------- |
@@ -44,6 +44,8 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
 - The main thread can cancel or clear its child sessions through the `mainloop` tools.
 
 ## Session detail
+
+Assistant message prompts and processing indicators use the native runtime kind (`claude` or `codex`), including the main thread, inline replies, and fullscreen session views. Unknown or missing identity is labelled `agent` rather than guessed from a model name.
 
 The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Workspace health and lifecycle controls are shown separately.
 

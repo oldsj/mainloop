@@ -5,6 +5,7 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
   import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
+  import { agentLabel } from '$lib/agentLabel';
   import { messageTime } from '$lib/time';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
@@ -19,6 +20,7 @@
     emptyStateMessage = 'Start a conversation to begin',
     showInlineSessions = true,
     context = 'main',
+    agentKind = undefined,
     error = null,
     inputDisabled = false,
     onDismissError,
@@ -33,6 +35,7 @@
     emptyStateMessage?: string;
     showInlineSessions?: boolean;
     context?: string;
+    agentKind?: 'claude' | 'codex' | null;
     /** A send that was rejected; shown above the input, not lost in the console. */
     error?: string | null;
     /** Disable sending without implying a running turn (e.g. while the connection is offline). */
@@ -169,6 +172,7 @@
           <MessageBubble
             message={item.message}
             {context}
+            {agentKind}
             notice={deliveryNotices?.get(item.message.id)}
             retryDisabled={isLoading || inputDisabled}
             {onRetry}
@@ -177,6 +181,7 @@
           <MessageBubble
             message={item.message}
             {context}
+            {agentKind}
             notice={deliveryNotices?.get(item.message.id)}
             retryDisabled={isLoading || inputDisabled}
             {onRetry}
@@ -185,7 +190,7 @@
           <!-- Thread reply notification (Slack-style "replied in thread") -->
           {@const sessionColor = item.session.color}
           {@const isUser = item.message.role === 'user'}
-          {@const modelName = item.session.model || 'claude'}
+          {@const modelName = agentLabel(item.session.agent_kind)}
           {@const preview = item.message.content.slice(0, 120)}
           {@const isLong = item.message.content.length > 120}
           {@const isActiveSession = $navigationContext.currentContext === item.session.id}
@@ -257,7 +262,7 @@
         class="border-term-accent bg-term-bg-secondary flex w-full flex-col gap-1 border-l-2 px-3 py-2 md:px-4"
       >
         <span class="text-term-accent text-xs md:text-sm">
-          claude@{context}$
+          {agentLabel(agentKind)}@{context}$
         </span>
         <div class="flex items-center gap-2">
           <span class="text-term-fg-muted text-sm">processing</span>

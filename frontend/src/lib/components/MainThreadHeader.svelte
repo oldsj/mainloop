@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agentLabel } from '$lib/agentLabel';
   import type { MainThreadInfo } from '$lib/api';
   import { connection } from '$lib/stores/connection';
   import { threadStatus } from '$lib/delivery';
@@ -13,7 +14,7 @@
   let open = $state(false);
 
   const native = $derived(info.native);
-  const model = $derived((native?.model ?? 'claude').replace(/^claude-/, ''));
+  const model = $derived((native?.model ?? agentLabel(native?.kind)).replace(/^claude-/, ''));
   const pending = $derived(info.topics.reduce((n, t) => n + t.pending, 0));
   // The last state we fetched is stale once the backend is unreachable; don't show it as live.
   // A failed or unconfirmed last delivery is never shown as ready or working.

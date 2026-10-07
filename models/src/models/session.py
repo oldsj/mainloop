@@ -55,6 +55,10 @@ class Session(BaseModel):
     )
     topic: str | None = Field(None, description="Topic this session works for")
 
+    agent_kind: Literal["claude", "codex"] | None = Field(
+        None, description="Native runtime kind from the session binding"
+    )
+
     # Execution state
     status: SessionStatus = Field(
         default=SessionStatus.PENDING, description="Session status"

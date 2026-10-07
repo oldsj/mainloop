@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api';
+  import { sessions } from '$lib/stores/sessions';
   import { connection } from '$lib/stores/connection';
 
   let kind = $state<'claude' | 'codex'>('claude');
@@ -15,7 +15,7 @@
     submitting = true;
     error = null;
     try {
-      const session = await api.createSession({
+      const session = await sessions.createSession({
         title: title.trim() || `${kind} session`,
         description: `Native ${kind} agent session`,
         prompt: prompt.trim(),
