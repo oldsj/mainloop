@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { page } from '$app/stores';
+  import HITLCard from './HITLCard.svelte';
+  import SessionHITL from './SessionHITL.svelte';
   import { onMount } from 'svelte';
   import { conversationStore } from '$lib/stores/conversation';
   import { projects } from '$lib/stores/projects';
@@ -305,6 +308,12 @@
     <MainThreadHeader info={mainThread} onStop={stopMainThreadTurn} {stopping} />
   {/if}
 
+  {#if $page.url.searchParams.get('hitl')}
+    <div class="max-h-[50vh] shrink-0 overflow-y-auto">
+      <HITLCard requestId={$page.url.searchParams.get('hitl')!} />
+    </div>
+  {/if}
+  {#if mainThread?.session_id}<SessionHITL sessionId={mainThread.session_id} />{/if}
   <!-- Always show main thread. Native mode: child sessions live in the side list, not inline. -->
   <div class="min-h-0 flex-1">
     <ConversationView

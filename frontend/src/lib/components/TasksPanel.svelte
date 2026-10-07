@@ -1,8 +1,16 @@
 <script lang="ts">
+  import { visiblePolling } from '../visiblePolling';
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
+  import HITLCard from './HITLCard.svelte';
   import type { QueueItem } from '$lib/api';
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
+
+  $effect(() => {
+    if (!desktop && !mobile) return;
+    // Observer projections can arrive without an SSE queue event.
+    return visiblePolling().watch('inbox', (signal) => inbox.fetchItems(signal));
+  });
 
   let respondingItemId = $state<string | null>(null);
   let customResponses = $state<Record<string, string>>({});
@@ -77,12 +85,12 @@
 </script>
 
 {#if desktop || mobile}
-  <div class="flex min-h-0 flex-col bg-term-bg {mobile ? 'h-full' : ''}">
-    <header class="flex items-center justify-between border-b border-term-border px-4 py-3">
+  <div class="bg-term-bg flex min-h-0 flex-col {mobile ? 'h-full' : ''}">
+    <header class="border-term-border flex items-center justify-between border-b px-4 py-3">
       <div class="flex items-center gap-2">
         <h2 class="text-term-fg">[INBOX]</h2>
         {#if $unreadCount > 0}
-          <span class="border border-term-info px-2 py-0.5 text-xs text-term-info">
+          <span class="border-term-info text-term-info border px-2 py-0.5 text-xs">
             {$unreadCount}
           </span>
         {/if}
@@ -93,137 +101,165 @@
       {#if $inboxItems.length === 0}
         <div class="flex h-full flex-col items-center justify-center px-4 py-6 text-center">
           <p class="text-term-fg-muted">$ ls inbox/</p>
-          <p class="mt-2 text-term-fg-muted">All caught up</p>
+          <p class="text-term-fg-muted mt-2">All caught up</p>
         </div>
       {:else}
         <div>
           {#each $inboxItems as item (item.id)}
-            <div
-              class="border-b border-l-2 border-term-border p-4 transition-colors {priorityStyles[item.priority]} {item.read_at
-                ? 'opacity-75'
-                : ''}"
-            >
-              <div class="flex items-start gap-3">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="1.5"
-                  stroke="currentColor"
-                  class="mt-0.5 h-5 w-5 shrink-0 text-term-fg-muted"
-                >
-                  <path stroke-linecap="square" stroke-linejoin="miter" d={getIconPath(item.item_type)} />
-                </svg>
+            {#if item.item_type === 'hitl_request'}
+              {#if typeof item.context.hitl_request_id === 'string'}
+                <HITLCard requestId={item.context.hitl_request_id} />
+              {:else}<p class="text-term-fg-muted p-4">
+                  Session input unavailable: missing request reference.
+                </p>{/if}
+            {:else}
+              <div
+                class="border-term-border border-b border-l-2 p-4 transition-colors {priorityStyles[
+                  item.priority
+                ]} {item.read_at ? 'opacity-75' : ''}"
+              >
+                <div class="flex items-start gap-3">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="1.5"
+                    stroke="currentColor"
+                    class="text-term-fg-muted mt-0.5 h-5 w-5 shrink-0"
+                  >
+                    <path
+                      stroke-linecap="square"
+                      stroke-linejoin="miter"
+                      d={getIconPath(item.item_type)}
+                    />
+                  </svg>
 
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center justify-between gap-2">
-                    <h3 class="text-term-fg">{item.title}</h3>
-                    <span class="shrink-0 text-xs text-term-fg-muted">{formatTime(item.created_at)}</span>
-                  </div>
-
-                  {#if item.item_type === 'plan_review'}
-                    <button
-                      type="button"
-                      onclick={() => (expandedPlanId = expandedPlanId === item.id ? null : item.id)}
-                      class="mt-2 flex w-full items-center gap-2 text-left text-sm text-term-info hover:underline"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke-width="1.5"
-                        stroke="currentColor"
-                        class="h-4 w-4 transition-transform {expandedPlanId === item.id ? 'rotate-180' : ''}"
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <h3 class="text-term-fg">{item.title}</h3>
+                      <span class="text-term-fg-muted shrink-0 text-xs"
+                        >{formatTime(item.created_at)}</span
                       >
-                        <path stroke-linecap="square" stroke-linejoin="miter" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                      </svg>
-                      {expandedPlanId === item.id ? 'Hide plan' : 'View plan'}
-                    </button>
+                    </div>
 
-                    {#if expandedPlanId === item.id}
-                      <div class="mt-3 max-h-96 overflow-y-auto rounded border border-term-border bg-term-bg-secondary p-3">
-                        <pre class="whitespace-pre-wrap text-xs text-term-fg">{item.content}</pre>
+                    {#if item.item_type === 'plan_review'}
+                      <button
+                        type="button"
+                        onclick={() =>
+                          (expandedPlanId = expandedPlanId === item.id ? null : item.id)}
+                        class="text-term-info mt-2 flex w-full items-center gap-2 text-left text-sm hover:underline"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke-width="1.5"
+                          stroke="currentColor"
+                          class="h-4 w-4 transition-transform {expandedPlanId === item.id
+                            ? 'rotate-180'
+                            : ''}"
+                        >
+                          <path
+                            stroke-linecap="square"
+                            stroke-linejoin="miter"
+                            d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                          />
+                        </svg>
+                        {expandedPlanId === item.id ? 'Hide plan' : 'View plan'}
+                      </button>
+
+                      {#if expandedPlanId === item.id}
+                        <div
+                          class="border-term-border bg-term-bg-secondary mt-3 max-h-96 overflow-y-auto rounded border p-3"
+                        >
+                          <pre class="text-term-fg text-xs whitespace-pre-wrap">{item.content}</pre>
+                        </div>
+                      {/if}
+                    {:else}
+                      <p class="text-term-fg-muted mt-1 text-sm">{item.content}</p>
+                    {/if}
+
+                    {#if getPrUrl(item)}
+                      <a
+                        href={getPrUrl(item)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-term-info mt-2 inline-flex items-center gap-1 text-sm hover:underline"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke-width="1.5"
+                          stroke="currentColor"
+                          class="h-4 w-4"
+                        >
+                          <path
+                            stroke-linecap="square"
+                            stroke-linejoin="miter"
+                            d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                          />
+                        </svg>
+                        View PR
+                      </a>
+                    {/if}
+
+                    {#if item.options && item.options.length > 0 && item.status === 'pending'}
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        {#each item.options as option}
+                          <button
+                            type="button"
+                            onclick={() => handleInboxOption(item.id, option)}
+                            disabled={respondingItemId === item.id}
+                            class="border-term-border bg-term-bg text-term-fg hover:border-term-accent hover:text-term-accent border px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                          >
+                            {option}
+                          </button>
+                        {/each}
                       </div>
                     {/if}
-                  {:else}
-                    <p class="mt-1 text-sm text-term-fg-muted">{item.content}</p>
-                  {/if}
 
-                  {#if getPrUrl(item)}
-                    <a
-                      href={getPrUrl(item)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="mt-2 inline-flex items-center gap-1 text-sm text-term-info hover:underline"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke-width="1.5"
-                        stroke="currentColor"
-                        class="h-4 w-4"
+                    {#if (item.item_type === 'question' || item.item_type === 'plan_review') && item.status === 'pending'}
+                      <form
+                        onsubmit={(e) => {
+                          e.preventDefault();
+                          handleCustomSubmit(item.id);
+                        }}
+                        class="mt-3"
                       >
-                        <path
-                          stroke-linecap="square"
-                          stroke-linejoin="miter"
-                          d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                        />
-                      </svg>
-                      View PR
-                    </a>
-                  {/if}
+                        <div class="flex gap-2">
+                          <input
+                            type="text"
+                            bind:value={customResponses[item.id]}
+                            placeholder={item.item_type === 'plan_review'
+                              ? 'Request changes...'
+                              : 'Type your response...'}
+                            disabled={respondingItemId === item.id}
+                            class="border-term-border bg-term-bg text-term-fg placeholder:text-term-fg-muted focus:border-term-accent flex-1 border px-3 py-1.5 text-sm focus:outline-none disabled:opacity-50"
+                          />
+                          <button
+                            type="submit"
+                            disabled={respondingItemId === item.id ||
+                              !customResponses[item.id]?.trim()}
+                            class="border-term-border bg-term-bg text-term-fg hover:border-term-accent hover:text-term-accent border px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                          >
+                            SEND
+                          </button>
+                        </div>
+                      </form>
+                    {/if}
 
-                  {#if item.options && item.options.length > 0 && item.status === 'pending'}
-                    <div class="mt-3 flex flex-wrap gap-2">
-                      {#each item.options as option}
-                        <button
-                          type="button"
-                          onclick={() => handleInboxOption(item.id, option)}
-                          disabled={respondingItemId === item.id}
-                          class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
-                        >
-                          {option}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-
-                  {#if (item.item_type === 'question' || item.item_type === 'plan_review') && item.status === 'pending'}
-                    <form
-                      onsubmit={(e) => {
-                        e.preventDefault();
-                        handleCustomSubmit(item.id);
-                      }}
-                      class="mt-3"
-                    >
-                      <div class="flex gap-2">
-                        <input
-                          type="text"
-                          bind:value={customResponses[item.id]}
-                          placeholder={item.item_type === 'plan_review' ? 'Request changes...' : 'Type your response...'}
-                          disabled={respondingItemId === item.id}
-                          class="flex-1 border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg placeholder:text-term-fg-muted focus:border-term-accent focus:outline-none disabled:opacity-50"
-                        />
-                        <button
-                          type="submit"
-                          disabled={respondingItemId === item.id || !customResponses[item.id]?.trim()}
-                          class="border border-term-border bg-term-bg px-3 py-1.5 text-sm text-term-fg transition-colors hover:border-term-accent hover:text-term-accent disabled:opacity-50"
-                        >
-                          SEND
-                        </button>
+                    {#if item.status === 'responded' && item.response}
+                      <div
+                        class="border-term-border bg-term-bg text-term-fg-muted mt-2 border px-2 py-1 text-sm"
+                      >
+                        > {item.response}
                       </div>
-                    </form>
-                  {/if}
-
-                  {#if item.status === 'responded' && item.response}
-                    <div class="mt-2 border border-term-border bg-term-bg px-2 py-1 text-sm text-term-fg-muted">
-                      > {item.response}
-                    </div>
-                  {/if}
+                    {/if}
+                  </div>
                 </div>
               </div>
-            </div>
+            {/if}
           {/each}
         </div>
       {/if}

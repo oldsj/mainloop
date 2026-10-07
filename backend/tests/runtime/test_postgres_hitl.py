@@ -178,6 +178,12 @@ class PolicyPostgresTests(PostgresTestCase):
                                 "Authorization": "Bearer actor-token-not-an-owner-credential"
                             },
                         ):
+                            visible = await client.get(path)
+                            self.assertEqual(visible.status_code, 200)
+                            self.assertEqual(
+                                visible.json()["writes_enabled"], flag == "true"
+                            )
+                            self.assertEqual(visible.json()["merge_policy"], "approval")
                             before = await db.get_project(project.id)
                             audit_before = await self.pool.fetchval(
                                 "SELECT count(*) FROM project_merge_policy_audit WHERE project_id=$1",
@@ -210,6 +216,7 @@ class PolicyPostgresTests(PostgresTestCase):
                                 # Opt-in asserts the external isolation prerequisite;
                                 # it deliberately does not turn headers into identities.
                                 self.assertEqual(reply.status_code, 200)
+                                self.assertTrue(reply.json()["writes_enabled"])
                                 self.assertEqual(after.merge_policy, "auto")
                                 self.assertEqual(
                                     after.merge_policy_version,

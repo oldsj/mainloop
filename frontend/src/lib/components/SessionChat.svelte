@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SessionHITL from './SessionHITL.svelte';
   import { onMount } from 'svelte';
   import { api, type Message, type NativeSessionInfo, type Session } from '$lib/api';
   import { deliveryNotices } from '$lib/delivery';
@@ -114,26 +115,31 @@
   }
 </script>
 
-<ConversationView
-  {messages}
-  {isLoading}
-  onSendMessage={handleSendMessage}
-  placeholder={offline
-    ? 'Backend unreachable…'
-    : ended
-      ? `This session is ${session?.status}.`
-      : 'Message this session...'}
-  emptyStateTitle="$ session --start"
-  emptyStateMessage="This session's conversation will appear here"
-  showInlineSessions={false}
-  context={session?.title ?? 'session'}
-  agentKind={native?.kind ?? session?.agent_kind}
-  error={sendError ?? loadError}
-  inputDisabled={offline || ended}
-  deliveryNotices={notices}
-  onRetry={handleRetry}
-  onDismissError={() => {
-    sendError = null;
-    loadError = null;
-  }}
-/>
+<div class="flex h-full min-h-0 flex-col">
+  <SessionHITL {sessionId} />
+  <div class="min-h-0 flex-1">
+    <ConversationView
+      {messages}
+      {isLoading}
+      onSendMessage={handleSendMessage}
+      placeholder={offline
+        ? 'Backend unreachable…'
+        : ended
+          ? `This session is ${session?.status}.`
+          : 'Message this session...'}
+      emptyStateTitle="$ session --start"
+      emptyStateMessage="This session's conversation will appear here"
+      showInlineSessions={false}
+      context={session?.title ?? 'session'}
+      agentKind={native?.kind ?? session?.agent_kind}
+      error={sendError ?? loadError}
+      inputDisabled={offline || ended}
+      deliveryNotices={notices}
+      onRetry={handleRetry}
+      onDismissError={() => {
+        sendError = null;
+        loadError = null;
+      }}
+    />
+  </div>
+</div>

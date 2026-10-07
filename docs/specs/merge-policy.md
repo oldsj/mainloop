@@ -209,4 +209,23 @@ revisions can still support generic questions/decisions; the separate merge hand
 execution without the frozen exact receipt/configuration contract and proposal gates. Production
 nested evidence import, pinned configuration import, provider restoration/retention, owner-route
 isolation, and same-turn provider capabilities remain enablement prerequisites. These are fake
-transport/PostgreSQL proofs, not deployed Actor restoration. Shared UI controls belong to b3.
+transport/PostgreSQL proofs, not deployed Actor restoration. Shared UI controls are described in [inbox](inbox.md) and [chat](chat.md#native-structured-input).
+
+## Shared UI and policy controls
+
+The owner policy response includes `writes_enabled`, derived from the same exact default-off
+server gate used by PUT. The project page displays the current value and protected globs even
+when editing is disabled. Saving carries the displayed policy version; a conflict or uncertain
+save re-reads the current policy before another explicit save.
+
+HITL GET/POST responses include display context from owner-scoped observed/bound session rows,
+a verified leaf provider when available, and `writes_enabled`. `GET /sessions/{id}/hitl` lists
+up to 100 non-superseded request IDs for that owned session, including read-only receipts and
+alias links. Display context never grants response authority. The shared renderer reserves an
+optional server-resolved merge context slot (PR, head/base, protected matches, CI evidence).
+The API currently returns `merge: null`; tool arguments and metadata never populate that slot.
+No merge actions or merge execution are added.
+
+Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
+shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
+escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
