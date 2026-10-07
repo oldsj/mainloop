@@ -311,7 +311,7 @@ async def create(
                 manifest.repo_url,
                 project_id,
                 manifest.branch,
-                manifest.ref or None,
+                manifest.ref,
             )
             await conn.execute(
                 """INSERT INTO workspaces

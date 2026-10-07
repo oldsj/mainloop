@@ -86,7 +86,9 @@ class Session(BaseModel):
     repo_url: str | None = Field(None, description="GitHub repository URL")
     project_id: str | None = Field(None, description="Associated project ID")
     branch_name: str | None = Field(None, description="Branch to create/work on")
-    base_branch: str = Field(default="main", description="Base branch")
+    base_branch: str = Field(
+        default="main", description="Base ref; empty means the remote's default branch"
+    )
 
     # Model selection
     model: str | None = Field(

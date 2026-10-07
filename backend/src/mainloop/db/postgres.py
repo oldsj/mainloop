@@ -670,8 +670,8 @@ class Database:
             created_at=row["created_at"],
             last_used_at=row["last_used_at"],
             metadata_updated_at=row.get("metadata_updated_at"),
-            open_pr_count=row.get("open_pr_count", 0),
-            open_issue_count=row.get("open_issue_count", 0),
+            open_pr_count=row.get("open_pr_count") or 0,
+            open_issue_count=row.get("open_issue_count") or 0,
         )
 
     async def get_project(self, project_id: str) -> Project | None:
@@ -1625,7 +1625,8 @@ class Database:
             repo_url=row.get("repo_url"),
             project_id=row.get("project_id"),
             branch_name=row.get("branch_name"),
-            base_branch=row.get("base_branch", "main"),
+            # Legacy workspace rows stored NULL for the remote's default ref.
+            base_branch=row.get("base_branch") or "",
             model=row.get("model"),
             # GitHub issue fields
             issue_url=row.get("issue_url"),

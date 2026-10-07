@@ -171,6 +171,8 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
     `project_id` is `404`.
   - `ref` defaults to the project's default branch, or is empty (the remote's default) when the
     project has none recorded.
+    The associated session's `base_branch` preserves that ref, including the empty string.
+    Legacy NULL base refs are read as empty, so they do not break session list or detail requests.
   - `branch` is the local branch to create or switch to. When empty it is always a new
     `mainloop/<8 hex>` branch, whatever `ref` or the project's default is, so the working branch
     never depends on hidden project state and never shadows `origin/<default>` with a different

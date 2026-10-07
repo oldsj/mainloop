@@ -248,7 +248,7 @@ def load_session(session_id: str) -> Session | None:
         repo_url=row.get("repo_url"),
         project_id=row.get("project_id"),
         branch_name=row.get("branch_name"),
-        base_branch=row.get("base_branch", "main"),
+        base_branch=row.get("base_branch") or "",
         model=row.get("model"),
         issue_url=row.get("issue_url"),
         issue_number=row.get("issue_number"),
