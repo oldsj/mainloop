@@ -215,6 +215,12 @@ so interrupted receipts rotate behind untouched work across passes and restarts.
 cancellation after a send claim preserves `sending`; subsequent recovery observes uncertainty
 without replay. Ordinary reconciliation and housekeeping proceed after that bounded share.
 
+Task attention recovery has a separate two-second share over at most ten committed receipts
+whose trees retain approval links or an approval wait. Pending transport keeps its existing
+attempt ordering; finished transport timestamps rotate attention recovery. No recovery creates
+a new decision, card or native turn. Attention failures cannot consume the response transport
+share, and finished transports need no further native reads or sends to repair attention.
+
 The task-bound continuation lane bypasses ordinary queued turns and never calls session
 replacement or prompt delivery. The decision and outbound message ID are durable before a
 send attempt is claimed. A crash while still `recorded` can recover and send; persisted
@@ -282,6 +288,8 @@ the outcome and exact-head CI; it cannot authorize another write. Task projectio
 owner outcome notification settlement share the existing merge transaction. Native-runtime
 termination and capacity release remain separate, confirmed lifecycle steps.
 
-Task read/cleanup wiring and uncertain-publication handoff holds remain serialized integration
-dependencies. The prepared task regressions use fake upstreams and PostgreSQL fixtures; their
-execution and technical qualification are pending. No new production activation follows.
+Authoritative DB-only task reads, projection-port startup/reconciliation and committed-receipt
+attention recovery are integrated. Task runtime cleanup, uncertain-publication handoff holds,
+atomic PR-claim/attempt association and any native parent publication notification remain
+serialized integration dependencies. Local PostgreSQL/fake-upstream regressions qualify these
+application seams; no new production activation or live-provider qualification follows.

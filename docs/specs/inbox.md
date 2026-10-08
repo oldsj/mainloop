@@ -28,7 +28,7 @@ Reads have a ten-second deadline. Hidden/unmounted reads are cancelled; a transp
 not settled retains its lock. Inbox reads from polling, SSE and manual refresh also coalesce
 behind one in-flight request. Poll cleanup does not cancel decision submissions.
 
-## Coding-task attention links (source implementation; qualification pending)
+## Coding-task attention links
 
 A delegated leaf's pending input links to the existing canonical HITL inbox card. Its parent
 and root task roll up that same card ID as presentation only. Duplicate observations create
@@ -40,7 +40,15 @@ The observer refreshes task links after committing its HITL observation, releasi
 locks before taking task-tree locks. Leaf/root projection updates then commit together.
 Already-recorded leaf receipts, superseded input and stale merge proposals are excluded from
 pending task attention. Changed-head observation clears the old proposal/approval links.
-The shared response/read integration must call the same refresh helper after receipt recording
-so those links clear promptly without waiting for another native observation. That shared
-wiring remains unapplied in this source slice. Offline and PostgreSQL regression sources are
-prepared, with execution reserved to the heavy-check lane; no live-provider proof is claimed.
+Response submission refreshes each unique canonical leaf binding after the durable receipt
+commits and leaf/merge decision locks are released. Same-action replay refreshes those links
+without recording another decision or sending another native response. Attention failure or
+timeout preserves the existing receipt and continuation path.
+
+The existing response reconciler repairs missed attention updates from committed receipts,
+including accepted or rejected transport, in a separate bounded share. Cached task-tree links
+identify trees to refresh even if the native request projection has been removed. If the leaf
+has completed before refresh, the helper authenticates an active ancestor and recomputes its
+tree. The terminal leaf keeps its terminal status and cannot submit work; its parent gains
+no leaf receipt or consent. Local PostgreSQL/fake-upstream regressions cover this integration;
+they provide no live-provider proof.

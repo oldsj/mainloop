@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import uuid
 
 from mainloop.db import db
@@ -24,6 +25,8 @@ from models.hitl import (
     VerifiedAssociation,
     normalized_hash,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def load_projection(conn, owner, request_id):
@@ -138,6 +141,20 @@ def proposal_tools(leaf_request, response, proposals, configuration):
 
 async def submit(owner, request_id, action_id, response, *, service=None):
     service = service or observer()
+    projection, receipt, fresh = await record_response(
+        owner, request_id, action_id, response, service=service
+    )
+    if fresh:
+        await dispatch(receipt, service=service)
+    else:
+        # Same-action replay repairs presentation without another native send.
+        await refresh_receipt_attention(receipt)
+    async with db.connection() as conn:
+        return await view(conn, projection, receipt, service=service)
+
+
+async def record_response(owner, request_id, action_id, response, *, service):
+    """Commit the immutable decision before acquiring any task attention locks."""
     if owner != service.owner:
         raise LookupError("HITL request not found")
     async with db.connection() as conn:
@@ -155,7 +172,7 @@ async def submit(owner, request_id, action_id, response, *, service=None):
                 c.leaf.key() for c in receipt.calls
             } != {leaf.key() for leaf in projection.leaves}:
                 raise store.HITLConflict("Action ID already has another decision")
-            return await view(conn, projection, receipt, service=service)
+            return projection, receipt, False
         if projection.availability != "pending":
             raise Unavailable(projection.unavailable_reason or "Request is unavailable")
         if not projection.leaves:
@@ -265,9 +282,7 @@ async def submit(owner, request_id, action_id, response, *, service=None):
                 ):
                     raise store.HITLConflict("Continuation evidence was removed")
             receipt = await store.record_response(conn, receipt)
-    await dispatch(receipt, service=service)
-    async with db.connection() as conn:
-        return await view(conn, projection, receipt, service=service)
+    return projection, receipt, True
 
 
 async def view(conn, projection, receipt=None, *, service=None):
@@ -327,7 +342,11 @@ async def transport_state(conn, receipt, state):
     await store.refresh_receipt_cards(conn, receipt)
 
 
-async def dispatch(receipt, *, service):
+async def dispatch(receipt, *, service, refresh_attention=True):
+    # No receipt/leaf/merge transaction locks are held. Presentation failure must
+    # not change recorded consent or suppress its existing native continuation.
+    if refresh_attention:
+        await refresh_receipt_attention(receipt)
     # A session-level PG lock prevents a second dispatcher observing an in-flight
     # attempt. On process death it releases; persisted sending then means uncertain.
     async with db.connection() as conn:
@@ -443,6 +462,73 @@ async def dispatch(receipt, *, service):
 
 
 RESPONSE_RECOVERY_BUDGET_SECONDS = 2.0
+ATTENTION_RECOVERY_BUDGET_SECONDS = 2.0
+
+
+async def refresh_receipt_attention(receipt):
+    """Refresh each canonical leaf once, using only a committed decision snapshot."""
+    from mainloop.tasks import attention
+
+    bindings = sorted(
+        {call.leaf.binding_id for call in receipt.calls if call.leaf.binding_id}
+    )
+    try:
+        async with asyncio.timeout(ATTENTION_RECOVERY_BUDGET_SECONDS):
+            for binding_id in bindings:
+                try:
+                    await attention.refresh(db, binding_id)
+                except Exception:
+                    logger.exception(
+                        "Committed HITL attention refresh failed: %s", binding_id
+                    )
+    except TimeoutError:
+        logger.warning(
+            "Committed HITL attention refresh timed out: %s", receipt.action_id
+        )
+
+
+async def reconcile_receipt_attention(service):
+    """Recover missed refreshes even after native transport has finished.
+
+    Existing terminal transport timestamps rotate the bounded batch. No extra
+    intent store is needed: committed receipt leaves and cached canonical links
+    identify the work, including a completed leaf with a still-waiting ancestor.
+    """
+    try:
+        async with asyncio.timeout(ATTENTION_RECOVERY_BUDGET_SECONDS):
+            async with db.connection() as conn:
+                rows = await conn.fetch(
+                    """SELECT r.snapshot FROM native_hitl_responses r
+                       JOIN native_hitl_response_transport t USING(owner_id,action_id)
+                       WHERE r.owner_id=$1 AND r.snapshot->'outer'->>'gateway'=$2
+                         AND EXISTS (
+                           SELECT 1 FROM jsonb_array_elements(r.snapshot->'calls') call
+                           JOIN task_attempts a ON a.binding_id=call->'leaf'->>'binding_id'
+                           JOIN tasks leaf ON leaf.id=a.task_id AND leaf.owner_id=r.owner_id
+                           JOIN tasks related ON related.owner_id=leaf.owner_id
+                             AND related.root_task_id=leaf.root_task_id
+                           WHERE jsonb_array_length(related.projection->'pending_approval_ids') > 0
+                             OR related.snapshot->>'reason'='approval'
+                         )
+                       ORDER BY t.updated_at,t.action_id LIMIT 10""",
+                    service.owner,
+                    service.gateway,
+                )
+            for row in rows:
+                receipt = DecisionReceipt.model_validate_json(
+                    json.dumps(store._decode(row["snapshot"]))
+                )
+                async with db.connection() as conn:
+                    await conn.execute(
+                        """UPDATE native_hitl_response_transport SET updated_at=now()
+                           WHERE owner_id=$1 AND action_id=$2
+                             AND state IN ('accepted','rejected_transport')""",
+                        receipt.owner_id,
+                        receipt.action_id,
+                    )
+                await refresh_receipt_attention(receipt)
+    except TimeoutError:
+        return
 
 
 async def reconcile_hitl_responses():
@@ -472,6 +558,9 @@ async def reconcile_hitl_responses():
                         receipt.owner_id,
                         receipt.action_id,
                     )
-                await dispatch(receipt, service=service)
+                await dispatch(receipt, service=service, refresh_attention=False)
     except TimeoutError:
-        return
+        pass
+    # Attention gets a separate share so an outage cannot use the transport
+    # recovery budget. Finished transports need no further native reads or sends.
+    await reconcile_receipt_attention(service)
