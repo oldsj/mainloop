@@ -28,13 +28,14 @@ from mainloop.push_gate.protocol import (
 from mainloop.push_gate.quarantine import PreparedPush, prepare_receive, receive_spool
 from mainloop.push_gate.upstream import FixedGitUpstream
 from mainloop.services.github_repo import parse_github_repo
+from pydantic import BaseModel, ConfigDict, Field
+
 from models.push_gate import (
     ProtectedBranchPolicy,
     PublicationAttempt,
     PublicationState,
     PushGrant,
 )
-from pydantic import BaseModel, ConfigDict, Field
 
 
 class RuntimeAssociation(BaseModel):

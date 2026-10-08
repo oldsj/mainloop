@@ -17,7 +17,6 @@ from mainloop.push_gate.authorization import ZERO_OID
 from mainloop.push_gate.protocol import Limits, pkt, receipt, receive_commands
 from mainloop.push_gate.transport import create_git_applications
 from mainloop.push_gate.upstream import FixedGitUpstream, LoopbackFixture
-from models.push_gate import PublicationState
 from tests.runtime.test_push_transport_git import (
     ASSOCIATION,
     GRANT,
@@ -29,6 +28,8 @@ from tests.runtime.test_push_transport_git import (
     GitFixtureCase,
     command,
 )
+
+from models.push_gate import PublicationState
 
 
 async def asgi(

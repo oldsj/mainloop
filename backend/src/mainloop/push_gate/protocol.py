@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from mainloop.push_gate.authorization import ZERO_OID
+
 from models.push_gate import RefUpdate
 
 

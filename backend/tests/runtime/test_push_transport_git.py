@@ -19,6 +19,7 @@ from mainloop.push_gate.transport import (
     create_git_applications,
 )
 from mainloop.push_gate.upstream import FixedGitUpstream, LoopbackFixture
+
 from models.push_gate import ProtectedBranchPolicy, PublicationState, PushGrant
 
 READ = "fixture_read_capability_123456789"
