@@ -4,25 +4,32 @@ import asyncio
 import copy
 import json
 import unittest
+import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import HTTPException
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.db import tasks as task_store
 from mainloop.db.postgres import PRCreationConflict
 from mainloop.mcp_app import TOOLS, invoke
-from mainloop.runtime import native_sessions
+from mainloop.providers import registry
+from mainloop.runtime import native_sessions, workspaces
 from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.agent_tools import AgentService, Ctx
 from mainloop.runtime.delegation import PgStore
 from mainloop.runtime.policy import Actor, may_call, tools_for
 from mainloop.services import github_creation as creation
 from mainloop.services.github_repo import parse_github_repo
+from mainloop.tasks import lifecycle
 from pydantic import ValidationError
 from tests.runtime.test_postgres_ledger import PostgresTestCase, _init_schema
 
 from models.agent_tools import OpenPullRequest
+from models.task import Task, TaskCheckout
+from models.workspace import WorkspaceManifest
 
 SHA = "a" * 40
 BASE_SHA = "b" * 40
@@ -254,16 +261,30 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
             "mainloop.services.github_creation.open_pull_request",
             new=AsyncMock(return_value={"text": "fixture"}),
         ) as run:
-            for role in ("main", "child", "agent", "supervisor", "unknown"):
-                actor = Actor(role, 0)
-                ctx = Ctx({"role": role}, actor)
-                exposed = "open_pull_request" in tools_for(actor)
-                result = await invoke(service, ctx, "open_pull_request", ARGS)
-                self.assertEqual(exposed, role in ("main", "child"))
-                self.assertEqual(result.isError, not exposed)
-                if exposed:
-                    may_call(actor, "open_pull_request")
-            self.assertEqual(run.await_count, 2)
+            for role, depth, grant, allowed in (
+                ("main", 0, "coordination", True),
+                ("supervisor", 1, "workspace", True),
+                ("child", 2, "workspace", True),
+                ("agent", 0, "workspace", True),
+                ("supervisor", 1, "coordination", False),
+                ("child", 2, "coordination", False),
+                ("child", 0, "coordination", False),
+                ("child", 1, "workspace", False),
+                ("supervisor", 0, "workspace", False),
+                ("main", 1, "coordination", False),
+                ("agent", 0, "none", False),
+                ("unknown", 0, "coordination", False),
+            ):
+                with self.subTest(role=role, depth=depth, grant=grant):
+                    actor = Actor(role, depth, grant)
+                    ctx = Ctx({"role": role, "mcp_grant_kind": grant}, actor)
+                    exposed = "open_pull_request" in tools_for(actor)
+                    result = await invoke(service, ctx, "open_pull_request", ARGS)
+                    self.assertEqual(exposed, allowed)
+                    self.assertEqual(result.isError, not exposed)
+                    if exposed:
+                        may_call(actor, "open_pull_request")
+            self.assertEqual(run.await_count, 4)
         self.assertIs(TOOLS["open_pull_request"][0], OpenPullRequest)
 
     async def test_client_errors_are_opaque_and_redirects_not_followed(self):
@@ -339,6 +360,11 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
 class PRPostgresTests(PostgresTestCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        # Each method owns its task capacity in this class's scratch database.
+        # Retained attempts from earlier fixtures must not consume later admission.
+        await self.pool.execute(
+            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        )
         self.project = await db.get_or_create_project(
             self.user, parse_github_repo("owner/repo")
         )
@@ -468,21 +494,89 @@ class PRPostgresTests(PostgresTestCase):
         self.assertEqual(denied.exception.status_code, 401)
 
     async def child(self):
-        sid, _ = await self.bound_session(role="child", parent_session_id=self.sid)
-        await self.pool.execute(
-            "UPDATE sessions SET project_id=$2, repo_url=$3 WHERE id=$1",
-            sid,
-            self.project.id,
-            "https://github.com/owner/repo",
-        )
-        await self.pool.execute(
-            "INSERT INTO workspaces (session_id,repo,branch) VALUES ($1,$2,$3)",
-            sid,
-            "https://github.com/owner/repo",
-            ARGS["branch"],
-        )
-        self.ctx = await self.service.authenticate(token_for(sid))
-        return sid
+        # Offline authority fixture: enroll persisted S0/S1 facts, no live runtime proof.
+        now = datetime.now(UTC)
+        root_id = uuid.uuid4().hex
+        parent_binding = self.sid
+        async with self.pool.acquire() as conn, conn.transaction():
+            for role, depth, mode in (
+                ("supervisor", 1, "coordination"),
+                ("child", 2, "code"),
+            ):
+                task_id = root_id if depth == 1 else uuid.uuid4().hex
+                task = Task(
+                    id=task_id,
+                    owner_id=self.user,
+                    project_id=self.project.id,
+                    parent_task_id=None if depth == 1 else root_id,
+                    root_task_id=root_id,
+                    creator_binding_id=parent_binding,
+                    title="Offline PR scope fixture",
+                    brief="Persisted authority fixture; no live runtime qualification",
+                    mode=mode,
+                    assigned_profile_id="codex",
+                    selection_source="explicit",
+                    checkout=(
+                        TaskCheckout(branch=ARGS["branch"], ref=SHA)
+                        if mode == "code"
+                        else None
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+                await task_store.insert_task(conn, task)
+                task, attempt = await task_store.admit_attempt(
+                    conn,
+                    task,
+                    registry().resolve("codex", role),
+                    role=role,
+                    depth=depth,
+                )
+                enrolled = await workspaces.enroll_session(
+                    conn,
+                    user_id=self.user,
+                    kind="codex",
+                    role=role,
+                    mcp_grant_kind="workspace" if mode == "code" else "coordination",
+                    manifest=(
+                        WorkspaceManifest(
+                            repo_url="https://github.com/owner/repo",
+                            branch=ARGS["branch"],
+                            ref=SHA,
+                            agent_kind="codex",
+                        )
+                        if mode == "code"
+                        else None
+                    ),
+                    project_id=self.project.id,
+                    session_id=attempt.id,
+                    parent_session_id=parent_binding,
+                    title="Offline PR scope fixture",
+                    description="Offline enrollment, not live provisioning evidence",
+                    prompt="Fixture",
+                    environment=None,
+                    claim_branch=False,
+                )
+                await lifecycle.save_attempt(
+                    conn,
+                    attempt.model_copy(
+                        update={
+                            "binding_id": enrolled.workspace_id,
+                            "session_id": enrolled.workspace_id,
+                            "workspace_id": enrolled.workspace_id,
+                            "state": "active",
+                        }
+                    ),
+                )
+                # Synthetic runtime identity satisfies repository authority, never calls kagent.
+                await conn.execute(
+                    "UPDATE native_bindings SET kagent_session_id=$2 WHERE session_id=$1",
+                    enrolled.workspace_id,
+                    "offline-pr-fixture-" + attempt.id,
+                )
+                parent_binding = enrolled.workspace_id
+        self.ctx = await self.service.authenticate(token_for(parent_binding))
+        return parent_binding
 
     async def test_create_uses_live_default_branch_and_returns_canonical_link(self):
         result = await self.call()
@@ -669,7 +763,8 @@ class PRPostgresTests(PostgresTestCase):
 
     async def test_child_requires_matching_project_workspace_and_branch(self):
         sid = await self.child()
-        self.assertFalse((await self.call()).isError)
+        result = await self.call()
+        self.assertFalse(result.isError, result.content)
         other = await db.get_or_create_project(
             self.user, parse_github_repo("owner/other")
         )
@@ -785,3 +880,89 @@ class PRPostgresTests(PostgresTestCase):
         await _init_schema(self.url)
         self.assertEqual((await self.call()).structuredContent["state"], "created")
         self.assertEqual(len(self.fake.posts), 1)
+
+    async def test_delegated_pr_result_links_exact_attempt_and_event_once(self):
+        sid = await self.child()
+        first = await self.call()
+        self.assertFalse(first.isError, first.content)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id,task_id FROM task_attempts WHERE binding_id=$1", sid
+            )
+            attempt = await lifecycle.load_attempt(conn, row["id"])
+            task = await lifecycle.load_task(conn, row["task_id"])
+            projection = await task_store.projection(conn, task.id)
+            refs = [
+                ref for ref in attempt.evidence_refs if ref.startswith("pr-creation:")
+            ]
+        self.assertEqual(len(refs), 1)
+        intent = await self.pool.fetchrow(
+            "SELECT * FROM pr_creations WHERE id=$1",
+            refs[0].removeprefix("pr-creation:"),
+        )
+        self.assertEqual(
+            (intent["user_id"], intent["project_id"], intent["head"]),
+            (self.user, self.project.id, task.checkout.branch),
+        )
+        self.assertEqual(
+            (projection.repository, projection.pr_number, projection.pr_head_sha),
+            ("owner/repo", 17, SHA),
+        )
+        self.assertEqual(
+            (projection.pr_state, projection.ci_state), ("unknown", "unknown")
+        )
+        replay = await self.call()
+        self.assertFalse(replay.isError, replay.content)
+        self.assertEqual(replay.structuredContent, first.structuredContent)
+        self.assertEqual(len(self.fake.posts), 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_events WHERE task_id=$1 AND event_key LIKE 'pr-created:%'",
+                task.id,
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT version FROM tasks WHERE id=$1", task.id),
+            task.version,
+        )
+
+    async def test_delegated_lost_pr_response_reconciles_link_without_redispatch(self):
+        sid = await self.child()
+        self.fake.lose_response = True
+        first = await self.call()
+        self.assertEqual(first.structuredContent["state"], "uncertain")
+        second = await self.call()
+        self.assertFalse(second.isError, second.content)
+        self.assertEqual(second.structuredContent["state"], "created")
+        self.assertEqual(len(self.fake.posts), 1)
+        task_id = await self.pool.fetchval(
+            "SELECT task_id FROM task_attempts WHERE binding_id=$1", sid
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT projection->>'pr_head_sha' FROM tasks WHERE id=$1", task_id
+            ),
+            SHA,
+        )
+
+    async def test_unassociated_delegated_intent_cannot_be_adopted(self):
+        await self.child()
+        body = OpenPullRequest.model_validate(self.args)
+        payload_hash = creation.hashlib.sha256(
+            json.dumps(body.model_dump(exclude={"request_id"}), sort_keys=True).encode()
+        ).hexdigest()
+        await db.claim_pr_creation(
+            user_id=self.user,
+            project_id=self.project.id,
+            request_id=body.request_id,
+            payload_hash=payload_hash,
+            repo_id=123,
+            head=body.branch,
+            base="trunk",
+            expected_sha=SHA,
+        )
+        result = await self.call()
+        self.assertTrue(result.isError)
+        self.assertIn("[ownership]", result.content[0].text)
+        self.assertEqual(self.fake.posts, [])

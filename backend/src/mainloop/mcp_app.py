@@ -5,8 +5,10 @@ from contextvars import ContextVar
 
 from fastapi import HTTPException
 from mainloop.db import db
+from mainloop.db.tasks import TaskError
 from mainloop.runtime.agent_tools import AgentService, Ctx
 from mainloop.runtime.policy import PolicyError, may_call, surface_tools
+from mainloop.tasks.lifecycle import LifecycleDenied
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, Tool
@@ -14,16 +16,19 @@ from pydantic import ValidationError
 from starlette.responses import Response
 
 from models.agent_tools import (
-    Delegate,
     MergePullRequestWithApproval,
     OpenPullRequest,
-    OptionalSession,
     PendingDone,
     PreparePullRequestMerge,
-    Read,
     Record,
-    Report,
-    RequiredSession,
+    TaskCancel,
+    TaskDelegate,
+    TaskGet,
+    TaskHistory,
+    TaskList,
+    TaskReassign,
+    TaskReportInput,
+    TaskRetry,
     ToolInput,
     TopicOpen,
 )
@@ -59,12 +64,29 @@ TOOLS = {
     "decide": (Record, "Record a topic decision."),
     "pending_add": (Record, "Record pending user intent."),
     "pending_done": (PendingDone, "Close a pending item by id or unique prefix."),
-    "delegate": (Delegate, "Start a child agent for a task."),
-    "report": (Report, "Report your result to your parent exactly once."),
-    "status": (OptionalSession, "Read child state without sending a turn."),
-    "read": (Read, "Read stored child messages."),
-    "cancel": (RequiredSession, "Stop a child in your tree."),
-    "clear": (OptionalSession, "Archive finished children in your tree."),
+    "delegate": (
+        TaskDelegate,
+        "Create a durable task and scoped attempt; reuse request_id.",
+    ),
+    "report": (
+        TaskReportInput,
+        "Record progress or an explicit result claim with durable parent notification.",
+    ),
+    "task_get": (
+        TaskGet,
+        "Read a scoped task and its stored projections without a native turn.",
+    ),
+    "task_list": (TaskList, "List tasks visible within your persisted authority."),
+    "task_history": (TaskHistory, "Read stored attempts, operations and reports."),
+    "task_cancel": (
+        TaskCancel,
+        "Request cancellation of a managed task using its current version/attempt.",
+    ),
+    "task_retry": (TaskRetry, "Retry through the installed handoff service."),
+    "task_reassign": (
+        TaskReassign,
+        "Explicitly reassign through the installed handoff service.",
+    ),
 }
 
 
@@ -101,6 +123,10 @@ async def invoke(
             content=[TextContent(type="text", text=result["text"])],
             structuredContent=result,
         )
+    except LifecycleDenied as exc:
+        error = f"[403] {exc.code}"
+    except TaskError as exc:
+        error = f"[{exc.status}] {exc.code}"
     except PolicyError as exc:
         error = f"[{exc.code}] {exc.message}"
     except ValidationError:

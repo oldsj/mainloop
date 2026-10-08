@@ -530,6 +530,12 @@ class GitHubMergeClient(GitHubCreationClient):
             or any(s.state not in ("success", "pending") for s in statuses.values())
         )
         return {
+            "head_sha": sha,
+            "captured_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "complete": True,
+            "blocked": bool(blocked),
             "green": bool(green),
             "pending": not blocked
             and (
@@ -543,6 +549,22 @@ class GitHubMergeClient(GitHubCreationClient):
             "required": required,
             "github_rules_unavailable_on_plan": unavailable,
         }
+
+    async def observation(self, name, number):
+        """Bounded read of any PR state; unavailable checks remain unknown.
+
+        A closed PR is not merge execution evidence. Re-read the PR after CI so
+        movement during collection cannot attribute checks to another head.
+        """
+        pr = await self.pull(name, number)
+        try:
+            ci = await self.checks(name, pr.head.sha, pr.base.ref)
+        except (GitHubError, PolicyError, ValueError):
+            ci = None
+        fresh = await self.pull(name, number)
+        if fresh != pr:
+            raise GitHubError
+        return pr, ci
 
     async def merge(self, name, number, sha):
         return await self._request(

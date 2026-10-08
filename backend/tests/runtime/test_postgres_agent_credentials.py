@@ -327,7 +327,7 @@ class CredentialPostgresTests(PostgresTestCase):
             SessionStatus.FAILED,
             SessionStatus.CANCELLED,
         ):
-            sid, _ = await self.bound_session(role="child")
+            sid, _ = await self.bound_session(role="main")
             self.assertEqual((await self.auth(sid)).binding["session_id"], sid)
             with patch.object(credentials.credentials, "remove", AsyncMock()) as remove:
                 await db.update_session(sid, status=status)

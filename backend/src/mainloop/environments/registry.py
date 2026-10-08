@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -13,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.environment import Architecture, Digest, EnvironmentVersion
 
-VALIDATOR_VERSION = "oci-static-v1"
+VALIDATOR_VERSION = "oci-static-v2"
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 REGISTRY_READ_BUDGET_SECONDS = 30.0
 VALIDATION_BUDGET_SECONDS = 90.0
@@ -27,6 +29,46 @@ ACCEPT = ", ".join(
         "application/vnd.docker.distribution.manifest.v2+json",
     )
 )
+
+# HTTPX logs request URLs; httpcore debug logs response headers (including signed
+# Locations). Suppress those dependency logs only within this metadata reader's
+# context, without changing levels or logging for concurrent unrelated requests.
+_METADATA_READ = ContextVar("registry_metadata_read", default=False)
+
+
+class _MetadataLogFilter(logging.Filter):
+    def filter(self, record):
+        return not _METADATA_READ.get()
+
+
+for _logger_name in (
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+):
+    logging.getLogger(_logger_name).addFilter(_MetadataLogFilter())
+
+
+def config_cdn_location(location):
+    """Validate the sole public GHCR config hop without exposing its signed URL."""
+    try:
+        parsed = urlsplit(location)
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname == "pkg-containers.githubusercontent.com"
+            and parsed.port in (None, 443)
+            and not parsed.netloc.endswith(":")
+            and "@" not in parsed.netloc
+            and "#" not in location
+            and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in location)
+        ):
+            return location
+    except ValueError:
+        pass
+    raise RegistryError("Unsupported registry config redirect")
 
 
 class RegistryError(ValueError):
@@ -77,15 +119,20 @@ class RegistryClient(Protocol):
 class AnonymousOCIRegistry:
     """Anonymous bearer exchange stays on the allowlisted registry's HTTPS origin.
 
-    Cross-host auth/metadata redirects are unsupported; no credentials are loaded.
+    Only authenticated public GHCR config blobs may take one credential-free CDN
+    hop. All other redirects are unsupported; no credentials are loaded.
     """
 
     def __init__(self, transport=None):
         self.transport = transport
 
     async def read(self, registry, repository, kind, reference):
-        async with elapsed_budget(REGISTRY_READ_BUDGET_SECONDS, "read"):
-            return await self._read(registry, repository, kind, reference)
+        marker = _METADATA_READ.set(True)
+        try:
+            async with elapsed_budget(REGISTRY_READ_BUDGET_SECONDS, "read"):
+                return await self._read(registry, repository, kind, reference)
+        finally:
+            _METADATA_READ.reset(marker)
 
     async def _read(self, registry, repository, kind, reference):
         url = f"https://{registry}/v2/{repository}/{kind}/{reference}"
@@ -96,8 +143,8 @@ class AnonymousOCIRegistry:
             trust_env=False,
         ) as client:
 
-            async def fetch(target, headers=None, params=None):
-                async with client.stream(
+            async def fetch(request_client, target, headers=None, params=None):
+                async with request_client.stream(
                     "GET",
                     target,
                     headers={"Accept-Encoding": "identity", **(headers or {})},
@@ -127,7 +174,8 @@ class AnonymousOCIRegistry:
 
             headers = {"Accept": ACCEPT}
             try:
-                status, response_headers, data = await fetch(url, headers)
+                authenticated = False
+                status, response_headers, data = await fetch(client, url, headers)
                 if status == 401:
                     challenge = response_headers.get("www-authenticate", "")
                     if not challenge.lower().startswith("bearer "):
@@ -145,6 +193,7 @@ class AnonymousOCIRegistry:
                             "private images not supported yet: unsupported authentication origin"
                         )
                     token_status, _, token_data = await fetch(
+                        client,
                         realm,
                         params={
                             "service": fields.get("service", registry),
@@ -157,9 +206,27 @@ class AnonymousOCIRegistry:
                     token = response_token.token or response_token.access_token
                     if not isinstance(token, str) or not token:
                         raise RegistryError("private images not supported yet")
-                    status, _, data = await fetch(
-                        url, {**headers, "Authorization": f"Bearer {token}"}
+                    status, response_headers, data = await fetch(
+                        client, url, {**headers, "Authorization": f"Bearer {token}"}
                     )
+                    authenticated = True
+                if (
+                    status == 307
+                    and authenticated
+                    and registry == "ghcr.io"
+                    and kind == "blobs"
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", reference)
+                ):
+                    target = config_cdn_location(response_headers.get("location", ""))
+                    # A fresh client prevents even domain-scoped registry cookies
+                    # from reaching the CDN. Do not reuse registry request headers.
+                    async with httpx.AsyncClient(
+                        transport=self.transport,
+                        timeout=20,
+                        follow_redirects=False,
+                        trust_env=False,
+                    ) as cdn_client:
+                        status, _, data = await fetch(cdn_client, target)
                 if status in (401, 403, 404):
                     raise RegistryError(
                         "private images not supported yet (or image not found)"
@@ -174,7 +241,7 @@ class AnonymousOCIRegistry:
                     raise
                 raise RegistryError(
                     "Registry metadata unavailable or malformed"
-                ) from exc
+                ) from None
 
 
 class FakeRegistry:

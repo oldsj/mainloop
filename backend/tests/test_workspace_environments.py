@@ -41,7 +41,7 @@ def validated_version():
         architecture="arm64",
         declared_user="65532:65532",
         validation_status="static_validated",
-        validator_version="oci-static-v1",
+        validator_version="oci-static-v2",
         provenance_kind="user_pushed",
     )
 
@@ -73,7 +73,7 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_follow_default_and_explicit(self):
         first = await resolve(None, "project", "owner")
-        self.assertEqual(first.policy_identity, "v1:oci-static-v1")
+        self.assertEqual(first.policy_identity, "v1:oci-static-v2")
         self.assertEqual(first.image, "ghcr.io/example/dev@sha256:" + "a" * 64)
         self.selected.follow_default = False
         self.selected.version_id = "v1"
@@ -84,6 +84,20 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.selection_mock.return_value = None
         self.assertIsNone(await resolve(None, "project", "owner"))
         self.environment_mock.assert_not_called()
+
+    async def test_v1_validation_is_stale_for_default_and_explicit_selection(self):
+        previous = self.version.model_copy(
+            update={"validator_version": "oci-static-v1"}
+        )
+        self.version_mock.return_value = previous
+        for follow_default in (True, False):
+            with self.subTest(follow_default=follow_default):
+                self.selected.follow_default = follow_default
+                self.selected.version_id = None if follow_default else "v1"
+                with self.assertRaisesRegex(store.EnvironmentError, "policy is stale"):
+                    await resolve(None, "project", "owner")
+                self.assertEqual(previous.validator_version, "oci-static-v1")
+                self.assertEqual(previous.validation_status, "static_validated")
 
     async def test_revoked_pending_missing_default_and_platform(self):
         self.access_mock.return_value = False
