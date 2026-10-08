@@ -121,7 +121,7 @@ class WorkspaceEnvironmentPostgresTests(KagentFakeCase):
         )
         self.assertEqual(
             json.loads(row["reported_development_environment"])["policy_identity"],
-            self.v1 + ":oci-static-v1",
+            self.v1 + ":oci-static-v2",
         )
         self.assertEqual(json.loads(row["runtime_composition"])["cli_version"], "1.0")
         self.assertEqual(
