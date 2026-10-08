@@ -2,8 +2,9 @@
 
 A workspace is a native agent session whose kagent Session was created with a ``workspace``
 (repository, ref, branch, depth), so the repository is in the harness before the first turn. This
-module owns what is specific to that: creation, the lifecycle read from kagent, suspend and
-resume, the preview idle-out, and deletion. Turn delivery stays in ``native_sessions``.
+module owns what is specific to that: creation (and the automatic retry of a create kagent did
+not confirm), the lifecycle read from kagent, suspend and resume, the preview idle-out, and
+deletion. Turn delivery stays in ``native_sessions``.
 
 Suspend and resume are kagent's ``SuspendSession`` and ``ResumeSession``. Mainloop keeps no copy
 of the lifecycle state: it is read from ``GetSession`` each time, so it cannot drift.
@@ -26,7 +27,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -35,9 +36,12 @@ from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import (
     KagentError,
     KagentSession,
+    OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
+    ServiceConfigurationError,
     SessionError,
+    Unreachable,
 )
 from mainloop.services.github_repo import (
     GithubRepo,
@@ -60,10 +64,53 @@ logger = logging.getLogger(__name__)
 # CreateSession statuses that mean kagent rejected the request itself (bad workspace, an origin
 # the harness does not allow, no permission) rather than failed to answer.
 _REJECTED = (3, 7, 16)
+# CreateSession statuses that retrying the same request cannot fix: the rejections above, plus
+# NOT_FOUND (kagent deleted the Session it had reserved for this request id, so the id is used
+# up), ALREADY_EXISTS (the request id is bound to a different create) and UNIMPLEMENTED.
+# Anything else (UNAVAILABLE while the environment snapshot is prepared, FAILED_PRECONDITION
+# while no prepared revision is ready, a deadline, an unreachable gateway, an unobserved reply)
+# is retried automatically.
+_PERMANENT = (*_REJECTED, 5, 6, 12)
+_GRPC_NAMES = {
+    2: "unknown error",
+    3: "invalid argument",
+    4: "deadline exceeded",
+    5: "not found",
+    6: "already exists",
+    7: "permission denied",
+    8: "resource exhausted",
+    9: "failed precondition",
+    10: "aborted",
+    12: "unimplemented",
+    13: "internal error",
+    14: "unavailable",
+    16: "unauthenticated",
+}
+
+
+def _create_reason(exc: Exception) -> str:
+    """Return a classified, owner-safe reason for an unconfirmed create (raw text is logged)."""
+    if isinstance(exc, SessionError):
+        if exc.grpc_status in _GRPC_NAMES:
+            return f"kagent {_GRPC_NAMES[exc.grpc_status]} (gRPC {exc.grpc_status})"
+        return "kagent Session error"
+    if isinstance(exc, ServiceConfigurationError):
+        return "kagent refused Mainloop's configuration"
+    if isinstance(exc, Unreachable):
+        return "kagent unreachable"
+    if isinstance(exc, OutcomeUnknown):
+        return "kagent reply not observed"
+    if isinstance(exc, KagentError):
+        return "kagent error"
+    if isinstance(exc, WorkspaceConflict):
+        return "the workspace's task attempt is not live"
+    return f"Mainloop error ({type(exc).__name__})"
+
 
 _SELECT = """
 SELECT w.session_id, w.repo, w.ref, w.branch, w.depth, w.ports, w.idle_timeout_minutes,
        w.last_active_at, w.idle_suspended_at, w.created_at, w.development_environment,
+       w.create_attempts, w.create_error, w.create_stopped,
        s.user_id, s.conversation_id, n.kind, n.kagent_session_id,
        GREATEST(w.last_active_at, w.created_at,
                 (SELECT max(d.updated_at) FROM native_deliveries d
@@ -155,7 +202,7 @@ async def _observe(
         if kagent_session_id is None:
             return (
                 WorkspaceObservedState.UNKNOWN,
-                "The kagent Session has not been created; refresh to retry.",
+                "The kagent Session has not been created yet; retrying automatically.",
             )
         try:
             session = await ns.get_client().get_session(kagent_session_id)
@@ -200,10 +247,50 @@ async def _revoke_publication(
                 await push_lifecycle.revoke_locked(conn, workspace_id)
 
 
-async def _lifecycle(row, session: KagentSession | None = None) -> WorkspaceLifecycle:
-    state, detail = await _observe(
-        row["kagent_session_id"], session, workspace_id=row["session_id"]
+def _pending_create(row) -> tuple[WorkspaceObservedState, str]:
+    """Return the state of a workspace whose kagent Session is not confirmed yet."""
+    error, stopped = row.get("create_error"), row.get("create_stopped")
+    created_at = row.get("created_at")
+    if stopped == "rejected":
+        return (
+            WorkspaceObservedState.FAILED,
+            f"kagent refused to create the Session ({error}). Refresh to try again "
+            "once the cause is fixed.",
+        )
+    if stopped == "gave_up":
+        return (
+            WorkspaceObservedState.FAILED,
+            f"kagent did not create the Session after {row.get('create_attempts')} "
+            f"attempts ({error}); automatic retries stopped. Refresh to try again.",
+        )
+    if error:
+        return (
+            WorkspaceObservedState.RESUMING,
+            f"Waiting for kagent to create the Session ({error}); retrying automatically.",
+        )
+    if (
+        created_at is not None
+        and (datetime.now(UTC) - created_at).total_seconds()
+        >= settings.workspace_create_retry_window_seconds
+    ):
+        # Older than the retry window with no recorded outcome: ``due_creates`` skips it.
+        return (
+            WorkspaceObservedState.UNKNOWN,
+            "kagent never confirmed this workspace's Session; refresh to retry.",
+        )
+    return (
+        WorkspaceObservedState.RESUMING,
+        "The kagent Session has not been created yet; retrying automatically.",
     )
+
+
+async def _lifecycle(row, session: KagentSession | None = None) -> WorkspaceLifecycle:
+    if session is None and row["kagent_session_id"] is None:
+        state, detail = _pending_create(row)
+    else:
+        state, detail = await _observe(
+            row["kagent_session_id"], session, workspace_id=row["session_id"]
+        )
     async with db.connection() as conn:
         mode, reason = await push_lifecycle.projection(conn, row["session_id"])
     return WorkspaceLifecycle(
@@ -485,7 +572,8 @@ async def create(
     """Create the session rows and the kagent Session carrying the workspace.
 
     The rows are durable before kagent is called, and the create request id is stable, so a
-    create whose outcome is unknown is reconciled by ``refresh`` rather than repeated. kagent
+    create whose outcome is unknown is retried under that id (by ``retry_creates``, or by
+    ``refresh``) and returns the same Session rather than a second one. kagent
     refusing the request (for example a repository host outside the harness's allowed origins)
     removes the rows again and raises ``WorkspaceRejected``. The workspace takes the branch's
     writer claim in the same transaction, so a second writer on the branch (the default branch
@@ -515,13 +603,76 @@ async def create(
     return await get(workspace_id, user_id)
 
 
-async def _create_session(
-    workspace_id: str, user_id: str, *, reject_removes_rows: bool
+def _create_retry_fields(state: dict, error: str, *, permanent: bool) -> dict:
+    """Return the retry state after one more unconfirmed create: the next retry, or a stop."""
+    now = datetime.now(UTC)
+    attempts = state["create_attempts"] + 1
+    first = state["create_first_failed_at"] or now
+    fields = {
+        "create_attempts": attempts,
+        "create_first_failed_at": first,
+        "create_retry_at": None,
+        "create_error": error[:500],
+        "create_stopped": None,
+    }
+    if permanent:
+        fields["create_stopped"] = "rejected"
+    elif (
+        now - first
+    ).total_seconds() >= settings.workspace_create_retry_window_seconds:
+        fields["create_stopped"] = "gave_up"
+    else:
+        delay = min(
+            settings.workspace_create_retry_initial_seconds * 2 ** (attempts - 1),
+            settings.workspace_create_retry_max_seconds,
+        )
+        fields["create_retry_at"] = now + timedelta(seconds=delay)
+    return fields
+
+
+async def _record_create_failure(
+    workspace_id: str, exc: Exception, *, permanent: bool
 ) -> None:
+    binding = await ns.get_binding(workspace_id)
+    if binding is not None and binding["kagent_session_id"] is not None:
+        return  # a concurrent create confirmed the Session; its state is already cleared
+    state = await ns.ledger.create_retry(workspace_id)
+    if state is None:
+        return
+    await ns.ledger.set_create_retry(
+        workspace_id,
+        **_create_retry_fields(state, _create_reason(exc), permanent=permanent),
+    )
+
+
+_CREATE_RESET = {
+    "create_attempts": 0,
+    "create_first_failed_at": None,
+    "create_retry_at": None,
+    "create_error": None,
+    "create_stopped": None,
+}
+
+
+async def _create_session(
+    workspace_id: str,
+    user_id: str,
+    *,
+    reject_removes_rows: bool,
+    restart_retries: bool = False,
+) -> None:
+    """Create the binding's kagent Session under its stable request id, or confirm it exists.
+
+    An unconfirmed outcome is recorded on the workspace: a transient one schedules the next
+    automatic retry (``retry_creates``), a permanent one or one past the retry window stops
+    them. ``restart_retries`` (a manual refresh) starts a fresh retry window first.
+    """
     async with ns._lock(workspace_id):
         binding = await ns.get_binding(workspace_id)
         if binding is None:
             return
+        if restart_retries and binding["kagent_session_id"] is None:
+            await ns.ledger.set_create_retry(workspace_id, **_CREATE_RESET)
         if binding["kagent_session_id"] is not None:
             async with db.connection() as conn:
                 issuance = await conn.fetchval(
@@ -554,17 +705,28 @@ async def _create_session(
                 f"This workspace's task attempt is not live ({exc.code})."
             ) from exc
         except SessionError as exc:
+            if exc.grpc_status in _REJECTED and reject_removes_rows:
+                await _delete_rows(
+                    workspace_id, evidence=f"kagent-rejected:{exc.grpc_status}"
+                )
+                raise WorkspaceRejected(str(exc)) from exc
+            await _record_create_failure(
+                workspace_id,
+                exc,
+                permanent=exc.grpc_status in _PERMANENT or ns._create_hit_deleted(exc),
+            )
             if exc.grpc_status in _REJECTED:
-                if reject_removes_rows:
-                    await _delete_rows(
-                        workspace_id, evidence=f"kagent-rejected:{exc.grpc_status}"
-                    )
                 raise WorkspaceRejected(str(exc)) from exc
             logger.warning(
                 "kagent create for workspace %s unconfirmed: %s", workspace_id, exc
             )
             return
         except KagentError as exc:
+            await _record_create_failure(
+                workspace_id,
+                exc,
+                permanent=isinstance(exc, ServiceConfigurationError),
+            )
             logger.warning(
                 "kagent create for workspace %s unconfirmed: %s", workspace_id, exc
             )
@@ -581,10 +743,15 @@ async def _create_session(
 
 
 async def refresh(workspace_id: str, user_id: str) -> WorkspaceLifecycle:
-    """Re-read the lifecycle from kagent, first retrying a create whose outcome was unknown."""
+    """Re-read the lifecycle from kagent, first retrying a create whose outcome was unknown.
+
+    A manual retry also restarts automatic retries that had stopped.
+    """
     row = await _owned_row(workspace_id, user_id)
     if row["kagent_session_id"] is None or settings.git_transport_enabled:
-        await _create_session(workspace_id, user_id, reject_removes_rows=False)
+        await _create_session(
+            workspace_id, user_id, reject_removes_rows=False, restart_retries=True
+        )
         row = await _owned_row(workspace_id, user_id)
     return await _lifecycle(row)
 
@@ -729,6 +896,40 @@ async def delete(workspace_id: str, user_id: str) -> None:
                     "kagent did not confirm workspace deletion; refresh before retrying."
                 ) from exc
         await _delete_rows(workspace_id, evidence=evidence)
+
+
+async def retry_creates() -> list[str]:
+    """Retry the creates kagent did not confirm, when due; returns the ids now created.
+
+    Each retry is the same idempotent ``CreateSession`` (stable request id, same checkout and
+    credential reference) that **refresh** sends, under the same per-session lock, so it can
+    only ever return the one Session. The owner sees each attempt's outcome.
+    """
+    created = []
+    for row in await ns.ledger.due_creates(
+        settings.workspace_create_retry_initial_seconds,
+        settings.workspace_create_retry_window_seconds,
+    ):
+        workspace_id, user_id = row["session_id"], row["user_id"]
+        try:
+            await _create_session(workspace_id, user_id, reject_removes_rows=False)
+        except WorkspaceRejected:
+            pass  # recorded as a stop; the owner sees it below
+        except WorkspaceConflict as exc:
+            await _record_create_failure(workspace_id, exc, permanent=True)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - e.g. a Secret outage; retried with backoff
+            ns._log_step_failure("workspace_create", workspace_id, exc)
+            await _record_create_failure(workspace_id, exc, permanent=False)
+        binding = await ns.get_binding(workspace_id)
+        if binding is not None and binding["kagent_session_id"] is not None:
+            created.append(workspace_id)
+        try:
+            await publish(user_id, await get(workspace_id, user_id))
+        except WorkspaceNotFound:
+            pass
+    return created
 
 
 # --------------------------------------------------------------------------------------------

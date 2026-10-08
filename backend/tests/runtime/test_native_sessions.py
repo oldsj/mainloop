@@ -103,6 +103,14 @@ class MemoryLedger:
         self.workspace: SessionWorkspace | None = None
         self.archived = False
         self.kagent_deleted = False
+        # A workspace's automatic CreateSession retry state (the ``workspaces`` columns).
+        self.create_state = {
+            "create_attempts": 0,
+            "create_first_failed_at": None,
+            "create_retry_at": None,
+            "create_error": None,
+            "create_stopped": None,
+        }
 
     async def validate_report(self, message_id):
         # These dict fixtures have no managed task report intents. Real authority is tested
@@ -114,6 +122,17 @@ class MemoryLedger:
 
     async def update_binding(self, session_id, *, conn=None, **fields):
         self.binding.update(fields)
+        if fields.get("kagent_session_id") is not None:
+            self.reset_create_state()
+
+    def reset_create_state(self):
+        self.create_state.update(
+            create_attempts=0,
+            create_first_failed_at=None,
+            create_retry_at=None,
+            create_error=None,
+            create_stopped=None,
+        )
 
     async def remember_child_start_failure(self, session_id, reason):
         if self.binding["role"] != "child" or self.binding["turns"]:
@@ -136,6 +155,10 @@ class MemoryLedger:
             return False
         self.binding.update(
             kagent_session_id=None, kagent_request_id=request_id, standing_hash=None
+        )
+        self.reset_create_state()
+        self.create_state["create_retry_at"] = datetime.now(UTC) + timedelta(
+            seconds=ns.settings.workspace_create_retry_initial_seconds
         )
         for r in self.rows.values():
             if r["state"] in ("sending", "delivered"):
@@ -212,6 +235,31 @@ class MemoryLedger:
 
     async def get_workspace(self, session_id, *, conn=None):
         return self.workspace
+
+    async def create_retry(self, session_id):
+        if self.workspace is None or session_id != SESSION:
+            return None
+        return dict(self.create_state)
+
+    async def set_create_retry(self, session_id, **fields):
+        if self.workspace is not None and session_id == SESSION:
+            self.create_state.update(fields)
+
+    async def due_creates(self, initial_seconds, window_seconds):
+        # The fixture workspace is always young enough; the age rule is covered in Postgres.
+        state = self.create_state
+        due = state["create_retry_at"] is None or state[
+            "create_retry_at"
+        ] <= datetime.now(UTC)
+        if (
+            self.workspace is None
+            or self.binding["kagent_session_id"] is not None
+            or self.archived
+            or state["create_stopped"] is not None
+            or not due
+        ):
+            return []
+        return [{"session_id": SESSION, "user_id": "user-1"}]
 
     async def undeleted_archived(self):
         if (

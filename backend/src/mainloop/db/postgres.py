@@ -284,6 +284,12 @@ CREATE TABLE IF NOT EXISTS workspaces (
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS development_environment JSONB;
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS reported_development_environment JSONB;
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS runtime_composition JSONB;
+-- Automatic CreateSession retry after an unconfirmed outcome (same request id each time).
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS create_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS create_first_failed_at TIMESTAMPTZ;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS create_retry_at TIMESTAMPTZ;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS create_error TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS create_stopped TEXT;  -- 'rejected' | 'gave_up'
 
 -- Topics are durable records (not sessions). Supervisors (next slice) attach to a topic.
 CREATE TABLE IF NOT EXISTS topics (
