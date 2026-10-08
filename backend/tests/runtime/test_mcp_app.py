@@ -135,6 +135,31 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.task_call.await_count, 3)
         self.assertEqual(self.store.native_turns_sent_to_children, 0)
 
+    async def test_delegated_standing_supplies_identity_then_task_discovery(self):
+        from mainloop.runtime.standing import StandingInputs, render_standing
+
+        for role in ("supervisor", "child"):
+            text = render_standing(StandingInputs(role=role))
+            self.assertIn("`whoami`", text)
+            self.assertIn("`task_get`", text)
+            self.assertIn("returned task_id", text)
+            self.assertLess(text.index("`whoami`"), text.index("`task_get`"))
+        self.assertEqual(self.store.native_turns_sent_to_children, 0)
+
+    def test_continuation_discovery_keeps_existing_narrow_tool_schemas(self):
+        for tool in ("task_get", "task_history"):
+            schema = TOOLS[tool][0].model_json_schema()
+            self.assertEqual(set(schema["properties"]), {"task_id"})
+            self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(TOOLS["whoami"][0].model_json_schema()["properties"], {})
+        for role, depth in (("supervisor", 1), ("child", 2)):
+            actor = Actor(role, depth, "workspace")
+            self.assertTrue(
+                {"whoami", "task_get", "task_history", "task_list"}.issubset(
+                    surface_tools(actor, "ordinary")
+                )
+            )
+
     async def test_revoked_and_terminal_auth(self):
         for field, value in (
             ("status", "completed"),

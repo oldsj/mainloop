@@ -11,14 +11,19 @@ from datetime import UTC, datetime
 
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks.events import reserve_event
+from pydantic import ValidationError
 
 from models.task import (
     ProjectProviderPreference,
     Task,
+    TaskArtifact,
     TaskAttempt,
     TaskOperation,
     TaskProjection,
+    TaskReport,
 )
+from models.task_handoff import CheckpointEvidence, ContinuationManifest
+from models.workspace import WorkspaceEnvironment
 
 
 class TaskError(ValueError):
@@ -604,6 +609,225 @@ async def get_artifact(conn, artifact_id, principal):
         "sha256": row["sha256"],
         "payload": json.loads(row["content"]),
     }
+
+
+async def load_continuation(conn, task_id, principal):
+    """Read only the current attempt's exact immutable continuation links.
+
+    No artifact enumeration or external reference resolution. Persisted routing,
+    canonical hashes and report digests are checked before accepting typed context.
+    The caller keeps its authenticated binding and transaction held throughout.
+    """
+    require_transaction(conn)
+    task = await get_task(conn, task_id, principal)
+    row = await conn.fetchrow("SELECT * FROM tasks WHERE id=$1 FOR SHARE", task.id)
+    if any(
+        getattr(task, key) != row[key]
+        for key in (
+            "id",
+            "owner_id",
+            "project_id",
+            "parent_task_id",
+            "root_task_id",
+            "mode",
+            "current_attempt_id",
+            "status",
+            "version",
+        )
+    ):
+        raise TaskError(409, "continuation_identity_mismatch")
+    if task.current_attempt_id is None:
+        return task, (), ()
+
+    from mainloop.tasks import lifecycle
+
+    await conn.fetchrow(
+        "SELECT id FROM task_attempts WHERE id=$1 FOR SHARE", row["current_attempt_id"]
+    )
+    target = await lifecycle.load_attempt(conn, row["current_attempt_id"])
+    if target is None or target.task_id != task.id:
+        raise TaskError(409, "continuation_identity_mismatch")
+    if target.manifest_ref is None and target.checkpoint_ref is None:
+        return task, (), ()
+    if not target.manifest_ref or not target.checkpoint_ref:
+        raise TaskError(409, "continuation_identity_mismatch")
+
+    try:
+        manifest_artifact = await get_artifact(conn, target.manifest_ref, principal)
+        checkpoint_artifact = await get_artifact(conn, target.checkpoint_ref, principal)
+        if (
+            manifest_artifact["kind"] != "handoff_manifest"
+            or checkpoint_artifact["kind"] != "checkpoint"
+            or manifest_artifact["operation_id"] != checkpoint_artifact["operation_id"]
+        ):
+            raise TaskError(409, "continuation_identity_mismatch")
+        for artifact in (manifest_artifact, checkpoint_artifact):
+            if digest(artifact["payload"]) != artifact["sha256"]:
+                raise TaskError(409, "artifact_integrity_error")
+            if (
+                len(
+                    json.dumps(
+                        artifact["payload"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode()
+                )
+                > 32768
+            ):
+                raise TaskError(409, "artifact_integrity_error")
+        operation_row = await conn.fetchrow(
+            "SELECT * FROM task_operations WHERE id=$1 FOR SHARE",
+            manifest_artifact["operation_id"],
+        )
+        op = await operation(conn, operation_row["id"], principal)
+        if (
+            any(
+                getattr(op, key) != operation_row[key]
+                for key in ("id", "owner_id", "task_id", "attempt_id", "kind", "state")
+            )
+            or op.owner_id != task.owner_id
+            or op.task_id != task.id
+            or op.kind not in ("retry", "reassign")
+            or op.target_attempt_id != target.id
+            or op.attempt_id != target.id
+            or op.source_attempt_id != target.predecessor_id
+            or op.source_attempt_id is None
+            or op.manifest_ref != target.manifest_ref
+            or op.checkpoint_ref != target.checkpoint_ref
+        ):
+            raise TaskError(409, "continuation_identity_mismatch")
+        # Identity and canonical digests precede typed artifact parsing.
+        manifest = ContinuationManifest.model_validate(manifest_artifact["payload"])
+        checkpoint = CheckpointEvidence.model_validate(checkpoint_artifact["payload"])
+        source = await lifecycle.load_attempt(conn, op.source_attempt_id)
+        project_row = await project(conn, task.project_id, task.owner_id)
+        repository = parse_github_repo(project_row["full_name"]).full_name.lower()
+        workspace = await conn.fetchrow(
+            """SELECT w.*,s.user_id,s.project_id,s.repo_url,s.branch_name
+               FROM workspaces w JOIN sessions s ON s.id=w.session_id
+               WHERE w.session_id=$1""",
+            target.workspace_id,
+        )
+        runtime_id = await conn.fetchval(
+            "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+            source.binding_id if source else None,
+        )
+        claim = await conn.fetchrow(
+            "SELECT * FROM workspace_writer_claims WHERE attempt_id=$1", target.id
+        )
+        if (
+            source is None
+            or source.task_id != task.id
+            or source.successor_id != target.id
+            or (source.role, source.depth) != (target.role, target.depth)
+            or (target.role, target.depth)
+            != (("child", 2) if task.parent_task_id else ("supervisor", 1))
+            or target.session_id != target.binding_id
+            or target.workspace_id != target.binding_id
+            or task.checkout is None
+            or task.accepted_environment is None
+            or parse_github_repo(project_row["html_url"]).full_name.lower()
+            != repository
+            or manifest.task_id != task.id
+            or manifest.operation_id != op.id
+            or manifest.predecessor_id != source.id
+            or manifest.target_profile_id != target.profile_id
+            or target.profile_id != task.assigned_profile_id
+            or manifest.repository != repository
+            or manifest.branch != task.checkout.branch
+            or manifest.branch == project_row["default_branch"]
+            or manifest.checkpoint_sha != task.checkout.ref
+            or target.initial_ref != manifest.checkpoint_sha
+            or manifest.environment != task.accepted_environment
+            or target.environment != task.accepted_environment
+            or source.environment != task.accepted_environment
+            or manifest.caller_instructions.encode() != task.brief.encode()
+            or len(manifest.caller_instructions.encode()) > 16384
+            or (
+                checkpoint.operation_id,
+                checkpoint.attempt_id,
+                checkpoint.session_id,
+                checkpoint.binding_id,
+                checkpoint.writer_generation,
+                checkpoint.runtime_identity,
+            )
+            != (
+                op.id,
+                source.id,
+                source.session_id,
+                source.binding_id,
+                source.writer_generation,
+                runtime_id or f"no-start:{source.id}",
+            )
+            or (checkpoint.repository, checkpoint.branch, checkpoint.remote_sha)
+            != (repository, manifest.branch, manifest.checkpoint_sha)
+            or not checkpoint.committed_checkpoint
+            or checkpoint.git_dispatch != "settled"
+            or checkpoint.merge_dispatch != "settled"
+            or workspace is None
+            or workspace["user_id"] != task.owner_id
+            or workspace["project_id"] != task.project_id
+            or parse_github_repo(workspace["repo"]).full_name.lower() != repository
+            or parse_github_repo(workspace["repo_url"]).full_name.lower() != repository
+            or workspace["branch"] != manifest.branch
+            or workspace["branch_name"] != manifest.branch
+            or workspace["ref"] != manifest.checkpoint_sha
+            or workspace["depth"] != task.checkout.depth
+            or WorkspaceEnvironment.model_validate(
+                decode(workspace["development_environment"])
+            )
+            != manifest.environment
+            or claim is None
+            or not claim["held"]
+            or (
+                claim["owner_id"],
+                claim["repository"],
+                claim["branch"],
+                claim["generation"],
+            )
+            != (task.owner_id, repository, manifest.branch, target.writer_generation)
+        ):
+            raise TaskError(409, "continuation_identity_mismatch")
+        reports = []
+        seen = set()
+        for ref in manifest.report_refs:
+            if not ref.startswith("task-report:") or ref in seen:
+                raise TaskError(409, "continuation_identity_mismatch")
+            seen.add(ref)
+            report_row = await conn.fetchrow(
+                "SELECT * FROM task_reports WHERE id=$1",
+                ref.removeprefix("task-report:"),
+            )
+            if (
+                report_row is None
+                or report_row["task_id"] != task.id
+                or report_row["attempt_id"] != source.id
+            ):
+                raise TaskError(409, "continuation_identity_mismatch")
+            payload = decode(report_row["snapshot"])
+            if digest(payload) != report_row["request_digest"]:
+                raise TaskError(409, "report_integrity_error")
+            report = TaskReport.model_validate(payload)
+            if (report.task_id, report.attempt_id, report.request_id) != (
+                task.id,
+                source.id,
+                report_row["request_id"],
+            ):
+                raise TaskError(409, "continuation_identity_mismatch")
+            reports.append(report)
+        return (
+            task,
+            tuple(
+                TaskArtifact.model_validate(a)
+                for a in (manifest_artifact, checkpoint_artifact)
+            ),
+            tuple(reports),
+        )
+    except (ValidationError, ValueError, TypeError, KeyError) as exc:
+        if isinstance(exc, TaskError):
+            raise
+        raise TaskError(409, "continuation_integrity_error") from exc
 
 
 async def handoff_operation(conn, operation_id, *, lock=False):
