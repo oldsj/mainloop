@@ -219,9 +219,12 @@ def create_app(service: AgentService | None = None):
     async def lifespan(app):
         if managed:
             from mainloop.runtime.agent_identity import require_token_key
+            from mainloop.tasks.provisioning import install
 
             require_token_key()
             await db.connect()
+            # Accept durable task intent here; the API owns reconciliation loops.
+            install()
         try:
             async with server.session_manager.run(), protected.session_manager.run():
                 yield

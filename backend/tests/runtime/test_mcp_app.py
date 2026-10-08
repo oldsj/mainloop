@@ -227,6 +227,59 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(rpc("tools/list").status_code, 401)
 
 
+class ManagedLifespanTests(unittest.TestCase):
+    def test_managed_startup_installs_task_ports_without_reconciliation_loops(self):
+        from mainloop.db import db
+        from mainloop.tasks.projection import Projection
+        from mainloop.tasks.provisioning import Provisioning
+        from mainloop.tasks.service import ports
+
+        with (
+            patch.object(ports, "provisioning", None),
+            patch.object(ports, "projection", None),
+            patch.object(ports, "_projection_cursor", ""),
+            patch("mainloop.runtime.agent_identity.require_token_key") as key,
+            patch.object(db, "connect", AsyncMock()) as connect,
+            patch.object(db, "disconnect", AsyncMock()) as disconnect,
+            patch(
+                "mainloop.runtime.native_sessions.close_client", AsyncMock()
+            ) as close,
+            patch(
+                "mainloop.runtime.native_sessions.reconcile_loop", AsyncMock()
+            ) as native,
+            patch(
+                "mainloop.tasks.service.reconciliation_dispatcher", AsyncMock()
+            ) as tasks,
+        ):
+            with TestClient(create_app()):
+                key.assert_called_once_with()
+                connect.assert_awaited_once_with()
+                self.assertIsInstance(ports.provisioning, Provisioning)
+                self.assertIsInstance(ports.projection, Projection)
+            close.assert_awaited_once_with()
+            disconnect.assert_awaited_once_with()
+            native.assert_not_called()
+            tasks.assert_not_called()
+
+    def test_injected_service_does_not_install_ports_or_manage_database(self):
+        from mainloop.db import db
+        from mainloop.tasks.service import ports
+
+        with (
+            patch.object(ports, "provisioning", None),
+            patch.object(ports, "projection", None),
+            patch("mainloop.tasks.provisioning.install") as install,
+            patch.object(db, "connect", AsyncMock()) as connect,
+            patch.object(db, "disconnect", AsyncMock()) as disconnect,
+        ):
+            with TestClient(create_app(AgentService(FakeStore(), KINDS))):
+                self.assertIsNone(ports.provisioning)
+                self.assertIsNone(ports.projection)
+            install.assert_not_called()
+            connect.assert_not_called()
+            disconnect.assert_not_called()
+
+
 class CredentialTests(unittest.IsolatedAsyncioTestCase):
     async def test_per_binding_secret_and_cleanup(self):
         import base64
@@ -410,13 +463,16 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(conn.is_in_transaction())
             raise RuntimeError("unavailable")
 
-        with patch("mainloop.db.db.connection", connection), patch.object(
-            module, "_binding_lock", lock
-        ), patch(
-            "mainloop.push_gate.credentials.cleanup_all", AsyncMock()
-        ) as git_cleanup, patch.object(
-            module.credentials, "remove", AsyncMock(side_effect=unavailable)
-        ) as remove:
+        with (
+            patch("mainloop.db.db.connection", connection),
+            patch.object(module, "_binding_lock", lock),
+            patch(
+                "mainloop.push_gate.credentials.cleanup_all", AsyncMock()
+            ) as git_cleanup,
+            patch.object(
+                module.credentials, "remove", AsyncMock(side_effect=unavailable)
+            ) as remove,
+        ):
             await module.revoke("binding-id")
         git_cleanup.assert_awaited_once_with()
         self.assertFalse(conn.is_in_transaction())
@@ -453,11 +509,13 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         async def removed(*args):
             self.assertFalse(conn.is_in_transaction())
 
-        with patch("mainloop.db.db.connection", connection), patch.object(
-            module, "_binding_lock", lock
-        ), patch.object(
-            module.credentials, "remove", AsyncMock(side_effect=removed)
-        ) as remove:
+        with (
+            patch("mainloop.db.db.connection", connection),
+            patch.object(module, "_binding_lock", lock),
+            patch.object(
+                module.credentials, "remove", AsyncMock(side_effect=removed)
+            ) as remove,
+        ):
             await module.reconcile_cleanup()
         remove.assert_awaited_once_with(
             "binding-id", module.reference_from_data(reference)
