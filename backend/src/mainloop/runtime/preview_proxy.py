@@ -181,8 +181,10 @@ def session_actor(kagent_session_id: str) -> str:
     return f"session-{kagent_session_id}"
 
 
-async def _resolve_target(workspace_id: str, user_id: str) -> PreviewTarget | None:
-    row = await workspaces.preview_row(workspace_id, user_id)
+async def _resolve_target(
+    workspace_id: str, user_id: str, *, conn=None
+) -> PreviewTarget | None:
+    row = await workspaces.preview_row(workspace_id, user_id, conn=conn)
     if row is None:
         return None
     return PreviewTarget(
@@ -197,8 +199,8 @@ async def _resolve_target(workspace_id: str, user_id: str) -> PreviewTarget | No
 @contextlib.asynccontextmanager
 async def _router_admission(parsed: PreviewHost):
     """Re-resolve the owner, runtime identity and port at every CONNECT attempt."""
-    async with lifecycle.guard(parsed.workspace_id, "preview"):
-        target = await _resolve_target(parsed.workspace_id, current_user())
+    async with lifecycle.guard(parsed.workspace_id, "preview") as conn:
+        target = await _resolve_target(parsed.workspace_id, current_user(), conn=conn)
         if target is None or parsed.port not in target.ports:
             raise lifecycle.LifecycleDenied("preview_target_unavailable")
         yield target

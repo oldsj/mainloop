@@ -285,14 +285,19 @@ Projects without a selection retain the legacy CreateSession request without tha
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
 
-## Git publication contract (disabled)
+## Git publication contract (default off)
 
 The [push gate contract](push-gate.md) defines feature-branch publication scope and
-protected branches. Lifecycle issuance is disabled by default, and no listener or runtime
-push credential injection exists. Workspace responses include `publication_mode` and
+protected branches. Source supports frozen native enrollment, deferred read/push publication
+and PostgreSQL authority for injectable ASGI listeners. Both enablement flags default off;
+no production listener or containment is installed. Workspace responses include `publication_mode` and
 `publication_reason`, independently of runtime state. The badge and detail page show
 read-only reasons (default/protected branch, missing metadata, no grant, or disabled). Current
-actor GitHub credentials remain unchanged until the infrastructure containment switch.
+actor GitHub credentials remain unchanged until the separately verified infrastructure switch.
+The complete MCP/read/optional-push tuple commits before original CreateSession bytes. Durable
+same-session non-turn Suspend/Resume warmup and final fresh GetSession precede usable publication.
+UUID storage alone grants no authority. Unknown outcomes recover the original tuple; history
+without a plan is held rather than retrofitted. Default/protected workspaces receive read only.
 
 ## Task-backed workspaces
 
@@ -339,8 +344,19 @@ Push enrollment runs again after activation commits the delegated attempt proof.
 operation remains pending at `target_ready` until this idempotent step reconciles; restart
 recovery revalidates current authority without recording or replaying another first brief. `PUSH_GATE_ENABLED`
 remains false by default. The delegated-role push resolver is integrated with the same live parent authority checks;
-this slice does not install a Git bearer into an actor or claim live push prevention. The existing
-MCP credential envelope is frozen before create and retried unchanged after unknown outcomes.
+Git planning remains independently default off. Read publication follows exact current runtime
+observation; push follows active admission. Native send confirms required publications before
+turn bytes, resolving the original create identity's enrollment even when revoked. The final
+send guard rechecks the current binding and owner session after readiness; committed cancellation
+or revocation prevents a prepared turn from starting. Resume and preview admission reuse the
+guard's connection for stored-contract and permission reads. The complete credential envelope
+is retried unchanged after unknown outcomes. This
+source slice claims no live push prevention.
+
+UNKNOWN/DISPATCHING publication retains the branch claim across cancellation, confirmed runtime
+deletion, restart and successor requests. Settlement and destructive cleanup retain their durable
+operation/source identity while unresolved. Both Git purposes revoke with flags off; independent
+UID-conditional cleanup survives binding deletion and outages.
 
 The guard denies new preview admissions after draining; it does not terminate already-open router
 connections. Write-enabled handoff remains unqualified until retained-source isolation and preview

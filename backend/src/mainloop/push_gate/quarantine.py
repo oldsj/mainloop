@@ -10,6 +10,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from mainloop.push_gate.authorization import ZERO_OID
 from mainloop.push_gate.pack import PackFacts, walk_pack
@@ -21,7 +22,10 @@ from mainloop.push_gate.protocol import (
     pkt,
     receive_commands,
 )
-from mainloop.push_gate.upstream import FixedGitUpstream
+
+
+class SeedReadPort(Protocol):
+    async def upload_pack(self, body: bytes, *, protocol=None, secrets=()) -> bytes: ...
 
 
 @dataclass(frozen=True)
@@ -179,7 +183,7 @@ async def prepare_receive(
     size: int,
     refs: dict[str, str],
     default_branch: str,
-    upstream: FixedGitUpstream,
+    upstream: SeedReadPort,
     limits: Limits,
     *,
     secrets: tuple[bytes, ...] = (),

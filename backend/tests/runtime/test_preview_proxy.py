@@ -1121,7 +1121,7 @@ class PreviewProxyTests(unittest.TestCase):
                 ports = await preview_proxy.workspace_preview_ports(
                     "workspace-1", "owner"
                 )
-            lookup.assert_awaited_with("workspace-1", "owner")
+            lookup.assert_awaited_with("workspace-1", "owner", conn=None)
             self.assertEqual(
                 (target.atespace, target.actor, target.ports),
                 ("kagent", "session-sess-1", {5173: "web", 8000: "api"}),

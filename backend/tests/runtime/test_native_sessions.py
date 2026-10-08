@@ -9,6 +9,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,33 @@ from tests.runtime.test_task_provisioning import ordinary_guard
 from models import SessionStatus
 
 SESSION = "session-1"
+
+
+@asynccontextmanager
+async def memory_connection():
+    """Model ordinary native plumbing; actual SQL authority has PostgreSQL coverage."""
+    in_transaction = False
+
+    @asynccontextmanager
+    async def transaction():
+        nonlocal in_transaction
+        previous = in_transaction
+        in_transaction = True
+        try:
+            yield
+        finally:
+            in_transaction = previous
+
+    conn = SimpleNamespace(
+        fetchval=AsyncMock(return_value=None),
+        fetchrow=AsyncMock(return_value=None),
+        fetch=AsyncMock(return_value=[]),
+        execute=AsyncMock(),
+        transaction=transaction,
+        is_closed=lambda: False,
+        is_in_transaction=lambda: in_transaction,
+    )
+    yield conn
 
 
 class MemoryLedger:
@@ -84,7 +112,7 @@ class MemoryLedger:
     async def get_binding(self, session_id, *, conn=None):
         return self.binding if session_id == SESSION else None
 
-    async def update_binding(self, session_id, **fields):
+    async def update_binding(self, session_id, *, conn=None, **fields):
         self.binding.update(fields)
 
     async def remember_child_start_failure(self, session_id, reason):
@@ -100,7 +128,7 @@ class MemoryLedger:
         return True
 
     async def replace_kagent_session(
-        self, session_id, old_kagent_session_id, request_id
+        self, session_id, old_kagent_session_id, request_id, *, conn=None
     ):
         if self.binding.get("child_start_failure"):
             return False
@@ -176,10 +204,10 @@ class MemoryLedger:
         if text and self.rows[message_id]["state"] in ns._RESOLVABLE:
             self.rows[message_id]["partial_text"] = text
 
-    async def get_development_environment(self, session_id):
+    async def get_development_environment(self, session_id, *, conn=None):
         return getattr(self, "development_environment", None)
 
-    async def record_composition(self, session_id, session):
+    async def record_composition(self, session_id, session, *, conn=None):
         self.reported_composition = session
 
     async def get_workspace(self, session_id, *, conn=None):
@@ -194,7 +222,7 @@ class MemoryLedger:
             return [{"session_id": SESSION}]
         return []
 
-    async def mark_kagent_deleted(self, session_id):
+    async def mark_kagent_deleted(self, session_id, *, conn=None):
         self.kagent_deleted = True
 
     async def set_delivery(
@@ -336,6 +364,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 self.updated.append(fields["status"])
 
         for patcher in (
+            patch.object(ns.db, "connection", memory_connection),
             patch("mainloop.tasks.lifecycle.guard", ordinary_guard),
             patch("mainloop.tasks.lifecycle.check_session", AsyncMock()),
             patch.object(ns, "attempt_row", AsyncMock(return_value=None)),
@@ -392,7 +421,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         calls = []
 
-        async def publish(binding):
+        async def publish(binding, *, conn=None):
             binding_id = binding["session_id"]
             calls.append(binding_id)
             self.assertEqual(

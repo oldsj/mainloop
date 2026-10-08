@@ -4,7 +4,8 @@ A session that belongs to a task attempt (a delegated supervisor or child) is on
 attempt. Every path that submits a turn, recreates or resumes a runtime, serves a preview,
 archives or deletes rows, or ends the session consults ``check`` here, so no caller keeps its own
 copy of the rule. Sessions that no attempt owns (the main thread, owner workspaces, session
-children) are not constrained.
+children) retain their ordinary routing, but terminal, archived, deleted or revoked
+bindings cannot admit new work.
 
 Settlement is the only way an attempt leaves ``creating``/``active``/``draining``: the runtime is
 confirmed gone first, the attempt is ``fenced`` with that evidence, the branch claim is released
@@ -97,7 +98,10 @@ async def check(conn, session_id: str, action: str, *, lock: bool = False) -> No
     row = await facts(conn, session_id, lock=lock)
     if row is None:
         binding = await conn.fetchrow(
-            "SELECT role,mcp_grant_kind FROM native_bindings WHERE session_id=$1",
+            """SELECT b.role,b.mcp_grant_kind,b.token_hash,b.kagent_deleted_at,
+                      s.status,s.archived_at
+               FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE b.session_id=$1""",
             session_id,
         )
         if binding and (
@@ -105,6 +109,14 @@ async def check(conn, session_id: str, action: str, *, lock: bool = False) -> No
             or (binding["role"] == "child" and binding["mcp_grant_kind"] == "workspace")
         ):
             raise LifecycleDenied("attempt_missing")
+        if binding and action in _CLAIM_ACTIONS:
+            if binding["status"] in FINAL or binding["archived_at"]:
+                raise LifecycleDenied("session_terminal")
+            if binding["kagent_deleted_at"] or (
+                binding["mcp_grant_kind"] in ("workspace", "coordination")
+                and not binding["token_hash"]
+            ):
+                raise LifecycleDenied("binding_revoked")
         return
     code = denial(row, action)
     if code:
@@ -155,23 +167,24 @@ async def locked(conn, session_id: str):
 
 
 @asynccontextmanager
-async def guard(session_id: str, action: str):
-    """Guard an external action; ordinary sessions keep their existing behavior."""
+async def guard(session_id: str, action: str, *, conn=None):
+    """Guard an external action and yield its committed, lock-owning connection."""
     from mainloop.db import db
     from mainloop.push_gate import lifecycle as push_lifecycle
 
-    async with db.connection() as conn:
-        row = await facts(conn, session_id)
-        if row is None:
-            await check(conn, session_id, action)
-            yield
-            return
-        async with push_lifecycle.locked(conn, session_id), locked(conn, session_id):
-            await check(conn, session_id, action)
-            yield
+    if conn is None:
+        async with db.connection() as owned:
+            async with guard(session_id, action, conn=owned):
+                yield owned
+        return
+    if conn.is_in_transaction():
+        raise RuntimeError("runtime guard requires committed connection")
+    async with push_lifecycle.locked(conn, session_id), locked(conn, session_id):
+        await check(conn, session_id, action)
+        yield conn
 
 
-async def authenticate_binding(conn, binding: dict):
+async def authenticate_binding(conn, binding: dict, *, allow_creating=False):
     """Resolve a delegated principal from durable identities and exact task ancestry."""
     from mainloop.tasks.principal import TaskPrincipal
 
@@ -215,7 +228,8 @@ async def authenticate_binding(conn, binding: dict):
         or row["depth"] != depth
         or row["role"] != binding["role"]
         or row["binding_role"] != row["role"]
-        or row["state"] != "active"
+        or row["state"]
+        not in (("creating", "active") if allow_creating else ("active",))
         or row["current_attempt_id"] != row["id"]
         or row["session_id"] != row["binding_id"]
         or row["workspace_id"] != row["binding_id"]
@@ -321,17 +335,19 @@ async def authenticate_session(binding: dict):
         return principal
 
 
-async def check_session(session_id: str, action: str) -> None:
+async def check_session(session_id: str, action: str, *, conn=None) -> None:
     """``check`` for callers outside a transaction."""
     from mainloop.db import db
 
-    async with db.connection() as conn:
-        await check(conn, session_id, action)
+    if conn is None:
+        async with db.connection() as owned:
+            return await check_session(session_id, action, conn=owned)
+    await check(conn, session_id, action)
 
 
-async def permitted(session_id: str, action: str) -> bool:
+async def permitted(session_id: str, action: str, *, conn=None) -> bool:
     try:
-        await check_session(session_id, action)
+        await check_session(session_id, action, conn=conn)
     except LifecycleDenied:
         return False
     return True
@@ -345,11 +361,14 @@ CREATE_DISPATCH = "kagent-create:dispatch-may-have-started"
 CREATE_REJECTED = "kagent-create:first-dispatch-rejected-before-reservation"
 
 
-async def create_dispatch(session_id: str) -> bool:
+async def create_dispatch(session_id: str, *, conn=None) -> bool:
     """Persist conservative dispatch history using the existing attempt audit refs."""
     from mainloop.db import db
 
-    async with db.connection() as conn, conn.transaction():
+    if conn is None:
+        async with db.connection() as owned:
+            return await create_dispatch(session_id, conn=owned)
+    async with conn.transaction():
         row = await conn.fetchrow(
             "SELECT id FROM task_attempts WHERE binding_id=$1 FOR UPDATE", session_id
         )
@@ -369,7 +388,7 @@ async def create_dispatch(session_id: str) -> bool:
         return True
 
 
-async def create_rejected(session_id: str) -> None:
+async def create_rejected(session_id: str, *, conn=None) -> None:
     """Commit absence evidence and close admission together, before returning to the caller.
 
     The caller holds the runtime guard across dispatch and this write. A crash after
@@ -377,7 +396,10 @@ async def create_rejected(session_id: str) -> None:
     """
     from mainloop.db import db
 
-    async with db.connection() as conn, conn.transaction():
+    if conn is None:
+        async with db.connection() as owned:
+            return await create_rejected(session_id, conn=owned)
+    async with conn.transaction():
         row = await conn.fetchrow(
             "SELECT id FROM task_attempts WHERE binding_id=$1 FOR UPDATE", session_id
         )
@@ -486,6 +508,19 @@ async def settle(
     task = await load_task(conn, attempt.task_id, lock=True)
     attempt = await load_attempt(conn, attempt_id, lock=True)
     if attempt is None or attempt.state not in ("draining", "fenced"):
+        return None
+    from mainloop.push_gate import store as push_store
+
+    if task.mode == "code" and await push_store.unresolved_for_branch(
+        conn,
+        task.owner_id,
+        (
+            await conn.fetchval(
+                "SELECT full_name FROM projects WHERE id=$1", task.project_id
+            )
+        ),
+        task.checkout.branch,
+    ):
         return None
     attempt = await save_attempt(
         conn,

@@ -81,6 +81,13 @@ async def asgi(
 
 
 class ProductionTransportOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_production_adapter_requires_explicit_seed_factory(self):
+        from mainloop.push_gate.transport_authority import PostgresTransportAuthority
+
+        authority = PostgresTransportAuthority(None, None, None)
+        with self.assertRaisesRegex(ValueError, "production_seed_authority_required"):
+            create_git_applications(authority=authority)
+
     async def ownership_case(self, second):
         """Exercise real HTTP pools; substitute only their network backend."""
         entered = [asyncio.Event(), asyncio.Event()]

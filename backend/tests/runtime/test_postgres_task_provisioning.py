@@ -927,8 +927,8 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
         op, _, attempt = await self.create_task(request, ready=False)
         original = lifecycle.create_rejected
 
-        async def crash(sid):
-            await original(sid)
+        async def crash(sid, *, conn=None):
+            await original(sid, conn=conn)
             raise RejectedCreateCrash()
 
         with (
@@ -1021,8 +1021,8 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
                 raise SessionError("permission denied", grpc_status=7)
             return await original_dispatch(*args, **kwargs)
 
-        async def crash(sid):
-            await original_rejected(sid)
+        async def crash(sid, *, conn=None):
+            await original_rejected(sid, conn=conn)
             committed.set()
             await release.wait()
             raise RejectedCreateCrash()

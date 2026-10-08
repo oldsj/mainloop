@@ -9,7 +9,7 @@ from mainloop.tasks import lifecycle
 
 
 @asynccontextmanager
-async def ordinary_guard(*_args):
+async def ordinary_guard(*_args, **_kwargs):
     """In-memory ledger fixtures model ordinary sessions, not task persistence."""
     yield
 

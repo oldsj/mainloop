@@ -137,6 +137,45 @@ async def send(client: KagentClient, message_id: str = "m-1") -> list[StreamEven
     )
 
 
+class RuntimeAssociationWireTests(unittest.TestCase):
+    def test_optional_current_association_and_malformed_fields(self):
+        from mainloop.runtime.kagent_client import (
+            _field_bytes,
+            _field_str,
+            _field_varint,
+            decode_session_response,
+        )
+
+        base = _field_str(1, "session") + _field_str(14, "session")
+        self.assertIsNone(
+            decode_session_response(_field_bytes(1, base)).runtime_association
+        )
+        association = b"".join(
+            _field_str(n, value)
+            for n, value in enumerate(
+                ("generation", "space", "actor", "uid", "active"), 1
+            )
+        ) + _field_varint(6, 1)
+        decoded = decode_session_response(
+            _field_bytes(1, base + _field_bytes(20, association))
+        )
+        self.assertEqual(decoded.runtime_association.actor_uid, "uid")
+        self.assertTrue(decoded.runtime_association.current_active)
+        invalid = (
+            _field_bytes(20, association) * 2,
+            _field_varint(20, 1),
+            _field_bytes(20, association + _field_str(1, "duplicate")),
+            _field_bytes(20, association[:-2] + _field_varint(6, 2)),
+            _field_bytes(20, _field_bytes(1, b"\xff") + association),
+            _field_bytes(20, association[12:]),
+            _field_bytes(20, b""),
+            _field_bytes(20, _field_str(1, "x" * 257) + association),
+        )
+        for raw in invalid:
+            with self.subTest(raw=raw[:20]), self.assertRaises(OutcomeUnknown):
+                decode_session_response(_field_bytes(1, base + raw))
+
+
 class StateHelperTests(unittest.TestCase):
     def test_state_names_normalise(self):
         self.assertEqual(normalise_state("TASK_STATE_INPUT_REQUIRED"), "input_required")

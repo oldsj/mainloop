@@ -1,0 +1,933 @@
+"""Trusted, reproducible Git enrollment. PostgreSQL stores references and hashes only."""
+
+import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import logging
+import uuid
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+
+from kubernetes import client, config
+from kubernetes.client.exceptions import ApiException
+from mainloop.config import settings
+from mainloop.push_gate import store
+from mainloop.push_gate.authorization import WORKSPACE_WRITER_PAIRS, protected_reason
+from mainloop.runtime import native_sessions as ns
+from mainloop.runtime.agent_credentials import _binding_lock, reference_from_data
+from mainloop.runtime.kagent_client import RuntimeState, SessionCredential
+from mainloop.services.github_repo import parse_github_repo
+from mainloop.tasks import lifecycle
+
+from models.push_gate import (
+    GitCreatePlan,
+    GitEnrollment,
+    GitObservation,
+    GitRuntimeAssociation,
+    ProtectedBranchPolicy,
+    PushGrant,
+)
+
+logger = logging.getLogger(__name__)
+AUTHORIZATION_FIELD = "authorization"
+
+
+def no_transaction(conn):
+    if conn.is_in_transaction():
+        raise RuntimeError("Git external operation requires a committed connection")
+
+
+@asynccontextmanager
+async def connection(conn=None, *, database=None):
+    if conn is not None:
+        yield conn
+    else:
+        if database is None:
+            from mainloop.db import db
+
+            database = db
+        async with database.connection() as owned:
+            try:
+                yield owned
+            finally:
+                if not owned.is_closed():
+                    try:
+                        held = await owned.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND granted)"
+                        )
+                    except BaseException:
+                        await owned.close()
+                        raise
+                    if held:
+                        # A failed unlock must discard the session, never lend its locks.
+                        await owned.close()
+
+
+@asynccontextmanager
+async def locked(conn, binding_id):
+    from mainloop.push_gate import lifecycle as push_lifecycle
+
+    no_transaction(conn)
+    async with push_lifecycle.locked(conn, binding_id), lifecycle.locked(
+        conn, binding_id
+    ), _binding_lock(conn, binding_id):
+        yield
+
+
+def capability_for(plan: GitCreatePlan, purpose: str) -> str:
+    if purpose not in ("git-read", "git-push") or not settings.agent_token_key.strip():
+        raise ValueError("git_key_unavailable")
+    message = json.dumps(
+        [
+            "mainloop/git-capability/v1",
+            purpose,
+            str(plan.issuance_id),
+            plan.issuance_version,
+            plan.binding_id,
+            str(plan.create_request_id),
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
+    digest = hmac.new(
+        settings.agent_token_key.encode(), message, hashlib.sha256
+    ).hexdigest()
+    return ("gread_" if purpose == "git-read" else "push_") + digest
+
+
+def plan_digest(plan):
+    return hashlib.sha256(
+        json.dumps(
+            plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+
+def reference(plan, purpose):
+    prefix = "mainloop-git-read-" if purpose == "git-read" else "mainloop-git-push-"
+    return SessionCredential(
+        origin=(
+            settings.git_read_origin
+            if purpose == "git-read"
+            else settings.git_push_origin
+        ),
+        header="Authorization",
+        secret_name=prefix + str(plan.issuance_id),
+        secret_key=AUTHORIZATION_FIELD,
+    )
+
+
+async def enrollment_row(conn, issuance_id):
+    row = await conn.fetchrow(
+        "SELECT * FROM git_enrollments WHERE issuance_id=$1", str(issuance_id)
+    )
+    if not row:
+        raise ValueError("git_enrollment_unavailable")
+    plan = store._decode(row["plan"], GitCreatePlan)
+    if row["plan_digest"] != plan_digest(plan) or (
+        row["binding_id"],
+        row["create_request_id"],
+        row["issuance_version"],
+        row["owner_id"],
+        row["project_id"],
+        row["repository"],
+        row["branch"],
+    ) != (
+        plan.binding_id,
+        str(plan.create_request_id),
+        plan.issuance_version,
+        plan.owner_id,
+        plan.project_id,
+        plan.repository,
+        plan.branch,
+    ):
+        raise ValueError("git_plan_conflict")
+    return row, GitEnrollment(
+        plan=plan,
+        association=(
+            store._decode(row["association"], GitObservation)
+            if row["association"]
+            else None
+        ),
+        read_state=row["read_state"],
+        push_state=row["push_state"],
+    )
+
+
+async def validate_key(conn, plan):
+    row = await conn.fetchrow(
+        "SELECT read_token_hash FROM git_enrollments WHERE issuance_id=$1",
+        str(plan.issuance_id),
+    )
+    if not row or not hmac.compare_digest(
+        row["read_token_hash"], store.token_hash(capability_for(plan, "git-read"))
+    ):
+        raise ValueError("git_key_mismatch")
+
+
+async def read_scope(conn, binding_id, *, creating=False):
+    """Default/protected reads share ownership/ancestry checks, never push policy."""
+    row = await conn.fetchrow(
+        """SELECT b.*,s.user_id,s.project_id,s.status AS session_status,s.archived_at,
+        s.repo_url,s.branch_name,p.user_id AS project_owner,p.full_name,p.html_url,
+        p.default_branch,w.repo,w.ref,w.branch,w.depth,w.development_environment
+        FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+        JOIN projects p ON p.id=s.project_id JOIN workspaces w ON w.session_id=s.id
+        WHERE b.session_id=$1""",
+        binding_id,
+    )
+    if not row or (row["role"], row["mcp_grant_kind"]) not in WORKSPACE_WRITER_PAIRS:
+        raise ValueError("git_scope_unavailable")
+    if (
+        not row["token_hash"]
+        or row["kagent_deleted_at"]
+        or row["archived_at"]
+        or row["session_status"] in ("completed", "failed", "cancelled")
+    ):
+        raise ValueError("git_scope_revoked")
+    repository = parse_github_repo(row["full_name"]).full_name.lower()
+    from mainloop.runtime.agent_identity import hash_token, token_for
+
+    if row["token_hash"] != hash_token(token_for(binding_id)):
+        raise ValueError("mcp_grant_revoked")
+    if (
+        row["project_owner"] != row["user_id"]
+        or row["branch_name"] != row["branch"]
+        or any(
+            parse_github_repo(row[field]).full_name.lower() != repository
+            for field in ("repo_url", "repo", "html_url")
+        )
+    ):
+        raise ValueError("git_scope_conflict")
+    if row["role"] != "agent":
+        await lifecycle.check(conn, binding_id, "create" if creating else "submit")
+        await lifecycle.authenticate_binding(conn, dict(row), allow_creating=creating)
+    return dict(row), repository
+
+
+async def validate_scope(conn, enrollment, *, creating=False):
+    row, repository = await read_scope(
+        conn, enrollment.plan.binding_id, creating=creating
+    )
+    plan = enrollment.plan
+    agent = await ns.binding_agent_ref(row, conn=conn)
+    workspace = await ns.ledger.get_workspace(plan.binding_id, conn=conn)
+    environment = await ns.ledger.get_development_environment(
+        plan.binding_id, conn=conn
+    )
+    if (
+        (
+            row["user_id"],
+            row["project_id"],
+            repository,
+            row["branch"],
+            ns._request_id(row),
+        )
+        != (
+            plan.owner_id,
+            plan.project_id,
+            plan.repository,
+            plan.branch,
+            str(plan.create_request_id),
+        )
+        or asdict(agent) != plan.agent.model_dump()
+        or asdict(workspace) != plan.workspace.model_dump()
+        or environment
+        != (
+            plan.development_environment.model_dump()
+            if plan.development_environment
+            else None
+        )
+        or reference_from_data(row["credential_ref"])
+        != SessionCredential(**plan.references[0].model_dump())
+    ):
+        raise ValueError("git_plan_conflict")
+    if (
+        enrollment.association
+        and row["kagent_session_id"] != enrollment.association.runtime.session_id
+    ):
+        raise ValueError("runtime_changed")
+    attempt = await ns.attempt_row(row, conn=conn)
+    if (attempt["id"] if attempt else None) != plan.attempt_id:
+        raise ValueError("attempt_not_current")
+    if plan.branch_claim_generation is not None:
+        claim = await conn.fetchrow(
+            "SELECT * FROM workspace_writer_claims WHERE owner_id=$1 AND repository=$2 AND branch=$3",
+            plan.owner_id,
+            plan.repository,
+            plan.branch,
+        )
+        if (
+            not claim
+            or not claim["held"]
+            or claim["generation"] != plan.branch_claim_generation
+            or (
+                claim["attempt_id"] != plan.attempt_id
+                or (plan.attempt_id is None and claim["binding_id"] != plan.binding_id)
+            )
+        ):
+            raise ValueError("writer_claim_lost")
+    return row
+
+
+async def plan_for_create(conn, binding_id):
+    no_transaction(conn)
+    binding = await ns.get_binding(binding_id, conn=conn)
+    if binding is None:
+        raise ValueError("binding_unavailable")
+    existing = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+        binding_id,
+        ns._request_id(binding),
+    )
+    if existing:
+        row, enrollment = await enrollment_row(conn, existing)
+        await validate_key(conn, enrollment.plan)
+        if row["revoked_at"] is not None:
+            raise ValueError("git_enrollment_revoked")
+        await validate_scope(conn, enrollment, creating=True)
+        return enrollment.plan
+    if not settings.git_transport_enabled:
+        return None
+    if not settings.agent_token_key.strip():
+        raise ValueError("git_key_unavailable")
+    if (
+        not await ns.ledger.get_workspace(binding_id, conn=conn)
+        or binding["mcp_grant_kind"] != "workspace"
+    ):
+        return None
+    if (
+        binding.get("git_create_dispatched") is not False
+        or binding["kagent_session_id"] is not None
+    ):
+        raise ValueError("original_create_history_unavailable")
+    async with locked(conn, binding_id):
+        # Serialize original request identity and version reservation.
+        existing = await conn.fetchval(
+            "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+            binding_id,
+            ns._request_id(binding),
+        )
+        if existing:
+            return await plan_for_create(conn, binding_id)
+        row, repository = await read_scope(conn, binding_id, creating=True)
+        await store.assert_branch_resolved(
+            conn, row["user_id"], repository, row["branch"]
+        )
+        mcp = reference_from_data(row["credential_ref"])
+        if mcp is None:
+            raise ValueError("mcp_reference_unavailable")
+        attempt = await ns.attempt_row(row, conn=conn)
+        claim = await conn.fetchrow(
+            "SELECT * FROM workspace_writer_claims WHERE owner_id=$1 AND repository=$2 AND branch=$3",
+            row["user_id"],
+            repository,
+            row["branch"],
+        )
+        claim_valid = (
+            claim
+            and claim["held"]
+            and (
+                claim["attempt_id"] == (attempt["id"] if attempt else None)
+                and (attempt is not None or claim["binding_id"] == binding_id)
+            )
+        )
+        policy = None
+        if row["default_branch"]:
+            previous = await conn.fetchval(
+                "SELECT policy FROM push_branch_policies WHERE project_id=$1",
+                row["project_id"],
+            )
+            if previous is None:
+                await store.set_policy(
+                    conn,
+                    ProtectedBranchPolicy(
+                        project_id=row["project_id"],
+                        version=1,
+                        default_branch=row["default_branch"],
+                    ),
+                )
+            policy = await store.load_policy(conn, row["project_id"])
+        push = bool(
+            settings.push_gate_enabled
+            and claim_valid
+            and policy
+            and not protected_reason(row["branch"], policy)
+        )
+        previous = await conn.fetchval(
+            "SELECT grant_data FROM push_grants WHERE id=$1", binding_id
+        )
+        version = store._decode(previous, PushGrant).version + 1 if previous else 1
+        issuance_id = uuid.uuid4()
+        refs = [
+            asdict(mcp),
+            *[
+                asdict(
+                    SessionCredential(
+                        origin=(
+                            settings.git_read_origin
+                            if purpose == "git-read"
+                            else settings.git_push_origin
+                        ),
+                        header="Authorization",
+                        secret_name=f"mainloop-{purpose}-{issuance_id}",
+                        secret_key=AUTHORIZATION_FIELD,
+                    )
+                )
+                for purpose in (("git-read", "git-push") if push else ("git-read",))
+            ],
+        ]
+        plan = GitCreatePlan(
+            issuance_id=issuance_id,
+            issuance_version=1,
+            binding_id=binding_id,
+            create_request_id=ns._request_id(row),
+            owner_id=row["user_id"],
+            project_id=row["project_id"],
+            repository=repository,
+            branch=row["branch"],
+            agent=asdict(await ns.binding_agent_ref(row, conn=conn)),
+            workspace=asdict(await ns.ledger.get_workspace(binding_id, conn=conn)),
+            development_environment=await ns.ledger.get_development_environment(
+                binding_id, conn=conn
+            ),
+            references=refs,
+            attempt_id=attempt["id"] if attempt else None,
+            branch_claim_generation=claim["generation"] if claim_valid else None,
+            push_version=version if push else None,
+        )
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO git_enrollments(issuance_id,binding_id,create_request_id,issuance_version,
+                owner_id,project_id,repository,branch,plan,plan_digest,read_token_hash,push_state)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)""",
+                str(issuance_id),
+                binding_id,
+                str(plan.create_request_id),
+                plan.issuance_version,
+                plan.owner_id,
+                plan.project_id,
+                repository,
+                plan.branch,
+                plan.model_dump_json(),
+                plan_digest(plan),
+                store.token_hash(capability_for(plan, "git-read")),
+                "planned" if push else "absent",
+            )
+        return plan
+
+
+async def frozen_references(conn, binding_id, request_id):
+    issuance = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+        binding_id,
+        request_id,
+    )
+    if issuance is None:
+        return ()
+    _, enrollment = await enrollment_row(conn, issuance)
+    # Recovery of a revoked unknown create deliberately needs no usable key/value.
+    return tuple(
+        SessionCredential(**r.model_dump()) for r in enrollment.plan.references
+    )
+
+
+async def mark_create_dispatched(conn, plan):
+    no_transaction(conn)
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE git_enrollments SET create_dispatched=TRUE,updated_at=now() WHERE issuance_id=$1",
+            str(plan.issuance_id),
+        )
+
+
+def observation(plan, session):
+    association = session.runtime_association
+    if (
+        session.state != RuntimeState.READY
+        or not session.settled
+        or session.creator != "mainloop"
+        or session.context_id != session.id
+        or not session.context_confirmed
+        or not session.prepared_revision
+        or association is None
+        or association.phase != "active"
+        or not association.current_active
+        or session.agent is None
+        or asdict(session.agent) != plan.agent.model_dump()
+        or session.workspace is None
+        or asdict(session.workspace) != plan.workspace.model_dump()
+        or (
+            asdict(session.development_environment)
+            if session.development_environment
+            else None
+        )
+        != (
+            plan.development_environment.model_dump(
+                include={"image", "platform", "policy_identity"}
+            )
+            if plan.development_environment
+            else None
+        )
+        or (
+            plan.development_environment is not None
+            and session.runtime_composition is None
+        )
+    ):
+        raise ValueError("runtime_unattested")
+    return GitObservation(
+        runtime=GitRuntimeAssociation(
+            session_id=session.id,
+            revision=session.prepared_revision,
+            generation_id=association.generation_id,
+            atespace=association.atespace,
+            actor_name=association.actor_name,
+            actor_uid=association.actor_uid,
+        ),
+        context_id=session.context_id,
+        agent=asdict(session.agent),
+        workspace=asdict(session.workspace),
+        development_environment=(
+            asdict(session.development_environment)
+            if session.development_environment
+            else None
+        ),
+        runtime_composition=(
+            asdict(session.runtime_composition) if session.runtime_composition else None
+        ),
+    )
+
+
+async def confirm_ready(conn, binding_id, observed_get):
+    no_transaction(conn)
+    binding = await ns.get_binding(binding_id, conn=conn)
+    issuance = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+        binding_id,
+        ns._request_id(binding),
+    )
+    row, enrollment = await enrollment_row(conn, issuance)
+    await validate_key(conn, enrollment.plan)
+    await validate_scope(conn, enrollment, creating=True)
+    if (
+        row["revoked_at"]
+        or not row["create_dispatched"]
+        or binding["kagent_session_id"] != observed_get.id
+    ):
+        raise ValueError("git_enrollment_unconfirmed")
+    current = observation(enrollment.plan, observed_get)
+    if row["prepared_revision"] != observed_get.prepared_revision or (
+        (
+            json.loads(row["reported_composition"])
+            if row["reported_composition"]
+            else None
+        )
+        != (
+            asdict(observed_get.runtime_composition)
+            if observed_get.runtime_composition
+            else None
+        )
+    ):
+        raise ValueError("prepared_contract_changed")
+    if enrollment.association is not None and current != enrollment.association:
+        raise ValueError("runtime_changed")
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE git_enrollments SET association=$2::jsonb,read_state=CASE WHEN read_state='planned' THEN 'confirmed' ELSE read_state END WHERE issuance_id=$1",
+            issuance,
+            current.model_dump_json(),
+        )
+    return enrollment.model_copy(
+        update={
+            "association": current,
+            "read_state": (
+                "confirmed"
+                if enrollment.read_state == "planned"
+                else enrollment.read_state
+            ),
+        }
+    )
+
+
+async def freeze_prepared(conn, issuance_id, session):
+    """Freeze observed preparation before warmup; this alone grants no capability."""
+    no_transaction(conn)
+    row, enrollment = await enrollment_row(conn, issuance_id)
+    if not session.prepared_revision:
+        raise ValueError("prepared_contract_unavailable")
+    composition = (
+        asdict(session.runtime_composition) if session.runtime_composition else None
+    )
+    if row["prepared_revision"] is not None and (
+        row["prepared_revision"] != session.prepared_revision
+        or (
+            json.loads(row["reported_composition"])
+            if row["reported_composition"]
+            else None
+        )
+        != composition
+    ):
+        raise ValueError("prepared_contract_changed")
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE git_enrollments SET prepared_revision=$2,reported_composition=$3::jsonb WHERE issuance_id=$1",
+            str(issuance_id),
+            session.prepared_revision,
+            json.dumps(composition) if composition is not None else None,
+        )
+
+
+class GitSecretStore:
+    def __init__(self, api=None):
+        self.api = api
+
+    def _api(self):
+        if self.api is None:
+            config.load_incluster_config()
+            self.api = client.CoreV1Api()
+        return self.api
+
+    def body(self, plan, purpose):
+        ref = reference(plan, purpose)
+        return {
+            "metadata": {
+                "name": ref.secret_name,
+                "labels": {
+                    "mainloop.dev/actor-egress": "true",
+                    "mainloop.dev/purpose": purpose,
+                    "mainloop.dev/binding": plan.binding_id,
+                    "mainloop.dev/issuance": str(plan.issuance_id),
+                },
+            },
+            "type": "Opaque",
+            "immutable": True,
+            "data": {
+                "authorization": base64.b64encode(
+                    ("Bearer " + capability_for(plan, purpose)).encode()
+                ).decode()
+            },
+        }
+
+    def _matches(self, obj, body):
+        if (
+            obj.data != body["data"]
+            or obj.type != body["type"]
+            or obj.immutable is not True
+            or obj.metadata.labels != body["metadata"]["labels"]
+            or obj.metadata.name != body["metadata"]["name"]
+            or not obj.metadata.uid
+        ):
+            raise ValueError("git_secret_conflict")
+        return obj.metadata.uid
+
+    def _publish(self, plan, purpose):
+        body = self.body(plan, purpose)
+        try:
+            obj = self._api().create_namespaced_secret(
+                settings.kagent_namespace, body, _request_timeout=(5, 15)
+            )
+        except ApiException as exc:
+            if exc.status != 409:
+                raise RuntimeError("git_secret_unavailable") from None
+            obj = self._api().read_namespaced_secret(
+                body["metadata"]["name"],
+                settings.kagent_namespace,
+                _request_timeout=(5, 15),
+            )
+        return self._matches(obj, body)
+
+    async def publish(self, plan, purpose):
+        try:
+            return await asyncio.to_thread(self._publish, plan, purpose)
+        except ValueError:
+            raise
+        except Exception:
+            raise RuntimeError("git_secret_unavailable") from None
+
+    def _cleanup(self, plan, purpose, uid):
+        ref = reference(plan, purpose)
+        try:
+            obj = self._api().read_namespaced_secret(
+                ref.secret_name, settings.kagent_namespace, _request_timeout=(5, 15)
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise RuntimeError("git_cleanup_unavailable") from None
+        # Even a recorded UID cannot authorize deleting a same-name replacement.
+        actual = self._matches(obj, self.body(plan, purpose))
+        if uid is not None and actual != uid:
+            raise ValueError("git_cleanup_uid_conflict")
+        return actual
+
+    async def cleanup_uid(self, plan, purpose, uid):
+        try:
+            return await asyncio.to_thread(self._cleanup, plan, purpose, uid)
+        except ValueError:
+            raise
+        except Exception:
+            raise RuntimeError("git_cleanup_unavailable") from None
+
+    async def remove(self, plan, purpose, uid):
+        def delete():
+            try:
+                self._api().delete_namespaced_secret(
+                    reference(plan, purpose).secret_name,
+                    settings.kagent_namespace,
+                    body={"preconditions": {"uid": uid}},
+                    _request_timeout=(5, 15),
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise RuntimeError("git_cleanup_unavailable") from None
+
+        await asyncio.to_thread(delete)
+
+
+secrets = GitSecretStore()
+
+
+async def reobserve(conn, enrollment, *, creating=False, trusted_client=None):
+    no_transaction(conn)
+    await validate_scope(conn, enrollment, creating=creating)
+    if not enrollment.association:
+        raise ValueError("git_enrollment_unconfirmed")
+    session = await (trusted_client or ns.get_client()).get_session(
+        enrollment.association.runtime.session_id
+    )
+    if observation(enrollment.plan, session) != enrollment.association:
+        raise ValueError("runtime_changed")
+    await validate_scope(conn, enrollment, creating=creating)
+
+
+async def _publish(conn, issuance_id, purpose):
+    if not settings.git_transport_enabled:
+        raise ValueError("git_transport_disabled")
+    row, enrollment = await enrollment_row(conn, issuance_id)
+    async with locked(conn, enrollment.plan.binding_id):
+        row, enrollment = await enrollment_row(conn, issuance_id)
+        if row["revoked_at"] is not None or not enrollment.association:
+            raise ValueError("git_enrollment_revoked")
+        await validate_key(conn, enrollment.plan)
+        if purpose == "git-push" and enrollment.plan.push_version is None:
+            return None
+        if purpose == "git-push" and (
+            not settings.git_transport_enabled or not settings.push_gate_enabled
+        ):
+            raise ValueError("git_push_disabled")
+        creating = purpose == "git-read"
+        await reobserve(conn, enrollment, creating=creating)
+        if purpose == "git-push":
+            plan = enrollment.plan
+            binding = await ns.get_binding(plan.binding_id, conn=conn)
+            grant = PushGrant(
+                id=plan.binding_id,
+                owner_id=plan.owner_id,
+                project_id=plan.project_id,
+                repository=plan.repository,
+                branch=plan.branch,
+                workspace_id=plan.binding_id,
+                session_id=plan.binding_id,
+                runtime_identity=enrollment.association.runtime.session_id,
+                version=plan.push_version,
+                role=binding["role"],
+                grant_kind="workspace",
+                attempt_id=plan.attempt_id,
+                writer_generation=(
+                    plan.branch_claim_generation if plan.attempt_id else None
+                ),
+                branch_claim_generation=plan.branch_claim_generation,
+                git_issuance_id=plan.issuance_id,
+                runtime_association=enrollment.association.runtime,
+            )
+            async with conn.transaction():
+                await store.issue_derived_locked(conn, grant, enrollment)
+        # Commit the cleanup intent before the first potentially lost Secret reply.
+        async with conn.transaction():
+            await conn.execute(
+                (
+                    "UPDATE git_enrollments SET read_cleanup_pending=TRUE WHERE issuance_id=$1"
+                    if purpose == "git-read"
+                    else "UPDATE git_enrollments SET push_cleanup_pending=TRUE WHERE issuance_id=$1"
+                ),
+                str(issuance_id),
+            )
+        uid = await secrets.publish(enrollment.plan, purpose)
+        await reobserve(conn, enrollment, creating=creating)
+        async with conn.transaction():
+            await conn.execute(
+                (
+                    "UPDATE git_enrollments SET read_state='published',read_secret_uid=$2,read_cleanup_pending=FALSE WHERE issuance_id=$1"
+                    if purpose == "git-read"
+                    else "UPDATE git_enrollments SET push_state='published',push_secret_uid=$2,push_cleanup_pending=FALSE WHERE issuance_id=$1"
+                ),
+                str(issuance_id),
+                uid,
+            )
+        return reference(enrollment.plan, purpose)
+
+
+async def publish_read(conn, issuance_id):
+    return await _publish(conn, issuance_id, "git-read")
+
+
+async def publish_push(conn, issuance_id):
+    return await _publish(conn, issuance_id, "git-push")
+
+
+async def revoke_deferred(conn, binding_id):
+    if not conn.is_in_transaction():
+        raise RuntimeError("Git revocation requires transaction")
+    # Caller holds ordered policy/tree/publication/runtime locks; no I/O or reacquisition.
+    await conn.execute(
+        "UPDATE push_grants SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1",
+        binding_id,
+    )
+    await conn.execute(
+        """UPDATE git_enrollments SET revoked_at=COALESCE(revoked_at,now()),read_state='revoked',
+            push_state=CASE WHEN push_state='absent' THEN 'absent' ELSE 'revoked' END,
+            read_cleanup_pending=TRUE,push_cleanup_pending=(push_state<>'absent'),updated_at=now()
+            WHERE binding_id=$1""",
+        binding_id,
+    )
+
+
+async def reconcile_cleanup(conn, issuance_id):
+    no_transaction(conn)
+    row, enrollment = await enrollment_row(conn, issuance_id)
+    if row["revoked_at"] is None:
+        return
+    async with _binding_lock(conn, enrollment.plan.binding_id):
+        for prefix in ("read", "push"):
+            row, enrollment = await enrollment_row(conn, issuance_id)
+            if not row[f"{prefix}_cleanup_pending"]:
+                continue
+            purpose = "git-" + prefix
+            uid = await secrets.cleanup_uid(
+                enrollment.plan, purpose, row[f"{prefix}_secret_uid"]
+            )
+            if uid:
+                # Capture a lost publication UID durably before conditional deletion.
+                await conn.execute(
+                    (
+                        "UPDATE git_enrollments SET read_secret_uid=$2 WHERE issuance_id=$1"
+                        if prefix == "read"
+                        else "UPDATE git_enrollments SET push_secret_uid=$2 WHERE issuance_id=$1"
+                    ),
+                    str(issuance_id),
+                    uid,
+                )
+                await secrets.remove(enrollment.plan, purpose, uid)
+            await conn.execute(
+                (
+                    "UPDATE git_enrollments SET read_cleanup_pending=FALSE WHERE issuance_id=$1"
+                    if prefix == "read"
+                    else "UPDATE git_enrollments SET push_cleanup_pending=FALSE WHERE issuance_id=$1"
+                ),
+                str(issuance_id),
+            )
+
+
+async def ready_for_binding(conn, binding_id, session, *, push=True):
+    """Warm up and enroll the owned Session, preserving durable restart markers."""
+    no_transaction(conn)
+    binding = await ns.get_binding(binding_id, conn=conn)
+    issuance = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+        binding_id,
+        ns._request_id(binding),
+    )
+    if issuance is None:
+        if (
+            settings.git_transport_enabled
+            and await ns.ledger.get_workspace(binding_id, conn=conn)
+            and binding["mcp_grant_kind"] == "workspace"
+        ):
+            raise ValueError("git_plan_missing")
+        ready = await ns.get_client().ensure_ready(
+            session, timeout=settings.kagent_session_ready_timeout_seconds
+        )
+        from mainloop.push_gate import lifecycle as push_lifecycle
+
+        await push_lifecycle.enroll(conn, binding_id)
+        return ready
+    async with locked(conn, binding_id):
+        row, enrollment = await enrollment_row(conn, issuance)
+        if row["revoked_at"]:
+            raise ValueError("git_enrollment_revoked")
+        await validate_scope(conn, enrollment, creating=True)
+        client = ns.get_client()
+        current = (
+            await client.ensure_ready(
+                session, timeout=settings.kagent_session_ready_timeout_seconds
+            )
+            if row["warmup_state"] in ("pending", "complete")
+            else await client.get_session(session.id)
+        )
+        # Only the original unconfirmed bootstrap uses Suspend/Resume. Unknown calls
+        # reconcile the same Session operation via Get before dispatching another call.
+        if row["warmup_state"] != "complete":
+            current = await client.get_session(session.id)
+            await ns.validate_bound_session(binding, current, conn=conn)
+            await freeze_prepared(conn, issuance, current)
+            if row["warmup_state"] in ("pending", "suspending"):
+                await conn.execute(
+                    "UPDATE git_enrollments SET warmup_state='suspending' WHERE issuance_id=$1",
+                    issuance,
+                )
+                if current.state != RuntimeState.SUSPENDED or not current.settled:
+                    if not current.settled:
+                        raise ValueError("git_warmup_pending")
+                    current = await client.suspend_session(session.id)
+                if (
+                    current.id != session.id
+                    or current.state != RuntimeState.SUSPENDED
+                    or not current.settled
+                ):
+                    raise ValueError("git_warmup_pending")
+                await conn.execute(
+                    "UPDATE git_enrollments SET warmup_state='suspended' WHERE issuance_id=$1",
+                    issuance,
+                )
+            row, enrollment = await enrollment_row(conn, issuance)
+            if row["warmup_state"] in ("suspended", "resuming"):
+                await conn.execute(
+                    "UPDATE git_enrollments SET warmup_state='resuming' WHERE issuance_id=$1",
+                    issuance,
+                )
+                current = await client.get_session(session.id)
+                if current.state == RuntimeState.SUSPENDED and current.settled:
+                    current = await client.resume_session(session.id)
+                current = await client.ensure_ready(
+                    current, timeout=settings.kagent_session_ready_timeout_seconds
+                )
+        # Never use Create/Resume/ensure_ready output as the association observation.
+        current = await client.get_session(session.id)
+        enrollment = await confirm_ready(conn, binding_id, current)
+        await conn.execute(
+            "UPDATE git_enrollments SET warmup_state='complete' WHERE issuance_id=$1",
+            issuance,
+        )
+        await publish_read(conn, issuance)
+        from mainloop.push_gate import lifecycle as push_lifecycle
+
+        if push:
+            await publish_push(conn, issuance)
+        else:
+            await push_lifecycle.enroll(conn, binding_id)
+        return current
+
+
+async def cleanup_all():
+    async with connection() as conn:
+        rows = await conn.fetch(
+            "SELECT issuance_id FROM git_enrollments WHERE revoked_at IS NOT NULL AND (read_cleanup_pending OR push_cleanup_pending)"
+        )
+        for row in rows:
+            try:
+                await reconcile_cleanup(conn, row["issuance_id"])
+            except Exception:
+                # Preserve the durable hold without logging external Secret exceptions.
+                logger.warning("Git credential cleanup remains pending")
