@@ -220,6 +220,17 @@ releasing a brief. They must not issue native calls while holding the admission 
 `update_projection` atomically updates observations/version and reserves an outbox event; it
 cannot complete a task or grant consent. S4 owns trusted publication completion.
 
+The managed MCP listener installs the same provisioning and projection ports after connecting
+to PostgreSQL. It accepts transactional task intent and serves stored task reads alongside the
+API process; only the API starts the task dispatcher and native reconciliation loop. Installing
+ports does not create a runtime, send a turn or refresh a projection.
+
+Creates already recorded as `blocked` / `provisioning_unavailable` remain terminal after ports
+become available. The reconciler skips them, and an identical `delegate` or `POST /tasks` with
+the same principal and `request_id` returns the original blocked operation. Changing that
+request's payload still returns 409. Main or the owner must submit a new `request_id` to make a
+fresh attempt. The blocked operation holds no task, attempt, capacity slot or branch claim.
+
 ## Notifications and recovery
 
 ```json

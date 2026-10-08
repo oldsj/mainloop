@@ -41,7 +41,13 @@ from mainloop.services.workspace_authority import (
 )
 from mainloop.tasks import lifecycle, provisioning
 from mainloop.tasks.principal import TaskPrincipal
-from mainloop.tasks.service import mutate, ports, select_profile
+from mainloop.tasks.service import (
+    TaskPorts,
+    mutate,
+    ports,
+    reconcile_once,
+    select_profile,
+)
 from tests.runtime.test_postgres_ledger import KagentFakeCase
 from tests.test_workspace_environments import validated_version
 
@@ -205,6 +211,73 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
             self.fail("parent authority mutation committed inside child admission")
 
         await asyncio.wait_for(observe(), 10)
+
+    async def test_missing_port_block_stays_terminal_and_new_request_is_admitted(self):
+        request = self.request()
+        with patch.object(ports, "provisioning", None):
+            async with self.pool.acquire() as conn, conn.transaction():
+                blocked = await mutate(conn, self.owner, "create", request)
+        self.assertEqual(
+            (blocked.state, blocked.reason), ("blocked", "provisioning_unavailable")
+        )
+        self.assertIsNone(blocked.task_id)
+        self.assertIsNone(blocked.attempt_id)
+
+        with (
+            patch.object(self.worker, "reconcile", AsyncMock()) as reconcile,
+            patch("mainloop.tasks.reports.dispatch_pending", AsyncMock()),
+        ):
+            await reconcile_once(
+                db, installed_ports=TaskPorts(provisioning=self.worker)
+            )
+            reconcile.assert_not_awaited()
+
+        async with self.pool.acquire() as conn, conn.transaction():
+            replay = await mutate(conn, self.owner, "create", request)
+        self.assertEqual(replay, blocked)
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM tasks"), 0)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_attempts"), 0
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM workspace_writer_claims"), 0
+        )
+
+        with self.assertRaises(store.TaskError) as conflict:
+            async with self.pool.acquire() as conn, conn.transaction():
+                await mutate(
+                    conn,
+                    self.owner,
+                    "create",
+                    request.model_copy(update={"brief": "changed"}),
+                )
+        self.assertEqual(conflict.exception.code, "request_payload_conflict")
+
+        accepted, task, attempt = await self.create_task(
+            request.model_copy(update={"request_id": request.request_id + "-retry"}),
+            ready=False,
+        )
+        self.assertNotEqual(accepted.id, blocked.id)
+        self.assertEqual((accepted.state, accepted.reason), ("target_creating", None))
+        self.assertEqual((accepted.task_id, accepted.attempt_id), (task.id, attempt.id))
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM tasks"), 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_attempts WHERE capacity_held"
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM workspace_writer_claims WHERE held"
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_operations"), 2
+        )
+        self.assertEqual(self.fake.created_workspaces(), [])
+        self.spawn.assert_not_called()
 
     async def test_both_providers_supervisor_child_independent_scopes(self):
         for provider in ("claude", "codex"):
