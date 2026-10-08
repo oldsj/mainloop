@@ -343,8 +343,44 @@ async def reconcile_once(database, *, installed_ports=ports):
 
     from mainloop.tasks.reports import dispatch_pending
 
+    await reconcile_failed_deliveries(database)
     await dispatch_pending(database)
     await reconcile_projections(database, installed_ports)
+
+
+async def reconcile_failed_deliveries(database):
+    """Recover authoritative FAILED first/sole briefs after create completion."""
+    from mainloop.push_gate import lifecycle as push_lifecycle
+
+    async with database.connection() as conn:
+        rows = await conn.fetch(
+            """SELECT a.id,a.binding_id,d.message_id
+               FROM task_attempts a JOIN tasks t ON t.current_attempt_id=a.id
+               JOIN native_deliveries d ON d.session_id=a.binding_id
+               WHERE a.state='active' AND d.state='failed'
+                 AND d.message_id=a.snapshot->>'brief_delivery_id' AND d.source='brief'
+                 AND d.task_id IS NOT NULL
+                 AND d.evidence_ref='a2a:task/' || d.task_id || '#failed'
+                 AND NOT EXISTS (SELECT 1 FROM native_deliveries other
+                   WHERE other.session_id=d.session_id AND other.message_id<>d.message_id)
+                 AND t.status NOT IN ('completed','failed','cancelled')
+               ORDER BY a.id LIMIT 10"""
+        )
+    for row in rows:
+        try:
+            async with database.connection() as conn:
+                async with (
+                    push_lifecycle.locked(conn, row["binding_id"]),
+                    lifecycle.locked(conn, row["binding_id"]),
+                    conn.transaction(),
+                ):
+                    await lifecycle.block_failed_delivery(
+                        conn, row["id"], row["message_id"]
+                    )
+        except Exception:
+            logger.exception(
+                "Task delivery failure reconciliation failed: %s", row["id"]
+            )
 
 
 PROJECTION_RECONCILE_LIMIT = 10

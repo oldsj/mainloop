@@ -476,7 +476,13 @@ class Ledger:
         is open, and the owner's next ``user`` message releases the hold and goes first. The queued
         messages then follow it, one turn at a time.
         """
-        async with db.connection() as conn, conn.transaction():
+        async with (
+            db.connection() as conn,
+            lifecycle.authority_locked(conn, session_id),
+            conn.transaction(),
+        ):
+            # Order admission against failure qualification/draining across processes before
+            # taking row/delivery locks. The first-brief-only rule must see every submission.
             # A delegated session takes work only while its attempt is active and holds its claim;
             # the share lock keeps a fence from committing between this check and the insert.
             await lifecycle.check(conn, session_id, "submit", lock=True)
@@ -1913,7 +1919,14 @@ async def _finalize(
         new_state,
         from_states=_RESOLVABLE,
         task_id=proj.task_id,
-        evidence_ref=f"a2a:task/{proj.task_id}" if proj.task_id else None,
+        # A receipt alone does not prove native failure: transport/config/preparation
+        # failures also use delivery state 'failed'. Only the observed FAILED outcome
+        # gets this durable marker, which task lifecycle qualification revalidates.
+        evidence_ref=(
+            f"a2a:task/{proj.task_id}" + ("#failed" if state == "failed" else "")
+            if proj.task_id
+            else None
+        ),
         detail=detail,
     )
     if not moved:

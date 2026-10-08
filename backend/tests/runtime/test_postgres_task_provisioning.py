@@ -32,6 +32,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     ServiceConfigurationError,
     SessionError,
+    TaskProjection,
     decode_fields,
 )
 from mainloop.runtime.policy import PolicyError
@@ -45,6 +46,8 @@ from mainloop.tasks.service import (
     TaskPorts,
     mutate,
     ports,
+    read,
+    reconcile_failed_deliveries,
     reconcile_once,
     select_profile,
 )
@@ -182,6 +185,508 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
         )
         async with self.pool.acquire() as conn:
             return await lifecycle.authenticate_binding(conn, binding)
+
+    async def test_failed_first_brief_blocks_task_and_retains_writer_until_fenced(self):
+        await self.assert_failed_delivery_blocks_task()
+
+    async def assert_attempt_stays_active(self, task, attempt):
+        async with self.pool.acquire() as conn:
+            fresh = await lifecycle.load_task(conn, task.id)
+            self.assertEqual((fresh.status, fresh.version), ("running", task.version))
+            self.assertEqual(
+                (await lifecycle.load_attempt(conn, attempt.id)).state, "active"
+            )
+        self.assertTrue((await ns.get_binding(attempt.session_id))["token_hash"])
+
+    async def native_failure(self, attempt, message_id=None, detail="bootstrap failed"):
+        message_id = message_id or attempt.brief_delivery_id
+        await ns.ledger.transition(message_id, "delivered", from_states=("recorded",))
+        await ns._finalize(
+            attempt.session_id,
+            message_id,
+            TaskProjection(
+                task_id="failed-receipt-" + uuid.uuid4().hex,
+                state="TASK_STATE_FAILED",
+                failure_text=detail,
+            ),
+        )
+
+    async def assert_delivery_error_is_recoverable(self, error):
+        now = 0.0
+
+        async def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        def clock():
+            return now
+
+        for first_brief in (True, False):
+            with self.subTest(first_brief=first_brief):
+                _, task, attempt = await self.create_task()
+                message_id, text = attempt.brief_delivery_id, task.brief
+                if not first_brief:
+                    await ns._deliver(attempt.session_id, message_id, text)
+                    self.assertEqual(
+                        await ns.ledger.delivery_state(message_id), "completed"
+                    )
+                    text = "Continue"
+                    message_id = await ns.submit_message(attempt.session_id, text)
+                client = ns.get_client()
+                prep_error = (
+                    ServiceConfigurationError("fixture control configuration refused")
+                    if error == "config"
+                    else RuntimeError("fixture preparation failed")
+                )
+                with (
+                    patch.object(client, "_clock", clock),
+                    patch.object(client, "_sleep", sleep),
+                ):
+                    if error in ("prep", "config"):
+                        with patch.object(
+                            ns, "_with_standing", AsyncMock(side_effect=prep_error)
+                        ):
+                            await ns._deliver(attempt.session_id, message_id, text)
+                    else:
+                        self.fake.send_script = (
+                            ["unreachable"]
+                            if error == "gateway"
+                            else ["not-accepted"] * 100
+                        )
+                        await ns._deliver(attempt.session_id, message_id, text)
+                delivery = await self.pool.fetchrow(
+                    "SELECT state,task_id,detail FROM native_deliveries WHERE message_id=$1",
+                    message_id,
+                )
+                self.assertEqual(delivery["state"], "failed")
+                self.assertIsNone(delivery["task_id"])
+                self.assertTrue(delivery["detail"])
+                await reconcile_failed_deliveries(db)
+                await self.assert_attempt_stays_active(task, attempt)
+                self.fake.send_script = []
+                recovery = await ns.submit_message(attempt.session_id, "Recovery")
+                await ns._deliver(attempt.session_id, recovery, "Recovery")
+                self.assertEqual(await ns.ledger.delivery_state(recovery), "completed")
+                await reconcile_failed_deliveries(db)
+                await self.assert_attempt_stays_active(task, attempt)
+                self.assertEqual(await ns.ledger.delivery_state(message_id), "failed")
+
+    async def test_gateway_unreachable_leaves_first_brief_and_later_attempt_active(
+        self,
+    ):
+        await self.assert_delivery_error_is_recoverable("gateway")
+
+    async def test_exhausted_not_accepted_leaves_first_brief_and_later_attempt_active(
+        self,
+    ):
+        await self.assert_delivery_error_is_recoverable("not-accepted")
+
+    async def test_preparation_error_leaves_first_brief_and_later_attempt_active(self):
+        await self.assert_delivery_error_is_recoverable("prep")
+
+    async def test_control_config_error_leaves_first_brief_and_later_attempt_active(
+        self,
+    ):
+        await self.assert_delivery_error_is_recoverable("config")
+
+    async def test_old_native_failed_followed_by_completed_turn_is_ignored(self):
+        _, task, attempt = await self.create_task()
+        await self.native_failure(attempt)
+        newer = await ns.submit_message(attempt.session_id, "Recovery")
+        await ns._deliver(attempt.session_id, newer, "Recovery")
+        self.assertEqual(await ns.ledger.delivery_state(newer), "completed")
+        await reconcile_failed_deliveries(db)
+        await self.assert_attempt_stays_active(task, attempt)
+        self.assertEqual(
+            await ns.ledger.delivery_state(attempt.brief_delivery_id), "failed"
+        )
+
+    async def test_late_failed_uncertain_turn_cannot_revoke_newer_accepted_work(self):
+        _, task, attempt = await self.create_task()
+        await ns.ledger.transition(
+            attempt.brief_delivery_id, "uncertain", from_states=("recorded",)
+        )
+        newer = await ns.submit_message(attempt.session_id, "New work")
+        self.fake.send_script = ["cut"]
+        await ns._deliver(attempt.session_id, newer, "New work")
+        self.assertEqual(await ns.ledger.delivery_state(newer), "delivered")
+        self.assertIn(newer, self.fake.accepted_message_ids)
+        await self.native_failure(attempt)
+        await reconcile_failed_deliveries(db)
+        await self.assert_attempt_stays_active(task, attempt)
+        self.assertEqual(await ns.ledger.delivery_state(newer), "delivered")
+
+    async def test_later_native_failed_is_diagnostic_only(self):
+        _, task, attempt = await self.create_task()
+        await ns._deliver(attempt.session_id, attempt.brief_delivery_id, task.brief)
+        later = await ns.submit_message(attempt.session_id, "Later turn")
+        await self.native_failure(attempt, later)
+        await reconcile_failed_deliveries(db)
+        await self.assert_attempt_stays_active(task, attempt)
+
+    async def test_receipt_without_confirmed_failed_outcome_is_diagnostic_only(self):
+        for state in ("legacy", "TASK_STATE_REJECTED"):
+            with self.subTest(state=state):
+                _, task, attempt = await self.create_task()
+                await ns.ledger.transition(
+                    attempt.brief_delivery_id,
+                    "delivered",
+                    from_states=("recorded",),
+                    task_id="unqualified-receipt",
+                )
+                if state == "legacy":
+                    await ns.ledger.transition(
+                        attempt.brief_delivery_id,
+                        "failed",
+                        from_states=("delivered",),
+                        task_id="unqualified-receipt",
+                        evidence_ref="a2a:task/unqualified-receipt",
+                        detail="task failed: historical diagnostic",
+                    )
+                else:
+                    await ns._finalize(
+                        attempt.session_id,
+                        attempt.brief_delivery_id,
+                        TaskProjection(
+                            task_id="unqualified-receipt",
+                            state=state,
+                            failure_text="rejected",
+                        ),
+                    )
+                await reconcile_failed_deliveries(db)
+                await self.assert_attempt_stays_active(task, attempt)
+
+    async def wait_for_database_block(self, observed, waiting, finished):
+        await asyncio.wait_for(waiting.wait(), 10)
+
+        async def blocked():
+            while not finished.is_set():
+                if await self.pool.fetchval(
+                    "SELECT cardinality(pg_blocking_pids($1)) > 0", observed["pid"]
+                ):
+                    return
+                await self.pool.fetchval("SELECT 1")
+            self.fail("competing action finished without waiting for authority")
+
+        await asyncio.wait_for(blocked(), 10)
+
+    async def test_failure_guard_orders_new_submission_before_revocation(self):
+        _, task, attempt = await self.create_task()
+        await self.native_failure(attempt)
+        entered, release = asyncio.Event(), asyncio.Event()
+        waiting, finished = asyncio.Event(), asyncio.Event()
+        observed = {}
+        original_block = lifecycle.block_failed_delivery
+        original_authority = lifecycle.authority_locked
+
+        async def paused_block(*args):
+            entered.set()
+            await release.wait()
+            return await original_block(*args)
+
+        @asynccontextmanager
+        async def observed_authority(conn, sid):
+            if asyncio.current_task().get_name() == "repair-submission":
+                observed["pid"] = await conn.fetchval("SELECT pg_backend_pid()")
+                waiting.set()
+            async with original_authority(conn, sid):
+                yield
+
+        with (
+            patch.object(lifecycle, "block_failed_delivery", paused_block),
+            patch.object(lifecycle, "authority_locked", observed_authority),
+        ):
+            driver = asyncio.create_task(reconcile_failed_deliveries(db))
+            await asyncio.wait_for(entered.wait(), 10)
+
+            async def submit():
+                try:
+                    return await ns.submit_message(attempt.session_id, "Recovery")
+                finally:
+                    finished.set()
+
+            submitting = asyncio.create_task(submit(), name="repair-submission")
+            try:
+                await self.wait_for_database_block(observed, waiting, finished)
+            finally:
+                release.set()
+                await driver
+                with self.assertRaisesRegex(ValueError, "not live"):
+                    await submitting
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1",
+                attempt.session_id,
+            ),
+            1,
+        )
+        async with self.pool.acquire() as conn:
+            self.assertEqual(
+                (await lifecycle.load_task(conn, task.id)).status, "blocked"
+            )
+
+    async def test_submission_committing_ahead_of_failure_guard_prevents_drain(self):
+        _, task, attempt = await self.create_task()
+        await self.native_failure(attempt)
+        inserted, release = asyncio.Event(), asyncio.Event()
+        waiting, finished = asyncio.Event(), asyncio.Event()
+        observed = {}
+        original_insert = ns.ledger._insert_message
+        original_authority = lifecycle.authority_locked
+
+        async def paused_insert(conn, sid, cid, text, state, source):
+            mid = await original_insert(conn, sid, cid, text, state, source)
+            inserted.set()
+            await release.wait()
+            return mid
+
+        @asynccontextmanager
+        async def observed_authority(conn, sid):
+            if asyncio.current_task().get_name() == "repair-failure-driver":
+                observed["pid"] = await conn.fetchval("SELECT pg_backend_pid()")
+                waiting.set()
+            async with original_authority(conn, sid):
+                yield
+
+        with (
+            patch.object(ns.ledger, "_insert_message", paused_insert),
+            patch.object(lifecycle, "authority_locked", observed_authority),
+        ):
+            submitting = asyncio.create_task(
+                ns.submit_message(attempt.session_id, "Recovery")
+            )
+            await asyncio.wait_for(inserted.wait(), 10)
+
+            async def reconcile():
+                try:
+                    await reconcile_failed_deliveries(db)
+                finally:
+                    finished.set()
+
+            driver = asyncio.create_task(reconcile(), name="repair-failure-driver")
+            try:
+                await self.wait_for_database_block(observed, waiting, finished)
+            finally:
+                release.set()
+                newer = await submitting
+                await driver
+        self.assertEqual(await ns.ledger.delivery_state(newer), "recorded")
+        await self.assert_attempt_stays_active(task, attempt)
+
+    async def test_uncertain_and_completed_deliveries_leave_attempt_active(self):
+        for state in ("uncertain", "completed"):
+            with self.subTest(state=state):
+                _, task, attempt = await self.create_task()
+                await ns.ledger.transition(
+                    attempt.brief_delivery_id, state, from_states=("recorded",)
+                )
+                await reconcile_once(
+                    db, installed_ports=TaskPorts(provisioning=self.worker)
+                )
+                async with self.pool.acquire() as conn:
+                    fresh = await lifecycle.load_task(conn, task.id)
+                    self.assertEqual(
+                        (fresh.status, fresh.version), ("running", task.version)
+                    )
+                    self.assertEqual(
+                        (await lifecycle.load_attempt(conn, attempt.id)).state, "active"
+                    )
+                self.assertTrue(
+                    (await ns.get_binding(attempt.session_id))["token_hash"]
+                )
+
+    async def test_late_failure_preserves_terminal_task(self):
+        for status in ("completed", "cancelled", "failed"):
+            with self.subTest(status=status):
+                _, task, attempt = await self.create_task()
+                await self.native_failure(attempt, detail="late failure")
+                async with self.pool.acquire() as conn, conn.transaction():
+                    await store.save_task(
+                        conn,
+                        task.model_copy(
+                            update={
+                                "status": status,
+                                "version": task.version + 1,
+                            }
+                        ),
+                        task.version,
+                        f"fixture:{status}",
+                    )
+                await reconcile_failed_deliveries(db)
+                # Also exercise a stale scan result reaching the locked mutation helper.
+                async with self.pool.acquire() as conn:
+                    async with (
+                        provisioning.push_lifecycle.locked(conn, attempt.session_id),
+                        lifecycle.locked(conn, attempt.session_id),
+                        conn.transaction(),
+                    ):
+                        await lifecycle.block_failed_delivery(
+                            conn, attempt.id, attempt.brief_delivery_id
+                        )
+                    fresh = await lifecycle.load_task(conn, task.id)
+                    self.assertEqual(
+                        (fresh.status, fresh.version), (status, task.version + 1)
+                    )
+                    self.assertEqual(
+                        (await lifecycle.load_attempt(conn, attempt.id)).state, "active"
+                    )
+                self.assertTrue(
+                    (await ns.get_binding(attempt.session_id))["token_hash"]
+                )
+
+    async def test_failure_of_noncurrent_attempt_does_not_change_task(self):
+        _, task, attempt = await self.create_task()
+        await self.native_failure(attempt, detail="old attempt failed")
+        async with self.pool.acquire() as conn, conn.transaction():
+            await store.save_task(
+                conn,
+                task.model_copy(
+                    update={
+                        "current_attempt_id": None,
+                        "version": task.version + 1,
+                    }
+                ),
+                task.version,
+                "fixture:source-replaced",
+            )
+        await reconcile_failed_deliveries(db)
+        async with self.pool.acquire() as conn:
+            async with (
+                provisioning.push_lifecycle.locked(conn, attempt.session_id),
+                lifecycle.locked(conn, attempt.session_id),
+                conn.transaction(),
+            ):
+                await lifecycle.block_failed_delivery(
+                    conn, attempt.id, attempt.brief_delivery_id
+                )
+            fresh = await lifecycle.load_task(conn, task.id)
+            self.assertEqual(
+                (fresh.status, fresh.version), ("running", task.version + 1)
+            )
+            self.assertIsNone(fresh.current_attempt_id)
+            self.assertEqual(
+                (await lifecycle.load_attempt(conn, attempt.id)).state, "active"
+            )
+        self.assertTrue((await ns.get_binding(attempt.session_id))["token_hash"])
+
+    async def test_failure_projection_rolls_back_revocation_and_recovers(self):
+        _, task, attempt = await self.create_task()
+        await self.native_failure(
+            attempt, detail="bootstrap failed: token=fixture-secret"
+        )
+        with patch.object(
+            store,
+            "save_task",
+            AsyncMock(side_effect=RuntimeError("event storage outage")),
+        ):
+            await reconcile_failed_deliveries(db)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(
+                (await lifecycle.load_attempt(conn, attempt.id)).state, "active"
+            )
+            self.assertEqual(
+                (await lifecycle.load_task(conn, task.id)).version, task.version
+            )
+        self.assertTrue((await ns.get_binding(attempt.session_id))["token_hash"])
+        await reconcile_failed_deliveries(db)
+        async with self.pool.acquire() as conn:
+            fresh = await lifecycle.load_attempt(conn, attempt.id)
+            self.assertEqual(fresh.state, "draining")
+            self.assertTrue(
+                any("bootstrap failed" in ref for ref in fresh.evidence_refs)
+            )
+            self.assertFalse(
+                any("fixture-secret" in ref for ref in fresh.evidence_refs)
+            )
+        self.assertIsNone((await ns.get_binding(attempt.session_id))["token_hash"])
+
+    async def assert_failed_delivery_blocks_task(self):
+        _, task, attempt = await self.create_task()
+        message_id = attempt.brief_delivery_id
+        failure = 'Workspace bootstrap failed: ref "HEAD" was not found.'
+        self.fake.send_script = ["cut"]
+        await ns._deliver(attempt.session_id, message_id, task.brief)
+        receipt = await self.pool.fetchval(
+            "SELECT task_id FROM native_deliveries WHERE message_id=$1", message_id
+        )
+        self.assertTrue(receipt)
+        self.fake.tasks[receipt]["status"] = {
+            "state": "TASK_STATE_FAILED",
+            "message": {"messageId": "failure", "parts": [{"text": failure}]},
+        }
+        self.fake.tasks[receipt]["artifacts"] = []
+        await ns.sync(attempt.session_id)
+        self.assertEqual(await ns.ledger.delivery_state(message_id), "failed")
+        # The create operation is already completed. A fresh dispatcher must still find
+        # terminal delivery evidence, without replaying a brief or creating a runtime.
+        calls = len(self.fake.requests)
+        spawned = self.spawn.call_count
+        await reconcile_once(db, installed_ports=TaskPorts(provisioning=self.worker))
+        async with self.pool.acquire() as conn:
+            view = await read(conn, self.owner, task.id)
+            failed_attempt = await lifecycle.load_attempt(conn, attempt.id)
+            self.assertEqual(
+                (view.task.status, view.task.reason), ("blocked", "reconciliation")
+            )
+            self.assertEqual(failed_attempt.state, "draining")
+            self.assertTrue(
+                any(failure in ref for ref in view.attempts[0].evidence_refs)
+            )
+            self.assertTrue(
+                await conn.fetchval(
+                    "SELECT capacity_held FROM task_attempts WHERE id=$1", attempt.id
+                )
+            )
+            self.assertTrue(
+                await conn.fetchval(
+                    "SELECT held FROM workspace_writer_claims WHERE attempt_id=$1",
+                    attempt.id,
+                )
+            )
+        self.assertIsNone((await ns.get_binding(attempt.session_id))["token_hash"])
+        self.assertEqual(
+            (len(self.fake.requests), self.spawn.call_count), (calls, spawned)
+        )
+        version = view.task.version
+        await reconcile_once(db, installed_ports=TaskPorts(provisioning=self.worker))
+        async with self.pool.acquire() as conn:
+            self.assertEqual(
+                (await lifecycle.load_task(conn, task.id)).version, version
+            )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_events WHERE task_id=$1 AND version=$2",
+                task.id,
+                version,
+            ),
+            1,
+        )
+        # Owner cancellation is still the existing route to confirmed disposal and release.
+        async with self.pool.acquire() as conn, conn.transaction():
+            cancel = await mutate(
+                conn,
+                self.owner,
+                "cancel",
+                TaskAction(
+                    request_id=uuid.uuid4().hex,
+                    expected_version=version,
+                    expected_attempt_id=attempt.id,
+                ),
+                task_id=task.id,
+            )
+        await self.worker.reconcile(db, cancel)
+        async with self.pool.acquire() as conn:
+            self.assertEqual(
+                (await lifecycle.load_attempt(conn, attempt.id)).state, "cancelled"
+            )
+            self.assertEqual(
+                (await lifecycle.load_task(conn, task.id)).status, "cancelled"
+            )
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT capacity_held FROM task_attempts WHERE id=$1", attempt.id
+            )
+        )
 
     @asynccontextmanager
     async def observed_parent_revoke(self, sid):
