@@ -661,6 +661,24 @@ class CoordinatorPostgresTests(s1.TaskProvisioningPostgresTests):
                             installed_ports=installed,
                         )
                 self.assertEqual(changed.exception.code, "request_payload_conflict")
+            from mainloop.mcp_app import invoke
+            from mainloop.runtime.agent_identity import token_for
+            from mainloop.runtime.agent_tools import AgentService
+            from mainloop.runtime.delegation import PgStore
+
+            agent = AgentService(PgStore(), [])
+            ctx = await agent.authenticate(token_for(target.session_id))
+            before_reads = len(self.fake.requests), tuple(external.calls)
+            for tool in ("task_get", "task_history"):
+                result = await invoke(agent, ctx, tool, {"task_id": task.id})
+                self.assertFalse(result.isError, result.content)
+                self.assertEqual(
+                    {a["id"] for a in result.structuredContent["artifacts"]},
+                    {current.manifest_ref, current.checkpoint_ref},
+                )
+            self.assertEqual(
+                before_reads, (len(self.fake.requests), tuple(external.calls))
+            )
             # Settle the scenario through S1 rather than raising capacity limits.
             async with self.pool.acquire() as conn, conn.transaction():
                 latest_task = await lifecycle.load_task(conn, task.id)
@@ -919,6 +937,91 @@ class CoordinatorPostgresTests(s1.TaskProvisioningPostgresTests):
                 )
                 self.assertEqual(text, brief)
                 self.assertLessEqual(len(text.encode("utf-8")), 16384)
+
+    async def test_successor_discovery_reads_after_readiness_before_sole_original_brief(
+        self,
+    ):
+        from fastapi import HTTPException
+        from mainloop.db import db
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime import native_sessions
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+        from mainloop.runtime.delegation import PgStore
+        from mainloop.tasks import lifecycle, provisioning
+        from mainloop.tasks.handoff import Handoff
+
+        operation, _, external, _ = await self.prepare_cancel_window("target_creating")
+        async with self.pool.acquire() as conn:
+            task = await lifecycle.load_task(conn, operation.task_id)
+            target = await lifecycle.load_attempt(conn, task.current_attempt_id)
+        agent = AgentService(PgStore(), [])
+        with self.assertRaises(HTTPException):
+            await agent.authenticate(token_for(target.session_id))
+        # Fake read-only preparation confirms checkout before active admission.
+        await Handoff(external.runtime, external.reader, live=False).reconcile(
+            db, operation
+        )
+        async with self.pool.acquire() as conn:
+            current = await store.handoff_operation(conn, operation.id)
+            self.assertEqual(current.state, "target_ready")
+            task = await lifecycle.load_task(conn, operation.task_id)
+        with self.assertRaises(HTTPException):
+            await agent.authenticate(token_for(target.session_id))
+        async with self.pool.acquire() as conn, conn.transaction():
+            target = await provisioning.admit_successor(conn, task, target)
+        # This fixture's fresh successor bearer represents the later grant
+        # publication; no live Secret, session or model is invoked.
+        ctx = await agent.authenticate(token_for(target.session_id))
+        counts = (
+            len(self.fake.requests),
+            tuple(external.calls),
+            await self.pool.fetchval("SELECT count(*) FROM native_deliveries"),
+        )
+        identity = await invoke(agent, ctx, "whoami", {})
+        self.assertFalse(identity.isError)
+        self.assertEqual(identity.structuredContent["task_id"], task.id)
+        for tool in ("task_get", "task_history", "task_list"):
+            result = await invoke(
+                agent, ctx, tool, {} if tool == "task_list" else {"task_id": task.id}
+            )
+            self.assertFalse(result.isError, result.content)
+        self.assertEqual(
+            counts,
+            (
+                len(self.fake.requests),
+                tuple(external.calls),
+                await self.pool.fetchval("SELECT count(*) FROM native_deliveries"),
+            ),
+        )
+        async with self.pool.acquire() as conn:
+            for action in ("create", "submit", "resume", "preview"):
+                with self.assertRaises(lifecycle.LifecycleDenied) as denied:
+                    await lifecycle.check(conn, target.session_id, action)
+                self.assertEqual(denied.exception.code, "handoff_admission_pending")
+        binding = await PgStore().get_binding(target.session_id)
+        # Standing input changes do not silently install delegated bootstrap.
+        self.assertEqual(
+            await native_sessions._with_standing(binding, task.brief),
+            (task.brief, None),
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            target = await provisioning.activate_successor(conn, task, target, current)
+            replay = await provisioning.activate_successor(conn, task, target, current)
+            self.assertEqual(replay.brief_delivery_id, target.brief_delivery_id)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT content FROM messages WHERE id=$1", target.brief_delivery_id
+            ),
+            task.brief,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND source='brief'",
+                target.session_id,
+            ),
+            1,
+        )
 
     async def prepare_cancel_window(self, step, *, no_start=False):
         import uuid

@@ -159,6 +159,98 @@ async def read(conn, principal, task_id):
     )
 
 
+async def read_native(conn, principal, task_id):
+    """Binding-visible facts and exact linked continuation, without private history."""
+    task, artifacts, reports = await store.load_continuation(conn, task_id, principal)
+    current_reports = []
+    if task.current_attempt_id is not None:
+        for row in await conn.fetch(
+            """SELECT * FROM task_reports WHERE task_id=$1 AND attempt_id=$2
+               ORDER BY created_at,id""",
+            task.id,
+            task.current_attempt_id,
+        ):
+            payload = store.decode(row["snapshot"])
+            if store.digest(payload) != row["request_digest"]:
+                raise store.TaskError(409, "report_integrity_error")
+            value = TaskReport.model_validate(payload)
+            if (value.task_id, value.attempt_id, value.request_id) != (
+                task.id,
+                task.current_attempt_id,
+                row["request_id"],
+            ):
+                raise store.TaskError(409, "continuation_identity_mismatch")
+            current_reports.append(value)
+    linked_operation = artifacts[0].operation_id if artifacts else None
+    operation_rows = await conn.fetch(
+        "SELECT * FROM task_operations WHERE task_id=$1 ORDER BY created_at,id", task.id
+    )
+    operations = []
+    for row in operation_rows:
+        value = TaskOperation.model_validate(store.decode(row["snapshot"]))
+        if (
+            any(
+                getattr(value, key) != row[key]
+                for key in ("id", "owner_id", "task_id", "attempt_id", "kind", "state")
+            )
+            or value.owner_id != task.owner_id
+        ):
+            raise store.TaskError(409, "continuation_identity_mismatch")
+        operations.append(
+            value.model_copy(
+                update={
+                    "request_payload": {},
+                    "principal_key": "",
+                    "request_digest": "",
+                    "checkpoint_ref": (
+                        value.checkpoint_ref if value.id == linked_operation else None
+                    ),
+                    "manifest_ref": (
+                        value.manifest_ref if value.id == linked_operation else None
+                    ),
+                }
+            )
+        )
+    return TaskView(
+        task=task,
+        attempts=tuple(
+            value.model_copy(
+                update={
+                    "evidence_refs": (),
+                    "result_ref": None,
+                    "retention_hold": None,
+                    "brief_delivery_id": None,
+                    "checkpoint_ref": (
+                        value.checkpoint_ref
+                        if artifacts and value.id == task.current_attempt_id
+                        else None
+                    ),
+                    "manifest_ref": (
+                        value.manifest_ref
+                        if artifacts and value.id == task.current_attempt_id
+                        else None
+                    ),
+                }
+            )
+            for value in await store.attempts(conn, task.id)
+        ),
+        operations=tuple(operations),
+        artifacts=artifacts,
+        reports=(*reports, *current_reports),
+        projection=(await projection.read(conn, task)).model_copy(
+            update={"pending_approval_ids": ()}
+        ),
+        actions={
+            name: TaskEligibility(reason=reason)
+            for name, reason in (
+                ("retry", "handoff_unavailable"),
+                ("reassign", "handoff_unavailable"),
+                ("cancel", "cancel_unavailable"),
+            )
+        },
+    )
+
+
 async def mutate(
     conn, principal, kind, request, *, task_id=None, installed_ports=ports
 ):

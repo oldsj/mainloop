@@ -86,17 +86,11 @@ async def render_for_binding(binding: dict) -> str:
     session = await db.get_session(binding["session_id"])
     if binding["role"] != "main":
         if binding.get("task_id"):
-            from mainloop.db import tasks as task_store
-            from mainloop.tasks import lifecycle, service
-
-            async with db.connection() as conn:
-                principal = await lifecycle.authenticate_binding(conn, binding)
-                tasks = await task_store.list_tasks(conn, principal)
-                views = [await service.read(conn, principal, task.id) for task in tasks]
+            values = await PgStore().task_call(binding, "task_list", {})
             return render_standing(
                 StandingInputs(
                     role=binding["role"],
-                    tasks=[v.model_dump(mode="json") for v in views],
+                    tasks=values["tasks"],
                 )
             )
         return render_standing(StandingInputs(role=binding["role"]))
@@ -135,20 +129,11 @@ async def render_for_binding(binding: dict) -> str:
             settings.main_carry_over_messages,
             list(native_sessions.OPEN_STATES),
         )
-    from mainloop.db import tasks as task_store
-    from mainloop.tasks import service
-    from mainloop.tasks.principal import TaskPrincipal
-
-    async with db.connection() as conn:
-        principal = TaskPrincipal(
-            user_id, binding_id=binding["session_id"], role="main"
-        )
-        tasks = await task_store.list_tasks(conn, principal)
-        views = [await service.read(conn, principal, task.id) for task in tasks]
+    values = await PgStore().task_call(binding, "task_list", {})
     return render_standing(
         StandingInputs(
             role="main",
-            tasks=[v.model_dump(mode="json") for v in views],
+            tasks=values["tasks"],
             topics=await _topic_lines(user_id),
             current_topic=name,
             checkpoint=checkpoint,
@@ -394,7 +379,9 @@ class PgStore:
                         "attempt_number": attempt.number,
                     }
                 if action in ("task_get", "task_history"):
-                    value = await service.read(conn, principal, arguments["task_id"])
+                    value = await service.read_native(
+                        conn, principal, arguments["task_id"]
+                    )
                     return {
                         "text": f"{value.task.title}: {value.task.status}",
                         **value.model_dump(mode="json"),
@@ -402,7 +389,8 @@ class PgStore:
                 if action == "task_list":
                     tasks = await task_store.list_tasks(conn, principal, **arguments)
                     values = [
-                        await service.read(conn, principal, task.id) for task in tasks
+                        await service.read_native(conn, principal, task.id)
+                        for task in tasks
                     ]
                     return {
                         "text": "\n".join(
