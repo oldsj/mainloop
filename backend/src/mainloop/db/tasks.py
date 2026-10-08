@@ -604,3 +604,113 @@ async def get_artifact(conn, artifact_id, principal):
         "sha256": row["sha256"],
         "payload": json.loads(row["content"]),
     }
+
+
+async def handoff_operation(conn, operation_id, *, lock=False):
+    query = "SELECT snapshot FROM task_operations WHERE id=$1"
+    if lock:
+        query += " FOR UPDATE"
+    value = await conn.fetchval(query, operation_id)
+    return TaskOperation.model_validate(decode(value)) if value else None
+
+
+def handoff_require_admission(task, operation):
+    """Caller holds admission/task locks before reserving a replacement writer."""
+    if task.status in ("completed", "failed", "cancelled"):
+        raise TaskError(409, "task_terminal")
+    if task.version != operation.request_payload.get("_s3", {}).get("expected_version"):
+        raise TaskError(409, "stale_task_attempt")
+
+
+async def handoff_save(conn, previous, value):
+    """Admission -> task -> operation CAS, with a committed task-event projection."""
+    require_transaction(conn)
+    await admission_lock(conn)
+    task_row = None
+    if previous.task_id:
+        task_row = await conn.fetchval(
+            "SELECT snapshot FROM tasks WHERE id=$1 FOR UPDATE", previous.task_id
+        )
+    current = await handoff_operation(conn, previous.id, lock=True)
+    if current != previous:
+        raise TaskError(409, "stale_handoff_operation")
+    if task_row is not None:
+        task = Task.model_validate(decode(task_row))
+        # A new authoritative no-start retry may leave its original failed
+        # projection. Later records/errors must never undo a committed stop.
+        starting_no_start = (
+            task.status == "failed"
+            and previous.source_attempt_id is None
+            and "_s3" not in previous.request_payload
+            and value.source_attempt_id is not None
+            and value.state == "requested"
+            and value.request_payload.get("_s3", {}).get("no_start") is True
+        )
+        if (
+            task.status in ("completed", "failed", "cancelled")
+            and not starting_no_start
+        ):
+            await save_operation(conn, value)
+            return
+        reason = value.reason or (
+            None if value.state in ("completed", "target_ready") else "handoff"
+        )
+        status = (
+            task.status
+            if value.state in ("completed", "target_ready")
+            else ("blocked" if value.state == "blocked" else "waiting")
+        )
+        updated = task.model_copy(
+            update={
+                "reason": reason,
+                "status": status,
+                "version": task.version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        await save_task(
+            conn, updated, task.version, f"handoff:{value.id}:{updated.version}"
+        )
+        metadata = value.request_payload.get("_s3")
+        if metadata is not None:
+            value = value.model_copy(
+                update={
+                    "request_payload": {
+                        **value.request_payload,
+                        "_s3": {**metadata, "expected_version": updated.version},
+                    }
+                }
+            )
+    await save_operation(conn, value)
+
+
+async def handoff_pending(conn, task_id, excluding):
+    return await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM task_operations WHERE task_id=$1
+           AND id<>$2 AND kind IN ('retry','reassign','cancel')
+           AND state NOT IN ('completed','blocked'))""",
+        task_id,
+        excluding,
+    )
+
+
+async def handoff_children_drained(conn, task_id):
+    return not await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+           WHERE t.parent_task_id=$1 AND a.state IN ('creating','active','draining'))""",
+        task_id,
+    )
+
+
+async def retention_candidates(conn):
+    """Do not delete around uncertain handoff/publication or native HITL."""
+    rows = await conn.fetch(
+        """SELECT a.task_id,a.id FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+           WHERE a.state='superseded' AND NOT EXISTS(
+             SELECT 1 FROM task_operations o WHERE o.task_id=a.task_id
+             AND o.state NOT IN ('completed','blocked'))
+           AND NOT EXISTS(SELECT 1 FROM task_operations o WHERE o.task_id=a.task_id
+             AND o.state='blocked' AND o.snapshot->>'reason' IS NOT NULL)
+           ORDER BY a.id"""
+    )
+    return rows

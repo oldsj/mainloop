@@ -263,7 +263,12 @@ class TaskProjection(ContractModel):
 class TaskArtifact(ContractModel):
     id: Identifier
     operation_id: Identifier
-    kind: Literal["checkpoint", "handoff_manifest", "unverified_provider_summary"]
+    kind: Literal[
+        "checkpoint",
+        "handoff_manifest",
+        "unverified_provider_summary",
+        "retention_receipt",
+    ]
     sha256: str
     payload: dict
 
