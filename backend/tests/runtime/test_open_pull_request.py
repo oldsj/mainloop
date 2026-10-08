@@ -813,6 +813,14 @@ class PRPostgresTests(PostgresTestCase):
             ("failed", "UPDATE sessions SET status='failed' WHERE id=$1"),
             ("cancelled", "UPDATE sessions SET status='cancelled' WHERE id=$1"),
         )
+        lifecycle_denials = {
+            "revoked token": "[403] binding_revoked",
+            "archived": "[403] session_terminal",
+            "runtime deleted": "[403] binding_revoked",
+            "completed": "[403] session_terminal",
+            "failed": "[403] session_terminal",
+            "cancelled": "[403] session_terminal",
+        }
         for name, query in cases:
             with self.subTest(state=name):
                 sid, _ = await self.bound_session(role="main")
@@ -820,7 +828,10 @@ class PRPostgresTests(PostgresTestCase):
                 await self.pool.execute(query, sid)
                 result = await self.call()
                 self.assertTrue(result.isError)
-                self.assertIn("[ownership]", result.content[0].text)
+                if name in lifecycle_denials:
+                    self.assertEqual(result.content[0].text, lifecycle_denials[name])
+                else:
+                    self.assertIn("[ownership]", result.content[0].text)
                 self.assertEqual(self.fake.requests, [])
                 self.assertEqual(self.fake.posts, [])
 

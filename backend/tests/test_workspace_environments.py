@@ -178,7 +178,7 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.runtime_composition.cli_version, "1.0")
 
     async def test_replacement_and_recovery_use_persisted_resolution(self):
-        from tests.runtime.test_native_sessions import MemoryLedger
+        from tests.runtime.test_native_sessions import MemoryLedger, memory_connection
 
         ledger = MemoryLedger()
         ledger.development_environment = dict(
@@ -204,13 +204,16 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
             role="agent",
             kagent_request_id="original",
         )
-        with patch.object(ns, "ledger", ledger), patch.object(
-            ns, "get_client", return_value=client
-        ):
-            await ns._create_session_with_credentials(binding, ())
-            await ns._create_session_with_credentials(binding, ())
-            binding["kagent_request_id"] = "replacement"
-            await ns._create_session_with_credentials(binding, ())
+        async with memory_connection() as conn:
+            with patch.object(ns, "ledger", ledger), patch.object(
+                ns, "get_client", return_value=client
+            ), patch.object(
+                ns.db, "connection", side_effect=AssertionError("pool reacquisition")
+            ):
+                await ns._create_session_with_credentials(binding, (), conn=conn)
+                await ns._create_session_with_credentials(binding, (), conn=conn)
+                binding["kagent_request_id"] = "replacement"
+                await ns._create_session_with_credentials(binding, (), conn=conn)
         calls = client.create_session.call_args_list
         self.assertEqual(calls[0], calls[1])
         self.assertEqual(
@@ -218,6 +221,17 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
             calls[0].kwargs["development_environment"],
         )
         self.assertEqual(ledger.reported_composition, session)
+        self.assertEqual(
+            [call.kwargs["request_id"] for call in calls],
+            ["original", "original", "replacement"],
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["development_environment"]
+                == session.development_environment
+                for call in calls
+            )
+        )
 
 
 def malformed_composition_fields():
