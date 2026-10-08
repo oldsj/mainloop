@@ -8,6 +8,12 @@ Main at depth zero creates supervisors. A supervisor at depth one creates direct
 
 `delegate` accepts `request_id`, `title`, `brief`, `mode`, optional `project_id`, `topic_id`, `provider_profile_id` and typed `checkout`. Code tasks require an owned project and checkout; coordination tasks have no repository authority. The service chooses role, depth, owner, root and native configuration. Provider constraints and admission caps apply through the shared service. Reusing a request ID with identical input returns the original operation; changed input conflicts. A returned pending operation is not a running native session.
 
+Reuse the request ID after a lost or uncertain response. After a confirmed terminal `blocked` create, a new create requires a **new** request ID; replaying the old ID returns the recorded blocked operation.
+
+Main's standing context lists its owner's projects with IDs, full repository names and whether an environment is selected. Selection does not guarantee environment readiness. This index is a snapshot when standing context is installed, not a live project query, and is not included for delegated agents.
+
+MCP-created task briefs include short role guidance before the assigned work: call `whoami`, read `task_get`, then perform the work and `report`. Coding guidance additionally says to run project checks, `git push` the task branch, use `open_pull_request` instead of `gh` (the workspace cannot reach GitHub's API), and use `merge_pull_request` once CI is green, subject to existing policy and tool availability. If it returns `approval_required`, call `merge_pull_request_with_approval` (the owner approves in Mainloop), or report missing approval tooling as a blocker. Coordination guidance grants no repository authority. The combined guidance and assigned brief must fit the existing 16 KiB brief limit. Owner-created task briefs are unchanged.
+
 `task_get`, `task_list` and `task_history` read stored task projections, attempts, operations and reports without creating native turns. Main reads its owner's trees; supervisors read themselves and their direct children; children read only themselves. `task_cancel` requires the current task version and attempt and follows the existing durable cancellation service. Supervisors manage only their direct children, not themselves or another tree.
 
 `task_retry` and `task_reassign` remain hidden and directly denied until the shared handoff port is installed. No provider fallback is inferred. Legacy session tools `status`, `read`, `cancel` and `clear`, and topic/kind delegation arguments, are removed.
@@ -26,7 +32,7 @@ A completed native turn or fallback reply creates no report and completes no tas
 
 Coordination completion requires an explicit completed result and no live child reservations. The reconciler waits for outstanding native deliveries, drains the attempt, revokes its credential, confirms runtime deletion, then settles completion and releases capacity. Unknown deletion keeps the attempt draining and the result pending. A pending cancellation takes precedence over completion.
 
-Standing context renders bounded stored task projections and recent report claims without additional model calls. Native history, compaction and structured owner input retain their provider identity. The delegated runtime currently receives S1's persisted initial brief; injecting the richer standing projection into that initial brief remains an integration change outside this slice's provisioning ownership.
+Standing context renders bounded stored task projections and recent report claims without additional model calls. Native history, compaction and structured owner input retain their provider identity. The delegated runtime receives the persisted initial brief, including role guidance for MCP creates; the richer standing projection is not injected into that brief.
 
 ## Qualification boundary
 
