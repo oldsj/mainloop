@@ -3,7 +3,7 @@
 Implemented: owner-managed environment metadata, immutable versions, project grants
 and project selection. New workspaces resolve and pin the selected environment;
 existing sessions keep their recorded environment. There are no environment MCP tools
-or frontend selection controls.
+or agent-facing environment controls.
 
 ## Registration and validation
 
@@ -23,7 +23,17 @@ responses before consuming the body. Each read has a 4 MiB pre-append size limit
 a 30-second elapsed budget including anonymous token exchange/retry, and
 20-second inactivity timeouts. Whole validation and refresh operations each have
 a 90-second elapsed budget; expiration reports a registry error. Anonymous bearer exchange is supported on the registry's own HTTPS origin;
-cross-host authentication and metadata redirects are unsupported. No image layers
+cross-host authentication and manifest redirects are unsupported. Policy
+`oci-static-v2` permits one HTTP 307 hop only for an immutable config blob from
+public GHCR after its same-origin anonymous bearer exchange. The target must be
+HTTPS at exactly `pkg-containers.githubusercontent.com`, with no port or port 443,
+no userinfo and no fragment. A fresh client sends no Authorization, cookies or
+registry credentials, refuses further redirects and retains the read budget,
+identity encoding, byte limit, descriptor size and digest checks. Signed URLs
+stay in memory and are excluded from dependency logs and error messages. Other
+registries and unauthenticated redirects remain unsupported. Versions validated
+under `oci-static-v1` retain their original evidence and fail the current-policy
+workspace resolution check; fresh validation is required. No image layers
 are downloaded or executed. Authentication failures report “private images not
 supported yet”; an inaccessible or missing private repository may also return 404.
 Private pulls are not supported.
@@ -91,7 +101,7 @@ They are not silently deleted or activated.
 
 Builders, executable validation/probes, ABI and reserved-path checks, package
 requests/policy enforcement, approvals for build/activation,
-activation of a different environment in an existing workspace, retention and environment selection UI are not implemented. Models
+activation of a different environment in an existing workspace and retention are not implemented. Models
 reserve parent version, structured package declaration and approval-reference
 fields; they do not execute package installation or establish approval authority.
 
@@ -113,3 +123,18 @@ Projects without a selection retain the legacy CreateSession request without tha
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
+
+## Implemented project UI
+
+The project page shows the saved environment selection separately from a draft.
+Owners can register a public digest-pinned image with a name and amd64 or arm64
+architecture, choose a statically validated current-policy immutable version, or
+follow an accepted environment default. Accepting a selected version as the default
+is an explicit action affecting all projects following that environment. Registration
+shows the returned static-validation status; it does not establish runtime readiness.
+Pending-build and obsolete-policy versions cannot be saved. With no selection, new
+sessions use the configured native agent image. Changes apply to newly started
+sessions and do not migrate running sessions. Reads never select or accept defaults
+automatically. Saving uses the observed selection revision; conflicts refresh saved
+state while preserving the draft for review. An unconfirmed registration reply blocks
+repeat registration in that form until the owner reconciles the environment list.

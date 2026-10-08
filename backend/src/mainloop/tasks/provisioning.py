@@ -719,6 +719,156 @@ class Provisioning:
 
 
 def install() -> Provisioning:
-    """Install the provisioning port for owner and supervisor task creation."""
+    """Install task ports at the existing startup seam."""
+    from mainloop.tasks.projection import Projection
+
     ports.provisioning = Provisioning()
+    ports.projection = Projection()
+    ports._projection_cursor = ""
     return ports.provisioning
+
+
+async def enroll_successor(conn, task, source, profile, operation, checkpoint):
+    """Reuse S1 enrollment for an existing task; no external create or writable admission."""
+    store.require_transaction(conn)
+    await store.admission_lock(conn)
+    task = await lifecycle.load_task(conn, task.id, lock=True)
+    store.handoff_require_admission(task, operation)
+    if task.current_attempt_id is not None:
+        raise store.TaskError(409, "source_not_settled")
+    if task.accepted_environment is None or task.checkout is None:
+        raise store.TaskError(409, "handoff_code_environment_required")
+    parent_session = None
+    if task.parent_task_id:
+        parent = await lifecycle.load_task(conn, task.parent_task_id, lock=True)
+        parent_session = await Provisioning()._live_parent_session(conn, parent)
+    checkout = task.checkout.model_copy(update={"ref": checkpoint.remote_sha})
+    task = task.model_copy(
+        update={
+            "checkout": checkout,
+            "assigned_profile_id": profile.id,
+            "provider_constraint": (
+                profile.id if operation.kind == "reassign" else task.provider_constraint
+            ),
+            "selection_source": (
+                "explicit" if operation.kind == "reassign" else task.selection_source
+            ),
+            "status": "queued",
+            "reason": "handoff",
+        }
+    )
+    task, attempt = await store.admit_attempt(
+        conn,
+        task,
+        profile,
+        role=source.role,
+        depth=source.depth,
+        predecessor_id=source.id,
+    )
+    enrolled = await workspaces.enroll_session(
+        conn,
+        user_id=task.owner_id,
+        kind=profile.id,
+        role=source.role,
+        mcp_grant_kind=_grant_kind(task),
+        manifest=WorkspaceManifest(
+            repo_url=f"https://github.com/{checkpoint.repository}",
+            ref=checkpoint.remote_sha,
+            branch=checkout.branch,
+            depth=checkout.depth,
+            agent_kind=profile.id,
+        ),
+        project_id=task.project_id,
+        session_id=attempt.id,
+        parent_session_id=parent_session,
+        topic_id=task.topic_id,
+        title=task.title,
+        description="Task successor attempt",
+        prompt=task.brief,
+        environment=task.accepted_environment,
+        claim_branch=False,
+    )
+    attempt = await lifecycle.save_attempt(
+        conn,
+        attempt.model_copy(
+            update={
+                "session_id": enrolled.workspace_id,
+                "binding_id": enrolled.workspace_id,
+                "workspace_id": enrolled.workspace_id,
+                "checkpoint_ref": operation.checkpoint_ref,
+                "manifest_ref": operation.manifest_ref,
+                "evidence_refs": scope_evidence(task, attempt),
+            }
+        ),
+    )
+    # Enrollment does not send a brief or publish any usable credential.
+    await lifecycle.save_attempt(
+        conn, source.model_copy(update={"successor_id": attempt.id})
+    )
+    await conn.execute("UPDATE tasks SET projection='{}'::jsonb WHERE id=$1", task.id)
+    return task, attempt
+
+
+async def activate_successor(conn, task, attempt, operation):
+    """Caller has verified trusted exact checkout/environment readiness under runtime locks."""
+    store.require_transaction(conn)
+    current = await lifecycle.load_attempt(conn, attempt.id, lock=True)
+    if current.brief_delivery_id is not None:
+        return current
+    if current.state != "active":
+        raise store.TaskError(409, "target_not_admitted")
+    denial = await Provisioning()._authority_denial(conn, task, current)
+    if denial:
+        raise store.TaskError(409, denial)
+    conversation_id = await conn.fetchval(
+        "SELECT conversation_id FROM sessions WHERE id=$1", attempt.session_id
+    )
+    # Native delivery remains owned by the existing ledger/dispatcher. No send here.
+    # Preserve authoritative owner instructions once, including a full 16 KiB
+    # original. Manifest context stays durable; a scoped native reader is a
+    # separately required integration contract, not an invented tool in this brief.
+    text = task.brief
+    if len(text.encode("utf-8")) > 16384:
+        raise store.TaskError(422, "brief_too_large")
+    message_id = await ns.ledger.insert_brief(
+        conn, session_id=attempt.session_id, conversation_id=conversation_id, text=text
+    )
+    active = await lifecycle.save_attempt(
+        conn,
+        current.model_copy(
+            update={
+                "state": "active",
+                "brief_delivery_id": message_id,
+            }
+        ),
+    )
+    await store.save_task(
+        conn,
+        task.model_copy(
+            update={
+                "status": "running",
+                "reason": None,
+                "version": task.version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        ),
+        task.version,
+        f"attempt:{attempt.id}:brief-recorded",
+    )
+    return active
+
+
+async def admit_successor(conn, task, attempt):
+    """Qualified checkout precedes active admission; the first brief follows fresh grants."""
+    store.require_transaction(conn)
+    current = await lifecycle.load_attempt(conn, attempt.id, lock=True)
+    if current.state == "active":
+        return current
+    if current.state != "creating":
+        raise store.TaskError(409, "target_not_creating")
+    denial = await Provisioning()._authority_denial(conn, task, current)
+    if denial:
+        raise store.TaskError(409, denial)
+    return await lifecycle.save_attempt(
+        conn, current.model_copy(update={"state": "active"})
+    )

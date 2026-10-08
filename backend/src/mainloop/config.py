@@ -139,9 +139,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _retention_order(self):
-        # A calendar month is at least 28 days. This conservative bound guarantees
-        # deletion never precedes archive for any superseded_at date.
-        if self.task_archive_after_days > 28 * self.task_delete_after_months:
+        from mainloop.tasks.retention import minimum_calendar_days
+
+        if self.task_archive_after_days > minimum_calendar_days(
+            self.task_delete_after_months
+        ):
             raise ValueError("task deletion cannot precede archive")
         return self
 

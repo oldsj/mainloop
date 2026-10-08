@@ -28,6 +28,11 @@ reconciliation. Agent activity, delivery, workspace health, attention and public
 separate observations. A provider report or finished turn cannot prove coding-task completion.
 Verified merged publication is the later completion gate.
 
+Task GET authorizes the task before reading its cached publication projection. Reads stay
+DB-only: successful CI becomes unknown when its head differs, its timestamp is missing,
+future or older than five minutes. The response includes the existing publication mode and
+current merge proposal/result; reading never starts a native turn or dispatches a merge.
+
 Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
 reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
 state, brief delivery, lineage, results/evidence and retention audit. SQL rejects routing
@@ -203,6 +208,12 @@ No retained sessions, topics or claims are backfilled.
 
 Provisioning exposes `create`, `cancel`, `reconcile`; handoff exposes `start`, `reconcile`;
 projection exposes `refresh`. Disconnected mutations return stable reasons and cannot dispatch.
+Startup installs the existing publication projection port alongside provisioning at the same
+installation seam. The existing task reconciler observes at most ten current active coding
+tasks in a two-second share per pass, rotating by task ID with a process-local cursor. It
+advances before each refresh and isolates revoked, terminal or failing sources so later tasks
+can progress. A restart begins a new scan. The port revalidates source authority and only
+records observations; qualification/activation gates and unavailable action flags are unchanged.
 Later ports must persist intent in the caller transaction before external operations, use the
 operation ID for reconciliation, consume the pinned attempt routing, and qualify readiness before
 releasing a brief. They must not issue native calls while holding the admission transaction.

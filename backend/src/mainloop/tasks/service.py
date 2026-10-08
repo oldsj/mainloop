@@ -6,7 +6,7 @@ idempotent blocked operation but never reserve capacity, create sessions or disp
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from asyncpg import Connection
@@ -14,6 +14,8 @@ from mainloop.config import settings
 from mainloop.db import tasks as store
 from mainloop.db.postgres import Database
 from mainloop.providers import qualify_task_profile, registry
+from mainloop.runtime.policy import PolicyError
+from mainloop.tasks import lifecycle, projection
 from mainloop.tasks.events import dispatch_committed_events
 from mainloop.tasks.principal import TaskPrincipal
 
@@ -72,6 +74,7 @@ class TaskPorts:
     provisioning: ProvisioningPort | None = None
     handoff: HandoffPort | None = None
     projection: ProjectionPort | None = None
+    _projection_cursor: str = field(default="", init=False, repr=False)
 
 
 ports = TaskPorts()
@@ -144,7 +147,99 @@ async def read(conn, principal, task_id):
         reports=tuple(
             TaskReport.model_validate(store.decode(r["snapshot"])) for r in report_rows
         ),
-        projection=await store.projection(conn, task.id),
+        projection=await projection.read(conn, task),
+        actions={
+            name: TaskEligibility(reason=reason)
+            for name, reason in (
+                ("retry", "handoff_unavailable"),
+                ("reassign", "handoff_unavailable"),
+                ("cancel", "cancel_unavailable"),
+            )
+        },
+    )
+
+
+async def read_native(conn, principal, task_id):
+    """Binding-visible facts and exact linked continuation, without private history."""
+    task, artifacts, reports = await store.load_continuation(conn, task_id, principal)
+    current_reports = []
+    if task.current_attempt_id is not None:
+        for row in await conn.fetch(
+            """SELECT * FROM task_reports WHERE task_id=$1 AND attempt_id=$2
+               ORDER BY created_at,id""",
+            task.id,
+            task.current_attempt_id,
+        ):
+            payload = store.decode(row["snapshot"])
+            if store.digest(payload) != row["request_digest"]:
+                raise store.TaskError(409, "report_integrity_error")
+            value = TaskReport.model_validate(payload)
+            if (value.task_id, value.attempt_id, value.request_id) != (
+                task.id,
+                task.current_attempt_id,
+                row["request_id"],
+            ):
+                raise store.TaskError(409, "continuation_identity_mismatch")
+            current_reports.append(value)
+    linked_operation = artifacts[0].operation_id if artifacts else None
+    operation_rows = await conn.fetch(
+        "SELECT * FROM task_operations WHERE task_id=$1 ORDER BY created_at,id", task.id
+    )
+    operations = []
+    for row in operation_rows:
+        value = TaskOperation.model_validate(store.decode(row["snapshot"]))
+        if (
+            any(
+                getattr(value, key) != row[key]
+                for key in ("id", "owner_id", "task_id", "attempt_id", "kind", "state")
+            )
+            or value.owner_id != task.owner_id
+        ):
+            raise store.TaskError(409, "continuation_identity_mismatch")
+        operations.append(
+            value.model_copy(
+                update={
+                    "request_payload": {},
+                    "principal_key": "",
+                    "request_digest": "",
+                    "checkpoint_ref": (
+                        value.checkpoint_ref if value.id == linked_operation else None
+                    ),
+                    "manifest_ref": (
+                        value.manifest_ref if value.id == linked_operation else None
+                    ),
+                }
+            )
+        )
+    return TaskView(
+        task=task,
+        attempts=tuple(
+            value.model_copy(
+                update={
+                    "evidence_refs": (),
+                    "result_ref": None,
+                    "retention_hold": None,
+                    "brief_delivery_id": None,
+                    "checkpoint_ref": (
+                        value.checkpoint_ref
+                        if artifacts and value.id == task.current_attempt_id
+                        else None
+                    ),
+                    "manifest_ref": (
+                        value.manifest_ref
+                        if artifacts and value.id == task.current_attempt_id
+                        else None
+                    ),
+                }
+            )
+            for value in await store.attempts(conn, task.id)
+        ),
+        operations=tuple(operations),
+        artifacts=artifacts,
+        reports=(*reports, *current_reports),
+        projection=(await projection.read(conn, task)).model_copy(
+            update={"pending_approval_ids": ()}
+        ),
         actions={
             name: TaskEligibility(reason=reason)
             for name, reason in (
@@ -249,6 +344,45 @@ async def reconcile_once(database, *, installed_ports=ports):
     from mainloop.tasks.reports import dispatch_pending
 
     await dispatch_pending(database)
+    await reconcile_projections(database, installed_ports)
+
+
+PROJECTION_RECONCILE_LIMIT = 10
+PROJECTION_RECONCILE_BUDGET_SECONDS = 2.0
+
+
+async def reconcile_projections(database, installed_ports):
+    """Rotate current code tasks through the installed observer, never dispatch merges."""
+    if installed_ports.projection is None:
+        return
+    try:
+        async with asyncio.timeout(PROJECTION_RECONCILE_BUDGET_SECONDS):
+            async with database.connection() as conn:
+                rows = await conn.fetch(
+                    """SELECT t.id FROM tasks t
+                       JOIN task_attempts a ON a.id=t.current_attempt_id
+                       JOIN native_bindings b ON b.session_id=a.binding_id
+                       JOIN sessions s ON s.id=b.session_id
+                       WHERE t.mode='code' AND a.state='active'
+                         AND t.status NOT IN ('completed','failed','cancelled')
+                         AND b.token_hash IS NOT NULL AND b.kagent_deleted_at IS NULL
+                         AND s.archived_at IS NULL
+                       ORDER BY (t.id <= $1),t.id LIMIT $2""",
+                    installed_ports._projection_cursor,
+                    PROJECTION_RECONCILE_LIMIT,
+                )
+            for row in rows:
+                # Advance before work: a slow, revoked or failing source cannot
+                # monopolize the next pass. The port revalidates live authority.
+                installed_ports._projection_cursor = row["id"]
+                try:
+                    await installed_ports.projection.refresh(database, row["id"])
+                except (PolicyError, lifecycle.LifecycleDenied):
+                    logger.debug("Task projection source lost authority: %s", row["id"])
+                except Exception:
+                    logger.exception("Task projection refresh failed: %s", row["id"])
+    except TimeoutError:
+        return
 
 
 class SSETaskEventSink:

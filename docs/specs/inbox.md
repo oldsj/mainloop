@@ -27,3 +27,28 @@ per second; busy lists can therefore refresh less often than the nominal four se
 Reads have a ten-second deadline. Hidden/unmounted reads are cancelled; a transport that has
 not settled retains its lock. Inbox reads from polling, SSE and manual refresh also coalesce
 behind one in-flight request. Poll cleanup does not cancel decision submissions.
+
+## Coding-task attention links
+
+A delegated leaf's pending input links to the existing canonical HITL inbox card. Its parent
+and root task roll up that same card ID as presentation only. Duplicate observations create
+no additional owner card or task attention event. The existing native leaf identity,
+continuation destination and immutable receipt retain ownership; a parent link is not a
+response route and cannot grant merge consent.
+
+The observer refreshes task links after committing its HITL observation, releasing receipt
+locks before taking task-tree locks. Leaf/root projection updates then commit together.
+Already-recorded leaf receipts, superseded input and stale merge proposals are excluded from
+pending task attention. Changed-head observation clears the old proposal/approval links.
+Response submission refreshes each unique canonical leaf binding after the durable receipt
+commits and leaf/merge decision locks are released. Same-action replay refreshes those links
+without recording another decision or sending another native response. Attention failure or
+timeout preserves the existing receipt and continuation path.
+
+The existing response reconciler repairs missed attention updates from committed receipts,
+including accepted or rejected transport, in a separate bounded share. Cached task-tree links
+identify trees to refresh even if the native request projection has been removed. If the leaf
+has completed before refresh, the helper authenticates an active ancestor and recomputes its
+tree. The terminal leaf keeps its terminal status and cannot submit work; its parent gains
+no leaf receipt or consent. Local PostgreSQL/fake-upstream regressions cover this integration;
+they provide no live-provider proof.

@@ -60,7 +60,11 @@ async def facts(conn, session_id: str, *, lock: bool = False) -> dict | None:
     """
     query = """SELECT a.id,a.state,a.writer_generation,a.role,t.mode,t.id AS task_id,
                   t.current_attempt_id,t.status AS task_status,c.held AS claim_held,c.generation AS claim_generation,
-                  a.snapshot->'evidence_refs' ? 'kagent-create:first-dispatch-rejected-before-reservation' AS create_rejected
+                  a.snapshot->'evidence_refs' ? 'kagent-create:first-dispatch-rejected-before-reservation' AS create_rejected,
+                  (a.snapshot->>'brief_delivery_id' IS NULL AND EXISTS(
+                    SELECT 1 FROM task_operations o WHERE o.snapshot->>'target_attempt_id'=a.id
+                    AND o.kind IN ('retry','reassign') AND o.state<>'completed'
+                  )) AS handoff_admission_pending
            FROM task_attempts a JOIN tasks t ON t.id=a.task_id
            LEFT JOIN workspace_writer_claims c ON c.attempt_id=a.id
            WHERE a.binding_id=$1"""
@@ -76,6 +80,8 @@ def denial(row: dict, action: str) -> str | None:
     if row["state"] not in ACTIONS[action]:
         return f"attempt_{row['state']}"
     if action in _CLAIM_ACTIONS:
+        if row["state"] == "active" and row.get("handoff_admission_pending"):
+            return "handoff_admission_pending"
         if row["task_status"] in ("completed", "failed", "cancelled"):
             return "task_terminal"
         if row["current_attempt_id"] != row["id"]:
@@ -523,3 +529,60 @@ async def settle(
             conn, updated, task.version, f"attempt:{attempt.id}:{final}"
         )
     return attempt
+
+
+async def drain_handoff(conn, attempt: TaskAttempt):
+    """Publication/runtime locks precede this helper; revoke before state mutation."""
+    from mainloop.runtime.agent_credentials import revoke_deferred
+
+    store.require_transaction(conn)
+    if attempt.state != "failed":
+        await revoke_deferred(conn, attempt.binding_id)
+    elif CREATE_REJECTED not in attempt.evidence_refs:
+        raise store.TaskError(409, "failed_source_not_no_start")
+    await store.admission_lock(conn)
+    await load_task(conn, attempt.task_id, lock=True)
+    current = await load_attempt(conn, attempt.id, lock=True)
+    if current is None or current.state not in (
+        "active",
+        "creating",
+        "draining",
+        "failed",
+    ):
+        raise store.TaskError(409, "source_state_changed")
+    if (current.binding_id, current.writer_generation) != (
+        attempt.binding_id,
+        attempt.writer_generation,
+    ):
+        raise store.TaskError(409, "stale_writer_generation")
+    if current.state != "failed":
+        await save_attempt(conn, current.model_copy(update={"state": "draining"}))
+
+
+async def supersede_handoff(conn, attempt: TaskAttempt, evidence: str):
+    """Evidence must be validated by the configured S3 adapter before this call."""
+    store.require_transaction(conn)
+    await store.admission_lock(conn)
+    await load_task(conn, attempt.task_id, lock=True)
+    current = await load_attempt(conn, attempt.id, lock=True)
+    if current is None:
+        raise store.TaskError(409, "source_missing")
+    if (current.binding_id, current.writer_generation) != (
+        attempt.binding_id,
+        attempt.writer_generation,
+    ):
+        raise store.TaskError(409, "stale_writer_generation")
+    if current.state == "failed":
+        # Failed no-start has already relinquished its claim through S1 settlement.
+        if CREATE_REJECTED not in current.evidence_refs:
+            raise store.TaskError(409, "failed_source_not_no_start")
+        current = await save_attempt(
+            conn, current.model_copy(update={"state": "superseded"})
+        )
+    else:
+        current = await settle(conn, attempt.id, "superseded", evidence=evidence)
+    if current is None:
+        raise store.TaskError(409, "source_state_changed")
+    return await save_attempt(
+        conn, current.model_copy(update={"superseded_at": datetime.now(UTC)})
+    )

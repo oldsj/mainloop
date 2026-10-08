@@ -20,6 +20,7 @@ from mainloop.services.workspace_authority import (
     ScopeUnavailable,
     repository_scope,
 )
+from mainloop.tasks import publication
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from models.agent_tools import OpenPullRequest
@@ -212,6 +213,7 @@ def _uncertain(request_id: str) -> dict:
     }
 
 
+@publication.guarded(schema=OpenPullRequest)
 async def open_pull_request(binding: dict, arguments: dict) -> dict:
     body = OpenPullRequest.model_validate(arguments)
     project = await db.pr_project_authority(
@@ -230,6 +232,8 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
     except PRCreationConflict:
         raise PolicyError("conflict", "request ID has a different payload") from None
     if prior and prior["state"] == "created":
+        await publication.bind_creation(db, binding, prior)
+        await publication.attach_creation(db, binding, prior, full_name)
         result = prior["result"]
         return json.loads(result) if isinstance(result, str) else result
     async with GitHubCreationClient() as github:
@@ -253,7 +257,9 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                 raise PolicyError(
                     "conflict", "request ID or repo/head/base has a different payload"
                 ) from None
+            await publication.bind_creation(db, binding, intent, newly_claimed=creator)
             if intent["state"] == "created":
+                await publication.attach_creation(db, binding, intent, full_name)
                 result = intent["result"]
                 return json.loads(result) if isinstance(result, str) else result
             matches = await github.find(full_name, intent["head"], intent["base"])
@@ -268,6 +274,7 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                     intent["expected_sha"],
                 )
                 await db.finish_pr_creation(intent["id"], result)
+                await publication.attach_creation(db, binding, intent, full_name)
                 return result
             if not creator:
                 return _uncertain(body.request_id)
@@ -295,6 +302,7 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                 # POST may have succeeded even when its response is unusable. Never repeat it.
                 return _uncertain(body.request_id)
             await db.finish_pr_creation(intent["id"], result)
+            await publication.attach_creation(db, binding, intent, full_name)
             return result
         except (GitHubError, ValidationError):
             raise PolicyError(

@@ -35,6 +35,7 @@ from mainloop.services.github_pr import (
     list_open_prs,
     list_recent_commits,
 )
+from mainloop.services.github_repo import InvalidGithubRepo, parse_github_repo
 from mainloop.sse import (
     create_sse_response,
     event_stream,
@@ -48,7 +49,7 @@ from mainloop.workflows.dbos_config import dbos_config  # noqa: F401
 from mainloop.workflows.main_thread import (
     get_or_start_main_thread,
 )
-from pydantic import BaseModel, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
 from models import (
     MainThread,
@@ -904,6 +905,26 @@ async def respond_to_hitl(
 
 
 # ============= Project Endpoints =============
+
+
+class ProjectImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repo: str
+
+
+@app.post("/projects", response_model=Project, status_code=201)
+async def import_project(
+    request: ProjectImportRequest, user_id: str = Depends(current_user)
+):
+    """Import the owner's repository without admitting a workspace or session."""
+    try:
+        repo = parse_github_repo(request.repo)
+    except InvalidGithubRepo as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid GitHub repository"
+        ) from exc
+    return await db.get_or_create_project(user_id, repo)
 
 
 @app.get("/projects", response_model=list[Project])
