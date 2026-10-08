@@ -594,6 +594,66 @@ async def drain_handoff(conn, attempt: TaskAttempt):
         await save_attempt(conn, current.model_copy(update={"state": "draining"}))
 
 
+async def block_failed_delivery(conn, attempt_id: str, message_id: str):
+    """Project an authoritative FAILED first/sole brief under authority/runtime locks.
+
+    Reuse the source drain to revoke authority before task/admission row locks. Failure
+    of a turn proves neither runtime termination nor that a writer never edited files.
+    """
+    from mainloop.runtime.native_sessions import safe_detail
+
+    store.require_transaction(conn)
+    attempt = await load_attempt(conn, attempt_id)
+    if attempt is None or attempt.state != "active":
+        return
+    if attempt.brief_delivery_id != message_id:
+        return
+    task = await load_task(conn, attempt.task_id)
+    if task.current_attempt_id != attempt.id or task.status in FINAL:
+        return
+    delivery = await conn.fetchrow(
+        """SELECT d.detail FROM native_deliveries d
+           WHERE d.message_id=$1 AND d.session_id=$2 AND d.state='failed'
+             AND d.source='brief' AND d.task_id IS NOT NULL
+             AND d.evidence_ref='a2a:task/' || d.task_id || '#failed'
+             AND NOT EXISTS (SELECT 1 FROM native_deliveries other
+               WHERE other.session_id=d.session_id AND other.message_id<>d.message_id)""",
+        message_id,
+        attempt.binding_id,
+    )
+    if delivery is None:
+        return
+    # record_submission takes the same tree authority lock before its transaction.
+    # No second delivery can appear between this sole-brief check and revocation.
+    await drain_handoff(conn, attempt)
+    task = await load_task(conn, attempt.task_id, lock=True)
+    if task.current_attempt_id != attempt.id or task.status in FINAL:
+        return  # A concurrent terminal outcome wins; never reopen it.
+    detail = (
+        safe_detail(delivery["detail"]) or "native delivery failed without a reason"
+    )
+    await transition(
+        conn,
+        attempt.id,
+        "draining",
+        from_states=("draining",),
+        evidence=f"native-delivery-failed:{message_id}: {detail}",
+    )
+    await store.save_task(
+        conn,
+        task.model_copy(
+            update={
+                "status": "blocked",
+                "reason": "reconciliation",
+                "version": task.version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        ),
+        task.version,
+        f"attempt:{attempt.id}:delivery-failed:{message_id}",
+    )
+
+
 async def supersede_handoff(conn, attempt: TaskAttempt, evidence: str):
     """Evidence must be validated by the configured S3 adapter before this call."""
     store.require_transaction(conn)

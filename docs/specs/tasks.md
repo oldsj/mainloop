@@ -196,6 +196,34 @@ Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `fa
 `cancelled`, `completed`. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
 
+A confirmed kagent `TASK_STATE_FAILED` for the current active attempt's first brief moves the
+task to `blocked` / `reconciliation` and the attempt to `draining` on the existing dispatcher's
+next pass, only when that brief remains the session's sole delivery. The native ledger records
+the accepted A2A task receipt with a `#failed` evidence fragment only for the observed FAILED
+outcome; delivery state `failed` or a task receipt alone is insufficient. The scan and locked
+mutation both revalidate this qualification, even after create completion or dispatcher restart.
+Submission admission takes the same task-tree authority lock before its row/delivery locks,
+so a concurrent submission either commits first and disqualifies the failure or waits and is
+denied after the drain. No timestamp comparison is used to infer which turn governs a task.
+
+This rule deliberately covers only first-brief bootstrap failure. Any additional delivery,
+including queued, recorded, uncertain or failed recovery work, prevents automatic draining.
+Later-turn native failures, historical failures lacking the confirmed FAILED evidence marker,
+gateway outages, exhausted not-accepted retries, preparation exceptions and control/configuration
+refusals remain delivery diagnostics and leave the attempt active. Uncertain messages are never
+replayed by this projection. Late failure evidence cannot revoke newer accepted/completed work,
+reopen a terminal task or mutate a noncurrent attempt.
+
+For a qualifying failure, the attempt's owner-readable `evidence_refs` retain the message ID
+and sanitized diagnostic. The task page shows the existing reconciliation reason; diagnostic
+detail is available through the linked native session or owner REST attempt history. Revocation,
+attempt/task state and the `task:updated` event commit together, and repeat passes are idempotent.
+
+Turn failure does not prove runtime termination or a clean no-start. The writer claim and
+capacity stay held, and no prompt is replayed or replacement writer started. Owner cancellation
+uses the existing API/MCP drain/fence/settlement path to confirm disposal before releasing them;
+the task page's existing cancel eligibility remains unavailable.
+
 ## Admission and integration ports
 
 All persistence mutations take the caller's asyncpg connection inside one transaction. Lock

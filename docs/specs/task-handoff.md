@@ -26,6 +26,17 @@ merge dispatch prevents transfer. A definite failed no-start may use its trusted
 initial ref after that ref is resolved and verified; this exception is pending
 integration and is not inferred from session absence.
 
+A confirmed native FAILED receipt for the first brief blocks the current task for
+reconciliation and drains its attempt only while that brief is the session's sole delivery.
+Receipt/outcome and sole-delivery qualification are revalidated under the authority locks that
+order submissions. Transport/preparation/configuration errors, later-turn failures and old
+failures with any recovery delivery remain diagnostics without draining or revoking authority.
+For a qualifying bootstrap failure the writer claim and capacity remain held: a failed turn
+is not the trusted no-start rejection above, and does not qualify a handoff, release a branch
+or authorize automatic retry. The owner can cancel through S1's existing API/MCP
+confirmed-disposal path. Failure detail is retained in the native delivery and the attempt's
+owner-readable audit evidence; the task page renders the existing generic reconciliation reason.
+
 Source credentials must be revoked and the exact runtime confirmed quiescent,
 including previews and supervisor children, before generation CAS releases the
 claim. Suspension and timeouts are insufficient. Live handoff requires qualified
