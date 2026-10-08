@@ -181,6 +181,18 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
 
 ## API
 
+- `POST /projects` imports a repository for the current owner: `{repo}` with no extra fields.
+  It accepts the same strictly validated GitHub references as workspace creation below.
+  Returns the stored `Project` with `201`, including when it already exists. Repeated and
+  concurrent mixed-case imports share one project per owner; an existing row keeps its URL,
+  display case and cached metadata and updates its last-used time. Another owner's row is
+  never reused. Invalid repository references return a sanitized `400`; invalid request
+  shapes return `422`, before any database effects.
+  Import makes no GitHub metadata request and starts no workspace or native Session. A new
+  project has an empty (unknown) default branch until the existing refresh endpoint records
+  it. It creates no task, capability or push grant, selects no environment, and does not
+  enable merging. This owner REST endpoint allows project import before explicit environment
+  selection and Actor creation; a frontend import control is not implemented by this endpoint.
 - `POST /workspaces` creates a workspace:
   `{project_id | repo, branch?, ref?, depth?, dev?, agent_kind?}`. Send exactly one of
   `project_id` and `repo`, otherwise `422`. Returns `201`.
