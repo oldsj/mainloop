@@ -348,3 +348,39 @@ async def reconcile_cleanup():
                     "error_class": type(exc).__name__,
                 },
             )
+
+
+async def revoke_deferred(conn, binding_id: str):
+    """Caller already holds publication/runtime locks; no external cleanup or new connection.
+
+    Queue cleanup durably in the same transaction as source drain. The existing
+    cleanup dispatcher removes the Secret after commit; authority is already null.
+    """
+    if not conn.is_in_transaction():
+        raise RuntimeError("credential revocation requires transaction")
+    from mainloop.push_gate import store as push_store
+
+    await push_store.revoke(conn, binding_id)
+    async with _binding_lock(conn, binding_id):
+        row = await conn.fetchrow(
+            "SELECT credential_ref FROM native_bindings WHERE session_id=$1 FOR UPDATE",
+            binding_id,
+        )
+        if row is None:
+            raise RuntimeError("source credential binding is missing")
+        reference = row["credential_ref"] or reference_data(
+            credential_reference(binding_id)
+        )
+        if not isinstance(reference, str):
+            reference = json.dumps(reference)
+        await conn.execute(
+            "UPDATE native_bindings SET token_hash=NULL,credential_cleanup_pending=TRUE WHERE session_id=$1",
+            binding_id,
+        )
+        await conn.execute(
+            """INSERT INTO agent_credential_cleanup(session_id,credential_ref)
+               VALUES($1,$2::jsonb) ON CONFLICT(session_id) DO UPDATE
+               SET credential_ref=excluded.credential_ref""",
+            binding_id,
+            reference,
+        )
