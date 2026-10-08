@@ -142,13 +142,26 @@ TASK_MIGRATION_SQL += """
 -- canonical JSON produced by Mainloop, never runtime transcripts or credentials.
 CREATE TABLE IF NOT EXISTS task_artifacts (
  id TEXT PRIMARY KEY, operation_id TEXT NOT NULL REFERENCES task_operations(id),
- kind TEXT NOT NULL CHECK(kind IN ('checkpoint','handoff_manifest','unverified_provider_summary')),
+ kind TEXT NOT NULL CHECK(kind IN ('checkpoint','handoff_manifest','unverified_provider_summary','retention_receipt')),
  content TEXT NOT NULL CHECK(octet_length(content) <= 32768),
  sha256 TEXT NOT NULL CHECK(sha256 ~ '^[0-9a-f]{64}$'),
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
  UNIQUE(operation_id,kind),
  CHECK(kind <> 'unverified_provider_summary' OR octet_length(content) <= 8192)
 );
+-- Upgrade an existing three-kind table atomically. Keep an enforcing check in
+-- place throughout replacement; uniqueness and immutable audit rows are unchanged.
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint
+            WHERE conrelid='task_artifacts'::regclass
+            AND conname='task_artifacts_kind_check'
+            AND position('retention_receipt' IN pg_get_constraintdef(oid))=0) THEN
+ ALTER TABLE task_artifacts ADD CONSTRAINT task_artifacts_kind_storage_upgrade
+ CHECK(kind IN ('checkpoint','handoff_manifest','unverified_provider_summary','retention_receipt'));
+ ALTER TABLE task_artifacts DROP CONSTRAINT task_artifacts_kind_check;
+ ALTER TABLE task_artifacts RENAME CONSTRAINT task_artifacts_kind_storage_upgrade TO task_artifacts_kind_check;
+ END IF;
+END $$;
 CREATE OR REPLACE FUNCTION reject_task_artifact_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'task artifacts are immutable'; END $$;
 DROP TRIGGER IF EXISTS immutable_task_artifact ON task_artifacts;
