@@ -19,15 +19,17 @@ The home chat is the user's native Claude Code main session, run by a kagent Age
 - The native session remains authoritative for provider history and context management; Mainloop mirrors observed messages and delivery receipts.
 - The main session keeps one kagent Session until kagent deletes it (for example after its idle TTL); then the next message starts a new one, see Sessions. Context length is managed by the provider's native auto-compaction, which is configured per harness outside Mainloop; Mainloop does not rotate the session or ask it to write out state. Standing context is sent with the first message to each kagent Session.
 
-## Delegating sessions
+## Delegating tasks
 
-- The main session can create Claude Code or Codex child sessions through the `delegate` tool on the `mainloop` MCP server.
-- Child reports are stored against their topic and delivered to the main session as ledgered messages. Reports arriving during another turn are queued.
-- The main session can inspect status and stored reports without sending a prompt to a child.
+- Main creates durable supervisor tasks through `delegate`; each supervisor may create direct children in its inherited project/tree. Children cannot delegate further.
+- Explicit progress and result reports persist against their task attempt and queue notifications to the current authorized parent and main. Busy parents use the existing delivery ledger.
+- `task_get`, `task_list` and `task_history` inspect stored progress without native turns. Task cancellation uses the shared service; retry/reassign remain unavailable until handoff is installed.
+- Native turn completion creates no automatic report or task success. Coding success requires verified merged publication; coordination completion requires explicit success, no live children and confirmed runtime settlement.
+- See [delegation](delegation.md) for inputs, scope and restart behavior.
 
 ## Identity and policy
 
-The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential reference injected by kagent's credential path; the native agent receives a placeholder, not the bearer. MCP discovery and calls use the binding role and persisted grant together. The main thread manages topics, pending intent and its child tree; children can call `whoami`, `note`, `decide` and `report`, and cannot delegate or inspect siblings. A newly created owner workspace can call `whoami` and `open_pull_request` within its stored project and branch scope. Merge tools remain behind the existing enablement gates. Workspace grants do not provide topic writes, reports or delegation. Ordinary standalone and retained legacy workspace bindings stay ungranted. Inputs are validated and policy failures return tool errors. Terminal, archived and revoked bindings cannot authenticate.
+The identity strip shows the native agent, the kagent Agent and Session with its runtime state, model, turn count, and delivery states. Tool identity comes from a per-binding credential reference injected by kagent's credential path; the native agent receives a placeholder, not the bearer. MCP discovery and calls use the binding role and persisted grant together. The main thread manages topics, pending intent and its durable task trees. Task supervisors and children can report their own current attempt and read scoped task history; children cannot delegate or inspect siblings. A newly created owner workspace can call `whoami` and `open_pull_request` within its stored project and branch scope. Merge tools remain behind the existing enablement gates. Ordinary owner workspace grants do not provide topic writes, reports or delegation. Delegated workspace grants additionally supply task tools within their persisted task scope; coordination grants never supply repository authority. Ordinary standalone and retained legacy workspace bindings stay ungranted. Inputs are validated and policy failures return tool errors. Terminal, archived and revoked bindings cannot authenticate.
 The dedicated MCP origin exposes `/mcp` and the isolated `/mcp/merge-approval` tool surface; merge tools remain disabled pending the [merge enablement gates](pull-requests.md#enablement-remains-separate). REST remains unauthenticated and relies on the
 required NetworkPolicy isolation documented in the architecture guide. The channel is
 implemented with fake-backed tests; the joint gateway proof (native agent to MCP through the gateway,

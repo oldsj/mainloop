@@ -719,8 +719,12 @@ class Provisioning:
 
 
 def install() -> Provisioning:
-    """Install the provisioning port for owner and supervisor task creation."""
+    """Install task ports at the existing startup seam."""
+    from mainloop.tasks.projection import Projection
+
     ports.provisioning = Provisioning()
+    ports.projection = Projection()
+    ports._projection_cursor = ""
     return ports.provisioning
 
 

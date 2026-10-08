@@ -35,9 +35,13 @@ class PolicyTests(unittest.TestCase):
             Actor("supervisor", 1, "workspace"),
             Actor("child", 2, "workspace"),
         ):
-            self.assertEqual(tools_for(actor), {"whoami", "open_pull_request"})
+            self.assertTrue(
+                {"whoami", "open_pull_request", "report", "task_get"}
+                <= tools_for(actor)
+            )
         for actor in (Actor("supervisor", 1), Actor("child", 2)):
-            self.assertEqual(tools_for(actor), {"whoami"})
+            self.assertTrue({"whoami", "report", "task_get"} <= tools_for(actor))
+            self.assertNotIn("open_pull_request", tools_for(actor))
         self.assertEqual(tools_for(Actor("supervisor", 2, "workspace")), frozenset())
         self.assertEqual(tools_for(Actor("child", 1, "workspace")), frozenset())
 
@@ -92,7 +96,9 @@ class PolicyTests(unittest.TestCase):
                 policy.may_report_task(actor)
 
     def test_production_session_child_report_remains_available(self):
-        policy.may_report(Actor("child", 1))
+        with self.assertRaises(PolicyError):
+            policy.may_report(Actor("child", 1))
+        policy.may_report(Actor("child", 2))
         with self.assertRaises(PolicyError):
             policy.may_report(Actor("main", 0))
 
@@ -128,7 +134,8 @@ class StandingTests(unittest.TestCase):
             StandingInputs(role="child", recent=[RecentMessage("user", "SECRET")])
         )
         self.assertNotIn("SECRET", text)
-        self.assertIn("`report` tool exactly once", text)
+        self.assertIn("stable request_id", text)
+        self.assertIn("completed turn does not complete", text)
 
     def test_hash_is_stable(self):
         self.assertEqual(content_hash("a"), content_hash("a"))
@@ -272,27 +279,6 @@ class FakeStore:
             {"role": "assistant", "content": "y" * 3000},
             {"role": "assistant", "content": "z" * 3000},
         ][offset : offset + limit]
-
-    async def spawn_child(self, parent, topic, kind, title, brief):
-        sid = f"child-{len(self.bindings)}"
-        self.bindings[sid] = {
-            "session_id": sid,
-            "role": "child",
-            "mcp_grant_kind": "coordination",
-            "kind": kind,
-            "user_id": "u",
-            "parent_session_id": parent["session_id"],
-            "topic_id": topic["id"],
-            "reported_at": None,
-            "title": title,
-        }
-        self.tokens[hash_token(f"tok-{sid}")] = sid
-        return sid
-
-    async def deliver_report(self, child, topic, summary, fallback):
-        self.bindings[child["session_id"]]["reported_at"] = "now"
-        self.reports.append(summary)
-        return "msg-1"
 
     async def standing_text(self, binding):
         return "standing"

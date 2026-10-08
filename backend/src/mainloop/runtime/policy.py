@@ -9,13 +9,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Depth counts edges below the main thread: main=0, its child=1, a grandchild=2.
+# Depth counts task edges: main=0, supervisor=1, child=2.
 MAX_DEPTH = 2
 MAX_CHILDREN_PER_PARENT = 3
 MAX_CHILDREN_GLOBAL = 6
-# Only the main thread delegates in this slice. Topic supervisors (next slice) will add a
-# ``supervisor`` role that may spawn workers at depth 2.
-SPAWN_ROLES = frozenset({"main"})
+# The durable task service resolves actual hierarchy and atomically enforces capacity.
+SPAWN_ROLES = frozenset({"main", "supervisor"})
 
 
 class PolicyError(Exception):
@@ -29,7 +28,7 @@ class PolicyError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Actor:
-    role: str  # main | child | agent
+    role: str  # main | supervisor | child | agent
     depth: int
     mcp_grant_kind: str = "coordination"
 
@@ -54,11 +53,11 @@ def check_spawn(
             f"spawn refused: would create a level-{actor.depth + 2} agent; "
             f"the maximum depth below the main thread is {MAX_DEPTH}",
         )
-    if actor.role not in SPAWN_ROLES:
+    if (actor.role, actor.depth) not in (("main", 0), ("supervisor", 1)):
         raise PolicyError(
             "role",
             f"spawn refused: a {actor.role} agent may not start agents "
-            "(only the main thread delegates in this release; report instead)",
+            "(only main and task supervisors delegate; report instead)",
         )
     if live_children_of_actor >= MAX_CHILDREN_PER_PARENT:
         raise PolicyError(
@@ -75,15 +74,14 @@ def check_spawn(
 
 
 def may_manage_children(actor: Actor) -> None:
-    if actor.role != "main":
+    if (actor.role, actor.depth) not in (("main", 0), ("supervisor", 1)):
         raise PolicyError(
-            "role", "only the main thread can cancel or clear its child agents"
+            "role", "only main and supervisors can manage their direct tasks"
         )
 
 
 def may_report(actor: Actor) -> None:
-    if actor.role != "child":
-        raise PolicyError("role", "only a child agent can report to its parent")
+    may_report_task(actor)
 
 
 REPORT_MAX_CHARS = 4000
@@ -91,29 +89,10 @@ READ_MAX_CHARS = 4000
 NOTE_MAX_CHARS = 2000
 
 
-# One role table controls discovery and invocation. Slice b extends these roles.
-_COMMON_TOOLS = frozenset({"whoami", "note", "decide", "open_pull_request"})
-ROLE_TOOLS = {
-    "main": _COMMON_TOOLS
-    | frozenset(
-        {
-            "topics",
-            "topic_open",
-            "pending_add",
-            "pending_done",
-            "delegate",
-            "status",
-            "read",
-            "cancel",
-            "clear",
-        }
-    ),
-    "child": _COMMON_TOOLS | frozenset({"report"}),
-}
-
+# Discovery and direct invocation share the same exact role/depth/grant table.
+TASK_READ_TOOLS = frozenset({"task_get", "task_list", "task_history"})
+TASK_MANAGEMENT_TOOLS = frozenset({"delegate", "task_cancel"})
 WORKSPACE_TOOLS = frozenset({"whoami", "open_pull_request"})
-
-
 MERGE_TOOLS = frozenset(
     {
         "prepare_pull_request_merge",
@@ -124,21 +103,42 @@ MERGE_TOOLS = frozenset(
 
 
 def tools_for(actor: Actor) -> frozenset[str]:
-    if actor.mcp_grant_kind == "coordination" and (
-        (actor.role, actor.depth) in (("supervisor", 1), ("child", 2))
-    ):
-        # Task report/delegation tools arrive in S2; never expose the session report shortcut.
-        tools = frozenset({"whoami"})
-    elif actor.mcp_grant_kind == "coordination":
-        tools = ROLE_TOOLS.get(actor.role, frozenset())
-    elif actor.mcp_grant_kind == "workspace" and (
-        actor.role == "agent"
-        or (actor.role, actor.depth) in (("supervisor", 1), ("child", 2))
-    ):
+    if (actor.role, actor.depth, actor.mcp_grant_kind) == ("main", 0, "coordination"):
+        tools = frozenset(
+            {
+                "whoami",
+                "topics",
+                "topic_open",
+                "note",
+                "decide",
+                "pending_add",
+                "pending_done",
+                "open_pull_request",
+            }
+        )
+        tools |= TASK_READ_TOOLS | TASK_MANAGEMENT_TOOLS
+    elif (actor.role, actor.depth) in (
+        ("supervisor", 1),
+        ("child", 2),
+    ) and actor.mcp_grant_kind in ("workspace", "coordination"):
+        tools = frozenset({"whoami", "report"}) | TASK_READ_TOOLS
+        if actor.role == "supervisor":
+            tools |= TASK_MANAGEMENT_TOOLS
+        if actor.mcp_grant_kind == "workspace":
+            tools |= WORKSPACE_TOOLS
+    elif (actor.role, actor.depth, actor.mcp_grant_kind) == ("agent", 0, "workspace"):
         tools = WORKSPACE_TOOLS
     else:
         tools = frozenset()
-    if tools and os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true":
+    if tools & TASK_MANAGEMENT_TOOLS:
+        from mainloop.tasks.service import ports
+
+        if ports.handoff is not None:
+            tools |= {"task_retry", "task_reassign"}
+    if (
+        "open_pull_request" in tools
+        and os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true"
+    ):
         tools |= MERGE_TOOLS
     return tools
 
@@ -158,6 +158,6 @@ def may_call(actor: Actor, tool: str) -> None:
 
 
 def may_report_task(actor: Actor) -> None:
-    """Frozen task hierarchy, separate from the production session tools until S2."""
+    """Only current task supervisors and children may report."""
     if (actor.role, actor.depth) not in (("supervisor", 1), ("child", 2)):
         raise PolicyError("role", "invalid task reporting role/depth")

@@ -1,15 +1,19 @@
-# Durable tasks (S0 contracts)
+# Durable tasks
 
-Implemented: task/attempt/operation persistence, owner reads, project provider preferences,
-transactional admission helpers, and committed task notification dispatch. Native creation,
-task delegation tools, task cancellation, retry, handoff, publication completion and retention cleanup
-remain unavailable until their implementation slices connect the ports. This spec distinguishes
-these contracts from live capability qualification; no runtime proof follows from fixtures.
+Implemented through S2: task/attempt/operation persistence, owner reads, project provider
+preferences, transactional admission, S1 native provisioning/cancellation and durable task
+notifications. MCP `delegate`, `report`, `task_get`, `task_list`, `task_history` and `task_cancel`
+use shared durable task contracts and persisted role/depth/attempt authority. Main creates
+supervisors; supervisors create direct children; children cannot delegate. Legacy session
+`status`, `read`, `cancel`, `clear` and spawn/one-shot report schemas are removed.
 
-The existing session-based MCP `delegate`, `report`, `status`, `read`, `cancel` and `clear`
-operations remain available with their existing schemas and behavior. S2 replaces that path
-in the same change that enables task tools. The new `TaskDelegate` and `TaskReportInput`
-schemas are separate contracts; they do not add aliases or change the production tools.
+Reports are unverified claims with transactional recipient intents, current-authority routing
+and native queue admission. Revoked unsent recipients are cancelled at promotion/send claim
+and retained for authorized successor routing. Sending/uncertain outcomes are never replayed.
+Explicit coordination completion requires no live children and confirmed runtime termination.
+Coding task completion still requires S4 verified publication. Retry/reassign stay unavailable
+until S3's shared handoff port is installed; retention cleanup is also S3 scope. Offline fixtures
+qualify deterministic behavior only, not live native/provider integration or published-head CI.
 
 ## Identity and state
 
@@ -23,6 +27,11 @@ Public status is `queued`, `running`, `waiting`, `blocked`, `completed`, `failed
 reconciliation. Agent activity, delivery, workspace health, attention and publication remain
 separate observations. A provider report or finished turn cannot prove coding-task completion.
 Verified merged publication is the later completion gate.
+
+Task GET authorizes the task before reading its cached publication projection. Reads stay
+DB-only: successful CI becomes unknown when its head differs, its timestamp is missing,
+future or older than five minutes. The response includes the existing publication mode and
+current merge proposal/result; reading never starts a native turn or dispatches a merge.
 
 Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
 reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
@@ -41,17 +50,17 @@ An owner-selected provider constraint cannot be overridden by a supervisor.
 Owner routes use the configured-owner dependency, ignoring caller identity headers. MCP never
 uses the owner REST listener.
 
-| Route                                    | S0 result                                                               |
-| ---------------------------------------- | ----------------------------------------------------------------------- |
-| `GET /tasks?project_id=&parent_task_id=` | Array of task views within owner scope                                  |
-| `GET /tasks/{id}`                        | Task, attempt history, projection, action eligibility                   |
-| `POST /tasks`                            | 202, idempotent blocked operation; no task/runtime/capacity reservation |
-| `POST /tasks/{id}/retry`                 | 202, blocked handoff operation after authority/version check            |
-| `POST /tasks/{id}/reassign`              | Same, with explicit target profile                                      |
-| `POST /tasks/{id}/cancel`                | 202, blocked cancellation operation                                     |
-| `GET /task-operations/{id}`              | Durable operation, including step and reason                            |
-| `GET /projects/{id}/default-provider`    | Profile or null, preference version (initially 0)                       |
-| `PUT /projects/{id}/default-provider`    | Compare-and-swap preference; null removes selection                     |
+| Route                                    | Implemented result                                                                 |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /tasks?project_id=&parent_task_id=` | Array of task views within owner scope                                             |
+| `GET /tasks/{id}`                        | Task, attempt history, projection, action eligibility                              |
+| `POST /tasks`                            | 202, idempotent provisioning operation; admission reserves task/attempt/capacity   |
+| `POST /tasks/{id}/retry`                 | 202, blocked handoff operation after authority/version check                       |
+| `POST /tasks/{id}/reassign`              | Same, with explicit target profile                                                 |
+| `POST /tasks/{id}/cancel`                | 202, durable cancellation operation; capacity retained until confirmed termination |
+| `GET /task-operations/{id}`              | Durable operation, including step and reason                                       |
+| `GET /projects/{id}/default-provider`    | Profile or null, preference version (initially 0)                                  |
+| `PUT /projects/{id}/default-provider`    | Compare-and-swap preference; null removes selection                                |
 
 Example create input:
 
@@ -67,7 +76,7 @@ Example create input:
 }
 ```
 
-S0 action response (timestamps and digest shortened here for readability):
+Disconnected-port action response (timestamps and digest shortened here for readability; S1 installs provisioning):
 
 ```json
 {
@@ -93,7 +102,7 @@ and normalized payload return the same operation. Changed payload/kind/target re
 stale version/attempt returns 409; out-of-scope reads return 404. Authority fields, unknown
 fields and old delegation `kind`/session payload aliases are rejected with 422.
 
-Example read state:
+Example disconnected-port read state (S1 installs cancellation; S3 handoff remains unavailable):
 
 ```json
 {
@@ -192,13 +201,19 @@ Idempotency is checked before reservation, and transaction rollback removes all 
 
 Writer claims key owner/canonical repository/exact branch, covering project URL/name aliases.
 Generations increase when a released claim is reused. Compare-and-swap release checks generation
-and durable fenced state for delegated attempts. Coordination has no claim. S1 must connect
-ordinary owner workspace creation to the same helper, pass confirmed fence evidence for owner
-release, and connect lifecycle guards; S0 does not claim existing native creation is fenced.
+and durable fenced state for delegated attempts. Coordination has no claim. S1 connects ordinary owner workspace creation to this helper, requires confirmed fence evidence
+for owner release, and installs lifecycle guards. This is an offline-qualified implementation,
+not live runtime fencing proof.
 No retained sessions, topics or claims are backfilled.
 
 Provisioning exposes `create`, `cancel`, `reconcile`; handoff exposes `start`, `reconcile`;
 projection exposes `refresh`. Disconnected mutations return stable reasons and cannot dispatch.
+Startup installs the existing publication projection port alongside provisioning at the same
+installation seam. The existing task reconciler observes at most ten current active coding
+tasks in a two-second share per pass, rotating by task ID with a process-local cursor. It
+advances before each refresh and isolates revoked, terminal or failing sources so later tasks
+can progress. A restart begins a new scan. The port revalidates source authority and only
+records observations; qualification/activation gates and unavailable action flags are unchanged.
 Later ports must persist intent in the caller transaction before external operations, use the
 operation ID for reconciliation, consume the pinned attempt routing, and qualify readiness before
 releasing a brief. They must not issue native calls while holding the admission transaction.
@@ -237,9 +252,9 @@ producer slices connect). Artifacts include operation ID, kind, SHA-256 and cano
 payload. `unverified_provider_summary` remains a labelled claim; immutable manifests/checkpoints
 are capped at 32 KiB and summaries at 8 KiB. Task operation records retain the validated
 `request_payload` for durable recovery. Reports never imply completion or release capacity.
-Report and recipient delivery tables reserve stable request/event keys for S2's outbox routing.
+Report and recipient delivery tables provide stable request/event keys for S2 outbox routing.
 Writer release requires a server-supplied `fence_evidence_ref` as well as generation/identity CAS;
-S1 must verify that evidence, including ordinary owner workspace fencing, before calling it.
+S1 verifies that evidence, including ordinary owner workspace fencing, before calling it.
 
 Action eligibility may express an available action without a blocker:
 
