@@ -6,7 +6,7 @@ idempotent blocked operation but never reserve capacity, create sessions or disp
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from asyncpg import Connection
@@ -14,6 +14,8 @@ from mainloop.config import settings
 from mainloop.db import tasks as store
 from mainloop.db.postgres import Database
 from mainloop.providers import qualify_task_profile, registry
+from mainloop.runtime.policy import PolicyError
+from mainloop.tasks import lifecycle, projection
 from mainloop.tasks.events import dispatch_committed_events
 from mainloop.tasks.principal import TaskPrincipal
 
@@ -72,6 +74,7 @@ class TaskPorts:
     provisioning: ProvisioningPort | None = None
     handoff: HandoffPort | None = None
     projection: ProjectionPort | None = None
+    _projection_cursor: str = field(default="", init=False, repr=False)
 
 
 ports = TaskPorts()
@@ -144,7 +147,7 @@ async def read(conn, principal, task_id):
         reports=tuple(
             TaskReport.model_validate(store.decode(r["snapshot"])) for r in report_rows
         ),
-        projection=await store.projection(conn, task.id),
+        projection=await projection.read(conn, task),
         actions={
             name: TaskEligibility(reason=reason)
             for name, reason in (
@@ -249,6 +252,45 @@ async def reconcile_once(database, *, installed_ports=ports):
     from mainloop.tasks.reports import dispatch_pending
 
     await dispatch_pending(database)
+    await reconcile_projections(database, installed_ports)
+
+
+PROJECTION_RECONCILE_LIMIT = 10
+PROJECTION_RECONCILE_BUDGET_SECONDS = 2.0
+
+
+async def reconcile_projections(database, installed_ports):
+    """Rotate current code tasks through the installed observer, never dispatch merges."""
+    if installed_ports.projection is None:
+        return
+    try:
+        async with asyncio.timeout(PROJECTION_RECONCILE_BUDGET_SECONDS):
+            async with database.connection() as conn:
+                rows = await conn.fetch(
+                    """SELECT t.id FROM tasks t
+                       JOIN task_attempts a ON a.id=t.current_attempt_id
+                       JOIN native_bindings b ON b.session_id=a.binding_id
+                       JOIN sessions s ON s.id=b.session_id
+                       WHERE t.mode='code' AND a.state='active'
+                         AND t.status NOT IN ('completed','failed','cancelled')
+                         AND b.token_hash IS NOT NULL AND b.kagent_deleted_at IS NULL
+                         AND s.archived_at IS NULL
+                       ORDER BY (t.id <= $1),t.id LIMIT $2""",
+                    installed_ports._projection_cursor,
+                    PROJECTION_RECONCILE_LIMIT,
+                )
+            for row in rows:
+                # Advance before work: a slow, revoked or failing source cannot
+                # monopolize the next pass. The port revalidates live authority.
+                installed_ports._projection_cursor = row["id"]
+                try:
+                    await installed_ports.projection.refresh(database, row["id"])
+                except (PolicyError, lifecycle.LifecycleDenied):
+                    logger.debug("Task projection source lost authority: %s", row["id"])
+                except Exception:
+                    logger.exception("Task projection refresh failed: %s", row["id"])
+    except TimeoutError:
+        return
 
 
 class SSETaskEventSink:

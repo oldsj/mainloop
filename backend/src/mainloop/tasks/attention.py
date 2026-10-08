@@ -92,14 +92,26 @@ async def refresh(database, binding_id):
     """Roll up presentation atomically; reuse the observer's canonical owner card.
 
     Run after the observer's HITL transaction, never with its receipt/leaf locks
-    held. Read/decision integration may call the same helper after receipt writes.
+    held. Committed receipts may recover through an active ancestor when their
+    leaf is terminal; the terminal binding never regains submit authority.
     """
     async with database.connection() as conn:
         row = await conn.fetchrow(
-            """SELECT b.*,s.user_id,t.project_id FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+            """WITH RECURSIVE ancestry AS (
+                 SELECT t.*,0 AS distance FROM task_attempts source
+                   JOIN tasks t ON t.id=source.task_id WHERE source.binding_id=$1
+                 UNION ALL
+                 SELECT p.*,child.distance+1 FROM ancestry child JOIN tasks p
+                   ON p.id=child.parent_task_id AND p.owner_id=child.owner_id
+                     AND p.root_task_id=child.root_task_id AND p.project_id IS NOT DISTINCT FROM child.project_id
+                   WHERE child.distance < 2
+               )
+               SELECT b.*,s.user_id,t.project_id FROM ancestry t
+               JOIN task_attempts a ON a.id=t.current_attempt_id
                JOIN native_bindings b ON b.session_id=a.binding_id
                JOIN sessions s ON s.id=b.session_id
-               WHERE a.binding_id=$1 AND t.current_attempt_id=a.id AND a.state='active'""",
+               WHERE a.state='active' AND t.status NOT IN ('completed','failed','cancelled')
+               ORDER BY t.distance LIMIT 1""",
             binding_id,
         )
     if not row:
