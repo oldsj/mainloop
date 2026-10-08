@@ -36,21 +36,15 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.isError, result.content)
         return result.structuredContent
 
-    async def test_delegate_report_policy_and_idempotency(self):
-        child = (await self.call("delegate", kind="codex", brief="do it"))["session_id"]
-        ctx = await self.service.authenticate(f"tok-{child}")
-        self.assertEqual(
-            tools_for(ctx.actor),
-            {"whoami", "note", "decide", "report", "open_pull_request"},
+    async def test_legacy_delegation_payload_and_tools_are_removed(self):
+        result = await invoke(
+            self.service, self.ctx, "delegate", {"kind": "codex", "brief": "do it"}
         )
-        for name in TOOLS.keys() - tools_for(ctx.actor):
-            r = await invoke(self.service, ctx, name, {})
-            self.assertTrue(r.isError)
-            self.assertIn("[role]", r.content[0].text)
-        for _ in range(2):
-            r = await invoke(self.service, ctx, "report", {"summary": "done"})
-            self.assertFalse(r.isError)
-        self.assertEqual(self.store.reports, ["done"])
+        self.assertTrue(result.isError)
+        for name in ("status", "read", "cancel", "clear"):
+            self.assertNotIn(name, TOOLS)
+            result = await invoke(self.service, self.ctx, name, {})
+            self.assertTrue(result.isError)
 
     async def test_validation_and_trim(self):
         for name, args in (
@@ -133,17 +127,12 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.isError)
         run.assert_awaited_once()
 
-    async def test_status_read_cancel_and_clear_stay_in_own_tree(self):
-        child = (await self.call("delegate", kind="claude", brief="do it"))[
-            "session_id"
-        ]
-        self.assertIn(child[:8], (await self.call("status"))["text"])
-        self.assertIn("truncated", (await self.call("read", session=child))["text"])
-        r = await invoke(self.service, self.ctx, "cancel", {"session": "other-tree"})
-        self.assertTrue(r.isError)
-        await self.call("cancel", session=child)
-        r = await self.call("clear", session=child)
-        self.assertEqual(r["cleared"], [child])
+    async def test_task_reads_use_the_store_without_native_turns(self):
+        self.store.task_call = AsyncMock(return_value={"text": "stored task"})
+        for name in ("task_get", "task_history"):
+            await self.call(name, task_id="task-1")
+        await self.call("task_list")
+        self.assertEqual(self.store.task_call.await_count, 3)
         self.assertEqual(self.store.native_turns_sent_to_children, 0)
 
     async def test_revoked_and_terminal_auth(self):

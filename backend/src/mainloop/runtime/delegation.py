@@ -1,14 +1,12 @@
-"""Postgres side of the context model: main-thread bootstrap, topics and records, delegation,
-child reports, status/read from control-plane state, and standing-context rendering.
+"""Postgres main-thread context and binding-scoped durable task operations.
 
-Nothing here talks to an agent except through ``native_sessions.submit_message`` (the ledgered
-delivery path). Status and read never add a turn to any native session (D9).
+Task reads and standing projections never add a native turn. Mutations share the task
+application service; committed report notifications use its existing reconciler and ledger.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -33,7 +31,7 @@ async def ensure_main_session(user_id: str) -> dict:
     per-user lock, so a failure leaves neither and concurrent first requests share one.
     """
     query = """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-               WHERE b.role='main' AND s.user_id=$1 ORDER BY b.created_at LIMIT 1"""
+               WHERE b.role='main' AND s.user_id=$1 AND s.archived_at IS NULL ORDER BY b.created_at LIMIT 1"""
     async with db.connection() as conn:
         row = await conn.fetchrow(query, user_id)
     if row:
@@ -87,6 +85,20 @@ async def render_for_binding(binding: dict) -> str:
     """Standing context / carry-over for a binding, rendered from Postgres only."""
     session = await db.get_session(binding["session_id"])
     if binding["role"] != "main":
+        if binding.get("task_id"):
+            from mainloop.db import tasks as task_store
+            from mainloop.tasks import lifecycle, service
+
+            async with db.connection() as conn:
+                principal = await lifecycle.authenticate_binding(conn, binding)
+                tasks = await task_store.list_tasks(conn, principal)
+                views = [await service.read(conn, principal, task.id) for task in tasks]
+            return render_standing(
+                StandingInputs(
+                    role=binding["role"],
+                    tasks=[v.model_dump(mode="json") for v in views],
+                )
+            )
         return render_standing(StandingInputs(role=binding["role"]))
     user_id = session.user_id
     async with db.connection() as conn:
@@ -123,9 +135,20 @@ async def render_for_binding(binding: dict) -> str:
             settings.main_carry_over_messages,
             list(native_sessions.OPEN_STATES),
         )
+    from mainloop.db import tasks as task_store
+    from mainloop.tasks import service
+    from mainloop.tasks.principal import TaskPrincipal
+
+    async with db.connection() as conn:
+        principal = TaskPrincipal(
+            user_id, binding_id=binding["session_id"], role="main"
+        )
+        tasks = await task_store.list_tasks(conn, principal)
+        views = [await service.read(conn, principal, task.id) for task in tasks]
     return render_standing(
         StandingInputs(
             role="main",
+            tasks=[v.model_dump(mode="json") for v in views],
             topics=await _topic_lines(user_id),
             current_topic=name,
             checkpoint=checkpoint,
@@ -136,16 +159,8 @@ async def render_for_binding(binding: dict) -> str:
 
 
 async def auto_report(session_id: str, reply: str) -> None:
-    """Fallback signal: a child finished a turn without calling the ``report`` MCP tool."""
-    binding = await native_sessions.get_binding(session_id)
-    if binding is None or binding["reported_at"] is not None:
-        return
-    await PgStore().deliver_report(
-        binding,
-        {"id": binding["topic_id"]} if binding["topic_id"] else None,
-        reply[:4000],
-        True,
-    )
+    """Retained native callback: turn completion grants no task result authority."""
+    return None
 
 
 class PgStore:
@@ -315,88 +330,114 @@ class PgStore:
             )
         return [dict(r) for r in rows]
 
-    async def spawn_child(
-        self, parent: dict, topic: dict, kind: str, title: str, brief: str
-    ) -> str:
-        parent_session = await db.get_session(parent["session_id"])
-        conversation = await db.create_conversation(parent["user_id"], title=title)
-        text = (
-            f"Task brief from Mainloop (topic: {topic['name']})\n\n{brief}\n\n"
-            "When finished, call the `report` tool once with `summary` describing what you did and concluded, under 1500 characters."
-        )
-        async with db.connection() as conn:
-            async with conn.transaction():
-                session = await db.create_session(
-                    Session(
-                        id=str(uuid.uuid4()),
-                        user_id=parent["user_id"],
-                        main_thread_id=parent_session.main_thread_id,
-                        title=title[:80],
-                        description=f"Child of the main thread, topic {topic['name']}",
-                        prompt=text,
-                        conversation_id=conversation.id,
-                        status=SessionStatus.ACTIVE,
-                    ),
-                    conn=conn,
-                )
-                await native_sessions.create_binding(
-                    session.id,
-                    kind,
-                    role="child",
-                    parent_session_id=parent["session_id"],
-                    topic_id=topic["id"],
-                    conn=conn,
-                )
-        await native_sessions.submit_message(session.id, text, source="brief")
-        return session.id
+    async def task_principal(self, binding: dict):
+        from mainloop.tasks import lifecycle
 
-    async def deliver_report(
-        self, child: dict, topic: dict | None, summary: str, fallback: bool
-    ) -> str:
-        """Record the report as evidence on the topic and deliver it to the parent as a message."""
         async with db.connection() as conn:
-            claimed = await conn.fetchval(
-                "UPDATE native_bindings SET reported_at=NOW() WHERE session_id=$1 AND reported_at IS NULL RETURNING session_id",
-                child["session_id"],
+            principal = await lifecycle.authenticate_binding(conn, binding)
+            if binding["mcp_grant_kind"] == "workspace":
+                from mainloop.services.workspace_authority import delegated_facts
+
+                binding.update(await delegated_facts(conn, binding["session_id"]))
+            binding.update(
+                task_id=principal.task_id,
+                attempt_id=principal.attempt_id,
+                root_task_id=principal.root_task_id,
+                depth=principal.depth,
             )
-            if claimed is None:
-                return ""
-            session = await db.get_session(child["session_id"])
-            evidence_ref = await conn.fetchval(
-                """SELECT evidence_ref FROM native_deliveries
-                   WHERE session_id=$1 AND evidence_ref IS NOT NULL ORDER BY updated_at DESC LIMIT 1""",
-                child["session_id"],
-            )
-            if topic and topic.get("id"):
-                await conn.execute(
-                    "INSERT INTO topic_records (id, topic_id, kind, text, session_id, evidence_ref) VALUES ($1,$2,'report',$3,$4,$5)",
-                    str(uuid.uuid4()),
-                    topic["id"],
-                    summary,
-                    child["session_id"],
-                    evidence_ref,
+            return principal
+
+    async def task_call(self, binding: dict, action: str, arguments: dict) -> dict:
+        from mainloop.db import tasks as task_store
+        from mainloop.tasks import lifecycle, reports, service
+        from mainloop.tasks.principal import TaskPrincipal
+
+        from models.task import TaskAction, TaskCreate, TaskReassign, TaskReport
+
+        async with db.connection() as conn:
+            async with lifecycle.authority_locked(
+                conn, binding["session_id"]
+            ), conn.transaction():
+                fresh = await conn.fetchrow(
+                    """SELECT b.*,s.user_id,s.status,s.archived_at FROM native_bindings b
+                       JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 FOR SHARE OF b,s""",
+                    binding["session_id"],
                 )
-                await conn.execute(
-                    "UPDATE topics SET updated_at=NOW() WHERE id=$1", topic["id"]
-                )
-        # Reporting is how a child's task ends: it is done, not waiting on the user. A session the
-        # user already cancelled stays cancelled.
-        if session.status not in native_sessions.ENDED_STATUSES:
-            await db.update_session(
-                child["session_id"],
-                status=SessionStatus.COMPLETED,
-                summary=summary,
-                completed_at=datetime.now(UTC),
-            )
-        label = (
-            " (fallback: the child ended a turn without reporting; this is its last reply)"
-            if fallback
-            else ""
-        )
-        text = f"[report from child {child['session_id'][:8]} '{session.title}'{label}]\n{summary}"
-        return await native_sessions.submit_message(
-            child["parent_session_id"], text, source="report"
-        )
+                if (
+                    not fresh
+                    or not fresh["token_hash"]
+                    or fresh["token_hash"] != binding.get("token_hash")
+                    or fresh["archived_at"]
+                    or fresh["kagent_deleted_at"]
+                    or fresh["status"] in ("completed", "failed", "cancelled")
+                ):
+                    raise task_store.TaskError(403, "inactive_principal")
+                if (
+                    fresh["role"] == "main"
+                    and fresh["mcp_grant_kind"] == "coordination"
+                ):
+                    principal = TaskPrincipal(
+                        fresh["user_id"], binding_id=fresh["session_id"], role="main"
+                    )
+                else:
+                    principal = await lifecycle.authenticate_binding(conn, dict(fresh))
+                if action == "identity":
+                    attempt = await lifecycle.load_attempt(conn, principal.attempt_id)
+                    task = await task_store.get_task(conn, principal.task_id, principal)
+                    return {
+                        "task_id": task.id,
+                        "attempt_id": attempt.id,
+                        "root_task_id": task.root_task_id,
+                        "parent_task_id": task.parent_task_id,
+                        "workspace_id": attempt.workspace_id,
+                        "writer_generation": attempt.writer_generation,
+                        "attempt_number": attempt.number,
+                    }
+                if action in ("task_get", "task_history"):
+                    value = await service.read(conn, principal, arguments["task_id"])
+                    return {
+                        "text": f"{value.task.title}: {value.task.status}",
+                        **value.model_dump(mode="json"),
+                    }
+                if action == "task_list":
+                    tasks = await task_store.list_tasks(conn, principal, **arguments)
+                    values = [
+                        await service.read(conn, principal, task.id) for task in tasks
+                    ]
+                    return {
+                        "text": "\n".join(
+                            f"{v.task.id} {v.task.title}: {v.task.status}"
+                            for v in values
+                        )
+                        or "(no tasks)",
+                        "tasks": [v.model_dump(mode="json") for v in values],
+                    }
+                if action == "report":
+                    return await reports.record(
+                        conn, principal, TaskReport.model_validate(arguments)
+                    )
+                if action == "delegate":
+                    request = TaskCreate.model_validate(arguments)
+                    value = await service.mutate(conn, principal, "create", request)
+                else:
+                    task_id = arguments["task_id"]
+                    payload = {k: v for k, v in arguments.items() if k != "task_id"}
+                    kind = {
+                        "task_cancel": "cancel",
+                        "task_retry": "retry",
+                        "task_reassign": "reassign",
+                    }[action]
+                    request = (
+                        TaskReassign if kind == "reassign" else TaskAction
+                    ).model_validate(payload)
+                    value = await service.mutate(
+                        conn, principal, kind, request, task_id=task_id
+                    )
+                return {
+                    "text": f"task operation {value.id}: {value.state}"
+                    + (f" ({value.reason})" if value.reason else ""),
+                    **value.model_dump(mode="json"),
+                }
 
     async def standing_text(self, binding: dict) -> str:
         return await render_for_binding(binding)

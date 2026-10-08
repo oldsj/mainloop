@@ -1097,26 +1097,20 @@ class DelegationTests(PostgresTestCase):
             1,
         )
 
-    async def test_spawn_child_leaves_no_orphan_when_the_binding_fails(self):
-        store = PgStore()
-        parent = await ensure_main_session(self.user)
-        topic = await store.topic(self.user, "alpha", create=True)
-        parent_row = await store.get_binding(parent["session_id"])
-        before = await self.pool.fetchval(
-            "SELECT count(*) FROM sessions WHERE user_id=$1", self.user
+    async def test_unassociated_legacy_child_bearer_cannot_authenticate(self):
+        from fastapi import HTTPException
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        main = await ensure_main_session(self.user)
+        child_id, _ = await self.session("active")
+        await ns.create_binding(
+            child_id, "codex", role="child", parent_session_id=main["session_id"]
         )
-        with (
-            patch.object(settings, "agent_token_key", ""),
-            patch.object(settings, "db_password", ""),
-            self.assertRaises(RuntimeError),
-        ):
-            await store.spawn_child(parent_row, topic, "codex", "Fix it", "do it")
-        self.assertEqual(
-            await self.pool.fetchval(
-                "SELECT count(*) FROM sessions WHERE user_id=$1", self.user
-            ),
-            before,
-        )
+        with self.assertRaises(HTTPException) as error:
+            await AgentService(PgStore()).authenticate(token_for(child_id))
+        self.assertEqual(error.exception.status_code, 401)
+        # Shared task-create rollback is exercised with real admission in test_postgres_task_reports.
 
     async def test_render_for_binding_main_uses_topics_records_and_recent_messages(
         self,
@@ -1159,6 +1153,7 @@ class DelegationTests(PostgresTestCase):
         )
         sid, _ = await self.session()
         child = await ns.create_binding(sid, "codex", role="child")
+        # Rendering generic role text is read-only and grants no task authority.
         self.assertTrue(await render_for_binding(child))
 
     async def test_topic_records_and_pending_close(self):
@@ -1266,130 +1261,40 @@ class DelegationTests(PostgresTestCase):
         rows = await store.messages(sid, 1, 2)
         self.assertEqual([r["content"] for r in rows], ["m1", "m2"])
 
-    async def test_deliver_report_claims_once_records_evidence_and_queues_for_the_parent(
-        self,
-    ):
-        store = PgStore()
+    async def test_turn_end_does_not_report_complete_or_change_cancelled_sessions(self):
+        from mainloop.runtime import delegation
+
         parent, parent_cid = await self.bound_session(role="main")
-        topic = await store.topic(self.user, "alpha", create=True)
-        child_id, child_cid = await self.session("active")
-        child = await ns.create_binding(
-            child_id,
-            "claude",
-            role="child",
-            parent_session_id=parent,
-            topic_id=topic["id"],
-        )
-        mid = await self.delivery(child_id, child_cid, "completed", source="brief")
-        await self.pool.execute(
-            "UPDATE native_deliveries SET evidence_ref='a2a:task/t9' WHERE message_id=$1",
-            mid,
-        )
-
-        message_id = await store.deliver_report(child, topic, "all done", False)
-
-        self.assertTrue(message_id)
-        record = await self.pool.fetchrow(
-            "SELECT kind, text, session_id, evidence_ref FROM topic_records WHERE topic_id=$1 AND kind='report'",
-            topic["id"],
-        )
-        self.assertEqual(tuple(record), ("report", "all done", child_id, "a2a:task/t9"))
-        self.assertIsNotNone((await ns.get_binding(child_id))["reported_at"])
-        session = await db.get_session(child_id)
-        self.assertEqual(session.status, SessionStatus.COMPLETED)
-        self.assertEqual(session.summary, "all done")
-        self.assertEqual(
-            await self.pool.fetchrow(
-                "SELECT state, source, session_id FROM native_deliveries WHERE message_id=$1",
-                message_id,
-            ),
-            await self.pool.fetchrow(
-                "SELECT 'recorded'::text, 'report'::text, $1::text", parent
-            ),
-        )
-        self.assertIn(
-            "[report from child",
-            await self.pool.fetchval(
-                "SELECT content FROM messages WHERE id=$1", message_id
-            ),
-        )
-        # A second report is not claimed: no second record, no second message.
-        self.assertEqual(await store.deliver_report(child, topic, "again", False), "")
+        await self.delivery(parent, parent_cid, "sending")
+        topic = await PgStore().topic(self.user, "alpha", create=True)
+        for status in ("active", "cancelled"):
+            child_id, _ = await self.session(status)
+            await ns.create_binding(
+                child_id,
+                "claude",
+                role="child",
+                parent_session_id=parent,
+                topic_id=topic["id"],
+            )
+            await delegation.auto_report(child_id, "completed native reply")
+            await delegation.auto_report(child_id, "duplicate reply")
+            self.assertEqual((await db.get_session(child_id)).status.value, status)
+            self.assertIsNone((await ns.get_binding(child_id))["reported_at"])
         self.assertEqual(
             await self.pool.fetchval(
                 "SELECT count(*) FROM topic_records WHERE topic_id=$1", topic["id"]
             ),
-            1,
+            0,
         )
-
-    async def test_deliver_report_queues_behind_an_open_parent_turn_and_keeps_cancelled(
-        self,
-    ):
-        store = PgStore()
-        parent, parent_cid = await self.bound_session(role="main")
-        await self.delivery(parent, parent_cid, "sending")
-        child_id, _ = await self.session("cancelled")
-        child = await ns.create_binding(
-            child_id, "claude", role="child", parent_session_id=parent
-        )
-        message_id = await store.deliver_report(child, None, "late", True)
-        self.assertEqual(await self.state_of(message_id), "queued")
         self.assertEqual(
-            (await db.get_session(child_id)).status, SessionStatus.CANCELLED
-        )
-        self.assertIn(
-            "fallback",
             await self.pool.fetchval(
-                "SELECT content FROM messages WHERE id=$1", message_id
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND source='report'",
+                parent,
             ),
+            0,
         )
-
-    async def test_auto_report_uses_the_topic_and_skips_reported_children(self):
-        from mainloop.runtime import delegation
-
-        parent, _ = await self.bound_session(role="main")
-        topic = await PgStore().topic(self.user, "alpha", create=True)
-        child_id, _ = await self.session("active")
-        await ns.create_binding(
-            child_id,
-            "claude",
-            role="child",
-            parent_session_id=parent,
-            topic_id=topic["id"],
-        )
-        await delegation.auto_report(child_id, "x" * 5000)
-        await delegation.auto_report(child_id, "second")
-        texts = [
-            r["text"]
-            for r in await self.pool.fetch(
-                "SELECT text FROM topic_records WHERE topic_id=$1", topic["id"]
-            )
-        ]
-        self.assertEqual([len(t) for t in texts], [4000])
-
-    async def test_spawn_child_creates_session_binding_and_brief(self):
-        store = PgStore()
-        parent = await ensure_main_session(self.user)
-        topic = await store.topic(self.user, "alpha", create=True)
-        parent_row = await store.get_binding(parent["session_id"])
-        child_id = await store.spawn_child(
-            parent_row, topic, "codex", "Fix it", "do the thing"
-        )
-        binding = await ns.get_binding(child_id)
-        self.assertEqual(
-            (
-                binding["role"],
-                binding["kind"],
-                binding["parent_session_id"],
-                binding["topic_id"],
-            ),
-            ("child", "codex", parent["session_id"], topic["id"]),
-        )
-        deliveries = await ns.ledger.deliveries(child_id)
-        self.assertEqual(
-            [(d["state"], d["source"]) for d in deliveries], [("recorded", "brief")]
-        )
-        self.assertEqual(self.spawned.call_count, 1)
+        # Explicit transactional report/outbox, restart, dedupe and busy parent coverage moved
+        # to test_postgres_task_reports; there is no callable legacy one-shot completion path.
 
     async def test_submit_message_queues_reports_and_refuses_user_messages_while_busy(
         self,

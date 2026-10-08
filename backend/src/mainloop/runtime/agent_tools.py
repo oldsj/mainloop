@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from mainloop.config import settings
 from mainloop.runtime import policy
 from mainloop.runtime.agent_identity import hash_token
-from mainloop.runtime.policy import Actor, PolicyError
+from mainloop.runtime.policy import Actor
 from mainloop.runtime.standing import TopicLine
 
 INBOX = "inbox"
@@ -21,7 +21,6 @@ FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 class Store(Protocol):
     async def binding_by_token_hash(self, token_hash: str) -> dict | None: ...
     async def get_binding(self, session_id: str) -> dict | None: ...
-    async def count_live_children(self, parent_session_id: str | None) -> int: ...
     async def topic(self, user_id: str, name: str, *, create: bool) -> dict | None: ...
     async def set_topic_status(self, topic_id: str, status_line: str) -> None: ...
     async def topic_index(self, user_id: str) -> list[TopicLine]: ...
@@ -29,20 +28,8 @@ class Store(Protocol):
         self, topic_id: str, kind: str, text: str, session_id: str | None
     ) -> str: ...
     async def close_pending(self, user_id: str, record_id: str) -> bool: ...
-    async def children_state(self, parent_session_id: str) -> list[dict]: ...
-    async def messages(
-        self, session_id: str, offset: int, limit: int
-    ) -> list[dict]: ...
-    async def cancel_session(self, session_id: str) -> str: ...
-    async def archive_children(
-        self, user_id: str, parent_session_id: str, session_ids: list[str] | None
-    ) -> list[str]: ...
-    async def spawn_child(
-        self, parent: dict, topic: dict, kind: str, title: str, brief: str
-    ) -> str: ...
-    async def deliver_report(
-        self, child: dict, topic: dict | None, summary: str, fallback: bool
-    ) -> str: ...
+    async def task_principal(self, binding: dict): ...
+    async def task_call(self, binding: dict, action: str, arguments: dict) -> dict: ...
     async def standing_text(self, binding: dict) -> str: ...
 
 
@@ -108,26 +95,18 @@ class AgentService:
             or binding.get("status") in FINISHED_STATUSES
         ):
             raise HTTPException(status_code=401, detail="unknown agent token")
-        depth = None
+        depth = 0
         if binding["role"] in ("supervisor", "child"):
             from mainloop.tasks import lifecycle
 
             try:
-                principal = await lifecycle.authenticate_session(binding)
-                if principal is not None:
-                    depth = principal.depth
+                principal = await self.store.task_principal(binding)
+                if principal is None:
+                    raise ValueError("task principal required")
+                depth = principal.depth
             except (lifecycle.LifecycleDenied, ValueError) as exc:
-                raise HTTPException(
-                    status_code=401, detail="unknown agent token"
-                ) from exc
-        return Ctx(
-            binding,
-            Actor(
-                binding["role"],
-                depth if depth is not None else await self._depth(binding),
-                binding["mcp_grant_kind"],
-            ),
-        )
+                raise HTTPException(401, detail="unknown agent token") from exc
+        return Ctx(binding, Actor(binding["role"], depth, grant_kind))
 
     async def whoami(self, ctx: Ctx) -> dict:
         """Return only server-resolved, non-secret binding and workspace scope facts."""
@@ -153,7 +132,7 @@ class AgentService:
         elif binding.get("mcp_grant_kind") not in ("coordination", "workspace"):
             grant_status = "not_enrolled"
 
-        return {
+        result = {
             "text": (
                 f"{binding['role']} {binding['kind']} session={binding['session_id'][:8]} "
                 f"depth={ctx.actor.depth} grant={grant_status} scope={scope_status}"
@@ -169,14 +148,9 @@ class AgentService:
             "repository": repository,
             "branch": branch,
         }
-
-    async def _depth(self, binding: dict) -> int:
-        depth, cur, seen = 0, binding, set()
-        while cur.get("parent_session_id") and cur["session_id"] not in seen:
-            seen.add(cur["session_id"])
-            depth += 1
-            cur = await self.store.get_binding(cur["parent_session_id"]) or {}
-        return depth
+        if binding["role"] in ("supervisor", "child"):
+            result.update(await self.store.task_call(binding, "identity", {}))
+        return result
 
     # -- topics and records -------------------------------------------------------------
     async def topics(self, ctx: Ctx) -> dict:
@@ -226,164 +200,34 @@ class AgentService:
             raise HTTPException(status_code=404, detail="no such open pending item")
         return {"text": "pending closed"}
 
-    # -- delegation ------------------------------------------------------------------------
-    async def delegate(
-        self, ctx: Ctx, topic: str, kind: str, title: str, brief: str
-    ) -> dict:
-        if not brief.strip():
-            raise HTTPException(status_code=400, detail="a task brief is required")
-        sid = ctx.binding["session_id"]
-        try:
-            from mainloop.providers import registry
+    # Task commands share the owner application's durable service, using binding authority.
+    async def _task(self, ctx: Ctx, name: str, arguments: dict) -> dict:
+        policy.may_call(ctx.actor, name)
+        return await self.store.task_call(ctx.binding, name, arguments)
 
-            providers = registry()
-            kind = providers.resolve(kind, "child", selecting=True).id
-            allowed = frozenset(
-                providers.resolve(name, "child").id for name in self.allowed_kinds
-            )
-            policy.check_spawn(
-                ctx.actor,
-                kind=kind,
-                allowed_kinds=allowed,
-                live_children_of_actor=await self.store.count_live_children(sid),
-                live_children_global=await self.store.count_live_children(None),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail=f"[kind] {exc}") from exc
-        except PolicyError as exc:
-            raise HTTPException(
-                status_code=403, detail=f"[{exc.code}] {exc.message}"
-            ) from exc
-        t = await self.store.topic(ctx.binding["user_id"], topic or INBOX, create=True)
-        child_id = await self.store.spawn_child(
-            ctx.binding, t, kind, title.strip() or "task", brief
-        )
-        return {
-            "text": f"started {kind} child {child_id[:8]} for topic {t['name']}; its report will "
-            "arrive in this thread. Use the `status` tool to check it.",
-            "session_id": child_id,
-        }
+    async def delegate(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "delegate", arguments)
 
-    async def report(self, ctx: Ctx, summary: str, *, fallback: bool = False) -> dict:
-        try:
-            policy.may_report(ctx.actor)
-        except PolicyError as exc:
-            raise HTTPException(
-                status_code=403, detail=f"[{exc.code}] {exc.message}"
-            ) from exc
-        if ctx.binding.get("reported_at") is not None:
-            return {"text": "already reported; nothing more to do"}
-        topic = None
-        if ctx.binding.get("topic_id"):
-            topic = {"id": ctx.binding["topic_id"]}
-        mid = await self.store.deliver_report(
-            ctx.binding, topic, summary.strip()[: policy.REPORT_MAX_CHARS], fallback
-        )
-        return {
-            "text": "report recorded and delivered to the main thread",
-            "message_id": mid,
-        }
+    async def report(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "report", arguments)
 
-    # -- cleanup: end a child, clear finished ones from the list -------------------------------
-    async def _child(self, ctx: Ctx, session_id: str) -> dict:
-        rows = await self.store.children_state(ctx.binding["session_id"])
-        match = [r for r in rows if r["session_id"].startswith(session_id)]
-        if not match:
-            raise HTTPException(status_code=404, detail="no such child in your tree")
-        if len(match) > 1:
-            raise HTTPException(
-                status_code=400, detail="ambiguous session id; give more characters"
-            )
-        return match[0]
+    async def task_get(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_get", arguments)
 
-    @staticmethod
-    def _require_manager(ctx: Ctx) -> None:
-        try:
-            policy.may_manage_children(ctx.actor)
-        except PolicyError as exc:
-            raise HTTPException(
-                status_code=403, detail=f"[{exc.code}] {exc.message}"
-            ) from exc
+    async def task_list(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_list", arguments)
 
-    async def cancel(self, ctx: Ctx, session_id: str) -> dict:
-        self._require_manager(ctx)
-        child = await self._child(ctx, session_id)
-        short = child["session_id"][:8]
-        if child["status"] in FINISHED_STATUSES:
-            return {"text": f"{short} is already {child['status']}; nothing to cancel"}
-        outcome = await self.store.cancel_session(child["session_id"])
-        text = f"cancelled {short}"
-        if outcome == "unknown":
-            text += "; stopping its agent could not be confirmed, so it may still be running"
-        return {"text": text, "agent": outcome}
+    async def task_history(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_history", arguments)
 
-    async def clear(self, ctx: Ctx, session_id: str | None) -> dict:
-        """Clear finished children from the user's list (kept for audit, never deleted)."""
-        self._require_manager(ctx)
-        parent = ctx.binding["session_id"]
-        only = (
-            [(await self._child(ctx, session_id))["session_id"]] if session_id else None
-        )
-        archived = await self.store.archive_children(
-            ctx.binding["user_id"], parent, only
-        )
-        left = [
-            r
-            for r in await self.store.children_state(parent)
-            if (only is None or r["session_id"] in only)
-            and r["status"] not in FINISHED_STATUSES
-        ]
-        text = f"cleared {len(archived)} finished child session(s)"
-        if left:
-            names = ", ".join(r["session_id"][:8] for r in left)
-            text += (
-                f"; not cleared because they are still running or waiting: {names} "
-                "(call the `cancel` tool first)"
-            )
-        return {"text": text, "cleared": archived}
+    async def task_cancel(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_cancel", arguments)
 
-    # -- state, answered from Postgres only (no native turn) ----------------------------------
-    async def status(self, ctx: Ctx, session_id: str | None) -> dict:
-        rows = await self.store.children_state(ctx.binding["session_id"])
-        if session_id:
-            rows = [r for r in rows if r["session_id"].startswith(session_id)]
-        if not rows:
-            return {
-                "text": (
-                    "no children" if not session_id else "no such child in your tree"
-                )
-            }
-        lines = []
-        for r in rows:
-            lines.append(
-                f"- {r['session_id'][:8]} {r['kind']} '{r['title']}' topic={r['topic']} "
-                f"state={r['state']} turns={r['turns']} last_activity={r['last_activity']}"
-                + (
-                    f"\n    last reply: {r['last_reply']}"
-                    if r.get("last_reply")
-                    else ""
-                )
-            )
-        return {"text": "\n".join(lines), "children": rows}
+    async def task_retry(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_retry", arguments)
 
-    async def read(self, ctx: Ctx, session_id: str, since: int) -> dict:
-        rows = await self.store.children_state(ctx.binding["session_id"])
-        match = [r for r in rows if r["session_id"].startswith(session_id)]
-        if not match:
-            raise HTTPException(status_code=404, detail="no such child in your tree")
-        msgs = await self.store.messages(match[0]["session_id"], since, 20)
-        out, used = [], 0
-        for i, m in enumerate(msgs, start=since + 1):
-            line = f"#{i} {m['role']}: {m['content']}"
-            if used + len(line) > policy.READ_MAX_CHARS:
-                out.append(f"... truncated; continue with --since {i - 1}")
-                break
-            out.append(line)
-            used += len(line)
-        return {
-            "text": "\n".join(out) or "(nothing new)",
-            "next_since": since + len(msgs),
-        }
+    async def task_reassign(self, ctx: Ctx, **arguments) -> dict:
+        return await self._task(ctx, "task_reassign", arguments)
 
     async def standing(self, ctx: Ctx) -> dict:
         return {"text": await self.store.standing_text(ctx.binding)}
