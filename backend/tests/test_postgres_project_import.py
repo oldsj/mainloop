@@ -8,7 +8,6 @@ from mainloop import api
 from mainloop.config import settings
 from mainloop.identity import current_user
 from mainloop.runtime import workspaces
-
 from tests.runtime.test_postgres_ledger import PostgresTestCase
 from tests.test_project_import import INVALID_REPOS
 
@@ -79,17 +78,18 @@ class ProjectImportPostgresTests(PostgresTestCase):
         self.assertEqual(other["default_branch"], "")
         self.admission.assert_not_awaited()
         self.metadata.assert_not_awaited()
-        for table in (
-            "sessions",
-            "workspaces",
-            "native_bindings",
-            "push_grants",
-            "tasks",
-            "project_environment_selections",
+        for table, query in (
+            ("sessions", "SELECT count(*) FROM sessions"),
+            ("workspaces", "SELECT count(*) FROM workspaces"),
+            ("native_bindings", "SELECT count(*) FROM native_bindings"),
+            ("push_grants", "SELECT count(*) FROM push_grants"),
+            ("tasks", "SELECT count(*) FROM tasks"),
+            (
+                "project_environment_selections",
+                "SELECT count(*) FROM project_environment_selections",
+            ),
         ):
-            self.assertEqual(
-                await self.pool.fetchval(f"SELECT count(*) FROM {table}"), 0, table
-            )
+            self.assertEqual(await self.pool.fetchval(query), 0, table)
 
     async def test_invalid_import_has_no_database_effect(self):
         before = await self.pool.fetchval("SELECT count(*) FROM projects")
