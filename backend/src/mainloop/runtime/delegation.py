@@ -15,6 +15,7 @@ from mainloop.runtime.standing import (
     RecentMessage,
     StandingInputs,
     TopicLine,
+    delegated_brief,
     render_standing,
 )
 
@@ -96,6 +97,12 @@ async def render_for_binding(binding: dict) -> str:
         return render_standing(StandingInputs(role=binding["role"]))
     user_id = session.user_id
     async with db.connection() as conn:
+        projects = await conn.fetch(
+            """SELECT p.id, p.full_name, (e.project_id IS NOT NULL) AS environment_selected
+               FROM projects p LEFT JOIN project_environment_selections e ON e.project_id=p.id
+               WHERE p.user_id=$1 ORDER BY p.full_name,p.id""",
+            user_id,
+        )
         top = await conn.fetchrow(
             "SELECT id, name, status_line, checkpoint FROM topics WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
             user_id,
@@ -133,6 +140,7 @@ async def render_for_binding(binding: dict) -> str:
     return render_standing(
         StandingInputs(
             role="main",
+            projects=[dict(p) for p in projects],
             tasks=values["tasks"],
             topics=await _topic_lines(user_id),
             current_topic=name,
@@ -406,6 +414,16 @@ class PgStore:
                     )
                 if action == "delegate":
                     request = TaskCreate.model_validate(arguments)
+                    request = TaskCreate.model_validate(
+                        {
+                            **request.model_dump(),
+                            "brief": delegated_brief(
+                                "supervisor" if principal.role == "main" else "child",
+                                request.mode,
+                                request.brief,
+                            ),
+                        }
+                    )
                     value = await service.mutate(conn, principal, "create", request)
                 else:
                     task_id = arguments["task_id"]

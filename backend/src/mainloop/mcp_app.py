@@ -66,7 +66,9 @@ TOOLS = {
     "pending_done": (PendingDone, "Close a pending item by id or unique prefix."),
     "delegate": (
         TaskDelegate,
-        "Create a durable task and scoped attempt; reuse request_id.",
+        "Create a durable task and scoped attempt. Reuse request_id for lost or uncertain responses. "
+        "After a confirmed terminal blocked create, use a NEW request_id for a new create; "
+        "reusing the old id returns the blocked operation. Role and tool guidance prefixes the brief.",
     ),
     "report": (
         TaskReportInput,
