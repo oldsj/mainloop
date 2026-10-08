@@ -266,3 +266,22 @@ Only the exact plan-unavailable 403 described in [Pull requests](pull-requests.m
 is accepted as absence of rules from that endpoint and recorded in proposal CI evidence.
 Readable GitHub rules remain enforced. Mainloop policy, protected paths, complete green CI,
 head SHA pinning and approval requirements remain mandatory.
+
+## Coding-task authority and settlement
+
+The task publication source pins task/attempt/workspace/writer generation in existing immutable
+merge proposals. Receipt lookup continues to require the exact leaf binding, runtime, proposal,
+invocation and argument hash. A parent or sibling task link cannot consume that receipt.
+Changed heads require a new proposal; changed bindings, generations or superseded attempts
+invalidate execution under the old proposal. No receipt is transferred during handoff.
+
+Successful task completion additionally requires verified merge outcome and fresh successful
+CI for the exact proposal head. Preparation and reporting do not imply completion. A lost
+merge response keeps the existing intent uncertain until read-only reconciliation establishes
+the outcome and exact-head CI; it cannot authorize another write. Task projection/event and
+owner outcome notification settlement share the existing merge transaction. Native-runtime
+termination and capacity release remain separate, confirmed lifecycle steps.
+
+Task read/cleanup wiring and uncertain-publication handoff holds remain serialized integration
+dependencies. The prepared task regressions use fake upstreams and PostgreSQL fixtures; their
+execution and technical qualification are pending. No new production activation follows.

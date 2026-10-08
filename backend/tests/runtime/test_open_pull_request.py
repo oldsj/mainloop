@@ -360,6 +360,11 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
 class PRPostgresTests(PostgresTestCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        # Each method owns its task capacity in this class's scratch database.
+        # Retained attempts from earlier fixtures must not consume later admission.
+        await self.pool.execute(
+            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        )
         self.project = await db.get_or_create_project(
             self.user, parse_github_repo("owner/repo")
         )
@@ -875,3 +880,89 @@ class PRPostgresTests(PostgresTestCase):
         await _init_schema(self.url)
         self.assertEqual((await self.call()).structuredContent["state"], "created")
         self.assertEqual(len(self.fake.posts), 1)
+
+    async def test_delegated_pr_result_links_exact_attempt_and_event_once(self):
+        sid = await self.child()
+        first = await self.call()
+        self.assertFalse(first.isError, first.content)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id,task_id FROM task_attempts WHERE binding_id=$1", sid
+            )
+            attempt = await lifecycle.load_attempt(conn, row["id"])
+            task = await lifecycle.load_task(conn, row["task_id"])
+            projection = await task_store.projection(conn, task.id)
+            refs = [
+                ref for ref in attempt.evidence_refs if ref.startswith("pr-creation:")
+            ]
+        self.assertEqual(len(refs), 1)
+        intent = await self.pool.fetchrow(
+            "SELECT * FROM pr_creations WHERE id=$1",
+            refs[0].removeprefix("pr-creation:"),
+        )
+        self.assertEqual(
+            (intent["user_id"], intent["project_id"], intent["head"]),
+            (self.user, self.project.id, task.checkout.branch),
+        )
+        self.assertEqual(
+            (projection.repository, projection.pr_number, projection.pr_head_sha),
+            ("owner/repo", 17, SHA),
+        )
+        self.assertEqual(
+            (projection.pr_state, projection.ci_state), ("unknown", "unknown")
+        )
+        replay = await self.call()
+        self.assertFalse(replay.isError, replay.content)
+        self.assertEqual(replay.structuredContent, first.structuredContent)
+        self.assertEqual(len(self.fake.posts), 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_events WHERE task_id=$1 AND event_key LIKE 'pr-created:%'",
+                task.id,
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT version FROM tasks WHERE id=$1", task.id),
+            task.version,
+        )
+
+    async def test_delegated_lost_pr_response_reconciles_link_without_redispatch(self):
+        sid = await self.child()
+        self.fake.lose_response = True
+        first = await self.call()
+        self.assertEqual(first.structuredContent["state"], "uncertain")
+        second = await self.call()
+        self.assertFalse(second.isError, second.content)
+        self.assertEqual(second.structuredContent["state"], "created")
+        self.assertEqual(len(self.fake.posts), 1)
+        task_id = await self.pool.fetchval(
+            "SELECT task_id FROM task_attempts WHERE binding_id=$1", sid
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT projection->>'pr_head_sha' FROM tasks WHERE id=$1", task_id
+            ),
+            SHA,
+        )
+
+    async def test_unassociated_delegated_intent_cannot_be_adopted(self):
+        await self.child()
+        body = OpenPullRequest.model_validate(self.args)
+        payload_hash = creation.hashlib.sha256(
+            json.dumps(body.model_dump(exclude={"request_id"}), sort_keys=True).encode()
+        ).hexdigest()
+        await db.claim_pr_creation(
+            user_id=self.user,
+            project_id=self.project.id,
+            request_id=body.request_id,
+            payload_hash=payload_hash,
+            repo_id=123,
+            head=body.branch,
+            base="trunk",
+            expected_sha=SHA,
+        )
+        result = await self.call()
+        self.assertTrue(result.isError)
+        self.assertIn("[ownership]", result.content[0].text)
+        self.assertEqual(self.fake.posts, [])

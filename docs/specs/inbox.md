@@ -27,3 +27,20 @@ per second; busy lists can therefore refresh less often than the nominal four se
 Reads have a ten-second deadline. Hidden/unmounted reads are cancelled; a transport that has
 not settled retains its lock. Inbox reads from polling, SSE and manual refresh also coalesce
 behind one in-flight request. Poll cleanup does not cancel decision submissions.
+
+## Coding-task attention links (source implementation; qualification pending)
+
+A delegated leaf's pending input links to the existing canonical HITL inbox card. Its parent
+and root task roll up that same card ID as presentation only. Duplicate observations create
+no additional owner card or task attention event. The existing native leaf identity,
+continuation destination and immutable receipt retain ownership; a parent link is not a
+response route and cannot grant merge consent.
+
+The observer refreshes task links after committing its HITL observation, releasing receipt
+locks before taking task-tree locks. Leaf/root projection updates then commit together.
+Already-recorded leaf receipts, superseded input and stale merge proposals are excluded from
+pending task attention. Changed-head observation clears the old proposal/approval links.
+The shared response/read integration must call the same refresh helper after receipt recording
+so those links clear promptly without waiting for another native observation. That shared
+wiring remains unapplied in this source slice. Offline and PostgreSQL regression sources are
+prepared, with execution reserved to the heavy-check lane; no live-provider proof is claimed.

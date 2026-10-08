@@ -270,3 +270,39 @@ with the stored project default branch reports "default branch is not allowed".
 These reasons are returned only after verifying the owned project and workspace scope;
 missing or unauthorized bindings retain the generic ownership refusal. Live GitHub default
 branch checks still reject a default PR head.
+
+## Durable coding-task publication (source implementation; qualification pending)
+
+For a delegated coding task, publication is bound to its current attempt, native binding,
+workspace and writer generation. The PR creation intent remains in `pr_creations`; its ID
+is referenced from that attempt's existing evidence references before dispatch. A verified
+result updates `TaskProjection` through the existing atomic projection/event helper.
+An existing intent without that exact attempt association is refused, including a successor
+trying to adopt an uncertain source intent. No task publication table is introduced.
+
+Immutable merge proposals additionally pin task, attempt, workspace and writer generation.
+Preparation, evaluation and the one external write take the same policy/tree/publication/runtime
+locks as source revocation. A stale or revoked attempt cannot claim a new merge. Auto still
+uses the existing merge service; protected paths and Approval still require the original
+leaf's exact owner receipt. Task summaries and reports supply neither publication nor consent.
+
+CI evidence records the exact head, collection timestamp, completeness and pending/failure
+state. Missing checks, unreadable evidence, a mismatched head, a future timestamp or evidence
+older than five minutes are unknown. Unknown and pending evidence cannot complete a task.
+The durable merge intent retains the successful exact-head evidence accepted at dispatch;
+reconciliation of a lost response reads the PR and fresh exact-head checks without another PUT.
+A later policy edit cannot undo a merge already admitted under the recorded policy.
+
+Verified merge settlement updates the leaf task and projection, reserves its task event and
+one parent update, and uses the existing deduplicated owner merge notification in the same
+transaction. It does not complete the parent coding task, delete a native runtime, release a
+branch claim or free runtime capacity. Runtime fencing/cleanup remains a separate lifecycle
+operation. Closed without merge is a separate observed PR state.
+
+The read-only projection refresh port performs bounded GitHub reads and never sends native
+turns or merges. Its installation and stale-CI read masking are reserved for serialized shared
+service integration. The initial PR-intent claim and attempt association currently use two
+transactions: a crash between them leaves an unassociated uncertain intent that fails closed.
+Atomic claim/association and handoff holds for uncertain PR/merge intents require the shared
+integration contracts before production qualification. Prepared offline/PostgreSQL tests are
+not executed or live proof. Existing production enablement flags remain unchanged.
