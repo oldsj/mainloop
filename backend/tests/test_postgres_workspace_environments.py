@@ -193,7 +193,7 @@ class WorkspaceEnvironmentPostgresTests(KagentFakeCase):
                     lifecycle = await self.create(name)
                 wid = lifecycle.workspace_id
                 self.assertEqual(
-                    lifecycle.observed_state, WorkspaceObservedState.UNKNOWN
+                    lifecycle.observed_state, WorkspaceObservedState.RESUMING
                 )
                 binding = await ns.get_binding(wid)
                 self.assertIsNone(binding["kagent_session_id"])

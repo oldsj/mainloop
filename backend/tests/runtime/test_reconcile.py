@@ -22,6 +22,7 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             "cleanup_all": AsyncMock(),
             "reconcile_archived_deletes": AsyncMock(),
             "suspend_idle": AsyncMock(return_value=[]),
+            "retry_creates": AsyncMock(return_value=[]),
         }
         steps.update(overrides)
         ledger = AsyncMock()
@@ -45,6 +46,7 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(git_credentials, "cleanup_all", steps["cleanup_all"]),
             patch.object(workspaces, "suspend_idle", steps["suspend_idle"]),
+            patch.object(workspaces, "retry_creates", steps["retry_creates"]),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -85,6 +87,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(steps["sync"].await_count, 3)
         steps["suspend_idle"].assert_not_awaited()
         steps["reconcile_cleanup"].assert_not_awaited()
+        # Unconfirmed workspace creates back off from 15 s, so they are checked every pass.
+        steps["retry_creates"].assert_awaited_once_with()
         steps["cleanup_all"].assert_not_awaited()
 
     async def test_failing_git_cleanup_preserves_sweep_order_and_failure_isolation(

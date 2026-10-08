@@ -169,6 +169,12 @@ class Settings(BaseSettings):
     # A workspace with no preview traffic and no open turn for its idle timeout is suspended.
     # The check runs this often.
     workspace_idle_check_seconds: float = 60.0
+    # A create kagent did not confirm (for example Unavailable while the environment snapshot is
+    # prepared) is retried with the same request id: backoff from the initial delay, doubling up
+    # to the cap, until the window since the first failure has passed.
+    workspace_create_retry_initial_seconds: float = 15.0
+    workspace_create_retry_max_seconds: float = 120.0
+    workspace_create_retry_window_seconds: float = 600.0
 
     # Native main thread (context model).
     main_carry_over_messages: int = 6

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from mainloop.config import settings
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import workspaces
 from mainloop.runtime.agent_identity import hash_token
@@ -416,6 +418,319 @@ class CreateAndReplacementTests(WorkspaceTestCase):
         self.assertIsNone(self.ledger.binding["kagent_session_id"])
 
 
+UNAVAILABLE = SessionError("environment snapshot is being prepared", grpc_status=14)
+
+
+class CreateRetryTests(WorkspaceTestCase):
+    """An unconfirmed create is retried by the reconcile pass with the same request id."""
+
+    def failing_creates(self, *errors):
+        """Make the next CreateSession calls fail with ``errors`` (in order), then reach kagent.
+
+        Returns the request ids of every call, failed or not.
+        """
+        client = ns.get_client()
+        create = client.create_session
+        pending = list(errors)
+        request_ids: list[str] = []
+
+        async def create_session(agent, **kwargs):
+            request_ids.append(kwargs["request_id"])
+            if pending:
+                raise pending.pop(0)
+            return await create(agent, **kwargs)
+
+        patcher = patch.object(client, "create_session", create_session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return request_ids
+
+    def make_due(self):
+        self.ledger.create_state["create_retry_at"] = datetime.now(UTC)
+
+    async def test_unavailable_then_success_runs_without_a_manual_refresh(self):
+        request_ids = self.failing_creates(UNAVAILABLE)
+        await workspaces._create_session(SESSION, "user-1", reject_removes_rows=True)
+        state = self.ledger.create_state
+        self.assertIsNone(self.ledger.binding["kagent_session_id"])
+        self.assertEqual(state["create_attempts"], 1)
+        self.assertIsNone(state["create_stopped"])
+        self.assertGreater(state["create_retry_at"], datetime.now(UTC))
+        observed, detail = workspaces._pending_create(state)
+        self.assertEqual(observed, WorkspaceObservedState.RESUMING)
+        self.assertIn("retrying automatically", detail)
+        self.assertNotIn("refresh", detail.lower())
+
+        self.assertEqual(await workspaces.retry_creates(), [], "not due yet")
+        self.make_due()
+        self.assertEqual(await workspaces.retry_creates(), [SESSION])
+
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        self.assertEqual(len(request_ids), 2)
+        self.assertEqual(len(set(request_ids)), 1, "one create identity")
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual(self.fake.created_workspaces(), [WORKSPACE])
+        self.assertEqual(state["create_attempts"], 0)
+        self.assertIsNone(state["create_retry_at"])
+        self.assertIsNone(state["create_error"])
+        self.assertEqual(await workspaces.retry_creates(), [], "nothing left to retry")
+
+    async def test_a_lost_reply_is_retried_and_recovers_the_same_session(self):
+        client = ns.get_client()
+        create = client.create_session
+        calls = []
+
+        async def lose_first_reply(agent, **kwargs):
+            calls.append(kwargs["request_id"])
+            session = await create(agent, **kwargs)
+            if len(calls) == 1:
+                raise ns.OutcomeUnknown("sanitized lost create reply")
+            return session
+
+        with patch.object(client, "create_session", lose_first_reply):
+            await workspaces._create_session(
+                SESSION, "user-1", reject_removes_rows=True
+            )
+            self.make_due()
+            await workspaces.retry_creates()
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+
+    async def test_a_permanent_error_stops_without_retrying(self):
+        for status in (3, 5, 7, 16):
+            with self.subTest(status=status):
+                self.ledger.create_state.update(
+                    create_attempts=0, create_retry_at=None, create_stopped=None
+                )
+                request_ids = self.failing_creates(
+                    SessionError("no such agent or bad workspace", grpc_status=status)
+                )
+                try:
+                    # The refresh path: a rejection keeps the rows.
+                    await workspaces._create_session(
+                        SESSION, "user-1", reject_removes_rows=False
+                    )
+                except workspaces.WorkspaceRejected:
+                    self.assertIn(status, workspaces._REJECTED)
+                state = self.ledger.create_state
+                self.assertEqual(state["create_stopped"], "rejected")
+                self.assertIsNone(state["create_retry_at"])
+                self.make_due()
+                self.assertEqual(await workspaces.retry_creates(), [])
+                self.assertEqual(len(request_ids), 1, "no automatic retry")
+                observed, detail = workspaces._pending_create(state)
+                self.assertEqual(observed, WorkspaceObservedState.FAILED)
+                self.assertIn(f"(gRPC {status})", detail)
+                self.assertNotIn("no such agent or bad workspace", detail)
+                self.assertIn("refused", detail)
+        self.assertIsNone(self.ledger.binding["kagent_session_id"])
+
+    async def test_a_create_hitting_a_deleted_request_is_permanent(self):
+        self.failing_creates(
+            SessionError("request id belongs to a deleted session", grpc_status=9)
+        )
+        await workspaces._create_session(SESSION, "user-1", reject_removes_rows=False)
+        self.assertEqual(self.ledger.create_state["create_stopped"], "rejected")
+
+    async def test_a_rejected_first_create_still_removes_the_rows(self):
+        self.failing_creates(SessionError("origin not allowed", grpc_status=3))
+        delete_rows = AsyncMock()
+        with patch.object(workspaces, "_delete_rows", delete_rows):
+            with self.assertRaises(workspaces.WorkspaceRejected):
+                await workspaces._create_session(
+                    SESSION, "user-1", reject_removes_rows=True
+                )
+        delete_rows.assert_awaited_once_with(SESSION, evidence="kagent-rejected:3")
+
+    async def test_backoff_doubles_to_the_cap(self):
+        state = dict(self.ledger.create_state)
+        delays = []
+        for _ in range(6):
+            before = datetime.now(UTC)
+            state = workspaces._create_retry_fields(
+                state, "unavailable", permanent=False
+            )
+            delays.append(round((state["create_retry_at"] - before).total_seconds()))
+        self.assertEqual(delays, [15, 30, 60, 120, 120, 120])
+        self.assertEqual(state["create_attempts"], 6)
+
+    async def test_retries_give_up_after_the_window_and_refresh_restarts_them(self):
+        request_ids = self.failing_creates(UNAVAILABLE, UNAVAILABLE)
+        await workspaces._create_session(SESSION, "user-1", reject_removes_rows=True)
+        state = self.ledger.create_state
+        state["create_first_failed_at"] = datetime.now(UTC) - timedelta(
+            seconds=settings.workspace_create_retry_window_seconds
+        )
+        self.make_due()
+        self.assertEqual(await workspaces.retry_creates(), [])
+        self.assertEqual(state["create_stopped"], "gave_up")
+        self.assertEqual(state["create_attempts"], 2)
+        self.assertIsNone(state["create_retry_at"])
+        observed, detail = workspaces._pending_create(state)
+        self.assertEqual(observed, WorkspaceObservedState.FAILED)
+        self.assertIn("after 2 attempts", detail)
+        self.assertIn("Refresh to try again", detail)
+
+        self.assertEqual(await workspaces.retry_creates(), [], "stopped")
+        self.assertEqual(len(request_ids), 2)
+
+        # A manual refresh still works, under the same identity, and clears the stop.
+        row = {"session_id": SESSION, "kagent_session_id": None}
+        with (
+            patch.object(workspaces, "_owned_row", AsyncMock(return_value=row)),
+            patch.object(workspaces, "_lifecycle", AsyncMock()),
+        ):
+            await workspaces.refresh(SESSION, "user-1")
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        self.assertEqual(len(set(request_ids)), 1)
+        self.assertIsNone(state["create_stopped"])
+        self.assertEqual(state["create_attempts"], 0)
+
+    async def test_a_failed_manual_refresh_after_a_stop_rearms_retries(self):
+        self.ledger.create_state.update(
+            create_attempts=7,
+            create_first_failed_at=datetime.now(UTC) - timedelta(hours=1),
+            create_stopped="gave_up",
+            create_error="old",
+        )
+        self.failing_creates(UNAVAILABLE)
+        await workspaces._create_session(
+            SESSION, "user-1", reject_removes_rows=False, restart_retries=True
+        )
+        state = self.ledger.create_state
+        self.assertIsNone(state["create_stopped"])
+        self.assertEqual(state["create_attempts"], 1)
+        self.assertIsNotNone(state["create_retry_at"])
+
+    async def test_a_retry_racing_a_manual_refresh_creates_one_session(self):
+        client = ns.get_client()
+        create = client.create_session
+        started, release = asyncio.Event(), asyncio.Event()
+        request_ids = []
+
+        async def held_create(agent, **kwargs):
+            request_ids.append(kwargs["request_id"])
+            started.set()
+            await release.wait()
+            return await create(agent, **kwargs)
+
+        self.ledger.create_state.update(
+            create_attempts=1,
+            create_first_failed_at=datetime.now(UTC),
+            create_error="kagent unavailable (gRPC 14)",
+        )
+        self.make_due()
+        row = {"session_id": SESSION, "kagent_session_id": None}
+        with (
+            patch.object(client, "create_session", held_create),
+            patch.object(workspaces, "_owned_row", AsyncMock(return_value=row)),
+            patch.object(workspaces, "_lifecycle", AsyncMock()),
+            patch.object(workspaces, "publish", AsyncMock()) as published,
+        ):
+            retry = asyncio.create_task(workspaces.retry_creates())
+            await started.wait()
+            refresh = asyncio.create_task(workspaces.refresh(SESSION, "user-1"))
+            await asyncio.sleep(0.01)
+            self.assertFalse(refresh.done(), "refresh waits for the in-flight retry")
+            release.set()
+            self.assertEqual(await retry, [SESSION])
+            await refresh
+        published.assert_awaited_once()
+        self.assertEqual(
+            len(request_ids), 1, "refresh found the Session the retry made"
+        )
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        state = self.ledger.create_state
+        self.assertEqual(state["create_attempts"], 0)
+        self.assertIsNone(state["create_retry_at"])
+        self.assertIsNone(state["create_stopped"])
+
+    async def test_a_secret_outage_is_retried_with_backoff(self):
+        with patch(
+            "mainloop.runtime.agent_credentials.publish_for_binding",
+            AsyncMock(side_effect=OSError("Kubernetes API unavailable")),
+        ):
+            self.make_due()
+            with self.assertLogs(ns.logger, "ERROR"):
+                self.assertEqual(await workspaces.retry_creates(), [])
+        state = self.ledger.create_state
+        self.assertEqual(state["create_attempts"], 1)
+        self.assertIsNone(state["create_stopped"])
+        self.assertIsNotNone(state["create_retry_at"])
+        # The owner sees a classified reason, never the raw exception text.
+        self.assertEqual(state["create_error"], "Mainloop error (OSError)")
+        _, detail = workspaces._pending_create(state)
+        self.assertNotIn("Kubernetes API unavailable", detail)
+
+    async def test_the_detail_uses_the_classified_reason(self):
+        self.failing_creates(
+            SessionError("dial tcp 10.0.0.7:9000: secret-ish detail", grpc_status=14)
+        )
+        await workspaces._create_session(SESSION, "user-1", reject_removes_rows=True)
+        state = self.ledger.create_state
+        self.assertEqual(state["create_error"], "kagent unavailable (gRPC 14)")
+        _, detail = workspaces._pending_create(state)
+        self.assertNotIn("10.0.0.7", detail)
+
+    async def test_a_replacement_after_a_delivery_confirm_keeps_retrying(self):
+        # The first create fails and its retries end (stale state for this identity).
+        self.failing_creates(UNAVAILABLE)
+        await workspaces._create_session(SESSION, "user-1", reject_removes_rows=True)
+        self.ledger.create_state.update(
+            create_first_failed_at=datetime.now(UTC) - timedelta(days=2),
+            create_stopped="gave_up",
+            create_retry_at=None,
+        )
+        # A message delivery confirms the Session: the old identity's state is cleared.
+        await ns._ensure_kagent_session(self.ledger.binding)
+        self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
+        state = self.ledger.create_state
+        self.assertEqual(
+            (state["create_attempts"], state["create_stopped"], state["create_error"]),
+            (0, None, None),
+        )
+
+        # kagent deletes the Session; the replacement's create fails transiently.
+        await ns.get_client().delete_session(CONTEXT_ID)
+        self.fake.next_session_ids = ["replacement"]
+        request_ids = self.failing_creates(UNAVAILABLE)
+        with self.assertRaises(SessionError):
+            await ns._ensure_kagent_session(self.ledger.binding)
+        self.assertIsNone(self.ledger.binding["kagent_session_id"])
+        self.assertIsNone(state["create_stopped"])
+        self.assertIsNotNone(state["create_retry_at"], "the new identity is retried")
+
+        self.make_due()
+        self.assertEqual(await workspaces.retry_creates(), [SESSION])
+        self.assertEqual(self.ledger.binding["kagent_session_id"], "replacement")
+        self.assertEqual(len(set(request_ids)), 1, "the replacement's one identity")
+        self.assertNotEqual(request_ids[0], ns.create_request_id(SESSION))
+        self.assertEqual(state["create_attempts"], 0)
+
+    async def test_a_failure_after_a_concurrent_confirm_is_not_recorded(self):
+        await self.with_session()
+        await workspaces._record_create_failure(SESSION, UNAVAILABLE, permanent=False)
+        self.assertEqual(self.ledger.create_state["create_attempts"], 0)
+        self.assertIsNone(self.ledger.create_state["create_retry_at"])
+
+    def test_an_old_unrecorded_create_is_left_to_refresh(self):
+        row = {
+            "create_attempts": 0,
+            "create_error": None,
+            "create_stopped": None,
+            "created_at": datetime.now(UTC) - timedelta(days=3),
+        }
+        observed, detail = workspaces._pending_create(row)
+        self.assertEqual(observed, WorkspaceObservedState.UNKNOWN)
+        self.assertIn("refresh to retry", detail)
+        row["created_at"] = datetime.now(UTC)
+        observed, detail = workspaces._pending_create(row)
+        self.assertEqual(observed, WorkspaceObservedState.RESUMING)
+        self.assertIn("retrying automatically", detail)
+
+
 class MainThreadTests(WorkspaceTestCase):
     async def test_the_main_thread_is_never_suspended(self):
         await self.with_session()
@@ -638,10 +953,10 @@ class LifecycleMappingTests(unittest.TestCase):
 
 
 class ObserveTests(WorkspaceTestCase):
-    async def test_no_kagent_session_yet_is_unknown_with_a_hint(self):
+    async def test_no_kagent_session_yet_is_unknown_and_retrying(self):
         observed, detail = await workspaces._observe(None)
         self.assertEqual(observed, WorkspaceObservedState.UNKNOWN)
-        self.assertIn("refresh", detail)
+        self.assertIn("retrying automatically", detail)
 
     async def test_a_session_kagent_no_longer_has_is_unknown(self):
         observed, _ = await workspaces._observe("gone")

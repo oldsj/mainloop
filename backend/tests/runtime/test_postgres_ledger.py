@@ -1378,7 +1378,7 @@ class WorkspaceTests(KagentFakeCase):
                 project_id,
                 WorkspaceManifest(repo_url=repo_url, branch=branch),
             )
-        self.assertEqual(lifecycle.observed_state.value, "unknown")
+        self.assertEqual(lifecycle.observed_state.value, "resuming")
         return lifecycle.workspace_id
 
     async def test_create_stores_the_rows_and_sends_the_workspace_to_kagent(self):
@@ -1652,7 +1652,7 @@ class WorkspaceTests(KagentFakeCase):
                 project_id,
                 WorkspaceManifest(repo_url=repo_url, branch="feature/reconcile"),
             )
-            self.assertEqual(lifecycle.observed_state.value, "unknown")
+            self.assertEqual(lifecycle.observed_state.value, "resuming")
             await workspaces.refresh(lifecycle.workspace_id, self.user)
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], calls[1])
@@ -1789,12 +1789,164 @@ class WorkspaceTests(KagentFakeCase):
             AsyncMock(side_effect=Unreachable("down")),
         ):
             lifecycle = await workspaces.create(self.user, project_id, manifest)
-        self.assertEqual(lifecycle.observed_state.value, "unknown")
+        self.assertEqual(lifecycle.observed_state.value, "resuming")
         wid = lifecycle.workspace_id
         self.assertIsNone((await ns.get_binding(wid))["kagent_session_id"])
         refreshed = await workspaces.refresh(wid, self.user)
         self.assertEqual(refreshed.observed_state.value, "running")
         self.assertEqual((await ns.get_binding(wid))["kagent_session_id"], CONTEXT_ID)
+
+    async def test_an_unavailable_create_is_retried_by_the_reconcile_pass(self):
+        project_id = f"proj-{uuid.uuid4().hex[:8]}"
+        repo_url = f"https://github.com/example/{project_id}"
+        await self.pool.execute(
+            """INSERT INTO projects (id,user_id,owner,name,full_name,html_url)
+               VALUES ($1,$2,'example',$3,$4,$5)""",
+            project_id,
+            self.user,
+            project_id,
+            f"example/{project_id}",
+            repo_url,
+        )
+        client = ns.get_client()
+        create = client.create_session
+        request_ids = []
+
+        async def unavailable_once(agent, **kwargs):
+            request_ids.append(kwargs["request_id"])
+            if len(request_ids) == 1:
+                raise SessionError("snapshot is being prepared", grpc_status=14)
+            return await create(agent, **kwargs)
+
+        manifest = WorkspaceManifest(repo_url=repo_url, branch="feature/retry")
+        with (
+            patch.object(client, "create_session", unavailable_once),
+            patch.object(workspaces, "publish", AsyncMock()) as published,
+        ):
+            lifecycle = await workspaces.create(self.user, project_id, manifest)
+            wid = lifecycle.workspace_id
+            self.assertEqual(lifecycle.observed_state.value, "resuming")
+            self.assertIn("retrying automatically", lifecycle.detail)
+            self.assertEqual(await workspaces.retry_creates(), [], "not due yet")
+            state = await ns.ledger.create_retry(wid)
+            self.assertEqual(state["create_attempts"], 1)
+            self.assertIsNone(state["create_stopped"])
+
+            await self.pool.execute(
+                "UPDATE workspaces SET create_retry_at=NOW() WHERE session_id=$1", wid
+            )
+            self.assertEqual(await workspaces.retry_creates(), [wid])
+        published.assert_awaited_once()
+        self.assertEqual(published.await_args.args[1].observed_state.value, "running")
+        self.assertEqual(len(set(request_ids)), 1)
+        self.assertEqual(len(self.fake.created_request_ids), 1)
+        self.assertEqual((await ns.get_binding(wid))["kagent_session_id"], CONTEXT_ID)
+        state = await ns.ledger.create_retry(wid)
+        self.assertEqual(
+            (state["create_attempts"], state["create_retry_at"], state["create_error"]),
+            (0, None, None),
+        )
+
+    async def test_due_creates_skips_stopped_task_and_confirmed_workspaces(self):
+        due = await _create_workspace(self, kagent_session_id=None)
+        stopped = await _create_workspace(self, kagent_session_id=None)
+        waiting = await _create_workspace(self, kagent_session_id=None)
+        confirmed = await _create_workspace(self)
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - interval '1 minute' WHERE session_id=ANY($1)",
+            [due, stopped, waiting, confirmed],
+        )
+        await self.pool.execute(
+            "UPDATE workspaces SET create_stopped='gave_up' WHERE session_id=$1",
+            stopped,
+        )
+        await self.pool.execute(
+            "UPDATE workspaces SET create_retry_at=NOW() + interval '1 minute' WHERE session_id=$1",
+            waiting,
+        )
+        rows = await ns.ledger.due_creates(15, 600)
+        ids = [r["session_id"] for r in rows]
+        self.assertIn(due, ids)
+        for skipped in (stopped, waiting, confirmed):
+            self.assertNotIn(skipped, ids)
+        self.assertEqual(
+            {r["user_id"] for r in rows if r["session_id"] == due}, {self.user}
+        )
+        # A workspace created moments ago is left to its own create first.
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() WHERE session_id=$1", due
+        )
+        self.assertNotIn(
+            due, [r["session_id"] for r in await ns.ledger.due_creates(15, 600)]
+        )
+
+    async def test_due_creates_skips_ended_sessions(self):
+        ended = {}
+        for status in ("completed", "failed", "cancelled"):
+            ended[status] = await _create_workspace(self, kagent_session_id=None)
+            await self.pool.execute(
+                "UPDATE sessions SET status=$2 WHERE id=$1", ended[status], status
+            )
+        active = await _create_workspace(self, kagent_session_id=None)
+        await self.pool.execute(
+            "UPDATE workspaces SET create_retry_at=NOW() WHERE session_id=ANY($1)",
+            [*ended.values(), active],
+        )
+        ids = [r["session_id"] for r in await ns.ledger.due_creates(15, 600)]
+        self.assertIn(active, ids)
+        for status, wid in ended.items():
+            self.assertNotIn(wid, ids, status)
+
+    async def test_due_creates_leaves_old_unrecorded_creates_to_refresh(self):
+        old = await _create_workspace(self, kagent_session_id=None)
+        scheduled = await _create_workspace(self, kagent_session_id=None)
+        await self.pool.execute(
+            "UPDATE workspaces SET created_at=NOW() - interval '3 days' WHERE session_id=ANY($1)",
+            [old, scheduled],
+        )
+        # A retry this code scheduled keeps running whatever the workspace's age.
+        await self.pool.execute(
+            "UPDATE workspaces SET create_retry_at=NOW(), create_attempts=1, create_first_failed_at=NOW() WHERE session_id=$1",
+            scheduled,
+        )
+        ids = [r["session_id"] for r in await ns.ledger.due_creates(15, 600)]
+        self.assertNotIn(old, ids)
+        self.assertIn(scheduled, ids)
+        lifecycle = await workspaces.get(old, self.user)
+        self.assertEqual(lifecycle.observed_state.value, "unknown")
+        self.assertIn("refresh to retry", lifecycle.detail)
+
+    async def test_retry_state_follows_the_create_identity(self):
+        wid = await _create_workspace(self, kagent_session_id=None)
+        stale = {
+            "create_attempts": 4,
+            "create_first_failed_at": datetime.now(UTC),
+            "create_error": "kagent unavailable (gRPC 14)",
+            "create_stopped": "gave_up",
+        }
+        await ns.ledger.set_create_retry(wid, **stale)
+        # Confirming a Session (here as a delivery does) clears the state.
+        await ns.ledger.update_binding(wid, kagent_session_id="ctx-confirmed")
+        state = await ns.ledger.create_retry(wid)
+        self.assertEqual(
+            (
+                state["create_attempts"],
+                state["create_stopped"],
+                state["create_retry_at"],
+            ),
+            (0, None, None),
+        )
+        # A replacement identity starts a fresh retry schedule.
+        await ns.ledger.set_create_retry(wid, **stale)
+        self.assertTrue(
+            await ns.ledger.replace_kagent_session(
+                wid, "ctx-confirmed", "replacement-request"
+            )
+        )
+        state = await ns.ledger.create_retry(wid)
+        self.assertEqual((state["create_attempts"], state["create_stopped"]), (0, None))
+        self.assertIsNotNone(state["create_retry_at"])
+        self.assertIsNone(state["create_error"])
 
     async def test_the_lifecycle_is_owner_scoped_and_reports_last_activity(self):
         wid = await _create_workspace(self)

@@ -263,6 +263,21 @@ def _request_id(binding: dict) -> str:
 # --------------------------------------------------------------------------------------------
 
 
+# A workspace's automatic CreateSession retry state belongs to one create identity: it is
+# cleared when the binding gets a Session, and restarted (first retry due after the initial
+# delay) when it gets a new create request id.
+_RESET_CREATE_RETRY = """UPDATE workspaces
+    SET create_attempts=0, create_first_failed_at=NULL, create_retry_at=NULL,
+        create_error=NULL, create_stopped=NULL
+    WHERE session_id=$1 AND (create_attempts<>0 OR create_error IS NOT NULL
+                             OR create_stopped IS NOT NULL OR create_retry_at IS NOT NULL)"""
+_RESTART_CREATE_RETRY = """UPDATE workspaces
+    SET create_attempts=0, create_first_failed_at=NULL,
+        create_retry_at=NOW() + make_interval(secs => $2),
+        create_error=NULL, create_stopped=NULL
+    WHERE session_id=$1"""
+
+
 class Ledger:
     """Postgres side of the binding and delivery ledger."""
 
@@ -334,6 +349,8 @@ class Ledger:
                 session_id,
                 *fields.values(),
             )
+            if fields.get("kagent_session_id") is not None:
+                await conn.execute(_RESET_CREATE_RETRY, session_id)
 
     async def replace_kagent_session(
         self,
@@ -394,6 +411,11 @@ class Ledger:
                 )
                 if moved is None:
                     return False
+                await conn.execute(
+                    _RESTART_CREATE_RETRY,
+                    session_id,
+                    settings.workspace_create_retry_initial_seconds,
+                )
                 await conn.execute(
                     """UPDATE native_deliveries
                        SET state='uncertain',
@@ -582,6 +604,58 @@ class Ledger:
                 else None
             ),
         )
+
+    async def create_retry(self, session_id: str) -> dict | None:
+        """Return a workspace's CreateSession retry state; None for any other session."""
+        async with db.connection() as conn:
+            row = await conn.fetchrow(
+                """SELECT create_attempts, create_first_failed_at, create_retry_at,
+                          create_error, create_stopped
+                   FROM workspaces WHERE session_id=$1""",
+                session_id,
+            )
+        return dict(row) if row else None
+
+    async def set_create_retry(self, session_id: str, **fields) -> None:
+        sets = ", ".join(f"{k}=${i + 2}" for i, k in enumerate(fields))
+        async with db.connection() as conn:
+            await conn.execute(
+                f"UPDATE workspaces SET {sets} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
+                session_id,
+                *fields.values(),
+            )
+
+    async def due_creates(
+        self, initial_seconds: float, window_seconds: float
+    ) -> list[dict]:
+        """Owner workspaces whose create is unconfirmed and due for an automatic retry.
+
+        A row with no retry scheduled (a create still in flight, or one interrupted by a restart)
+        is due once it is ``initial_seconds`` old, but only while it is younger than the retry
+        window: an older one (for example left unconfirmed before automatic retries existed) is
+        left to a manual refresh. Ended sessions are never retried, and task attempt workspaces
+        are left to task provisioning, which retries its own creates.
+        """
+        async with db.connection() as conn:
+            rows = await conn.fetch(
+                """SELECT w.session_id, s.user_id FROM workspaces w
+                   JOIN sessions s ON s.id=w.session_id
+                   JOIN native_bindings n ON n.session_id=w.session_id
+                   WHERE n.kagent_session_id IS NULL AND n.kagent_deleted_at IS NULL
+                     AND n.role='agent' AND s.archived_at IS NULL
+                     AND s.status NOT IN ('completed','failed','cancelled')
+                     AND w.create_stopped IS NULL
+                     AND (w.create_retry_at <= NOW()
+                          OR (w.create_retry_at IS NULL
+                              AND w.created_at + make_interval(secs => $1) <= NOW()
+                              AND w.created_at > NOW() - make_interval(secs => $2)))
+                     AND NOT EXISTS (SELECT 1 FROM task_attempts a
+                                     WHERE a.binding_id=w.session_id)
+                   ORDER BY COALESCE(w.create_retry_at, w.created_at)""",
+                initial_seconds,
+                window_seconds,
+            )
+        return [dict(r) for r in rows]
 
     async def undeleted_archived(self) -> list[dict]:
         """Return archived sessions whose kagent Session kagent has not confirmed deleted."""
@@ -2311,9 +2385,11 @@ async def reconcile_once(*, sweep: bool) -> None:
     await _reconcile_step("list_open_work", list_open)
     for sid in sids:
         await _reconcile_step("sync", lambda sid=sid: sync(sid), sid)
+    from mainloop.runtime import workspaces
+
+    await _reconcile_step("workspace_creates", workspaces.retry_creates)
     if not sweep:
         return
-    from mainloop.runtime import workspaces
     from mainloop.runtime.agent_credentials import reconcile_cleanup
 
     await _reconcile_step("credential_cleanup", reconcile_cleanup)

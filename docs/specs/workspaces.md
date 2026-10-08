@@ -13,14 +13,14 @@ read from kagent.
 
 ## Lifecycle
 
-| Observed state | User label | Meaning                                                                |
-| -------------- | ---------- | ---------------------------------------------------------------------- |
-| `running`      | RUNNING    | kagent reports the Session ready.                                      |
-| `suspending`   | SUSPENDING | A suspend is in progress.                                              |
-| `suspended`    | SUSPENDED  | The Session is suspended. Its checkout is kept.                        |
-| `resuming`     | RESUMING   | The Session is being created or resumed.                               |
-| `failed`       | FAILED     | kagent reports the Session failed. `detail` carries kagent's reason.   |
-| `unknown`      | UNKNOWN    | kagent is unreachable, has no such Session, or reports a deleting one. |
+| Observed state | User label | Meaning                                                                                              |
+| -------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| `running`      | RUNNING    | kagent reports the Session ready.                                                                    |
+| `suspending`   | SUSPENDING | A suspend is in progress.                                                                            |
+| `suspended`    | SUSPENDED  | The Session is suspended. Its checkout is kept.                                                      |
+| `resuming`     | RESUMING   | The Session is being created (including automatic create retries) or resumed.                        |
+| `failed`       | FAILED     | kagent reports the Session failed, or automatic create retries stopped. `detail` carries the reason. |
+| `unknown`      | UNKNOWN    | kagent is unreachable, has no such Session, or reports a deleting one.                               |
 
 The UI shows workspace state wherever sessions are listed and links from the session detail to
 `/workspaces/{id}`. The workspace page shows the manifest, state, last activity and preview ports,
@@ -60,7 +60,29 @@ workspace operations.
   the recovered runtime; delete immediately disposes of it. Neither path sends a brief or creates
   a second writer. If kagent rejects the repository (for example
   its host is not in the Agent Harness `git.origins`) nothing is kept and the API returns `422`.
-  If the outcome is unknown, the rows are kept and **refresh** retries the same request.
+  If the outcome is unknown, the rows are kept and Mainloop retries the same request on its own.
+- Automatic create retries run in the backend's native reconcile pass. A transient outcome
+  (for example `UNAVAILABLE` while the development environment's snapshot is prepared, a
+  deadline, an unreachable gateway, a lost reply or a Secret publish failure) schedules the next
+  retry after 15 seconds, doubling to at most 2 minutes. Each retry is the same idempotent
+  `CreateSession` that **refresh** sends (stored request id, checkout and credential reference)
+  under the same per-session lock, so it can only return the one Session. While retrying, the
+  workspace is `resuming` and `detail` says it is retrying automatically with the last error's
+  classified reason (for example `kagent unavailable (gRPC 14)`); raw error text is only logged.
+  A permanent error (`INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `PERMISSION_DENIED`,
+  `UNIMPLEMENTED`, `UNAUTHENTICATED`, a request id whose Session was deleted, or a kagent
+  configuration refusal) stops retries at once, and transient errors stop once 10 minutes have
+  passed since the first failure. The workspace is then `failed` with the reason. **Refresh**
+  still retries the same request and restarts the automatic retries. The retry state is stored
+  on the workspace row, so it survives a backend restart; a workspace whose create never
+  recorded an outcome (the backend stopped mid-create) is retried once it is 15 seconds old,
+  but only while it is younger than the 10-minute window. An older one (for example left
+  unconfirmed before automatic retries existed) is `unknown` and waits for **refresh**. The
+  state belongs to one create identity: it is cleared when the binding gets a Session by any
+  path (including a message delivery), and a replacement Session's new request id starts a
+  fresh retry schedule. Completed, failed and cancelled sessions are never retried
+  automatically (refresh and delete still reconcile them), and task-attempt workspaces are
+  excluded: task provisioning retries its own creates.
 - Suspend is refused (`409`) while the native delivery ledger has a recorded, queued (unless held after a stop), sending or
   delivered-but-incomplete delivery. The check and `SuspendSession` run under the REST
   process's per-session lock. The MCP container is a second writer that this lock does not
