@@ -599,10 +599,23 @@ class Ledger:
         task_id: str | None = None,
         evidence_ref: str | None = None,
         detail: str | None = None,
+        revalidate_report: bool = False,
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
         detail = safe_detail(detail)
         async with db.connection() as conn, conn.transaction():
+            if revalidate_report:
+                # Preparation has not claimed a send. Recheck recipient authority atomically
+                # with failure classification, using the established ledger-before-row order.
+                session_id = await conn.fetchval(
+                    "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                    message_id,
+                )
+                if session_id is None:
+                    return False
+                await self._lock_deliveries(conn, session_id)
+                if not await self._validate_report(conn, message_id):
+                    return False
             if state in OPEN_STATES:
                 session_id = await conn.fetchval(
                     "SELECT session_id FROM native_deliveries WHERE message_id=$1",
@@ -622,6 +635,8 @@ class Ledger:
                     # the owner's newer turn. It stays observable and is never resent.
                     return False
             if state == "sending":
+                if not await self._validate_report(conn, message_id):
+                    return False
                 # Serialize the send claim with durable startup disposal intent.
                 binding = await conn.fetchrow(
                     """SELECT b.child_start_failure FROM native_bindings b
@@ -767,12 +782,37 @@ class Ledger:
             )
         return [dict(r) for r in rows]
 
+    async def _validate_report(self, conn, message_id):
+        from mainloop.tasks.reports import validate_delivery
+
+        return await validate_delivery(conn, message_id)
+
+    async def validate_report(self, message_id):
+        # Also check before runtime preparation; sending/uncertain outcomes are never replayed.
+        async with db.connection() as conn, conn.transaction():
+            sid = await conn.fetchval(
+                "SELECT session_id FROM native_deliveries WHERE message_id=$1",
+                message_id,
+            )
+            if sid is None:
+                return False
+            await self._lock_deliveries(conn, sid)
+            return await self._validate_report(conn, message_id)
+
     async def promote_queued(self, session_id: str) -> tuple[str, str] | None:
         """Mark the oldest queued delivery ``recorded`` if (and only if) nothing is open. Takes the
         same advisory lock as ``record_submission``, so a submission cannot slip in between. Nothing
         is promoted while the queue is held after a stop."""
         async with db.connection() as conn, conn.transaction():
             await self._lock_deliveries(conn, session_id)
+            # Cancel stale unsent reports before promotion can open a turn. Row locks taken
+            # by validation serialize with credential revocation, including ordinary main.
+            queued = await conn.fetch(
+                "SELECT message_id FROM native_deliveries WHERE session_id=$1 AND state='queued' ORDER BY created_at",
+                session_id,
+            )
+            for delivery in queued:
+                await self._validate_report(conn, delivery["message_id"])
             row = await conn.fetchrow(
                 """UPDATE native_deliveries SET state='recorded', updated_at=NOW()
                    WHERE message_id = (SELECT message_id FROM native_deliveries
@@ -1331,6 +1371,8 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
             # cancelled or another pass already took it: there is nothing to send.
             if await ledger.delivery_state(message_id) != "recorded":
                 return
+            if not await ledger.validate_report(message_id):
+                return
             binding = None
             try:
                 binding = await get_binding(session_id)
@@ -1342,6 +1384,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     message_id,
                     "failed",
                     from_states=("recorded",),
+                    revalidate_report=True,
                     detail=f"not sent: task attempt is not live ({exc.code})",
                 )
                 prompt = None
@@ -1358,6 +1401,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     message_id,
                     "failed",
                     from_states=("recorded",),
+                    revalidate_report=True,
                     detail=f"not sent: {describe_error(exc)}",
                 )
                 prompt = None
@@ -1399,6 +1443,7 @@ async def _deliver(session_id: str, message_id: str, text: str) -> None:
                     message_id,
                     "failed",
                     from_states=("recorded",),
+                    revalidate_report=True,
                     detail=f"not sent: {describe_error(exc)}",
                 )
                 prompt = None

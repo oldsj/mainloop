@@ -76,6 +76,11 @@ class MemoryLedger:
         self.archived = False
         self.kagent_deleted = False
 
+    async def validate_report(self, message_id):
+        # These dict fixtures have no managed task report intents. Real authority is tested
+        # with PostgreSQL and fake kagent in test_postgres_task_reports.
+        return True
+
     async def get_binding(self, session_id, *, conn=None):
         return self.binding if session_id == SESSION else None
 
@@ -204,7 +209,11 @@ class MemoryLedger:
         if detail is not None or state in ("delivered", "completed"):
             row["detail"] = detail
 
-    async def transition(self, message_id, state, *, from_states, **kw):
+    async def transition(
+        self, message_id, state, *, from_states, revalidate_report=False, **kw
+    ):
+        if revalidate_report and not await self.validate_report(message_id):
+            return False
         if state == "sending" and self.binding.get("child_start_failure"):
             return False
         if self.rows[message_id]["state"] not in from_states:

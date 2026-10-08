@@ -246,6 +246,10 @@ async def reconcile_once(database, *, installed_ports=ports):
         if port is not None:
             await port.reconcile(database, operation)
 
+    from mainloop.tasks.reports import dispatch_pending
+
+    await dispatch_pending(database)
+
 
 class SSETaskEventSink:
     async def publish(self, owner_id, event):

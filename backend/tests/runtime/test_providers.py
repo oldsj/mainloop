@@ -280,19 +280,19 @@ class ProviderApiTests(unittest.IsolatedAsyncioTestCase):
             binding.assert_not_called()
             connection.assert_not_called()
 
-    async def test_delegation_resolves_alias_and_keeps_policy_caps(self):
+    async def test_delegation_uses_shared_task_service_and_explicit_profile(self):
+        # Actual admission/immutable routing is qualified in PostgreSQL task reports tests.
         store = AsyncMock()
-        store.count_live_children.return_value = 0
-        store.topic.return_value = {"name": "inbox"}
-        store.spawn_child.return_value = "child-session"
-        service = AgentService(store, allowed_kinds=frozenset({"review"}))
+        store.task_call.return_value = {"text": "durable creation", "task_id": "task"}
+        service = AgentService(store)
         ctx = Ctx({"session_id": "parent", "user_id": "owner"}, Actor("main", 0))
-        await service.delegate(ctx, "inbox", "review", "review", "brief")
-        self.assertEqual(store.spawn_child.call_args.args[2], "codex-review")
-        store.spawn_child.reset_mock()
-        store.count_live_children.return_value = 6
-        from fastapi import HTTPException
-
-        with self.assertRaises(HTTPException):
-            await service.delegate(ctx, "inbox", "review", "review", "brief")
+        request = {
+            "request_id": "r",
+            "title": "review",
+            "brief": "brief",
+            "mode": "coordination",
+            "provider_profile_id": "codex-review",
+        }
+        await service.delegate(ctx, **request)
+        store.task_call.assert_awaited_once_with(ctx.binding, "delegate", request)
         store.spawn_child.assert_not_called()

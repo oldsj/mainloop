@@ -108,23 +108,17 @@ class TaskContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 TaskPrincipal("o", **kwargs)
 
-    def test_new_task_tools_stay_undiscovered_and_production_tools_work(self):
-        for actor in (Actor("main", 0), Actor("child", 1)):
-            self.assertFalse(
-                tools_for(actor)
-                & {
-                    "task_get",
-                    "task_list",
-                    "task_retry",
-                    "task_reassign",
-                    "task_cancel",
-                }
+    def test_task_discovery_uses_exact_roles_and_hides_unavailable_handoff(self):
+        for actor in (Actor("main", 0), Actor("supervisor", 1)):
+            self.assertTrue(
+                {"delegate", "task_get", "task_list", "task_history", "task_cancel"}
+                <= tools_for(actor)
             )
-        self.assertTrue(
-            {"delegate", "status", "read", "cancel", "clear"}
-            <= tools_for(Actor("main", 0))
-        )
-        self.assertIn("report", tools_for(Actor("child", 1)))
+            self.assertFalse({"status", "read", "cancel", "clear"} & tools_for(actor))
+            self.assertFalse({"task_retry", "task_reassign"} & tools_for(actor))
+        self.assertIn("report", tools_for(Actor("child", 2)))
+        self.assertNotIn("delegate", tools_for(Actor("child", 2)))
+        self.assertFalse(tools_for(Actor("child", 1)))
 
     def test_retention_and_default_settings(self):
         self.assertEqual(Settings(_env_file=None).task_delete_after_months, 2)
