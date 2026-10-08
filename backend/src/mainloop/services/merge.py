@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from mainloop.db import db
+from mainloop.db import tasks as task_store
 from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
@@ -17,6 +18,8 @@ from mainloop.services.workspace_authority import (
     ScopeUnavailable,
     resolve_project_authority,
 )
+from mainloop.tasks import publication
+from mainloop.tasks.projection import ci_state
 from pydantic import ValidationError
 
 from models.agent_tools import MergePullRequestWithApproval, PreparePullRequestMerge
@@ -95,6 +98,7 @@ async def read_evidence(binding, body):
         policy=current["merge_policy"],
         policy_version=current["merge_policy_version"],
         globs_version=PROTECTED_GLOBS_VERSION,
+        **publication.task_facts(current),
     )
     facts["route"] = (
         "approval"
@@ -160,6 +164,7 @@ def prepared_result(p):
     }
 
 
+@publication.guarded(before=require_enabled, schema=PreparePullRequestMerge)
 async def prepare(binding, arguments):
     require_enabled()
     body = PreparePullRequestMerge.model_validate(arguments)
@@ -195,6 +200,7 @@ async def prepare(binding, arguments):
         resolved[1].model_dump(mode="json") if resolved else None
     )
     async with db.connection() as conn, conn.transaction():
+        await task_store.admission_lock(conn)
         await lock_candidate(
             conn, owner, body.project_id, facts["repository_id"], body.pr_number
         )
@@ -211,7 +217,9 @@ async def prepare(binding, arguments):
         if prior:
             if prior["payload_hash"] != digest:
                 raise PolicyError("conflict", "request ID has different arguments")
-            return prepared_result(await proposal(conn, owner, prior["proposal_id"]))
+            p = await proposal(conn, owner, prior["proposal_id"])
+            await validate_binding(conn, binding, p)
+            return prepared_result(p)
         current, name = await authority(conn, binding, body.project_id, facts["head"])
         if (
             name != facts["repository"]
@@ -283,7 +291,9 @@ async def prepare(binding, arguments):
             digest,
             pid,
         )
-        return prepared_result(await proposal(conn, owner, pid))
+        p = await proposal(conn, owner, pid)
+        await publication.attach_proposal(conn, binding, p)
+        return prepared_result(p)
 
 
 async def validate_binding(conn, binding, p):
@@ -294,6 +304,12 @@ async def validate_binding(conn, binding, p):
         p["binding_id"] != binding["session_id"]
         or p["runtime_session_id"] != current["kagent_session_id"]
         or p["facts"]["repository"] != name
+        or publication.task_facts(current)
+        != {
+            key: p["facts"][key]
+            for key in ("task_id", "attempt_id", "workspace_id", "writer_generation")
+            if key in p["facts"]
+        }
     ):
         raise PolicyError("ownership", "proposal belongs to another binding or runtime")
     return current
@@ -345,6 +361,7 @@ async def finish(conn, candidate, result):
     )
     if prior:
         return decode(prior)
+    await publication.settle_merge(conn, candidate, result)
     await conn.execute(
         "UPDATE merge_requests SET state='merged',result=$2::jsonb WHERE id=$1",
         candidate["id"],
@@ -385,6 +402,13 @@ async def reconcile(binding, p, candidate):
     try:
         async with GitHubMergeClient() as github:
             pr = await github.pull(facts["repository"], facts["pr_number"])
+            ci = (
+                await github.checks(
+                    facts["repository"], facts["head_sha"], facts["base"]
+                )
+                if facts.get("task_id")
+                else None
+            )
         if (
             pr.merged
             and pr.head.sha == facts["head_sha"]
@@ -400,7 +424,12 @@ async def reconcile(binding, p, candidate):
             )
         ):
             result = merged_result(p, pr.merge_commit_sha, "github_pr_observation")
+            if facts.get("task_id"):
+                if ci_state(ci, facts["head_sha"]) != "success":
+                    return state_result("uncertain", p["id"])
+                result["ci_observation"] = ci
             async with db.connection() as conn, conn.transaction():
+                await task_store.admission_lock(conn)
                 await lock_candidate(
                     conn,
                     binding["user_id"],
@@ -410,11 +439,68 @@ async def reconcile(binding, p, candidate):
                 )
                 result = await finish(conn, candidate, result)
             return result
-    except (GitHubError, ValidationError):
+    except (GitHubError, ValidationError, PolicyError):
         pass
     return state_result("uncertain", p["id"])
 
 
+async def completed_replay(binding, arguments, *, approved):
+    """Return an immutable outcome after product completion, without execution.
+
+    Completion closes submit authority. A lost tool response must still be
+    recoverable by the same live binding/current writer; this never claims an
+    intent or sends a PUT. Superseded/revoked sources still fail closed.
+    """
+    async with db.connection() as conn:
+        row = await conn.fetchrow(
+            """SELECT p.id,p.runtime_session_id,r.result FROM merge_proposals p
+               JOIN merge_proposal_results r ON r.proposal_id=p.id
+               JOIN native_bindings b ON b.session_id=p.binding_id
+               JOIN sessions s ON s.id=b.session_id
+               JOIN task_attempts a ON a.binding_id=b.session_id
+               JOIN tasks t ON t.id=a.task_id
+               JOIN workspace_writer_claims c ON c.attempt_id=a.id
+               WHERE p.id=$1 AND p.owner_id=$2 AND p.binding_id=$3
+                 AND b.token_hash=$4 AND b.kagent_session_id=p.runtime_session_id
+                 AND s.user_id=$2 AND t.owner_id=$2
+                 AND b.kagent_deleted_at IS NULL AND s.archived_at IS NULL
+                 AND t.current_attempt_id=a.id AND t.status='completed'
+                 AND p.facts->>'attempt_id'=a.id AND a.state='active'
+                 AND c.held AND c.generation=a.writer_generation
+                 AND p.facts->>'writer_generation'=c.generation::text
+                 AND p.facts->>'workspace_id'=a.workspace_id
+                 AND r.result->>'state'='merged'""",
+            arguments["proposal_id"],
+            binding["user_id"],
+            binding["session_id"],
+            binding.get("token_hash"),
+        )
+        if row is None:
+            return None
+        digest = normalized_hash(arguments)
+        prior = await conn.fetchrow(
+            "SELECT payload_hash FROM merge_tool_invocations WHERE owner_id=$1 AND request_id=$2",
+            binding["user_id"],
+            arguments["request_id"],
+        )
+        if prior and prior["payload_hash"] != digest:
+            raise PolicyError("conflict", "invocation ID has different arguments")
+        if approved:
+            key = MergeReceiptKey(
+                owner_id=binding["user_id"],
+                leaf_binding_id=binding["session_id"],
+                leaf_runtime_session_id=row["runtime_session_id"],
+                proposal_id=row["id"],
+                invocation_request_id=arguments["request_id"],
+            )
+            if not await lookup_merge_receipt(conn, key, digest):
+                raise PolicyError("consent", "exact owner decision receipt required")
+        return decode(row["result"])
+
+
+@publication.guarded(
+    before=require_enabled, schema=MergePullRequestWithApproval, replay=completed_replay
+)
 async def execute(binding, arguments, *, approved):
     require_enabled()
     body = MergePullRequestWithApproval.model_validate(arguments)
@@ -432,6 +518,7 @@ async def execute(binding, arguments, *, approved):
         invocation_request_id=body.request_id,
     )
     async with db.connection() as conn, conn.transaction():
+        await task_store.admission_lock(conn)
         await lock_candidate(
             conn, owner, facts["project_id"], facts["repository_id"], facts["pr_number"]
         )
@@ -518,6 +605,7 @@ async def execute(binding, arguments, *, approved):
         )
     except PolicyError:
         async with db.connection() as conn, conn.transaction():
+            await task_store.admission_lock(conn)
             await lock_candidate(
                 conn,
                 owner,
@@ -536,6 +624,7 @@ async def execute(binding, arguments, *, approved):
                 )
         raise
     async with db.connection() as conn, conn.transaction():
+        await task_store.admission_lock(conn)
         await lock_candidate(
             conn, owner, facts["project_id"], facts["repository_id"], facts["pr_number"]
         )
@@ -571,8 +660,13 @@ async def execute(binding, arguments, *, approved):
                 or current["merge_policy_version"] != facts["policy_version"]
             ):
                 state = "blocked"
-            elif not fresh["ci"]["green"] or not fresh["mergeable"]:
+            elif (
+                ci_state(fresh["ci"], facts["head_sha"]) != "success"
+                or not fresh["mergeable"]
+            ):
                 if fresh["ci"].get("pending") or not fresh["mergeable"]:
+                    return state_result("evaluating", p["id"])
+                if ci_state(fresh["ci"], facts["head_sha"]) == "unknown":
                     return state_result("evaluating", p["id"])
                 state = "blocked"
             if state:
@@ -589,11 +683,20 @@ async def execute(binding, arguments, *, approved):
             intent = str(uuid.uuid4())
             candidate = dict(
                 await conn.fetchrow(
-                    "UPDATE merge_requests SET state='uncertain',intent_id=$2,receipt_action_id=$3,intent_invocation_id=$4 WHERE id=$1 RETURNING *",
+                    "UPDATE merge_requests SET state='uncertain',intent_id=$2,receipt_action_id=$3,intent_invocation_id=$4,result=$5::jsonb WHERE id=$1 RETURNING *",
                     candidate["id"],
                     intent,
                     receipt.action_id if receipt else None,
                     body.request_id,
+                    json.dumps(
+                        {
+                            "claim_evidence": {
+                                "head_sha": facts["head_sha"],
+                                "ci_state": ci_state(fresh["ci"], facts["head_sha"]),
+                                "ci": fresh["ci"],
+                            }
+                        }
+                    ),
                 )
             )
     if existing:
@@ -614,16 +717,60 @@ async def execute(binding, arguments, *, approved):
     except (GitHubError, ValidationError, AttributeError):
         return state_result("uncertain", p["id"])
     outcome = merged_result(p, result["sha"], "merge_response")
-    async with db.connection() as conn, conn.transaction():
-        await lock_candidate(
-            conn, owner, facts["project_id"], facts["repository_id"], facts["pr_number"]
-        )
-        outcome = await finish(conn, candidate, outcome)
+    try:
+        async with db.connection() as conn, conn.transaction():
+            await task_store.admission_lock(conn)
+            await lock_candidate(
+                conn,
+                owner,
+                facts["project_id"],
+                facts["repository_id"],
+                facts["pr_number"],
+            )
+            outcome = await finish(conn, candidate, outcome)
+    except PolicyError:
+        # The remote write may already have succeeded. Keep its durable intent
+        # for read-only reconciliation; never manufacture task completion.
+        return state_result("uncertain", p["id"])
     return outcome
 
 
+async def completed_auto_replay(binding, body):
+    async with db.connection() as conn:
+        prior = await conn.fetchrow(
+            "SELECT payload_hash,proposal_id FROM merge_tool_requests WHERE owner_id=$1 AND request_id=$2",
+            binding["user_id"],
+            body.request_id,
+        )
+    if prior is None:
+        return None
+    result = await completed_replay(
+        binding,
+        {"proposal_id": prior["proposal_id"], "request_id": body.request_id},
+        approved=False,
+    )
+    if result is None:
+        return None
+    digest = normalized_hash({**body.model_dump(), "binding_id": binding["session_id"]})
+    if prior["payload_hash"] != digest:
+        raise PolicyError("conflict", "request ID has different arguments")
+    return result
+
+
 async def auto_merge(binding, arguments):
-    result = await prepare(binding, arguments)
+    require_enabled()
+    body = PreparePullRequestMerge.model_validate(arguments)
+    replay = await completed_auto_replay(binding, body)
+    if replay is not None:
+        return replay
+    try:
+        result = await prepare(binding, arguments)
+    except PolicyError:
+        # A competing call may finish while preparation waits for the tree lock.
+        replay = await completed_auto_replay(binding, body)
+        if replay is not None:
+            return replay
+        raise
     if result["route"] == "approval":
         async with db.connection() as conn:
             p = await proposal(conn, binding["user_id"], result["proposal_id"])
@@ -635,7 +782,8 @@ async def auto_merge(binding, arguments):
             "uncertain",
             "merged",
         ):
-            return await reconcile(binding, p, dict(candidate))
+            async with publication.guard(db, binding, p["facts"]["project_id"]):
+                return await reconcile(binding, p, dict(candidate))
         return {
             **result,
             "state": "approval_required",

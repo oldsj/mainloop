@@ -308,6 +308,10 @@ class HITLObserver:
                     runtime_id,
                     task_id,
                 )
+            if session.binding_id:
+                from mainloop.tasks.attention import refresh as refresh_task_attention
+
+                await refresh_task_attention(db, session.binding_id)
             return
         try:
             resolved = await self.resolve(conn, session, task)
@@ -358,11 +362,24 @@ class HITLObserver:
                         "Authentication required or unsupported/malformed HITL request",
                     )
                 await self.attention(conn, runtime_id, task_id)
+                if session.binding_id:
+                    from mainloop.tasks.attention import (
+                        refresh as refresh_task_attention,
+                    )
+
+                    await refresh_task_attention(db, session.binding_id)
                 return
         async with conn.transaction():
             await store.supersede_task_projections(conn, projection)
             await store.observe_session(conn, session)
             await store.save_projection(conn, projection)
+
+        # HITL/receipt locks have been released before taking task-tree locks.
+        # This adds presentation links only, reusing the existing canonical card.
+        if session.binding_id:
+            from mainloop.tasks.attention import refresh as refresh_task_attention
+
+            await refresh_task_attention(db, session.binding_id)
 
     async def attention(self, conn, runtime_id, task_id):
         key = normalized_hash([self.gateway, runtime_id, task_id])
