@@ -3,6 +3,7 @@ FROM python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf1
 ARG TARGETARCH
 ENV HOME=/home/nonroot \
     XDG_CACHE_HOME=/home/nonroot/.cache \
+    TRUNK_CACHE=/home/nonroot/.cache/trunk \
     UV_PYTHON_DOWNLOADS=never \
     PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
