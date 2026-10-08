@@ -64,5 +64,34 @@ revoked predecessor remains fenced.
 
 The continuation brief preserves the authoritative original owner instructions
 exactly once within 16 KiB UTF-8. Additional manifest context remains durable.
-A scoped native task/artifact reader is still required before integration can
-deliver that context; owner REST reads are not an agent capability.
+Native `task_get`, `task_history` and `task_list` now return a narrow stored
+projection: task facts, sanitized attempt/operation lineage, current-attempt
+report claims, and only the current attempt's linked manifest, checkpoint and
+manifest-selected predecessor reports. Current reports are selected by their
+persisted task/attempt identity and also require a matching canonical digest.
+Both artifact links must agree with the same persisted handoff operation and
+current attempt. Identity, canonical SHA256, report digest, repository, checkout,
+provider and accepted environment mismatches fail closed. Tasks without a current
+linked continuation return no continuation artifacts or predecessor reports. Owner REST
+history retains its existing authorized view.
+
+The reader preserves active/current binding, ancestry and writer-generation
+authorization. Children read themselves; supervisors read themselves and direct
+children in their project/tree; the main thread retains owner-scoped task
+visibility with the same narrow artifact projection. No operation request,
+private adapter/retention evidence, native transcript or pending HITL/approval
+receipt is exposed by alternate reads. Report summaries and evidence references
+remain unverified claims; references are never dereferenced and convey no consent.
+The manifest's labelled provider note is read without enumerating other artifacts.
+
+Standing inputs tell supervisors and children to call `whoami`, then `task_get`
+with its returned task ID. These reads add no native call or model turn. Creating
+successors cannot authenticate; active successors with fresh grants can read their
+linked context while the existing pending-brief action gates remain enforced.
+Delegated native processes still skip standing installation in
+`native_sessions._with_standing`. A qualified Claude append-system-prompt or Codex
+developer-instruction/MCP setup must install discovery outside the unchanged
+owner brief, without an extra turn. Reader and standing-input regression evidence
+does not establish native consumption, bootstrap, handoff or retention readiness;
+the checkpoint, preparation, fencing, credential and cleanup adapters remain
+uninstalled.
