@@ -22,6 +22,10 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
+An omitted or empty checkout `ref` selects the repository's remote default branch. Explicit
+commit SHAs, branches and tags are passed through unchanged. The required checkout `branch`
+remains the feature branch used for the writer claim and push target, independently of `ref`.
+
 Public status is `queued`, `running`, `waiting`, `blocked`, `completed`, `failed` or
 `cancelled`. Reasons distinguish awaiting child, approval, CI, publication, handoff and
 reconciliation. Agent activity, delivery, workspace health, attention and publication remain

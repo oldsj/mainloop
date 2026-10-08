@@ -26,6 +26,12 @@ def create(**changes):
 
 
 class TaskContracts(unittest.TestCase):
+    def test_default_checkout_ref_selects_remote_default_branch(self):
+        self.assertEqual(TaskCheckout(branch="feature/task").ref, "")
+        self.assertEqual(TaskCheckout(branch="feature/task", ref="").ref, "")
+        for ref in ("a" * 40, "release/next", "v1.2.3"):
+            self.assertEqual(TaskCheckout(branch="feature/task", ref=ref).ref, ref)
+
     def test_no_caller_authority_or_legacy_aliases(self):
         payload = create().model_dump()
         for key in (

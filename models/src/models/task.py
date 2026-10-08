@@ -52,7 +52,8 @@ OperationState = Literal[
 
 class TaskCheckout(ContractModel):
     branch: Annotated[str, Field(strict=True, min_length=1, max_length=255)]
-    ref: Annotated[str, Field(strict=True, min_length=1, max_length=255)] = "HEAD"
+    # Empty selects the remote's default branch, matching the workspace contract.
+    ref: Annotated[str, Field(strict=True, max_length=255)] = ""
     depth: Annotated[int, Field(strict=True, ge=0, le=1000)] = 1
 
     @model_validator(mode="after")
