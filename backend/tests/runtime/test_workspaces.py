@@ -29,7 +29,7 @@ from mainloop.runtime.kagent_client import (
     Unreachable,
 )
 from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
-from tests.runtime.test_native_sessions import SESSION, MemoryLedger
+from tests.runtime.test_native_sessions import SESSION, MemoryLedger, memory_connection
 from tests.runtime.test_task_provisioning import ordinary_guard
 
 from models import SessionStatus, WorkspaceObservedState
@@ -100,6 +100,7 @@ class WorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
         ns._streaming.clear()
         ns._locks.clear()
         for patcher in (
+            patch.object(ns.db, "connection", memory_connection),
             patch("mainloop.tasks.lifecycle.guard", ordinary_guard),
             patch("mainloop.tasks.lifecycle.check_session", AsyncMock()),
             patch.object(ns, "attempt_row", AsyncMock(return_value=None)),

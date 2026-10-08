@@ -3,22 +3,26 @@
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from unittest.mock import patch
 
 import httpx
 from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.push_gate import credentials as git_credentials
 from mainloop.push_gate import lifecycle, store
 from mainloop.runtime import agent_credentials
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import workspaces
 from mainloop.runtime.kagent_client import (
+    CurrentRuntimeAssociation,
     OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
     SessionError,
 )
+from tests.runtime.test_git_credentials_postgres import FakeGitSecrets
 from tests.runtime.test_postgres_ledger import KagentFakeCase
 from tests.runtime.test_push_gate import UPDATE
 
@@ -32,6 +36,35 @@ class PushLifecycleTests(KagentFakeCase):
         enabled = patch.object(settings, "push_gate_enabled", True)
         enabled.start()
         self.addCleanup(enabled.stop)
+        enabled_git = patch.object(settings, "git_transport_enabled", True)
+        enabled_git.start()
+        self.addCleanup(enabled_git.stop)
+        git_store = patch.object(
+            git_credentials, "secrets", git_credentials.GitSecretStore(FakeGitSecrets())
+        )
+        git_store.start()
+        self.addCleanup(git_store.stop)
+        get = ns.get_client().get_session
+
+        async def observed(sid):
+            session = await get(sid)
+            return replace(
+                session,
+                creator="mainloop",
+                prepared_revision="fixture-revision",
+                runtime_association=CurrentRuntimeAssociation(
+                    "generation-" + sid,
+                    "fixture-space",
+                    "actor-" + sid,
+                    "uid-" + sid,
+                    "active",
+                    True,
+                ),
+            )
+
+        association = patch.object(ns.get_client(), "get_session", observed)
+        association.start()
+        self.addCleanup(association.stop)
         self.pid = "push-" + uuid.uuid4().hex
         self.repo = "https://github.com/example/" + self.pid
         await self.pool.execute(
@@ -101,10 +134,15 @@ class PushLifecycleTests(KagentFakeCase):
     async def test_runtime_replacement_and_stale_retry(self):
         ws = await self.create()
         sid = ws.session_id
-        # Rotate once explicitly to retain the purpose-separated bearer for the old identity.
+        # Native values are immutable for this Create identity; replacement alone rotates.
         async with self.pool.acquire() as conn:
-            await store.revoke(conn, sid)
-            old = await lifecycle.enroll(conn, sid)
+            issuance = await conn.fetchval(
+                "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
+                sid,
+            )
+            _, enrollment = await git_credentials.enrollment_row(conn, issuance)
+            old = git_credentials.capability_for(enrollment.plan, "git-push")
+            await lifecycle.enroll(conn, sid)
         old_id = (await ns.get_binding(sid))["kagent_session_id"]
         before = await self.grant(sid)
         await ns.ledger.update_binding(sid, kagent_session_id=old_id)
@@ -123,7 +161,7 @@ class PushLifecycleTests(KagentFakeCase):
         )
         await workspaces.refresh(sid, self.user)
         row = await self.grant(sid)
-        self.assertEqual(store._decode(row["grant_data"], PushGrant).version, 3)
+        self.assertEqual(store._decode(row["grant_data"], PushGrant).version, 2)
         self.assertNotEqual(row["token_hash"], store.token_hash(old))
         self.assertFalse(
             await ns.ledger.replace_kagent_session(sid, old_id, str(uuid.uuid4()))
@@ -139,8 +177,12 @@ class PushLifecycleTests(KagentFakeCase):
     async def test_policy_default_update_protects_existing_grants(self):
         ws = await self.create()
         async with self.pool.acquire() as conn:
-            await store.revoke(conn, ws.session_id)
-            bearer = await lifecycle.enroll(conn, ws.session_id)
+            issuance = await conn.fetchval(
+                "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
+                ws.session_id,
+            )
+            _, enrollment = await git_credentials.enrollment_row(conn, issuance)
+            bearer = git_credentials.capability_for(enrollment.plan, "git-push")
             await store.set_policy(
                 conn,
                 ProtectedBranchPolicy(
@@ -247,7 +289,7 @@ class PushLifecycleTests(KagentFakeCase):
         ws = await self.create()
         sid = ws.session_id
         reached, release = asyncio.Event(), asyncio.Event()
-        original = store.revoke
+        original = lifecycle.revoke_locked
 
         async def pause(conn, grant_id):
             await original(conn, grant_id)
@@ -255,7 +297,7 @@ class PushLifecycleTests(KagentFakeCase):
             await release.wait()
 
         async with self.pool.acquire() as waiter:
-            with patch.object(store, "revoke", pause):
+            with patch.object(lifecycle, "revoke_locked", pause):
                 mutation = asyncio.create_task(
                     db.update_session(sid, status=SessionStatus.COMPLETED)
                 )
@@ -404,14 +446,20 @@ class PushLifecycleTests(KagentFakeCase):
                         )
                         self.fake.next_session_ids = [str(uuid.uuid4())]
                         issued = []
-                        issue = store.issue
+                        issue = store.issue_derived_locked
 
-                        async def capture(conn, grant, issue=issue, issued=issued):
-                            bearer = await issue(conn, grant)
-                            issued.append(bearer)
-                            return bearer
+                        async def capture(
+                            conn, grant, enrollment, issue=issue, issued=issued
+                        ):
+                            result = await issue(conn, grant, enrollment)
+                            issued.append(
+                                git_credentials.capability_for(
+                                    enrollment.plan, "git-push"
+                                )
+                            )
+                            return result
 
-                        with patch.object(store, "issue", capture):
+                        with patch.object(store, "issue_derived_locked", capture):
                             await workspaces.refresh(sid, self.user)
                         self.assertEqual(len(issued), 1)
                         bearer = issued[0]

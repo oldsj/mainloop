@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from mainloop.push_gate.authorization import ZERO_OID, authorize
 from mainloop.push_gate.protocol import (
@@ -31,21 +31,15 @@ from mainloop.services.github_repo import parse_github_repo
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.push_gate import (
+    CredentialStamp,
+    GitRuntimeAssociation,
     ProtectedBranchPolicy,
     PublicationAttempt,
     PublicationState,
     PushGrant,
 )
 
-
-class RuntimeAssociation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    session_id: str = Field(min_length=1)
-    generation_id: str = Field(min_length=1)
-    atespace: str = Field(min_length=1)
-    actor_name: str = Field(min_length=1)
-    actor_uid: str = Field(min_length=1)
-    revision: str = Field(min_length=1)
+RuntimeAssociation = GitRuntimeAssociation
 
 
 class TrustedBinding(BaseModel):
@@ -55,6 +49,7 @@ class TrustedBinding(BaseModel):
     association: RuntimeAssociation
     grant: PushGrant | None = None
     policy: ProtectedBranchPolicy | None = None
+    stamp: CredentialStamp | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +112,7 @@ class GitApplication:
         hosts: tuple[str, ...] = (),
         validation_slot: asyncio.Semaphore | None = None,
         response_secrets: tuple[bytes, ...] = (),
+        seed_upstream_factory: Callable | None = None,
     ):
         self.purpose = purpose
         self.authority = authority
@@ -126,6 +122,12 @@ class GitApplication:
         self.hosts = hosts or (f"mainloop-{purpose}.mainloop.svc.cluster.local",)
         self.slot = validation_slot or asyncio.Semaphore(1)
         self.response_secrets = response_secrets
+        if (
+            getattr(authority, "requires_seed_factory", False)
+            and seed_upstream_factory is None
+        ):
+            raise ValueError("production_seed_authority_required")
+        self.seed_upstream_factory = seed_upstream_factory
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -413,10 +415,13 @@ class GitApplication:
                 if reason:
                     raise TransportError(reason)
                 async with asyncio.timeout(self.limits.validation_seconds):
+                    seed = (
+                        self.seed_upstream_factory(binding, self.upstream)
+                        if self.seed_upstream_factory
+                        else self.upstream
+                    )
                     refs = advertised_refs(
-                        await self.upstream.discovery(
-                            "git-upload-pack", secrets=secrets
-                        ),
+                        await seed.discovery("git-upload-pack", secrets=secrets),
                         "git-upload-pack",
                     )
                     prepared = await prepare_receive(
@@ -426,7 +431,7 @@ class GitApplication:
                         size,
                         refs,
                         binding.policy.default_branch,
-                        self.upstream,
+                        seed,
                         self.limits,
                         secrets=secrets,
                     )
@@ -551,6 +556,7 @@ def create_git_applications(
     read_hosts: tuple[str, ...] = (),
     push_hosts: tuple[str, ...] = (),
     response_secrets: tuple[bytes, ...] = (),
+    seed_upstream_factory: Callable | None = None,
 ) -> tuple[GitApplication, GitApplication]:
     slot = asyncio.Semaphore(1)
     common = dict(
@@ -560,6 +566,7 @@ def create_git_applications(
         limits=limits,
         validation_slot=slot,
         response_secrets=response_secrets,
+        seed_upstream_factory=seed_upstream_factory,
     )
     return GitApplication("git-read", hosts=read_hosts, **common), GitApplication(
         "git-push", hosts=push_hosts, **common

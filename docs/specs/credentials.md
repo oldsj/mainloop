@@ -96,5 +96,29 @@ child task authority. Credential publication requires a live current attempt and
 Coordination task discovery currently exposes identity only; task-scoped delegation/report tools
 arrive in the next slice. It exposes no repository tools or legacy session-completion report.
 Coding supervisor/child discovery exposes identity and scoped PR tools, with merge still behind
-its existing flag. Push credentials are separate from MCP credentials: re-enrollment is an
-integration hook, not runtime Git bearer delivery in this slice.
+its existing flag. Push credentials remain separate from MCP credentials.
+
+## Git capabilities (source support, default off)
+
+`GIT_TRANSPORT_ENABLED` freezes MCP/read/eligible-push references before original CreateSession.
+It requires the existing `AGENT_TOKEN_KEY` and exact sanctioned Mainloop service origins.
+Domain-separated HMAC derives independent `gread_` and `push_` values from immutable issuance,
+binding and original create identities. PostgreSQL stores hashes, references, current runtime
+association and cleanup evidence, never capability or PAT bytes. Key recovery mismatch is a hold.
+
+Git values publish after owned non-turn warmup and fresh GetSession proves the frozen contract.
+Default/protected workspaces have read only; delegated creating targets can receive read only;
+push requires active/current admission. Native send confirms required publications before model
+bytes. Lost replies recover the same tuple/value. Revoked unknown creates recover that tuple
+without publishing or restoring authority. Historical/dispatched tuples cannot gain new refs.
+
+Git Secrets are immutable Opaque, named `mainloop-git-read-<issuance-id>` and optional
+`mainloop-git-push-<issuance-id>`, with the full Authorization value in `authorization` and
+purpose/binding/issuance labels. Conflicts are compared, never overwritten. Terminal, archive,
+cancellation and replacement revoke both purposes even with flags off. Git cleanup uses recorded
+UID preconditions and independent durable tombstones, retaining outages and replacement conflicts.
+MCP publication and cleanup keep their own purpose and behavior.
+
+Trusted outbound clients use the same owner's existing PAT. Actors receive only Mainloop
+capabilities. No production listener, actor route, PAT mount or enforcement is installed here;
+see the [push gate specification](push-gate.md) for authority and remaining release gates.

@@ -715,6 +715,29 @@ class RuntimeComposition:
 
 
 @dataclass(frozen=True)
+class CurrentRuntimeAssociation:
+    generation_id: str
+    atespace: str
+    actor_name: str
+    actor_uid: str
+    phase: str
+    current_active: bool
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "CurrentRuntimeAssociation":
+        fields = _composition_fields(raw, {1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 0})
+        values = [_text(fields, number) for number in range(1, 6)]
+        active = _number(fields, 6)
+        if (
+            any(not value or len(value.encode()) > 256 for value in values)
+            or any(any(ord(c) < 32 for c in value) for value in values)
+            or active not in (0, 1)
+        ):
+            raise OutcomeUnknown("Malformed kagent runtime association")
+        return cls(*values, bool(active))
+
+
+@dataclass(frozen=True)
 class KagentSession:
     """The Session fields Mainloop uses. ``id`` is also the A2A ``contextId``."""
 
@@ -732,6 +755,8 @@ class KagentSession:
     a2a_authority: str = ""
     development_environment: DevelopmentEnvironment | None = None
     runtime_composition: RuntimeComposition | None = None
+    runtime_association: CurrentRuntimeAssociation | None = None
+    context_confirmed: bool = True
 
     @property
     def settled(self) -> bool:
@@ -774,7 +799,9 @@ def _decode_session(raw: bytes) -> KagentSession:
 
 
 def _decode_session_fields(raw: bytes) -> KagentSession:
-    fields = decode_fields(raw, wire_types={18: 2, 19: 2})
+    fields = decode_fields(raw, wire_types={18: 2, 19: 2, 20: 2})
+    if len(fields.get(20, [])) > 1:
+        raise OutcomeUnknown("Ambiguous kagent runtime association")
     if any(len(fields.get(number, [])) > 1 for number in (1, 2, 5, 6, 14, 15, 18, 19)):
         raise SessionError("Ambiguous gateway session identity")
     failure = fields.get(9, [b""])[0]
@@ -790,6 +817,7 @@ def _decode_session_fields(raw: bytes) -> KagentSession:
         state=_enum(RuntimeState, _number(fields, 7)),
         operation=_enum(RuntimeOperation, _number(fields, 8)),
         context_id=_text(fields, 14) or session_id,
+        context_confirmed=bool(_text(fields, 14)),
         failure_reason=_text(failure_fields, 1),
         failure_message=_text(failure_fields, 2),
         name=_text(fields, 13),
@@ -804,6 +832,9 @@ def _decode_session_fields(raw: bytes) -> KagentSession:
         ),
         runtime_composition=(
             RuntimeComposition.decode(fields[19][0]) if fields.get(19) else None
+        ),
+        runtime_association=(
+            CurrentRuntimeAssociation.decode(fields[20][0]) if fields.get(20) else None
         ),
         prepared_revision=_text(fields, 5),
         a2a_authority=_text(fields, 6),

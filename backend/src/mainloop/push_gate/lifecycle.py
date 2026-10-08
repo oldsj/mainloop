@@ -14,23 +14,69 @@ from models.push_gate import ProtectedBranchPolicy, PushGrant
 async def locked(conn, session_id: str, *, revoke: bool = False):
     """Keep a dedicated connection and ordered locks through the durable mutation."""
     project_id = await conn.fetchval(
-        "SELECT project_id FROM sessions WHERE id=$1", session_id
+        """SELECT COALESCE((SELECT project_id FROM sessions WHERE id=$1),
+        (SELECT project_id FROM git_enrollments WHERE binding_id=$1 ORDER BY created_at DESC LIMIT 1))""",
+        session_id,
     )
     if project_id is None:
         async with store.publication_lock(conn, session_id):
+            if revoke:
+                await revoke_locked(conn, session_id)
             yield
         return
     async with (
         store.policy_lock(conn, project_id),
         store.publication_lock(conn, session_id),
     ):
-        if revoke and settings.push_gate_enabled:
-            await store.revoke(conn, session_id)
+        if revoke:
+            await revoke_locked(conn, session_id)
         yield
 
 
-async def enroll(conn, session_id: str):
-    """Issue only after confirmed identity; return bearer solely to a future caller."""
+async def revoke_locked(conn, session_id):
+    """Unconditional revocation, queued before lifecycle mutation, with no Secret I/O."""
+    from mainloop.push_gate.credentials import revoke_deferred
+    from mainloop.runtime.agent_credentials import _binding_lock
+    from mainloop.tasks.lifecycle import locked as runtime_locked
+
+    async with runtime_locked(conn, session_id), _binding_lock(conn, session_id):
+        if conn.is_in_transaction():
+            await revoke_deferred(conn, session_id)
+        else:
+            async with conn.transaction():
+                await revoke_deferred(conn, session_id)
+
+
+async def enroll(conn, session_id):
+    """Post-readiness enrollment only; storing a runtime UUID never issues authority."""
+    from mainloop.push_gate.credentials import (
+        enrollment_row,
+        publish_push,
+        publish_read,
+    )
+
+    issuance = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
+        session_id,
+    )
+    if issuance is None:
+        if not settings.git_transport_enabled:
+            return await _legacy_enroll(conn, session_id)
+        return None
+    _, enrollment = await enrollment_row(conn, issuance)
+    if enrollment.association is None:
+        raise ValueError("git_enrollment_unconfirmed")
+    await publish_read(conn, issuance)
+    from mainloop.tasks.lifecycle import facts
+
+    attempt = await facts(conn, session_id)
+    if attempt is not None and attempt["state"] == "creating":
+        return None
+    return await publish_push(conn, issuance)
+
+
+async def _legacy_enroll(conn, session_id: str):
+    """Hash-only compatibility primitive; never authenticates on the Git listener."""
     if not settings.push_gate_enabled:
         return None
     async with locked(conn, session_id):

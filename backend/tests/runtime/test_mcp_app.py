@@ -360,6 +360,8 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         from mainloop.runtime import agent_credentials as module
 
         conn = Mock()
+        in_transaction = False
+        conn.is_in_transaction = Mock(side_effect=lambda: in_transaction)
         reference = {
             "origin": MCP_ORIGIN,
             "header": "Authorization",
@@ -384,7 +386,13 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
 
         @asynccontextmanager
         async def transaction():
-            yield
+            nonlocal in_transaction
+            previous = in_transaction
+            in_transaction = True
+            try:
+                yield
+            finally:
+                in_transaction = previous
 
         conn.transaction = transaction
 
@@ -394,16 +402,46 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
 
         @asynccontextmanager
         async def lock(_conn, _binding_id):
+            self.assertIs(_conn, conn)
+            self.assertEqual(_binding_id, "binding-id")
             yield
+
+        async def unavailable(*args):
+            self.assertFalse(conn.is_in_transaction())
+            raise RuntimeError("unavailable")
 
         with patch("mainloop.db.db.connection", connection), patch.object(
             module, "_binding_lock", lock
-        ), patch.object(
-            module.credentials,
-            "remove",
-            AsyncMock(side_effect=RuntimeError("unavailable")),
+        ), patch(
+            "mainloop.push_gate.credentials.cleanup_all", AsyncMock()
+        ) as git_cleanup, patch.object(
+            module.credentials, "remove", AsyncMock(side_effect=unavailable)
         ) as remove:
             await module.revoke("binding-id")
+        git_cleanup.assert_awaited_once_with()
+        self.assertFalse(conn.is_in_transaction())
+        lock_keys = [
+            call.args[1]
+            for call in conn.mock_calls
+            if call[0] in ("execute", "fetchval")
+            and "pg_advisory_lock(" in call.args[0]
+        ]
+        self.assertEqual(
+            lock_keys,
+            [
+                "mainloop:task-authority:binding-id",
+                "push-grant:binding-id",
+                "mainloop:task-authority:binding-id",
+                "mainloop:task-runtime:binding-id",
+            ],
+        )
+        unlock_keys = [
+            call.args[1]
+            for call in conn.mock_calls
+            if call[0] in ("execute", "fetchval")
+            and "pg_advisory_unlock(" in call.args[0]
+        ]
+        self.assertEqual(unlock_keys, list(reversed(lock_keys)))
         remove.assert_awaited_once_with(
             "binding-id", module.reference_from_data(reference)
         )
@@ -411,9 +449,15 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("token_hash=NULL", sql)
         self.assertIn("credential_cleanup_pending=TRUE", sql)
         self.assertIn("agent_credential_cleanup", sql)
+
+        async def removed(*args):
+            self.assertFalse(conn.is_in_transaction())
+
         with patch("mainloop.db.db.connection", connection), patch.object(
             module, "_binding_lock", lock
-        ), patch.object(module.credentials, "remove", AsyncMock()) as remove:
+        ), patch.object(
+            module.credentials, "remove", AsyncMock(side_effect=removed)
+        ) as remove:
             await module.reconcile_cleanup()
         remove.assert_awaited_once_with(
             "binding-id", module.reference_from_data(reference)

@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from mainloop.config import settings
 from mainloop.db import db
 from mainloop.push_gate import lifecycle as push_lifecycle
 from mainloop.runtime import native_sessions as ns
@@ -186,22 +187,17 @@ async def _observe(
 async def _revoke_publication(
     workspace_id: str, observed_runtime_id: str | None
 ) -> None:
-    from mainloop.config import settings
-
-    if settings.push_gate_enabled:
-        async with db.connection() as conn:
-            async with push_lifecycle.locked(conn, workspace_id):
-                current_runtime_id = await conn.fetchval(
-                    "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
-                    workspace_id,
-                )
-                if (
-                    observed_runtime_id is not None
-                    and current_runtime_id == observed_runtime_id
-                ):
-                    from mainloop.push_gate import store
-
-                    await store.revoke(conn, workspace_id)
+    async with db.connection() as conn:
+        async with push_lifecycle.locked(conn, workspace_id):
+            current_runtime_id = await conn.fetchval(
+                "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+                workspace_id,
+            )
+            if (
+                observed_runtime_id is not None
+                and current_runtime_id == observed_runtime_id
+            ):
+                await push_lifecycle.revoke_locked(conn, workspace_id)
 
 
 async def _lifecycle(row, session: KagentSession | None = None) -> WorkspaceLifecycle:
@@ -263,14 +259,14 @@ async def publish(user_id: str, lifecycle: WorkspaceLifecycle) -> None:
 # --------------------------------------------------------------------------------------------
 
 
-async def preview_row(workspace_id: str, user_id: str) -> dict | None:
+async def preview_row(workspace_id: str, user_id: str, *, conn=None) -> dict | None:
     """Return the owner's workspace with a live kagent Session, or None (for the preview proxy)."""
     try:
-        row = await _owned_row(workspace_id, user_id)
+        row = await _owned_row(workspace_id, user_id, conn=conn)
     except WorkspaceNotFound:
         return None
     if row["kagent_session_id"] is None or not await lifecycle.permitted(
-        workspace_id, "preview"
+        workspace_id, "preview", conn=conn
     ):
         return None
     ports = row["ports"]
@@ -524,7 +520,26 @@ async def _create_session(
 ) -> None:
     async with ns._lock(workspace_id):
         binding = await ns.get_binding(workspace_id)
-        if binding is None or binding["kagent_session_id"] is not None:
+        if binding is None:
+            return
+        if binding["kagent_session_id"] is not None:
+            async with db.connection() as conn:
+                issuance = await conn.fetchval(
+                    "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
+                    workspace_id,
+                )
+            if issuance is None:
+                return
+            session = await ns._live_session(binding["kagent_session_id"])
+            if session is not None and session.state not in (
+                RuntimeState.FAILED,
+                RuntimeState.DELETED,
+            ):
+                from mainloop.push_gate.credentials import ready_for_binding
+
+                async with db.connection() as conn:
+                    async with lifecycle.guard(workspace_id, "create", conn=conn):
+                        await ready_for_binding(conn, workspace_id, session)
             return
         try:
             if (
@@ -557,12 +572,18 @@ async def _create_session(
         await ns.ledger.update_binding(
             workspace_id, kagent_session_id=session.id, standing_hash=None
         )
+        if binding.get("token_hash"):
+            from mainloop.push_gate.credentials import ready_for_binding
+
+            async with db.connection() as conn:
+                async with lifecycle.guard(workspace_id, "create", conn=conn):
+                    await ready_for_binding(conn, workspace_id, session)
 
 
 async def refresh(workspace_id: str, user_id: str) -> WorkspaceLifecycle:
     """Re-read the lifecycle from kagent, first retrying a create whose outcome was unknown."""
     row = await _owned_row(workspace_id, user_id)
-    if row["kagent_session_id"] is None:
+    if row["kagent_session_id"] is None or settings.git_transport_enabled:
         await _create_session(workspace_id, user_id, reject_removes_rows=False)
         row = await _owned_row(workspace_id, user_id)
     return await _lifecycle(row)
@@ -591,6 +612,16 @@ async def _delete_rows(workspace_id: str, *, evidence: str | None = None) -> Non
     async with db.connection() as conn:
         async with push_lifecycle.locked(conn, workspace_id, revoke=True):
             async with conn.transaction():
+                from mainloop.push_gate import store as push_store
+
+                scope = await conn.fetchrow(
+                    "SELECT s.user_id,p.full_name,w.branch FROM sessions s JOIN projects p ON p.id=s.project_id JOIN workspaces w ON w.session_id=s.id WHERE s.id=$1",
+                    workspace_id,
+                )
+                if scope:
+                    await push_store.assert_branch_resolved(
+                        conn, scope["user_id"], scope["full_name"], scope["branch"]
+                    )
                 claim = await conn.fetchrow(
                     """SELECT owner_id,repository,branch,generation
                        FROM workspace_writer_claims WHERE binding_id=$1 AND held""",
@@ -788,19 +819,19 @@ async def _resume_if_suspended(row) -> tuple[KagentSession, bool]:
     """Return the Session, resumed first when suspended, and whether this call resumed it."""
     async with (
         ns._lock(row["session_id"]),
-        lifecycle.guard(row["session_id"], "resume"),
+        lifecycle.guard(row["session_id"], "resume") as conn,
     ):
         client = ns.get_client()
         session = await client.get_session(row["kagent_session_id"])
-        binding = await ns.get_binding(row["session_id"])
+        binding = await ns.get_binding(row["session_id"], conn=conn)
         if binding is None:
             raise WorkspaceUnconfirmed("Persisted workspace binding is unavailable.")
-        await ns.validate_bound_session(binding, session)
+        await ns.validate_bound_session(binding, session, conn=conn)
         # Only a suspended Session is resumed. ResumeSession on a Ready one does not wake a
         # quiesced actor (kagent); a turn or a preview request wakes it.
         if session.state == RuntimeState.SUSPENDED:
             resumed = await client.resume_session(row["kagent_session_id"])
-            await ns.validate_bound_session(binding, resumed)
+            await ns.validate_bound_session(binding, resumed, conn=conn)
             return resumed, True
         return session, False
 

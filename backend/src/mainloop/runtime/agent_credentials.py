@@ -179,109 +179,117 @@ async def _binding_lock(conn, binding_id: str) -> AsyncIterator[None]:
         await conn.fetchval("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
 
 
-async def publish_for_binding(binding: dict) -> SessionCredential:
+async def publish_for_binding(binding: dict, *, conn=None) -> SessionCredential:
     """Publish only an enrolled, still-authorized binding under the shared DB lock."""
     from mainloop.db import db
 
     binding_id = binding["session_id"]
-    async with db.connection() as conn:
-        async with _binding_lock(conn, binding_id):
-            row = await conn.fetchrow(
-                """SELECT b.role,b.mcp_grant_kind,b.token_hash,b.credential_ref,
-                          s.status,s.archived_at
-                   FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-                   WHERE b.session_id=$1""",
-                binding_id,
-            )
-            if not row:
-                raise RuntimeError("agent credential binding is unavailable")
-            grant = row["mcp_grant_kind"]
-            valid_pair = (row["role"], grant) in VALID_GRANT_PAIRS
-            attempt = await conn.fetchrow(
-                """SELECT a.state,a.writer_generation,t.mode,a.id,t.current_attempt_id,
-                          c.held AS claim_held,c.generation AS claim_generation
-                   FROM task_attempts a JOIN tasks t ON t.id=a.task_id
-                   LEFT JOIN workspace_writer_claims c ON c.attempt_id=a.id
-                   WHERE a.binding_id=$1""",
-                binding_id,
-            )
-            if (row["role"], grant) in DELEGATED_PAIRS or row["role"] == "supervisor":
-                # These pairs exist only for a task attempt.
-                valid_pair = valid_pair and attempt is not None
-            if valid_pair and attempt is not None:
-                # A delegated bearer exists only for a live attempt that still holds its branch
-                # claim at the generation it was admitted with. Coordination tasks have no claim.
-                valid_pair = (
-                    attempt["id"] == attempt["current_attempt_id"]
-                    and attempt["state"] in ("creating", "active")
-                    and (
-                        attempt["mode"] == "coordination"
-                        or (
-                            attempt["claim_held"]
-                            and attempt["claim_generation"]
-                            == attempt["writer_generation"]
-                        )
+    if conn is None:
+        async with db.connection() as owned:
+            return await publish_for_binding(binding, conn=owned)
+    if conn.is_in_transaction():
+        raise RuntimeError("credential publication requires committed connection")
+    async with _binding_lock(conn, binding_id):
+        row = await conn.fetchrow(
+            """SELECT b.role,b.mcp_grant_kind,b.token_hash,b.credential_ref,
+                      s.status,s.archived_at
+               FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+               WHERE b.session_id=$1""",
+            binding_id,
+        )
+        if not row:
+            raise RuntimeError("agent credential binding is unavailable")
+        grant = row["mcp_grant_kind"]
+        valid_pair = (row["role"], grant) in VALID_GRANT_PAIRS
+        attempt = await conn.fetchrow(
+            """SELECT a.state,a.writer_generation,t.mode,a.id,t.current_attempt_id,
+                      c.held AS claim_held,c.generation AS claim_generation
+               FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+               LEFT JOIN workspace_writer_claims c ON c.attempt_id=a.id
+               WHERE a.binding_id=$1""",
+            binding_id,
+        )
+        if (row["role"], grant) in DELEGATED_PAIRS or row["role"] == "supervisor":
+            # These pairs exist only for a task attempt.
+            valid_pair = valid_pair and attempt is not None
+        if valid_pair and attempt is not None:
+            # A delegated bearer exists only for a live attempt that still holds its branch
+            # claim at the generation it was admitted with. Coordination tasks have no claim.
+            valid_pair = (
+                attempt["id"] == attempt["current_attempt_id"]
+                and attempt["state"] in ("creating", "active")
+                and (
+                    attempt["mode"] == "coordination"
+                    or (
+                        attempt["claim_held"]
+                        and attempt["claim_generation"] == attempt["writer_generation"]
                     )
                 )
-            if (
-                not valid_pair
-                or not row["token_hash"]
-                or row["archived_at"] is not None
-                or row["status"] in {"completed", "failed", "cancelled"}
-                or row["token_hash"] != hash_token(token_for(binding_id))
-            ):
-                raise RuntimeError("agent credential binding is revoked or unavailable")
-            reference = reference_from_data(row["credential_ref"])
-            if reference is None:
-                raise RuntimeError("agent credential reference is unavailable")
-            return await credentials.publish(binding_id, reference)
+            )
+        if (
+            not valid_pair
+            or not row["token_hash"]
+            or row["archived_at"] is not None
+            or row["status"] in {"completed", "failed", "cancelled"}
+            or row["token_hash"] != hash_token(token_for(binding_id))
+        ):
+            raise RuntimeError("agent credential binding is revoked or unavailable")
+        reference = reference_from_data(row["credential_ref"])
+        if reference is None:
+            raise RuntimeError("agent credential reference is unavailable")
+        return await credentials.publish(binding_id, reference)
 
 
-async def revoke(binding_id: str):
+async def revoke(binding_id: str, *, conn=None):
     from mainloop.db import db
     from mainloop.push_gate import lifecycle as push_lifecycle
 
-    revoked = False
-    async with db.connection() as conn:
-        async with push_lifecycle.locked(conn, binding_id, revoke=True), _binding_lock(
-            conn, binding_id
-        ):
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    """SELECT mcp_grant_kind,credential_ref,token_hash,
-                              credential_cleanup_pending
-                       FROM native_bindings WHERE session_id=$1 FOR UPDATE""",
-                    binding_id,
-                )
-                if not row or row["mcp_grant_kind"] not in (
-                    "coordination",
-                    "workspace",
-                ):
-                    return
-                if not row["token_hash"] and not row["credential_cleanup_pending"]:
-                    return
-                reference_value = row["credential_ref"]
-                if reference_value is None:
-                    reference_value = reference_data(credential_reference(binding_id))
-                elif not isinstance(reference_value, str):
-                    reference_value = json.dumps(reference_value)
-                await conn.execute(
-                    """UPDATE native_bindings
-                       SET token_hash=NULL, credential_cleanup_pending=TRUE
-                       WHERE session_id=$1""",
-                    binding_id,
-                )
-                await conn.execute(
-                    """INSERT INTO agent_credential_cleanup(session_id,credential_ref)
-                       VALUES($1,$2::jsonb)
-                       ON CONFLICT(session_id) DO UPDATE
-                         SET credential_ref=EXCLUDED.credential_ref""",
-                    binding_id,
-                    reference_value,
-                )
-                revoked = True
-    if revoked:
+    if conn is None:
+        async with db.connection() as owned:
+            await revoke(binding_id, conn=owned)
         await _cleanup(binding_id)
+        from mainloop.push_gate.credentials import cleanup_all
+
+        await cleanup_all()
+        return
+    if conn.is_in_transaction():
+        raise RuntimeError("use revoke_deferred inside caller transaction")
+    async with push_lifecycle.locked(conn, binding_id, revoke=True), _binding_lock(
+        conn, binding_id
+    ):
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT mcp_grant_kind,credential_ref,token_hash,
+                          credential_cleanup_pending
+                   FROM native_bindings WHERE session_id=$1 FOR UPDATE""",
+                binding_id,
+            )
+            if not row or row["mcp_grant_kind"] not in (
+                "coordination",
+                "workspace",
+            ):
+                return
+            if not row["token_hash"] and not row["credential_cleanup_pending"]:
+                return
+            reference_value = row["credential_ref"]
+            if reference_value is None:
+                reference_value = reference_data(credential_reference(binding_id))
+            elif not isinstance(reference_value, str):
+                reference_value = json.dumps(reference_value)
+            await conn.execute(
+                """UPDATE native_bindings
+                   SET token_hash=NULL, credential_cleanup_pending=TRUE
+                   WHERE session_id=$1""",
+                binding_id,
+            )
+            await conn.execute(
+                """INSERT INTO agent_credential_cleanup(session_id,credential_ref)
+                   VALUES($1,$2::jsonb)
+                   ON CONFLICT(session_id) DO UPDATE
+                     SET credential_ref=EXCLUDED.credential_ref""",
+                binding_id,
+                reference_value,
+            )
 
 
 async def _cleanup(binding_id: str):
@@ -358,9 +366,9 @@ async def revoke_deferred(conn, binding_id: str):
     """
     if not conn.is_in_transaction():
         raise RuntimeError("credential revocation requires transaction")
-    from mainloop.push_gate import store as push_store
+    from mainloop.push_gate.credentials import revoke_deferred as revoke_git
 
-    await push_store.revoke(conn, binding_id)
+    await revoke_git(conn, binding_id)
     async with _binding_lock(conn, binding_id):
         row = await conn.fetchrow(
             "SELECT credential_ref FROM native_bindings WHERE session_id=$1 FOR UPDATE",

@@ -307,8 +307,9 @@ class Provisioning:
                 if binding is None:
                     raise RuntimeError("the attempt's binding is missing")
                 session = await self._ensure_session(binding)
-                async with lifecycle.guard(sid, "create"):
-                    session = await self._ready(session)
+                async with db.connection() as conn:
+                    async with lifecycle.guard(sid, "create", conn=conn):
+                        session = await self._ready(session, binding, conn=conn)
                 if session is None:
                     return
         except _RuntimeLost as exc:
@@ -363,11 +364,18 @@ class Provisioning:
         )
         return session
 
-    async def _ready(self, session):
+    async def _ready(self, session, binding=None, *, conn=None):
         try:
-            return await ns.get_client().ensure_ready(
-                session, timeout=settings.kagent_session_ready_timeout_seconds
-            )
+            if binding is None:
+                return await ns.get_client().ensure_ready(
+                    session, timeout=settings.kagent_session_ready_timeout_seconds
+                )
+            from mainloop.push_gate.credentials import connection, ready_for_binding
+
+            async with connection(conn) as owned:
+                return await ready_for_binding(
+                    owned, binding["session_id"], session, push=False
+                )
         except SessionError:
             live = await ns._live_session(session.id)
             if live is not None and live.state != RuntimeState.FAILED:
@@ -485,11 +493,13 @@ class Provisioning:
             return
         operation, active = await self._current(operation_id)
         await self._enroll_active(operation, active)
+        # Queue only the existing brief identity. The native send gate reconfirms all
+        # required Git publications before its first external turn bytes.
         ns._spawn_deliver(attempt.session_id, message_id, text)
 
     async def _enroll_active(
         self, operation: TaskOperation, attempt: TaskAttempt
-    ) -> None:
+    ) -> bool:
         """Recover the post-activation step; the brief's ledger intent already exists.
 
         Keep the operation pending until enrollment succeeds. A crash after issuance
@@ -511,6 +521,7 @@ class Provisioning:
                     await push_lifecycle.enroll(conn, attempt.session_id)
                     async with conn.transaction():
                         await self._complete(operation.id, conn)
+                    return True
         except lifecycle.LifecycleDenied:
             # Draining/cancelled attempts must not recover publication authority.
             await self._complete(operation.id)
@@ -654,7 +665,15 @@ class Provisioning:
                     settled = await lifecycle.settle(
                         conn, attempt.id, final, evidence=fence
                     )
-                    await self._complete(operation_id, conn)
+                    if settled is not None:
+                        await self._complete(operation_id, conn)
+        if settled is None:
+            operation, _ = await self._current(operation_id)
+            if operation:
+                await self._unconfirmed(
+                    operation, "Git publication fence remains unresolved"
+                )
+            return False
         if settled is not None and discard and not had_work:
             # Nothing ran: the workspace rows have no value. The attempt row stays as the audit.
             await workspaces._delete_rows(sid, evidence=fence)

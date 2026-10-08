@@ -161,9 +161,22 @@ async def unresolved_intents(conn, task, attempt):
         attempt.binding_id if attempt else None,
         task.checkout.branch,
     )
+    from mainloop.push_gate.store import unresolved_for_branch
+
+    git = await unresolved_for_branch(
+        conn,
+        task.owner_id,
+        (
+            await conn.fetchval(
+                "SELECT full_name FROM projects WHERE id=$1", task.project_id
+            )
+        ),
+        task.checkout.branch,
+    )
     return tuple(
         sorted(
             {
+                *git,
                 *(f"pr-creation:{row['id']}" for row in creations),
                 *(f"merge-intent:{row['intent_id']}" for row in merges),
             }

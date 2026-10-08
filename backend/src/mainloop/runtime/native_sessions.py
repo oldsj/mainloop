@@ -230,7 +230,7 @@ async def is_delegated(binding: dict) -> bool:
     return await attempt_row(binding) is not None
 
 
-async def binding_agent_ref(binding: dict) -> AgentRef:
+async def binding_agent_ref(binding: dict, *, conn=None) -> AgentRef:
     """Resolve the AgentRef for this binding's turns.
 
     A delegated attempt routes to the AgentRef pinned when it was admitted, never to the live
@@ -238,7 +238,7 @@ async def binding_agent_ref(binding: dict) -> AgentRef:
     other binding keeps the registry-resolved ref. A supervisor is delegated by definition, so a
     missing attempt is an error rather than a fall back to the registry.
     """
-    attempt = await attempt_row(binding)
+    attempt = await attempt_row(binding, conn=conn)
     if attempt is None:
         if binding["role"] == "supervisor":
             raise RuntimeError("supervisor binding has no task attempt")
@@ -303,32 +303,45 @@ class Ledger:
             json.dumps(credential_ref) if credential_ref is not None else None,
         )
 
-    async def update_binding(self, session_id: str, **fields) -> None:
+    async def update_binding(self, session_id: str, *, conn=None, **fields) -> None:
         if not fields:
             return
         sets = [f"{k}=${i + 2}" for i, k in enumerate(fields)]
         sets.append("updated_at=NOW()")
-        async with db.connection() as conn:
-            async with push_lifecycle.locked(conn, session_id, revoke=False):
-                if "kagent_session_id" in fields and settings.push_gate_enabled:
-                    current = await conn.fetchval(
-                        "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.update_binding(session_id, conn=owned, **fields)
+        async with push_lifecycle.locked(conn, session_id, revoke=False):
+            if "kagent_session_id" in fields:
+                current = await conn.fetchval(
+                    "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+                    session_id,
+                )
+                if current is not None and current != fields["kagent_session_id"]:
+                    await push_lifecycle.revoke_locked(conn, session_id)
+                    from mainloop.push_gate import store
+
+                    scope = await conn.fetchrow(
+                        "SELECT s.user_id,p.full_name,w.branch FROM sessions s JOIN projects p ON p.id=s.project_id JOIN workspaces w ON w.session_id=s.id WHERE s.id=$1",
                         session_id,
                     )
-                    if current != fields["kagent_session_id"]:
-                        from mainloop.push_gate import store
-
-                        await store.revalidate_on_runtime_replacement(conn, session_id)
-                await conn.execute(
-                    f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
-                    session_id,
-                    *fields.values(),
-                )
-                if fields.get("kagent_session_id"):
-                    await push_lifecycle.enroll(conn, session_id)
+                    if scope:
+                        await store.assert_branch_resolved(
+                            conn, scope["user_id"], scope["full_name"], scope["branch"]
+                        )
+            await conn.execute(
+                f"UPDATE native_bindings SET {', '.join(sets)} WHERE session_id=$1",  # nosec B608 - column names come from code, values are bound
+                session_id,
+                *fields.values(),
+            )
 
     async def replace_kagent_session(
-        self, session_id: str, old_kagent_session_id: str | None, request_id: str
+        self,
+        session_id: str,
+        old_kagent_session_id: str | None,
+        request_id: str,
+        *,
+        conn=None,
     ) -> bool:
         """Point the binding at a Session not created yet, after kagent deleted the old one.
 
@@ -337,44 +350,58 @@ class Ledger:
         finish there; they become ``uncertain`` (never replayed). False when another pass
         already replaced it.
         """
-        async with db.connection() as conn:
-            async with push_lifecycle.locked(conn, session_id):
-                if settings.push_gate_enabled:
-                    current = await conn.fetchrow(
-                        "SELECT kagent_session_id,child_start_failure FROM native_bindings WHERE session_id=$1",
-                        session_id,
-                    )
-                    if (
-                        not current
-                        or current["kagent_session_id"] != old_kagent_session_id
-                        or current["child_start_failure"] is not None
-                    ):
-                        return False
-                    from mainloop.push_gate import store
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.replace_kagent_session(
+                    session_id, old_kagent_session_id, request_id, conn=owned
+                )
+        async with push_lifecycle.locked(conn, session_id):
+            current = await conn.fetchrow(
+                "SELECT session_id,kagent_session_id,kagent_request_id,child_start_failure FROM native_bindings WHERE session_id=$1",
+                session_id,
+            )
+            if (
+                not current
+                or current["kagent_session_id"] != old_kagent_session_id
+                or current["child_start_failure"] is not None
+            ):
+                return False
+            if request_id == _request_id(dict(current)):
+                raise ValueError("replacement_create_identity_required")
+            await push_lifecycle.revoke_locked(conn, session_id)
+            from mainloop.push_gate import store
 
-                    await store.revalidate_on_runtime_replacement(conn, session_id)
-                async with conn.transaction():
-                    moved = await conn.fetchval(
-                        """UPDATE native_bindings
-                           SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
-                               updated_at=NOW()
-                           WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
-                             AND child_start_failure IS NULL
-                           RETURNING session_id""",
-                        session_id,
-                        old_kagent_session_id,
-                        request_id,
-                    )
-                    if moved is None:
-                        return False
-                    await conn.execute(
-                        """UPDATE native_deliveries
-                           SET state='uncertain',
-                               detail='the kagent Session was deleted; not replaying',
-                               updated_at=NOW()
-                           WHERE session_id=$1 AND state IN ('sending','delivered')""",
-                        session_id,
-                    )
+            claim = await conn.fetchrow(
+                "SELECT owner_id,repository,branch FROM workspace_writer_claims WHERE binding_id=$1 AND held",
+                session_id,
+            )
+            if claim:
+                await store.assert_branch_resolved(
+                    conn, claim["owner_id"], claim["repository"], claim["branch"]
+                )
+            async with conn.transaction():
+                moved = await conn.fetchval(
+                    """UPDATE native_bindings
+                       SET kagent_session_id=NULL, kagent_request_id=$3, standing_hash=NULL,
+                           git_create_dispatched=FALSE,
+                           updated_at=NOW()
+                       WHERE session_id=$1 AND kagent_session_id IS NOT DISTINCT FROM $2
+                         AND child_start_failure IS NULL
+                       RETURNING session_id""",
+                    session_id,
+                    old_kagent_session_id,
+                    request_id,
+                )
+                if moved is None:
+                    return False
+                await conn.execute(
+                    """UPDATE native_deliveries
+                       SET state='uncertain',
+                           detail='the kagent Session was deleted; not replaying',
+                           updated_at=NOW()
+                       WHERE session_id=$1 AND state IN ('sending','delivered')""",
+                    session_id,
+                )
         return True
 
     async def bump_turns(self, session_id: str) -> None:
@@ -521,34 +548,40 @@ class Ledger:
             repo=row["repo"], ref=row["ref"], branch=row["branch"], depth=row["depth"]
         )
 
-    async def get_development_environment(self, session_id: str):
+    async def get_development_environment(self, session_id: str, *, conn=None):
         from mainloop.db.environments import decode
 
-        async with db.connection() as conn:
-            value = await conn.fetchval(
-                "SELECT development_environment FROM workspaces WHERE session_id=$1",
-                session_id,
-            )
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.get_development_environment(session_id, conn=owned)
+        value = await conn.fetchval(
+            "SELECT development_environment FROM workspaces WHERE session_id=$1",
+            session_id,
+        )
         return decode(value) if value is not None else None
 
-    async def record_composition(self, session_id: str, session: KagentSession):
+    async def record_composition(
+        self, session_id: str, session: KagentSession, *, conn=None
+    ):
         from dataclasses import asdict
 
-        async with db.connection() as conn:
-            await conn.execute(
-                "UPDATE workspaces SET reported_development_environment=$2::jsonb, runtime_composition=$3::jsonb WHERE session_id=$1",
-                session_id,
-                (
-                    json.dumps(asdict(session.development_environment))
-                    if session.development_environment
-                    else None
-                ),
-                (
-                    json.dumps(asdict(session.runtime_composition))
-                    if session.runtime_composition
-                    else None
-                ),
-            )
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.record_composition(session_id, session, conn=owned)
+        await conn.execute(
+            "UPDATE workspaces SET reported_development_environment=$2::jsonb, runtime_composition=$3::jsonb WHERE session_id=$1",
+            session_id,
+            (
+                json.dumps(asdict(session.development_environment))
+                if session.development_environment
+                else None
+            ),
+            (
+                json.dumps(asdict(session.runtime_composition))
+                if session.runtime_composition
+                else None
+            ),
+        )
 
     async def undeleted_archived(self) -> list[dict]:
         """Return archived sessions whose kagent Session kagent has not confirmed deleted."""
@@ -561,34 +594,40 @@ class Ledger:
             )
         return [dict(r) for r in rows]
 
-    async def mark_kagent_deleted(self, session_id: str) -> None:
+    async def mark_kagent_deleted(self, session_id: str, *, conn=None) -> None:
         from mainloop.db import tasks as task_store
 
-        async with db.connection() as conn:
-            async with push_lifecycle.locked(conn, session_id, revoke=True):
-                async with conn.transaction():
-                    await task_store.admission_lock(conn)
-                    await conn.execute(
-                        "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
-                        session_id,
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.mark_kagent_deleted(session_id, conn=owned)
+        async with push_lifecycle.locked(conn, session_id, revoke=True):
+            async with conn.transaction():
+                await task_store.admission_lock(conn)
+                await conn.execute(
+                    "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+                    session_id,
+                )
+                # Delegated claims belong to settlement. Ordinary workspace claims
+                # also need release after confirmed archive deletion.
+                claim = await conn.fetchrow(
+                    """SELECT owner_id,repository,branch,generation
+                       FROM workspace_writer_claims WHERE binding_id=$1 AND held""",
+                    session_id,
+                )
+                from mainloop.push_gate import store as push_store
+
+                if claim is not None and not await push_store.unresolved_for_branch(
+                    conn, claim["owner_id"], claim["repository"], claim["branch"]
+                ):
+                    await task_store.release_writer(
+                        conn,
+                        owner_id=claim["owner_id"],
+                        repository=claim["repository"],
+                        branch=claim["branch"],
+                        generation=claim["generation"],
+                        binding_id=session_id,
+                        fence_evidence_ref=f"kagent-deleted:{session_id}",
                     )
-                    # Delegated claims belong to settlement. Ordinary workspace claims
-                    # also need release after confirmed archive deletion.
-                    claim = await conn.fetchrow(
-                        """SELECT owner_id,repository,branch,generation
-                           FROM workspace_writer_claims WHERE binding_id=$1 AND held""",
-                        session_id,
-                    )
-                    if claim is not None:
-                        await task_store.release_writer(
-                            conn,
-                            owner_id=claim["owner_id"],
-                            repository=claim["repository"],
-                            branch=claim["branch"],
-                            generation=claim["generation"],
-                            binding_id=session_id,
-                            fence_evidence_ref=f"kagent-deleted:{session_id}",
-                        )
 
     async def transition(
         self,
@@ -1103,17 +1142,63 @@ async def _create_session_with_credentials(
     refs: tuple,
     *,
     require_workspace: bool = False,
+    conn=None,
 ) -> KagentSession:
-    workspace = await ledger.get_workspace(binding["session_id"])
+    from mainloop.push_gate import credentials as git_credentials
+
+    if conn is None:
+        async with db.connection() as owned:
+            return await _create_session_with_credentials(
+                binding, refs, require_workspace=require_workspace, conn=owned
+            )
+    git_credentials.no_transaction(conn)
+    frozen = await git_credentials.frozen_references(
+        conn, binding["session_id"], _request_id(binding)
+    )
+    if frozen:
+        refs = frozen
+    elif binding.get("token_hash"):
+        plan = await git_credentials.plan_for_create(conn, binding["session_id"])
+        if plan:
+            refs = await git_credentials.frozen_references(
+                conn, binding["session_id"], _request_id(binding)
+            )
+    issuance = await conn.fetchval(
+        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+        binding["session_id"],
+        _request_id(binding),
+    )
+    if issuance:
+        _, enrollment = await git_credentials.enrollment_row(conn, issuance)
+        if enrollment.read_state != "revoked":
+            await git_credentials.validate_scope(conn, enrollment, creating=True)
+        await git_credentials.mark_create_dispatched(conn, enrollment.plan)
+    workspace = (
+        SessionWorkspace(**enrollment.plan.workspace.model_dump())
+        if issuance
+        else await ledger.get_workspace(binding["session_id"], conn=conn)
+    )
     if require_workspace and workspace is None:
         raise RuntimeError("persisted workspace create contract is unavailable")
     # The workspace is read from its one stored copy on every create, so a replacement Session
     # resends exactly what the first one got (kagent rejects a changed workspace under one id).
     from mainloop.runtime.kagent_client import DevelopmentEnvironment
 
-    value = await ledger.get_development_environment(binding["session_id"])
+    value = (
+        (
+            enrollment.plan.development_environment.model_dump()
+            if enrollment.plan.development_environment
+            else None
+        )
+        if issuance
+        else await ledger.get_development_environment(binding["session_id"], conn=conn)
+    )
     options = {}
-    agent = await binding_agent_ref(binding)
+    agent = (
+        AgentRef(**enrollment.plan.agent.model_dump())
+        if issuance
+        else await binding_agent_ref(binding, conn=conn)
+    )
     if value is not None:
         options["development_environment"] = DevelopmentEnvironment(
             value["image"], value["platform"], value["policy_identity"]
@@ -1121,10 +1206,15 @@ async def _create_session_with_credentials(
     # Commit the dispatch marker before the call. A crash, even before bytes leave,
     # is conservatively unknown on recovery; later refusals cannot erase that fact.
     first_dispatch = (
-        await lifecycle.create_dispatch(binding["session_id"])
-        if await attempt_row(binding) is not None
+        await lifecycle.create_dispatch(binding["session_id"], conn=conn)
+        if await attempt_row(binding, conn=conn) is not None
         else False
     )
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE native_bindings SET git_create_dispatched=TRUE WHERE session_id=$1",
+            binding["session_id"],
+        )
     try:
         session = await get_client().create_session(
             agent,
@@ -1138,13 +1228,13 @@ async def _create_session_with_credentials(
             # Companion Service.create returns INVALID_ARGUMENT only before reservation
             # (input/origin validation or a rolled-back reservation transaction).
             # Workflow failures after reservation use ABORTED/NOT_FOUND/UNAVAILABLE.
-            await lifecycle.create_rejected(binding["session_id"])
+            await lifecycle.create_rejected(binding["session_id"], conn=conn)
         raise
     except ServiceConfigurationError:
         # The control client's local credential check or gateway/service authentication
         # rejected this first dispatch before reservation. Later refusals prove nothing.
         if first_dispatch:
-            await lifecycle.create_rejected(binding["session_id"])
+            await lifecycle.create_rejected(binding["session_id"], conn=conn)
         raise
     if (
         not session.id
@@ -1164,20 +1254,27 @@ async def _create_session_with_credentials(
         session.development_environment is not None
         or session.runtime_composition is not None
     ):
-        await ledger.record_composition(binding["session_id"], session)
+        await ledger.record_composition(binding["session_id"], session, conn=conn)
+    if issuance and session.prepared_revision:
+        await git_credentials.freeze_prepared(conn, issuance, session)
     return session
 
 
-async def _create_bound_session(binding: dict) -> KagentSession:
-    async with lifecycle.guard(binding["session_id"], "create"):
-        return await _create_bound_session_guarded(binding)
+async def _create_bound_session(binding: dict, *, conn=None) -> KagentSession:
+    from mainloop.push_gate.credentials import connection
+
+    async with connection(conn) as conn:
+        async with lifecycle.guard(binding["session_id"], "create", conn=conn):
+            return await _create_bound_session_guarded(binding, conn=conn)
 
 
-async def validate_bound_session(binding: dict, session: KagentSession) -> None:
+async def validate_bound_session(
+    binding: dict, session: KagentSession, *, conn=None
+) -> None:
     """Validate persisted routing and checkout before treating a known runtime as ready."""
     from mainloop.runtime.kagent_client import DevelopmentEnvironment
 
-    value = await ledger.get_development_environment(binding["session_id"])
+    value = await ledger.get_development_environment(binding["session_id"], conn=conn)
     environment = (
         DevelopmentEnvironment(
             value["image"], value["platform"], value["policy_identity"]
@@ -1188,14 +1285,15 @@ async def validate_bound_session(binding: dict, session: KagentSession) -> None:
     if (
         session.id != binding["kagent_session_id"]
         or session.context_id != session.id
-        or session.agent != await binding_agent_ref(binding)
-        or session.workspace != await ledger.get_workspace(binding["session_id"])
+        or session.agent != await binding_agent_ref(binding, conn=conn)
+        or session.workspace
+        != await ledger.get_workspace(binding["session_id"], conn=conn)
         or session.development_environment != environment
     ):
         raise OutcomeUnknown("Known Session differs from the persisted create contract")
 
 
-async def _create_bound_session_guarded(binding: dict) -> KagentSession:
+async def _create_bound_session_guarded(binding: dict, *, conn=None) -> KagentSession:
     from mainloop.runtime.agent_credentials import publish_for_binding
 
     refs = ()
@@ -1203,14 +1301,14 @@ async def _create_bound_session_guarded(binding: dict) -> KagentSession:
         if not binding.get("token_hash"):
             raise RuntimeError("binding identity is revoked")
         try:
-            refs = (await publish_for_binding(binding),)
+            refs = (await publish_for_binding(binding, conn=conn),)
         except Exception as exc:
             if binding.get("child_start_failure"):
                 raise ChildStartPending(str(exc)) from exc
             raise
     elif binding.get("token_hash"):
         raise RuntimeError("binding identity has no persisted MCP grant")
-    return await _create_session_with_credentials(binding, refs)
+    return await _create_session_with_credentials(binding, refs, conn=conn)
 
 
 async def reconcile_revoked_workspace_creation(binding: dict) -> KagentSession:
@@ -1255,7 +1353,6 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
     TTL, or out of band) is replaced once, under a fresh create request id; the replacement gets
     the standing context again, because ``standing_hash`` belongs to the Session it went to.
     """
-    client = get_client()
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
     legacy_child = binding["role"] == "child" and not await is_delegated(binding)
     for replaced in (False, True):
@@ -1307,10 +1404,11 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
         if binding.get("child_start_failure"):
             await _settle_child_start_failure(binding)
         try:
-            async with lifecycle.guard(binding["session_id"], "submit"):
-                return await client.ensure_ready(
-                    session, timeout=settings.kagent_session_ready_timeout_seconds
-                )
+            from mainloop.push_gate.credentials import ready_for_binding
+
+            async with db.connection() as conn:
+                async with lifecycle.guard(binding["session_id"], "submit", conn=conn):
+                    return await ready_for_binding(conn, binding["session_id"], session)
         except ServiceConfigurationError:
             raise
         except KagentError as exc:
@@ -1350,11 +1448,45 @@ async def _guarded_send(binding, agent, **kwargs):
     """
     events = get_client().send_message(agent, **kwargs).__aiter__()
     try:
-        async with lifecycle.guard(binding["session_id"], "submit"):
-            try:
-                first = await anext(events)
-            except StopAsyncIteration:
-                return
+        async with db.connection() as conn:
+            async with lifecycle.guard(binding["session_id"], "submit", conn=conn):
+                from mainloop.push_gate.credentials import ready_for_binding
+
+                current_binding = await get_binding(binding["session_id"], conn=conn)
+                if current_binding is None or (
+                    current_binding["kagent_session_id"] != binding["kagent_session_id"]
+                    or _request_id(current_binding) != _request_id(binding)
+                    or await binding_agent_ref(current_binding, conn=conn) != agent
+                    or kwargs.get("context_id", current_binding["kagent_session_id"])
+                    != current_binding["kagent_session_id"]
+                ):
+                    raise lifecycle.LifecycleDenied("binding_changed")
+                issuance = await conn.fetchval(
+                    "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+                    binding["session_id"],
+                    _request_id(current_binding),
+                )
+                if issuance is None and (
+                    await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM git_enrollments WHERE binding_id=$1)",
+                        binding["session_id"],
+                    )
+                    or (
+                        settings.git_transport_enabled
+                        and current_binding["mcp_grant_kind"] == "workspace"
+                        and await ledger.get_workspace(binding["session_id"], conn=conn)
+                    )
+                ):
+                    raise ValueError("git_plan_missing")
+                if issuance:
+                    current = await get_client().get_session(
+                        current_binding["kagent_session_id"]
+                    )
+                    await ready_for_binding(conn, binding["session_id"], current)
+                try:
+                    first = await anext(events)
+                except StopAsyncIteration:
+                    return
         yield first
         async for event in events:
             yield event
@@ -2185,6 +2317,9 @@ async def reconcile_once(*, sweep: bool) -> None:
     from mainloop.runtime.agent_credentials import reconcile_cleanup
 
     await _reconcile_step("credential_cleanup", reconcile_cleanup)
+    from mainloop.push_gate.credentials import cleanup_all
+
+    await _reconcile_step("git_credential_cleanup", cleanup_all)
     await _reconcile_step("archived_deletes", reconcile_archived_deletes)
     await _reconcile_step("suspend_idle", workspaces.suspend_idle)
 

@@ -14,9 +14,23 @@ class Settings(BaseSettings):
 
     # Reserved contract only; this slice installs no listener even when enabled.
     push_gate_enabled: bool = Field(False, validation_alias="PUSH_GATE_ENABLED")
+    git_transport_enabled: bool = False
+    git_read_origin: str = "http://mainloop-git-read.mainloop.svc.cluster.local"
+    git_push_origin: str = "http://mainloop-git-push.mainloop.svc.cluster.local"
     push_gate_origin: str = ""
     push_gate_max_command_bytes: int = Field(262144, ge=1)
     push_gate_max_body_bytes: int = Field(268435456, ge=1)
+
+    @model_validator(mode="after")
+    def _git_configuration(self):
+        for purpose in ("read", "push"):
+            if getattr(self, f"git_{purpose}_origin") != (
+                f"http://mainloop-git-{purpose}.mainloop.svc.cluster.local"
+            ):
+                raise ValueError("Git origin is not sanctioned")
+        if self.git_transport_enabled and not self.agent_token_key.strip():
+            raise ValueError("Git transport requires AGENT_TOKEN_KEY")
+        return self
 
     # Database (PostgreSQL) - constructed from parts
     db_host: str = "localhost"

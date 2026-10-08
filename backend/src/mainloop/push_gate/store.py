@@ -5,6 +5,7 @@ upstream dispatch. No transaction is held across network I/O. Always lock projec
 """
 
 import hashlib
+import json
 import secrets
 from contextlib import asynccontextmanager
 
@@ -27,6 +28,7 @@ from models.push_gate import (
     PublicationAttempt,
     PublicationState,
     PushGrant,
+    TransportEvidence,
 )
 
 
@@ -268,6 +270,23 @@ async def live_grant(conn, grant: PushGrant, *, bind: bool = False) -> PushGrant
         )
     if grant.attempt_id is not None or grant.writer_generation is not None:
         raise ValueError("attempt_scope")
+    if grant.git_issuance_id is not None:
+        claim = await conn.fetchrow(
+            """SELECT generation,binding_id,attempt_id,held FROM workspace_writer_claims
+               WHERE owner_id=$1 AND repository=$2 AND branch=$3""",
+            grant.owner_id,
+            grant.repository.lower(),
+            grant.branch,
+        )
+        if (
+            not claim
+            or not claim["held"]
+            or claim["binding_id"] != grant.session_id
+            or claim["attempt_id"] is not None
+        ):
+            raise ValueError("writer_claim_lost")
+        if claim["generation"] != grant.branch_claim_generation:
+            raise ValueError("stale_writer_generation")
     return grant
 
 
@@ -384,11 +403,162 @@ async def record_attempt(conn, attempt: PublicationAttempt):
                 raise ValueError("request_identity_conflict")
             return
         await conn.execute(
-            """INSERT INTO push_publications(grant_id,request_id,attempt,state)
-            VALUES($1,$2,$3::jsonb,'pending')""",
+            """INSERT INTO push_publications(grant_id,request_id,attempt,state,owner_id,repository,branch)
+            VALUES($1,$2,$3::jsonb,'pending',
+              (SELECT owner_id FROM push_grants WHERE id=$1),lower($4),$5)""",
             attempt.grant_id,
             attempt.request_id,
             attempt.model_dump_json(),
+            attempt.repository,
+            attempt.update.ref.removeprefix("refs/heads/"),
+        )
+
+
+async def unresolved_for_branch(conn, owner_id, canonical_repository, branch):
+    """Include historical rows and fail closed on unavailable legacy scope."""
+    rows = await conn.fetch(
+        """SELECT p.*,g.owner_id AS grant_owner FROM push_publications p
+        LEFT JOIN push_grants g ON g.id=p.grant_id
+        WHERE p.state IN ('dispatching','unknown') AND
+          (p.owner_id=$1 OR g.owner_id=$1 OR (p.owner_id IS NULL AND g.owner_id IS NULL))
+        ORDER BY p.grant_id,p.request_id""",
+        owner_id,
+    )
+    canonical = parse_github_repo(canonical_repository).full_name.lower()
+    refs = []
+    for row in rows:
+        try:
+            attempt = _decode(row["attempt"], PublicationAttempt)
+            repository = parse_github_repo(attempt.repository).full_name.lower()
+            original_branch = attempt.update.ref.removeprefix("refs/heads/")
+            if (
+                not attempt.update.ref.startswith("refs/heads/")
+                or not _feature_branch(original_branch)
+                or (row["owner_id"], row["repository"], row["branch"])
+                != (row["grant_owner"], repository, original_branch)
+                or attempt.grant_id != row["grant_id"]
+                or attempt.request_id != row["request_id"]
+            ):
+                raise ValueError("legacy_scope_unavailable")
+        except (ValueError, TypeError):
+            # Invalid immutable legacy scope conservatively fences this owner's branches.
+            refs.append(f"git-push:{row['grant_id']}:{row['request_id']}")
+            continue
+        if (repository, original_branch) == (canonical, branch):
+            refs.append(f"git-push:{row['grant_id']}:{row['request_id']}")
+    return tuple(refs)
+
+
+async def assert_branch_resolved(conn, owner_id, canonical_repository, branch):
+    if await unresolved_for_branch(conn, owner_id, canonical_repository, branch):
+        raise ValueError("publication_unresolved")
+
+
+async def issue_derived_locked(conn, grant, enrollment):
+    """Only trusted immutable enrollment can supply deterministic issuance material."""
+    from mainloop.push_gate.credentials import capability_for, validate_key
+
+    plan = enrollment.plan
+    if enrollment.association is None or grant.git_issuance_id != plan.issuance_id:
+        raise ValueError("git_enrollment_unconfirmed")
+    if (
+        grant.version != plan.push_version
+        or grant.runtime_association != enrollment.association.runtime
+    ):
+        raise ValueError("git_issuance_conflict")
+    await validate_key(conn, plan)
+    grant = await live_grant(conn, grant, bind=True)
+    await assert_branch_resolved(conn, grant.owner_id, grant.repository, grant.branch)
+    policy = await load_policy(conn, grant.project_id)
+    if reason := protected_reason(grant.branch, policy):
+        raise ValueError(reason)
+    token = capability_for(plan, "git-push")
+    previous = await conn.fetchrow("SELECT * FROM push_grants WHERE id=$1", grant.id)
+    if previous and previous["revoked_at"] is None:
+        if stored_grant(previous) != grant or previous["token_hash"] != token_hash(
+            token
+        ):
+            raise ValueError("git_issuance_conflict")
+        return grant
+    if (
+        previous
+        and grant.version != _decode(previous["grant_data"], PushGrant).version + 1
+    ) or (not previous and grant.version != 1):
+        raise ValueError("grant_version")
+    await conn.execute(
+        """INSERT INTO push_grants(id,token_hash,owner_id,project_id,session_id,grant_data,attempt_id,writer_generation)
+        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(id) DO UPDATE SET
+        token_hash=EXCLUDED.token_hash,grant_data=EXCLUDED.grant_data,revoked_at=NULL,
+        attempt_id=EXCLUDED.attempt_id,writer_generation=EXCLUDED.writer_generation""",
+        grant.id,
+        token_hash(token),
+        grant.owner_id,
+        grant.project_id,
+        grant.session_id,
+        grant.model_dump_json(),
+        grant.attempt_id,
+        grant.writer_generation,
+    )
+    return grant
+
+
+async def record_transport_attempt(conn, evidence, credential_stamp):
+    evidence = TransportEvidence.model_validate(evidence).model_dump(mode="json")
+    attempt = evidence["attempt"]
+    grant = PushGrant.model_validate(evidence["grant"])
+    if evidence["stamp"] != credential_stamp.model_dump(mode="json"):
+        raise ValueError("credential_stamp_conflict")
+    payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT transport_evidence FROM push_publications WHERE grant_id=$1 AND request_id=$2 FOR UPDATE",
+            attempt["grant_id"],
+            attempt["request_id"],
+        )
+        if row:
+            if (
+                row["transport_evidence"] is None
+                or json.loads(row["transport_evidence"]) != evidence
+            ):
+                raise ValueError("request_identity_conflict")
+            return
+        await conn.execute(
+            """INSERT INTO push_publications(grant_id,request_id,attempt,state,owner_id,repository,branch,transport_evidence)
+               VALUES($1,$2,$3::jsonb,'pending',$4,$5,$6,$7::jsonb)""",
+            attempt["grant_id"],
+            attempt["request_id"],
+            json.dumps(attempt),
+            grant.owner_id,
+            grant.repository.lower(),
+            grant.branch,
+            payload,
+        )
+
+
+async def transition_transport_attempt(conn, evidence, state, receipt):
+    evidence = TransportEvidence.model_validate(evidence).model_dump(mode="json")
+    attempt = evidence["attempt"]
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT state,transport_evidence FROM push_publications WHERE grant_id=$1 AND request_id=$2 FOR UPDATE",
+            attempt["grant_id"],
+            attempt["request_id"],
+        )
+        if (
+            not row
+            or row["transport_evidence"] is None
+            or json.loads(row["transport_evidence"]) != evidence
+        ):
+            raise ValueError("request_identity_conflict")
+        if state not in TRANSITIONS.get(PublicationState(row["state"]), set()):
+            raise ValueError("invalid_transition")
+        await conn.execute(
+            """UPDATE push_publications SET state=$3,transport_receipt=$4::jsonb,updated_at=now()
+               WHERE grant_id=$1 AND request_id=$2""",
+            attempt["grant_id"],
+            attempt["request_id"],
+            state.value,
+            receipt.model_dump_json() if receipt else None,
         )
 
 

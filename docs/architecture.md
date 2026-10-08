@@ -162,6 +162,20 @@ the workspace again after its idle timeout.
 
 ## Agent tools and network isolation
 
+Default-off Git enrollment stores an immutable original create plan, purpose hashes and current
+field-20 runtime association in PostgreSQL. Native creation freezes MCP/read/optional-push refs
+before bytes; durable owned non-turn warmup and fresh GetSession precede usable Git publication.
+Native send confirms required publication. Injectable P1 ASGI listeners use a PostgreSQL adapter
+with one caller-owned connection through ordered dispatch/outcome locks. Each quarantine seed
+read revalidates the same credential stamp. No transaction spans external I/O.
+
+The existing publication ledger fences unresolved Git writes by owner/repository/branch across
+rotation, restart and successors. Cancellation revokes both purposes while retaining source,
+claim and operation state. Independent cleanup tombstones delete Git Secrets with UID
+preconditions. No production listeners, images, routes or Actor containment are installed;
+native handoff/retention/checkout adapters and live/runtime/package/GitOps gates remain separate.
+See [Git authority](specs/push-gate.md).
+
 Native agents use the `mainloop` MCP server, a dedicated stateless Streamable HTTP listener
 on port 8002. Service `mainloop-mcp` serves port 80 at
 `http://mainloop-mcp.mainloop.svc.cluster.local/mcp`; it exposes no REST API.

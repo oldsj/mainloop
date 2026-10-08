@@ -6,6 +6,7 @@ import logging
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from mainloop.push_gate import credentials as git_credentials
 from mainloop.runtime import agent_credentials
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import workspaces
@@ -18,6 +19,7 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             "observe_hitl_once": AsyncMock(),
             "reconcile_hitl_responses": AsyncMock(),
             "reconcile_cleanup": AsyncMock(),
+            "cleanup_all": AsyncMock(),
             "reconcile_archived_deletes": AsyncMock(),
             "suspend_idle": AsyncMock(return_value=[]),
         }
@@ -41,6 +43,7 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 agent_credentials, "reconcile_cleanup", steps["reconcile_cleanup"]
             ),
+            patch.object(git_credentials, "cleanup_all", steps["cleanup_all"]),
             patch.object(workspaces, "suspend_idle", steps["suspend_idle"]),
         ):
             p.start()
@@ -82,6 +85,50 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(steps["sync"].await_count, 3)
         steps["suspend_idle"].assert_not_awaited()
         steps["reconcile_cleanup"].assert_not_awaited()
+        steps["cleanup_all"].assert_not_awaited()
+
+    async def test_failing_git_cleanup_preserves_sweep_order_and_failure_isolation(
+        self,
+    ):
+        steps = self.patched(
+            cleanup_all=AsyncMock(side_effect=OSError("Git Secret cleanup unavailable"))
+        )
+        order = []
+        for name in (
+            "reconcile_cleanup",
+            "cleanup_all",
+            "reconcile_archived_deletes",
+            "suspend_idle",
+        ):
+            mock = steps[name]
+            failure = mock.side_effect
+
+            async def record(*args, step=name, error=failure):
+                order.append(step)
+                if error:
+                    raise error
+
+            mock.side_effect = record
+        with self.assertLogs(ns.logger, logging.ERROR) as logs:
+            await ns.reconcile_once(sweep=True)
+        self.assertEqual(
+            order,
+            [
+                "reconcile_cleanup",
+                "cleanup_all",
+                "reconcile_archived_deletes",
+                "suspend_idle",
+            ],
+        )
+        self.assertEqual(
+            [c.args[0] for c in steps["sync"].await_args_list], ["s1", "s2", "s3"]
+        )
+        self.assertEqual(
+            [(r.step, r.session_id, r.error_class) for r in logs.records],
+            [("git_credential_cleanup", "-", "OSError")],
+        )
+        for name in order:
+            steps[name].assert_awaited_once_with()
 
     async def test_a_failure_listing_open_work_still_runs_the_sweep(self):
         steps = self.patched()

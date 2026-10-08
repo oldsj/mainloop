@@ -351,6 +351,10 @@ async def reserve_writer(
 ):
     # S1 calls this for owner workspaces with binding_id and no task/attempt.
     await admission_lock(conn)
+    from mainloop.push_gate.store import unresolved_for_branch
+
+    if await unresolved_for_branch(conn, owner_id, repository, branch):
+        raise TaskError(409, "publication_unresolved")
     canonical = parse_github_repo(repository).full_name.lower()
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -502,6 +506,10 @@ async def release_writer(
     fence_evidence_ref=None,
 ):
     await admission_lock(conn)
+    from mainloop.push_gate.store import unresolved_for_branch
+
+    if await unresolved_for_branch(conn, owner_id, repository, branch):
+        raise TaskError(409, "publication_unresolved")
     if not fence_evidence_ref:
         raise TaskError(409, "fence_evidence_required")
     # Callers provide confirmed fence evidence through S1's lifecycle port; attempts
