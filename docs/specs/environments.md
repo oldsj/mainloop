@@ -3,7 +3,7 @@
 Implemented: owner-managed environment metadata, immutable versions, project grants
 and project selection. New workspaces resolve and pin the selected environment;
 existing sessions keep their recorded environment. There are no environment MCP tools
-or frontend selection controls.
+or agent-facing environment controls.
 
 ## Registration and validation
 
@@ -101,7 +101,7 @@ They are not silently deleted or activated.
 
 Builders, executable validation/probes, ABI and reserved-path checks, package
 requests/policy enforcement, approvals for build/activation,
-activation of a different environment in an existing workspace, retention and environment selection UI are not implemented. Models
+activation of a different environment in an existing workspace and retention are not implemented. Models
 reserve parent version, structured package declaration and approval-reference
 fields; they do not execute package installation or establish approval authority.
 
@@ -123,3 +123,18 @@ Projects without a selection retain the legacy CreateSession request without tha
 
 Selection requires kagent's runtime composition feature and service-token authentication
 to be enabled. Static validation is metadata evidence, not a live composition proof.
+
+## Implemented project UI
+
+The project page shows the saved environment selection separately from a draft.
+Owners can register a public digest-pinned image with a name and amd64 or arm64
+architecture, choose a statically validated current-policy immutable version, or
+follow an accepted environment default. Accepting a selected version as the default
+is an explicit action affecting all projects following that environment. Registration
+shows the returned static-validation status; it does not establish runtime readiness.
+Pending-build and obsolete-policy versions cannot be saved. With no selection, new
+sessions use the configured native agent image. Changes apply to newly started
+sessions and do not migrate running sessions. Reads never select or accept defaults
+automatically. Saving uses the observed selection revision; conflicts refresh saved
+state while preserving the draft for review. An unconfirmed registration reply blocks
+repeat registration in that form until the owner reconciles the environment list.

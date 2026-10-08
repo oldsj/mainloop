@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProjectEnvironment from '$lib/components/ProjectEnvironment.svelte';
   import MergePolicy from '$lib/components/MergePolicy.svelte';
   import { page } from '$app/stores';
   import { projects, currentProject } from '$lib/stores/projects';
@@ -152,7 +153,9 @@
 
     <!-- Content -->
     <div class="flex-1 overflow-y-auto px-6 py-4">
-      {#key project.id}<MergePolicy projectId={project.id} />{/key}
+      {#key project.id}<MergePolicy projectId={project.id} /><ProjectEnvironment
+          projectId={project.id}
+        />{/key}
       <section class="mb-6" aria-labelledby="tasks-heading" data-testid="project-tasks">
         <h2 id="tasks-heading" class="text-term-fg mb-3 text-sm font-semibold">Tasks</h2>
         <TaskList
@@ -360,7 +363,8 @@
           type="button"
           class="text-term-accent min-h-11 text-sm underline"
           onclick={() => projectId && projects.fetchProjectDetail(projectId)}
-        >Retry loading project</button>
+          >Retry loading project</button
+        >
       {:else}
         <p class="text-term-fg-muted text-sm">Loading project...</p>
       {/if}

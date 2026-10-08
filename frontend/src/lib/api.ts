@@ -622,7 +622,80 @@ function readSignal(signal?: AbortSignal): AbortSignal {
   return AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])]);
 }
 
+export interface DevEnvironment {
+  id: string;
+  owner_id: string;
+  name: string;
+  source_kind: 'prebuilt_image' | 'definition_repo' | 'operator_default';
+  accepted_default_version_id: string | null;
+}
+export interface EnvironmentVersion {
+  id: string;
+  environment_id: string;
+  validation_status: 'pending_build' | 'static_validated';
+  validator_version: string;
+  architecture: 'amd64' | 'arm64' | null;
+  platform_manifest_digest: string | null;
+  validation_result: Record<string, string>;
+}
+export interface ProjectEnvironmentSelection {
+  project_id: string;
+  environment_id: string;
+  version_id: string | null;
+  follow_default: boolean;
+  revision: number;
+  access_revoked: boolean;
+  resolved_version_id: string | null;
+}
+export type EnvironmentChoice = {
+  environment_id: string;
+  expected_version: number;
+} & ({ version_id: string; follow_default: false } | { version_id: null; follow_default: true });
+
+async function environmentRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const response = await apiFetch(`${API_URL}${path}`, {
+    method,
+    ...(body === undefined
+      ? {}
+      : {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+  });
+  if (!response.ok)
+    throw new ApiError(await errorDetail(response, 'Environment request failed'), response.status);
+  return response.json();
+}
+
 export const api = {
+  listEnvironments: () => environmentRequest<DevEnvironment[]>('/environments'),
+  listEnvironmentVersions: (id: string) =>
+    environmentRequest<EnvironmentVersion[]>(`/environments/${encodeURIComponent(id)}/versions`),
+  getProjectEnvironment: (id: string) =>
+    environmentRequest<ProjectEnvironmentSelection | null>(
+      `/projects/${encodeURIComponent(id)}/environment`
+    ),
+  selectProjectEnvironment: (id: string, choice: EnvironmentChoice) =>
+    environmentRequest<ProjectEnvironmentSelection>(
+      `/projects/${encodeURIComponent(id)}/environment`,
+      'PUT',
+      choice
+    ),
+  acceptEnvironmentDefault: (id: string, version_id: string) =>
+    environmentRequest<DevEnvironment>(`/environments/${encodeURIComponent(id)}/default`, 'PUT', {
+      version_id
+    }),
+  registerEnvironment: (body: {
+    name: string;
+    image: string;
+    architecture: 'amd64' | 'arm64';
+    source_kind: 'prebuilt_image';
+  }) =>
+    environmentRequest<{ environment: DevEnvironment; version: EnvironmentVersion }>(
+      '/environments',
+      'POST',
+      body
+    ),
   async getHITL(id: string, signal?: AbortSignal): Promise<HITLView> {
     const response = await apiFetch(`${API_URL}/hitl/${encodeURIComponent(id)}`, {
       signal: readSignal(signal)
