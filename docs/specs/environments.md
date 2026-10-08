@@ -97,10 +97,53 @@ selection. Cross-owner selection without a grant returns 403. Revocation blocks
 new selections; existing selections remain visible with `access_revoked: true`.
 They are not silently deleted or activated.
 
+## Internal package build-input preparation
+
+Implemented: `prepare_package_build(parent, declaration, policy,
+parent_source_receipt)` in `mainloop.environments.build_inputs` is a pure internal
+compiler for structured apt additions on an explicitly policy-approved Debian
+Linux arm64 parent. It has no API or MCP entry point and performs no installation,
+build, fetch, credential access or persistence. The trusted caller must supply and
+authenticate the policy snapshot and actual parent-filesystem source inventory;
+request metadata and ambient settings cannot establish that authority.
+
+Preparation requires a current `oci-static-v2` parent, its immutable platform and
+config digests, a matching policy content digest and matching source/keyring
+inventory digest. The policy explicitly permits package names and exact requested
+versions, including whether an unpinned request is allowed. The compiler accepts
+at most 32 distinct packages, 128 characters per name/version and 16 KiB of
+canonical request JSON. It rejects repository overrides, caller-provided resolved
+versions, generator or metadata evidence, extra fields, options, architecture
+qualifiers, whitespace, URL/VCS installers and wildcards. apk and other platforms
+are unsupported by this compiler; their existing metadata models remain available.
+
+The result contains deterministic tar context bytes holding only a Dockerfile,
+its SHA256 digest and canonical UTF-8 JSON input-manifest bytes and digest. The
+recipe uses the parent platform digest, build-time `USER 0:0`, fixed apt commands
+with JSON argv package operands, fixed cleanup and final `USER 65532:65532`.
+It requires apt 2.0 or later and uses literal `?exact-name(...)` selectors,
+preserving an explicitly permitted version suffix or unpinned request. A fixed
+metadata check requires an exact real package record for every operand before
+installation; missing names, virtual-only providers and unavailable versions fail
+closed. Dotted names remain valid and cannot trigger apt's bare-name regex fallback.
+Selectors and names enter the fixed check as positional argv, never shell source.
+The manifest correlates parent environment/version/index/platform/config, request
+and scope identifiers, policy, source inventory, generator and context identities.
+Every result has `execution_authorized: false`. Input identity is deterministic;
+live apt resolution and output are not claimed to be reproducible or resolved.
+
+This checks supplied content and policy consistency; it does not authenticate an
+actor, grant use/derive rights, approve a policy or qualify a runtime. Maintainer
+scripts and inherited parent content remain untrusted execution for a later
+isolated, credential-free executor. Synthetic receipts in offline tests establish
+engineering behavior only. Compilation changes no version, default, selection or
+native session, and does not complete the environment builder.
+
 ## Not yet implemented
 
-Builders, executable validation/probes, ABI and reserved-path checks, package
-requests/policy enforcement, approvals for build/activation,
+Build execution, controlled-repository definition ingress, trusted publication,
+resolved-package provenance, executable validation/probes, ABI and reserved-path
+checks, authenticated package requests/derive enforcement, approvals for build/activation,
 activation of a different environment in an existing workspace and retention are not implemented. Models
 reserve parent version, structured package declaration and approval-reference
 fields; they do not execute package installation or establish approval authority.
