@@ -57,6 +57,16 @@ files, reviews and comments, Pull requests write for PR creation and review-comm
 Contents write for squash merge. Current API callers do not need Workflows write;
 that registration permission is not included in their tokens.
 
+Merge evidence repository reads, including the final refresh, request Contents write
+(which includes read) because GitHub omits merge settings from Metadata-only responses.
+Ordinary repository identity reads retain Metadata read. `allow_squash_merge` remains
+required and must explicitly be true; a missing setting still refuses the merge.
+See [GitHub's repository API](https://docs.github.com/en/rest/repos/repos#get-a-repository).
+The remaining evidence reads use the permissions above. Generic evidence refusals log
+only the failed evidence step and exception class on the server; the agent receives
+the existing `complete GitHub merge evidence unavailable` message, without upstream
+bodies or exception text.
+
 PR/project monitoring uses the same repository-scoped transport and App auth.
 Legacy issue creation and issue-detail helpers additionally need Issues write/read;
 they fail closed if the App does not grant those permissions. The registration above
