@@ -1329,7 +1329,90 @@ class HITLWireTests(unittest.IsolatedAsyncioTestCase):
             ("original-task", "original-context", "stable-message"),
         )
         self.assertEqual(wire["metadata"][HITL_EXTENSION]["id"], "child-question")
-        self.assertEqual(wire["parts"], [])
+        self.assertTrue(wire["parts"])
         self.assertEqual(
             json.loads(requests[1].content)["params"]["pageToken"], "cursor"
         )
+
+    async def test_hitl_responses_pass_harness_message_validation(self):
+        import json
+
+        from models.hitl import (
+            HITL_EXTENSION,
+            AskUserAnswer,
+            AskUserResponse,
+            ToolApproval,
+            ToolApprovalResponse,
+        )
+
+        responses = (
+            ToolApprovalResponse(
+                type="tool_approval_response",
+                approvals=(ToolApproval(id="call", approved=True),),
+            ),
+            ToolApprovalResponse(
+                type="tool_approval_response",
+                approvals=(ToolApproval(id="call", approved=False),),
+            ),
+            AskUserResponse(
+                type="ask_user_response",
+                id="question",
+                answers=(AskUserAnswer(answer=("answer",)),),
+            ),
+        )
+
+        async def handler(request):
+            wire = json.loads(request.content)["params"]["message"]
+            # a2a-go v2.6.0 validates this before task persistence or execution.
+            if not wire.get("parts"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": "message parts is required",
+                        },
+                    },
+                )
+            self.assertEqual(wire["taskId"], "original-task")
+            self.assertEqual(wire["contextId"], "original-context")
+            self.assertEqual(wire["extensions"], [HITL_EXTENSION])
+            self.assertEqual(
+                wire["metadata"][HITL_EXTENSION],
+                response.model_dump(
+                    mode="json", exclude_none=True, exclude={"reviewed_context"}
+                ),
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "id": "original-task",
+                        "contextId": "original-context",
+                        "status": {"state": "working"},
+                        "history": [wire],
+                    },
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://fake"
+        ) as http:
+            client = KagentClient("http://fake", user_id="configured", client=http)
+            for response in responses:
+                with self.subTest(response=response):
+                    events = [
+                        event
+                        async for event in client.send_hitl_response(
+                            AGENT,
+                            response=response,
+                            message_id="stable-message",
+                            task_id="original-task",
+                            context_id="original-context",
+                        )
+                    ]
+                    self.assertEqual(
+                        events[0].task.history[0].message_id, "stable-message"
+                    )
