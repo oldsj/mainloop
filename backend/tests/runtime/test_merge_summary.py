@@ -1,5 +1,6 @@
 """Summary snapshots are deterministic and positive decisions bind their digest."""
 
+import copy
 import unittest
 
 from mainloop.services.merge_summary import (
@@ -68,6 +69,80 @@ def facts():
 
 
 class MergeSummaryTests(unittest.TestCase):
+    def test_ignored_suites_are_hashed_but_excluded_from_active_counts(self):
+        proposal_facts = facts()
+        suite = {
+            "id": 3,
+            "head_sha": "a" * 40,
+            "status": "queued",
+            "conclusion": None,
+            "app": {"id": 99, "slug": "cloudflare-workers-and-pages"},
+            "created_at": "2026-10-07T09:00:00Z",
+            "latest_check_runs_count": 0,
+        }
+        proposal_facts["ci"]["suites"].append(suite)
+        proposal_facts["ci"]["ignored_suites"] = [
+            {**suite, "reason": "queued_without_runs_past_grace_and_no_required_app"}
+        ]
+        summary, digest = build_summary(proposal_facts, "proposal-17")
+        self.assertEqual(summary["availability"], "ready")
+        self.assertEqual(summary["ci"]["ignored_suite_count"], 1)
+        self.assertEqual(summary["ci"]["result_count"], 2)
+        self.assertEqual(summary["ci"]["passed_count"], 2)
+        self.assertEqual(summary["ci"]["pending_count"], 0)
+        self.assertEqual(summary["ci"]["failed_count"], 0)
+        validate_reviewed_context(
+            proposal_facts, "proposal-17", digest, summary, digest
+        )
+        for field, value in (
+            ("reason", "changed reason"),
+            ("created_at", "2026-10-07T08:00:00Z"),
+            ("app", {"id": 98}),
+        ):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(proposal_facts)
+                changed["ci"]["ignored_suites"][0][field] = value
+                if field != "reason":
+                    changed["ci"]["suites"][-1][field] = value
+                changed_summary, changed_digest = build_summary(changed, "proposal-17")
+                self.assertNotEqual(changed_digest, digest)
+                self.assertNotEqual(
+                    changed_summary["ci"]["inventory_digest"],
+                    summary["ci"]["inventory_digest"],
+                )
+                with self.assertRaisesRegex(ValueError, "changed or is unavailable"):
+                    validate_reviewed_context(
+                        changed, "proposal-17", digest, summary, digest
+                    )
+
+    def test_old_proposals_without_ignored_suites_keep_their_digest(self):
+        proposal_facts = facts()
+        summary, _ = build_summary(proposal_facts, "proposal-17")
+        self.assertEqual(
+            summary["ci"]["inventory_digest"], canonical_digest(proposal_facts["ci"])
+        )
+        self.assertNotIn("ignored_suite_count", summary["ci"])
+
+    def test_malformed_ignored_inventory_makes_summary_unavailable(self):
+        for ignored in (
+            None,
+            {},
+            [None],
+            [
+                {
+                    "id": 3,
+                    "reason": "not in suites",
+                    "status": "queued",
+                    "conclusion": None,
+                }
+            ],
+        ):
+            with self.subTest(ignored=ignored):
+                proposal_facts = facts()
+                proposal_facts["ci"]["ignored_suites"] = ignored
+                summary, _ = build_summary(proposal_facts, "proposal-17")
+                self.assertEqual(summary["availability"], "unavailable")
+
     def test_digest_covers_proposal_facts_and_deterministic_reasons(self):
         proposal_id = "proposal-17"
         presentation, digest = build_summary(facts(), proposal_id)

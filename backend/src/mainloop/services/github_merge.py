@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
@@ -24,6 +24,7 @@ from models.merge_policy import ChangedPath, protected_matches
 PENDING_CHECK_STATES = frozenset(
     {"queued", "in_progress", "pending", "waiting", "requested"}
 )
+ABANDONED_SUITE_GRACE = timedelta(minutes=10)
 
 
 class MergeRepo(Repo):
@@ -55,6 +56,7 @@ class ChangedFile(BaseModel):
 class App(BaseModel):
     model_config = ConfigDict(strict=True)
     id: int = Field(gt=0)
+    slug: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class SuiteRef(BaseModel):
@@ -82,6 +84,32 @@ class Suite(BaseModel):
     head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     status: str = Field(max_length=32)
     conclusion: str | None = Field(max_length=64)
+    app: App | None = None
+    created_at: str | None = Field(default=None, max_length=64)
+    latest_check_runs_count: int | None = Field(default=None, ge=0)
+
+    def abandoned(self, captured_at, suites_with_runs, required_apps):
+        if (
+            self.status != "queued"
+            or self.conclusion is not None
+            or self.id in suites_with_runs
+            or (
+                "latest_check_runs_count" in self.model_fields_set
+                and self.latest_check_runs_count != 0
+            )
+            or self.app is None
+            or self.app.id in required_apps
+            or self.created_at is None
+        ):
+            return False
+        try:
+            created_at = datetime.fromisoformat(self.created_at)
+        except ValueError:
+            return False
+        return (
+            created_at.tzinfo is not None
+            and captured_at - created_at > ABANDONED_SUITE_GRACE
+        )
 
 
 class RequiredCheck(BaseModel):
@@ -317,10 +345,6 @@ class GitHubMergeClient(GitHubCreationClient):
             raise GitHubError
         matches = protected_matches(paths, complete=True)
         ci = await self.checks(name, sha, repo.default_branch)
-        ci["captured_at"] = (
-            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        )
-        ci["complete"] = True
         description_source = (pr.body or "").encode("utf-8")
         description = description_source[: 16 * 1024].decode("utf-8", errors="ignore")
         fresh = await self.pull(name, number)
@@ -361,34 +385,27 @@ class GitHubMergeClient(GitHubCreationClient):
         }
 
     async def checks(self, name, sha, base):
+        # Collection time must not age a pre-grace observation into eligibility.
+        captured_at = datetime.now(timezone.utc)
         root = f"/repos/{name}"
         suites = await self.pages(
             f"{root}/commits/{sha}/check-suites", key="check_suites", limit=999
         )
         suite_ids = set()
-        pending_suite = False
-        blocked_suite = False
-        normalized_suites = []
+        validated_suites = []
         for item in suites:
             suite = Suite.model_validate(item)
             if suite.head_sha != sha or suite.id in suite_ids:
                 raise GitHubError
             suite_ids.add(suite.id)
-            normalized_suites.append(suite.model_dump(mode="json"))
-            pending_suite |= suite.status in PENDING_CHECK_STATES
-            # Every completed suite must succeed, even if it emitted no runs or
-            # a newer suite/run succeeded. Unknown states also fail closed.
-            blocked_suite |= (
-                suite.conclusion != "success"
-                if suite.status == "completed"
-                else suite.status not in PENDING_CHECK_STATES
-            )
+            validated_suites.append(suite)
         raw = await self.pages(
             f"{root}/commits/{sha}/check-runs",
             key="check_runs",
             params={"filter": "all"},
         )
         latest = {}
+        suites_with_runs = set()
         ids = set()
         for item in raw:
             run = Check.model_validate(item)
@@ -396,6 +413,8 @@ class GitHubMergeClient(GitHubCreationClient):
             if run.head_sha != sha or sid not in suite_ids or run.id in ids:
                 raise GitHubError
             ids.add(run.id)
+            # Include superseded runs when deciding whether a suite is runless.
+            suites_with_runs.add(sid)
             key = (run.app.id, run.name)
             rank = run.id
             if key not in latest or rank > latest[key][0]:
@@ -501,12 +520,6 @@ class GitHubMergeClient(GitHubCreationClient):
                 "required_linear_history",
             ):
                 raise PolicyError("rules", "unsupported active branch rule")
-        green = bool(latest or statuses) and not pending_suite and not blocked_suite
-        green &= all(
-            r.status == "completed" and r.conclusion == "success"
-            for _, r in latest.values()
-        )
-        green &= all(s.state == "success" for s in statuses.values())
         for context, app in required:
             if (
                 not isinstance(context, str)
@@ -514,9 +527,45 @@ class GitHubMergeClient(GitHubCreationClient):
                 or (app is not None and type(app) is not int)
             ):
                 raise GitHubError
+        required_apps = {app for _, app in required if app not in (None, -1)}
+        ignored_suites = []
+        pending_suite = False
+        blocked_suite = False
+        for suite in validated_suites:
+            if suite.abandoned(captured_at, suites_with_runs, required_apps):
+                ignored_suites.append(
+                    {
+                        **suite.model_dump(mode="json", exclude_unset=True),
+                        "reason": "queued_without_runs_past_grace_and_no_required_app",
+                    }
+                )
+                continue
+            pending_suite |= suite.status in PENDING_CHECK_STATES
+            # Every completed suite must succeed, even if it emitted no runs or
+            # a newer suite/run succeeded. Unknown states also fail closed.
+            blocked_suite |= (
+                suite.conclusion != "success"
+                if suite.status == "completed"
+                else suite.status not in PENDING_CHECK_STATES
+            )
+        green = bool(latest or statuses) and not pending_suite and not blocked_suite
+        green &= all(
+            r.status == "completed" and r.conclusion == "success"
+            for _, r in latest.values()
+        )
+        green &= all(s.state == "success" for s in statuses.values())
+        for context, app in required:
             green &= any(
-                n == context and (app in (None, -1) or a == app) for a, n in latest
-            ) or (app in (None, -1) and context in statuses)
+                n == context
+                and (app in (None, -1) or a == app)
+                and r.status == "completed"
+                and r.conclusion == "success"
+                for (a, n), (_, r) in latest.items()
+            ) or (
+                app in (None, -1)
+                and context in statuses
+                and statuses[context].state == "success"
+            )
         blocked = (
             blocked_suite
             or any(
@@ -531,9 +580,7 @@ class GitHubMergeClient(GitHubCreationClient):
         )
         return {
             "head_sha": sha,
-            "captured_at": datetime.now(timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "captured_at": captured_at.isoformat().replace("+00:00", "Z"),
             "complete": True,
             "blocked": bool(blocked),
             "green": bool(green),
@@ -543,7 +590,10 @@ class GitHubMergeClient(GitHubCreationClient):
                 or any(r.status in PENDING_CHECK_STATES for _, r in latest.values())
                 or any(s.state == "pending" for s in statuses.values())
             ),
-            "suites": normalized_suites,
+            "suites": [
+                s.model_dump(mode="json", exclude_unset=True) for s in validated_suites
+            ],
+            "ignored_suites": ignored_suites,
             "checks": [r.model_dump(mode="json") for _, r in latest.values()],
             "statuses": [s.model_dump(mode="json") for s in statuses.values()],
             "required": required,
