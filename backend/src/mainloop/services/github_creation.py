@@ -79,8 +79,11 @@ class GitHubCreationClient:
     async def __aexit__(self, *_):
         await self.client.aclose()
 
+    def _permissions(self, method: str, path: str) -> dict[str, str]:
+        return endpoint(self.repository_name, method, path)
+
     async def _response(self, method: str, path: str, **kwargs):
-        permissions = endpoint(self.repository_name, method, path)
+        permissions = self._permissions(method, path)
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
                 token = await self.auth.token(

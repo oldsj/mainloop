@@ -211,6 +211,16 @@ class GitHubPlanUnavailable(GitHubError):
 
 
 class GitHubMergeClient(GitHubCreationClient):
+    evidence_step = "client"
+
+    def _permissions(self, method: str, path: str) -> dict[str, str]:
+        permissions = super()._permissions(method, path)
+        if method == "GET" and path.lower() == f"/repos/{self.repository_name}":
+            # GitHub omits merge settings without Contents read/write. Keep the
+            # ordinary creation/monitoring repository lookup at Metadata read.
+            return {"contents": "write"}
+        return permissions
+
     async def branch_rules_request(self, path, **kwargs):
         # Only these read endpoints may interpret the specific plan refusal.
         try:
@@ -274,8 +284,11 @@ class GitHubMergeClient(GitHubCreationClient):
         raise GitHubError
 
     async def evidence(self, name, number, sha):
+        self.evidence_step = "repository"
         repo = await self.repository(name)
+        self.evidence_step = "pull_request"
         pr = await self.pull(name, number)
+        self.evidence_step = "identity"
         if (
             repo.full_name.lower() != name.lower()
             or not repo.allow_squash_merge
@@ -296,9 +309,11 @@ class GitHubMergeClient(GitHubCreationClient):
             )
         if pr.head.ref == repo.default_branch:
             raise PolicyError("branch", "default branch is not allowed")
+        self.evidence_step = "branch"
         base = await self.branch(name, repo.default_branch)
         if base.name != pr.base.ref or base.commit.sha != pr.base.sha:
             raise PolicyError("base", "default branch moved; prepare again")
+        self.evidence_step = "files"
         raw = await self.pages(f"/repos/{name}/pulls/{number}/files", limit=3000)
         files = [
             ChangedFile.model_validate(
@@ -331,13 +346,21 @@ class GitHubMergeClient(GitHubCreationClient):
             raise GitHubError
         matches = protected_matches(paths, complete=True)
         ci = await self.checks(name, sha, repo.default_branch)
+        self.evidence_step = "description"
         description_source = (pr.body or "").encode("utf-8")
         description = description_source[: 16 * 1024].decode("utf-8", errors="ignore")
+        self.evidence_step = "pull_request_refresh"
         fresh = await self.pull(name, number)
-        if fresh != pr or await self.repository(name) != repo:
+        if fresh != pr:
             raise PolicyError(
                 "stale", "PR or repository changed while reading evidence"
             )
+        self.evidence_step = "repository_refresh"
+        if await self.repository(name) != repo:
+            raise PolicyError(
+                "stale", "PR or repository changed while reading evidence"
+            )
+        self.evidence_step = "summary"
         return {
             "repository_id": repo.id,
             "repository": name,
@@ -371,9 +394,11 @@ class GitHubMergeClient(GitHubCreationClient):
         }
 
     async def checks(self, name, sha, base):
+        self.evidence_step = "checks"
         # Collection time must not age a pre-grace observation into eligibility.
         captured_at = datetime.now(timezone.utc)
         root = f"/repos/{name}"
+        self.evidence_step = "check_suites"
         suites = await self.pages(
             f"{root}/commits/{sha}/check-suites", key="check_suites", limit=999
         )
@@ -385,6 +410,7 @@ class GitHubMergeClient(GitHubCreationClient):
                 raise GitHubError
             suite_ids.add(suite.id)
             validated_suites.append(suite)
+        self.evidence_step = "check_runs"
         raw = await self.pages(
             f"{root}/commits/{sha}/check-runs",
             key="check_runs",
@@ -405,6 +431,7 @@ class GitHubMergeClient(GitHubCreationClient):
             rank = run.id
             if key not in latest or rank > latest[key][0]:
                 latest[key] = (rank, run)
+        self.evidence_step = "statuses"
         statuses = {}
         ids = set()
         for item in await self.pages(f"{root}/commits/{sha}/statuses"):
@@ -418,6 +445,7 @@ class GitHubMergeClient(GitHubCreationClient):
         unavailable = []
         # The protection endpoint returns 404 for ruleset-only/unprotected
         # branches. Other reads, including active rules, must still succeed.
+        self.evidence_step = "protection"
         try:
             protection = await self._request(
                 "GET", f"{root}/branches/{quote(base, safe='')}/protection"
@@ -456,6 +484,7 @@ class GitHubMergeClient(GitHubCreationClient):
                 raise PolicyError("rules", "unsupported classic strict status checks")
             required.extend((c.context, c.app_id) for c in classic.checks)
             required.extend((c, None) for c in classic.contexts)
+        self.evidence_step = "rules"
         try:
             rules = await self.pages(f"{root}/rules/branches/{quote(base, safe='')}")
         except GitHubPlanUnavailable:
@@ -506,6 +535,7 @@ class GitHubMergeClient(GitHubCreationClient):
                 "required_linear_history",
             ):
                 raise PolicyError("rules", "unsupported active branch rule")
+        self.evidence_step = "checks_consistency"
         for context, app in required:
             if (
                 not isinstance(context, str)

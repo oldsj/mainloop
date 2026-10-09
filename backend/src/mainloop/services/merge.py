@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -25,6 +26,8 @@ from pydantic import ValidationError
 from models.agent_tools import MergePullRequestWithApproval, PreparePullRequestMerge
 from models.hitl import MergeReceiptKey, normalized_hash
 from models.merge_policy import PROTECTED_GLOBS_VERSION
+
+logger = logging.getLogger(__name__)
 
 
 def enabled():
@@ -70,6 +73,7 @@ async def authority(conn, binding, project_id, branch=None):
 async def read_evidence(binding, body):
     async with db.connection() as conn:
         project, name = await authority(conn, binding, body.project_id)
+    github = None
     try:
         async with asyncio.timeout(60), GitHubMergeClient(name) as github:
             facts = await github.evidence(name, body.pr_number, body.expected_sha)
@@ -80,7 +84,14 @@ async def read_evidence(binding, body):
         TypeError,
         ValueError,
         TimeoutError,
-    ):
+    ) as error:
+        # Fixed step labels and class names only: no exception text, traceback,
+        # response body, repository input or credential-bearing request.
+        logger.warning(
+            "GitHub merge evidence unavailable: step=%s exception=%s",
+            getattr(github, "evidence_step", "client"),
+            type(error).__name__,
+        )
         raise PolicyError(
             "github", "complete GitHub merge evidence unavailable"
         ) from None
