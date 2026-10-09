@@ -58,7 +58,8 @@ make dev
 Install a private GitHub App on the repositories Mainloop should manage. Set
 `GITHUB_APP_ID` to its numeric App ID and `GITHUB_APP_PRIVATE_KEY` to single-line
 base64 of its unencrypted RSA PEM (at least 2048 bits), through backend secret
-configuration. Mainloop discovers installations and mints short-lived tokens for
+configuration. Leading and trailing ASCII whitespace is ignored for both values;
+interior whitespace is rejected. Mainloop discovers installations and mints short-lived tokens for
 one repository and the requested operation's permissions. There is no backend PAT
 or anonymous fallback. App permissions, cache behavior and the issue-helper
 limitation are in [Pull requests](docs/specs/pull-requests.md).

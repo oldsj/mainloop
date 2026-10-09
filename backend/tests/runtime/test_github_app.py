@@ -88,6 +88,29 @@ def gzip_response(status, payload, *, chunked=False, delay=0):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_surrounding_ascii_whitespace_accepts_key_and_normalizes_app_id(self):
+        for key_format in (PrivateFormat.TraditionalOpenSSL, PrivateFormat.PKCS8):
+            encoded = base64.b64encode(
+                KEY.private_bytes(Encoding.PEM, key_format, NoEncryption())
+            ).decode()
+            for prefix, suffix in (
+                ("", "\n"),
+                ("", "\r\n"),
+                ("  ", "  "),
+                (" \t\n\r\v\f", " \t\n\r\v\f"),
+            ):
+                with self.subTest(format=key_format, prefix=prefix, suffix=suffix):
+                    auth = GitHubAppAuth(
+                        prefix + "123" + suffix, SecretStr(prefix + encoded + suffix)
+                    )
+                    claims = jwt.decode(
+                        auth._jwt(),
+                        KEY.public_key(),
+                        algorithms=["RS256"],
+                        issuer="123",
+                    )
+                    self.assertEqual(claims["iss"], "123")
+
     def test_first_use_rejects_missing_malformed_non_rsa_and_encrypted_keys(self):
         ec_key = ec.generate_private_key(ec.SECP256R1()).private_bytes(
             Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
@@ -95,7 +118,12 @@ class ConfigurationTests(unittest.TestCase):
         for encoded in (
             "",
             "secret-invalid-base64",
-            ENCODED_KEY + "\n",
+            " \t\n\r\v\f",
+            ENCODED_KEY[:64] + "\n" + ENCODED_KEY[64:],
+            " " + ENCODED_KEY[:64] + "\r\n" + ENCODED_KEY[64:] + " ",
+            ENCODED_KEY[:64] + " " + ENCODED_KEY[64:],
+            ENCODED_KEY[:64] + "\t" + ENCODED_KEY[64:],
+            "\u00a0" + ENCODED_KEY + "\u00a0",
             base64.b64encode(b"secret-invalid-pem").decode(),
             base64.b64encode(ec_key).decode(),
             base64.b64encode(
@@ -117,9 +145,22 @@ class ConfigurationTests(unittest.TestCase):
             for secret in (encoded, PEM.decode(), ENCODED_KEY):
                 if secret:
                     self.assertNotIn(secret, str(error.exception))
-        for app_id in ("", "zero-secret", "0", "-1"):
-            with self.assertRaises(PolicyError):
+        for app_id in (
+            "",
+            " \t\n\r\v\f",
+            "zero-secret",
+            "0",
+            "-1",
+            "12\n3",
+            " 12 3 ",
+            "\u00a0123\u00a0",
+        ):
+            with self.subTest(app_id=app_id), self.assertRaises(PolicyError) as error:
                 GitHubAppAuth(app_id, SecretStr(ENCODED_KEY))
+            self.assertEqual(error.exception.code, "configuration")
+            if app_id:
+                self.assertNotIn(app_id, str(error.exception))
+            self.assertNotIn(ENCODED_KEY, str(error.exception))
 
     def test_settings_hide_key_and_have_no_pat_setting(self):
         configured = Settings(
