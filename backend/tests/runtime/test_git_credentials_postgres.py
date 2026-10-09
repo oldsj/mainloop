@@ -3,8 +3,10 @@
 import asyncio
 import base64
 import copy
+import json
 import uuid
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -24,9 +26,12 @@ from mainloop.runtime.kagent_client import (
     CurrentRuntimeAssociation,
     KagentSession,
     OutcomeUnknown,
+    PreparationReceipt,
+    PreparationRequest,
     RuntimeComposition,
     RuntimeOperation,
     RuntimeState,
+    SessionError,
 )
 from mainloop.services.github_pr import RepoMetadata
 from mainloop.tasks.lifecycle import LifecycleDenied
@@ -93,6 +98,11 @@ class NativeGitClient:
         self.lose_create = False
         self.lose_suspend = False
         self.lose_resume = False
+        self.prepares = []
+        self.prepare_classification = "confirmed"
+        self.lose_prepare = False
+        self.prepare_not_received = False
+        self.prepare_error = None
 
     async def create_session(
         self,
@@ -101,7 +111,7 @@ class NativeGitClient:
         request_id,
         credentials=(),
         workspace=None,
-        development_environment=None
+        development_environment=None,
     ):
         row = await self.pool.fetchrow(
             "SELECT * FROM git_enrollments WHERE create_request_id=$1", request_id
@@ -159,7 +169,31 @@ class NativeGitClient:
 
     async def get_session(self, sid):
         self.gets.append(sid)
-        return self.sessions[sid]
+        session = self.sessions[sid]
+        receipt = session.workspace_preparation
+        if receipt is None:
+            return session
+        # kagent d6de0e4 native_handoff.go projects history on GetSession;
+        # a temporary lifecycle state does not mutate the stored receipt.
+        original, association = receipt.original, session.runtime_association
+        historical = (
+            receipt.historical
+            or session.state != RuntimeState.READY
+            or session.operation != RuntimeOperation.NONE
+            or session.id != original.session_id
+            or session.prepared_revision != original.prepared_revision
+            or session.workspace != original.workspace
+            or session.development_environment != original.development_environment
+            or session.runtime_composition != original.runtime_composition
+            or association is None
+            or association.phase != "active"
+            or not association.current_active
+            or association.generation_id != original.generation_id
+            or association.actor_uid != original.actor_uid
+        )
+        return replace(
+            session, workspace_preparation=replace(receipt, historical=historical)
+        )
 
     async def ensure_ready(self, session, **kwargs):
         current = self.sessions[session.id]
@@ -186,6 +220,41 @@ class NativeGitClient:
     async def delete_session(self, sid):
         self.sessions[sid] = replace(self.sessions[sid], state=RuntimeState.DELETED)
         return self.sessions[sid]
+
+    async def prepare_session_workspace(self, session_id, **kwargs):
+        request = PreparationRequest(session_id=session_id, **kwargs)
+        row = await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE create_request_id=$1",
+            request.create_request_id,
+        )
+        if (
+            row["prepare_state"] != "requested"
+            or row["prepare_action_id"] != request.action_id
+            or json.loads(row["prepare_receipt"])["original"] != asdict(request)
+            or row["read_state"] != "published"
+        ):
+            raise AssertionError(
+                "Prepare bytes before committed request/read publication"
+            )
+        self.prepares.append(request.encode())
+        if self.prepare_error:
+            raise self.prepare_error
+        if self.prepare_not_received:
+            self.prepare_not_received = False
+            raise OutcomeUnknown("fixture Prepare lost before admission")
+        current = self.sessions[session_id]
+        receipt = PreparationReceipt(
+            original=request,
+            context_id=session_id,
+            atespace=current.runtime_association.atespace,
+            actor_name=current.runtime_association.actor_name,
+            classification=self.prepare_classification,
+        )
+        self.sessions[session_id] = replace(current, workspace_preparation=receipt)
+        if self.lose_prepare:
+            self.lose_prepare = False
+            raise OutcomeUnknown("fixture Prepare reply loss")
+        return receipt
 
 
 class GitCredentialsCase(PostgresTestCase):
@@ -265,6 +334,92 @@ class GitCredentialsCase(PostgresTestCase):
 
 
 class GitCredentialTests(GitCredentialsCase):
+    async def test_replacement_first_send_requires_confirmation(self):
+        # Adapted from prep-slice2/review-probes.py: use the actual replacement,
+        # readiness and send paths, with a binding-wide completed-turn count.
+        with patch.object(settings, "git_transport_enabled", False), patch.object(
+            settings, "push_gate_enabled", False
+        ):
+            sid = await self.create("owner-replacement")
+            await ns.ledger.bump_turns(sid)
+        old = await ns.get_binding(sid)
+        await self.native.delete_session(old["kagent_session_id"])
+        await ns._replace_kagent_session(old)
+        await workspaces._create_session(sid, self.user, reject_removes_rows=False)
+        binding = await ns.get_binding(sid)
+        row = await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
+            sid,
+        )
+        current = self.native.sessions[binding["kagent_session_id"]]
+        self.assertNotEqual(current.id, old["kagent_session_id"])
+        self.assertEqual(binding["turns"], 1)
+        self.assertEqual(row["prepare_state"], "absent")
+        self.assertFalse(self.native.prepares)
+        emitted = []
+
+        async def send(*args, **kwargs):
+            emitted.append("turn bytes")
+            yield "first event"
+
+        error = None
+        with patch.object(self.native, "send_message", send, create=True):
+            events = ns._guarded_send(binding, current.agent)
+            try:
+                await anext(events)
+            except ValueError as exc:
+                error = str(exc)
+            finally:
+                await events.aclose()
+        self.assertEqual(emitted, [], "Replacement's first turn must await preparation")
+        self.assertEqual(error, "git_prepare_pending")
+
+    async def test_existing_row_migration_preserves_authority(self):
+        sid = await self.create("migration-probe")
+        before = await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE binding_id=$1", sid
+        )
+        # The sanitized base migration keeps CI independent of local Git history.
+        old_sql = (
+            Path(__file__).parent / "fixtures" / "git-enrollment-before-preparation.sql"
+        ).read_text()
+        await self.pool.execute(old_sql)
+        await self.pool.execute(
+            "ALTER TABLE git_enrollments DROP COLUMN prepare_action_id, "
+            "DROP COLUMN prepare_state, DROP COLUMN prepare_receipt"
+        )
+        await self.pool.execute(MIGRATION_SQL)
+        await self.pool.execute(MIGRATION_SQL)
+        after = await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE binding_id=$1", sid
+        )
+        self.assertEqual(after["prepare_state"], "absent")
+        self.assertIsNone(after["prepare_action_id"])
+        self.assertIsNone(after["prepare_receipt"])
+        for field in ("plan", "plan_digest", "association", "read_state", "push_state"):
+            self.assertEqual(after[field], before[field])
+
+    async def test_owner_preparation_is_deferred_and_first_turn_is_held(self):
+        sid = await self.create()
+        row = await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE binding_id=$1", sid
+        )
+        self.assertEqual(row["prepare_state"], "absent")
+        self.assertIsNone(row["prepare_action_id"])
+        self.assertFalse(self.native.prepares)
+        binding = await ns.get_binding(sid)
+        current = self.native.sessions[binding["kagent_session_id"]]
+        emitted = []
+
+        async def send(*args, **kwargs):
+            emitted.append("turn bytes")
+            yield "event"
+
+        with patch.object(self.native, "send_message", send, create=True):
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await anext(ns._guarded_send(binding, current.agent))
+        self.assertFalse(emitted)
+
     async def test_complete_native_enrollment_and_purpose_separation(self):
         sid = await self.create()
         enrollment = await self.enrolled(sid)
@@ -613,6 +768,11 @@ class GitCredentialTests(GitCredentialsCase):
 class GitTaskCredentialTests(GitCredentialsCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        # The scratch database is shared across this class; old held attempts
+        # must not consume the next test's global admission capacity.
+        await self.pool.execute(
+            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_operations CASCADE"
+        )
         from functools import partial
 
         from mainloop.db import environments
@@ -721,6 +881,691 @@ class GitTaskCredentialTests(GitCredentialsCase):
                 await lifecycle.load_task(conn, operation.task_id),
                 await lifecycle.load_attempt(conn, operation.attempt_id),
             )
+
+    async def preparation_target(self):
+        operation, _, attempt = await self.task(ready=False)
+        binding = await ns.get_binding(attempt.session_id)
+        session = await ns._create_bound_session(binding)
+        await ns.ledger.update_binding(attempt.session_id, kagent_session_id=session.id)
+        return operation, attempt.session_id, session.id
+
+    async def preparation_row(self, sid):
+        return await self.pool.fetchrow(
+            "SELECT * FROM git_enrollments WHERE binding_id=$1", sid
+        )
+
+    async def ready_preparation(self, sid, runtime):
+        async with self.pool.acquire() as conn:
+            return await credentials.ready_for_binding(
+                conn, sid, self.native.sessions[runtime], push=False
+            )
+
+    async def test_crash_after_reservation_recovers_same_request(self):
+        class CrashBeforeBytes(BaseException):
+            pass
+
+        _, sid, runtime = await self.preparation_target()
+        reserved = []
+
+        async def crash(session_id, **kwargs):
+            reserved.append(PreparationRequest(session_id=session_id, **kwargs))
+            raise CrashBeforeBytes()
+
+        with patch.object(self.native, "prepare_session_workspace", crash):
+            with self.assertRaises(CrashBeforeBytes):
+                await self.ready_preparation(sid, runtime)
+        row = await self.preparation_row(sid)
+        self.assertEqual(row["prepare_state"], "requested")
+        self.assertEqual(
+            json.loads(row["prepare_receipt"])["original"], asdict(reserved[0])
+        )
+        self.assertFalse(self.native.prepares)
+        self.assertIsNone(self.native.sessions[runtime].workspace_preparation)
+        await self.ready_preparation(sid, runtime)
+        self.assertEqual(self.native.prepares, [reserved[0].encode()])
+        self.assertEqual(
+            (await self.preparation_row(sid))["prepare_state"], "confirmed"
+        )
+
+    async def test_concurrent_readiness_serializes_prepare(self):
+        _, sid, runtime = await self.preparation_target()
+        self.native.prepare_classification = "pending"
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.native.prepare_session_workspace
+
+        async def paused(session_id, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(session_id, **kwargs)
+
+        jobs = []
+        blocked = False
+        with patch.object(self.native, "prepare_session_workspace", paused):
+            try:
+                jobs.append(asyncio.create_task(self.ready_preparation(sid, runtime)))
+                await asyncio.wait_for(entered.wait(), 10)
+                jobs.append(asyncio.create_task(self.ready_preparation(sid, runtime)))
+                async with asyncio.timeout(10):
+                    while not blocked:
+                        blocked = await self.pool.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity "
+                            "WHERE datname=current_database() AND wait_event_type='Lock' "
+                            "AND cardinality(pg_blocking_pids(pid))>0)"
+                        )
+            finally:
+                release.set()
+                results = await asyncio.gather(*jobs, return_exceptions=True)
+        self.assertTrue(blocked)
+        self.assertEqual(len(self.native.prepares), 1)
+        self.assertEqual(
+            [str(result) for result in results],
+            ["git_prepare_pending", "git_prepare_pending"],
+        )
+
+    async def test_observation_ignores_stale_and_revoked_enrollment(self):
+        from models import WorkspaceObservedState
+
+        self.native.prepare_not_received = True
+        _, sid, runtime = await self.preparation_target()
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await self.ready_preparation(sid, runtime)
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RESUMING, "Preparing workspace"),
+        )
+        binding = await ns.get_binding(sid)
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_request_id=$2 WHERE session_id=$1",
+            sid,
+            "00000000-0000-4000-8000-000000000099",
+        )
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RUNNING, None),
+        )
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_request_id=$2,kagent_session_id=$3 WHERE session_id=$1",
+            sid,
+            binding["kagent_request_id"],
+            "00000000-0000-4000-8000-000000000098",
+        )
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RUNNING, None),
+        )
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_session_id=$2 WHERE session_id=$1",
+            sid,
+            runtime,
+        )
+        await self.pool.execute(
+            "UPDATE git_enrollments SET revoked_at=now() WHERE binding_id=$1", sid
+        )
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RUNNING, None),
+        )
+
+    async def test_normal_suspension_keeps_suspended_projection(self):
+        from models import WorkspaceObservedState
+
+        _, _, attempt = await self.task()
+        sid = attempt.session_id
+        runtime = (await ns.get_binding(sid))["kagent_session_id"]
+        ready = self.native.sessions[runtime]
+        await self.native.suspend_session(runtime)
+        projected = await self.native.get_session(runtime)
+        self.assertTrue(projected.workspace_preparation.historical)
+        self.assertFalse(self.native.sessions[runtime].workspace_preparation.historical)
+        suspended = await workspaces._observe(runtime, workspace_id=sid)
+        await self.native.resume_session(runtime)
+        self.assertFalse(
+            (await self.native.get_session(runtime)).workspace_preparation.historical
+        )
+        self.assertEqual(
+            self.native.sessions[runtime].runtime_association, ready.runtime_association
+        )
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RUNNING, None),
+        )
+        self.assertEqual(
+            (await self.preparation_row(sid))["prepare_state"], "confirmed"
+        )
+        self.assertEqual(suspended, (WorkspaceObservedState.SUSPENDED, None))
+
+    async def test_transient_historical_read_does_not_permanently_fail(self):
+        _, _, attempt = await self.task()
+        sid = attempt.session_id
+        runtime = (await ns.get_binding(sid))["kagent_session_id"]
+        ready = self.native.sessions[runtime]
+        await self.native.suspend_session(runtime)
+        suspended = await self.native.get_session(runtime)
+        await self.native.resume_session(runtime)
+        # ensure_ready returns READY, then the final Get sees concurrent suspension.
+        with patch.object(self.native, "get_session", return_value=suspended):
+            try:
+                await self.ready_preparation(sid, runtime)
+            except ValueError as exc:
+                self.assertEqual(str(exc), "git_prepare_pending")
+            else:
+                self.fail("A suspended observation must hold readiness")
+        self.assertEqual(
+            (await self.preparation_row(sid))["prepare_state"], "confirmed"
+        )
+        self.assertEqual(
+            self.native.sessions[runtime].runtime_association, ready.runtime_association
+        )
+        await self.ready_preparation(sid, runtime)
+        self.assertEqual(
+            (await self.preparation_row(sid))["prepare_state"], "confirmed"
+        )
+        self.assertEqual(len(self.native.prepares), 1)
+
+    async def test_lifecycle_projection_holds_every_preparation_read(self):
+        from models import WorkspaceObservedState
+
+        _, _, attempt = await self.task()
+        sid = attempt.session_id
+        runtime = (await ns.get_binding(sid))["kagent_session_id"]
+        ready = self.native.sessions[runtime]
+        row = await self.preparation_row(sid)
+        cases = (
+            (
+                RuntimeState.SUSPENDED,
+                RuntimeOperation.NONE,
+                (WorkspaceObservedState.SUSPENDED, None),
+            ),
+            (
+                RuntimeState.READY,
+                RuntimeOperation.SUSPEND,
+                (WorkspaceObservedState.SUSPENDING, "Suspending."),
+            ),
+            (
+                RuntimeState.READY,
+                RuntimeOperation.RESUME,
+                (WorkspaceObservedState.RESUMING, "Starting."),
+            ),
+            (
+                RuntimeState.SUSPENDED,
+                RuntimeOperation.RESUME,
+                (WorkspaceObservedState.RESUMING, "Starting."),
+            ),
+            (
+                RuntimeState.CREATING,
+                RuntimeOperation.CREATE,
+                (WorkspaceObservedState.RESUMING, "Starting."),
+            ),
+            (
+                RuntimeState.READY,
+                RuntimeOperation.CREATE,
+                (WorkspaceObservedState.RESUMING, "Starting."),
+            ),
+        )
+        for state, operation, expected_view in cases:
+            for boundary in ("readiness", "publication", "prepare"):
+                with self.subTest(state=state, operation=operation, boundary=boundary):
+                    self.native.sessions[runtime] = replace(
+                        ready, state=state, operation=operation
+                    )
+                    projected = await self.native.get_session(runtime)
+                    self.assertTrue(projected.workspace_preparation.historical)
+                    self.assertEqual(
+                        await workspaces._observe(runtime, workspace_id=sid),
+                        expected_view,
+                    )
+                    # Readiness can settle before a later Get sees a new operation.
+                    with patch.object(
+                        self.native, "ensure_ready", AsyncMock(return_value=ready)
+                    ):
+                        async with self.pool.acquire() as conn:
+                            with self.assertRaisesRegex(
+                                ValueError, "git_prepare_pending"
+                            ):
+                                if boundary == "readiness":
+                                    await credentials.ready_for_binding(
+                                        conn, sid, ready, push=False
+                                    )
+                                elif boundary == "publication":
+                                    await credentials.publish_read(
+                                        conn, row["issuance_id"]
+                                    )
+                                else:
+                                    async with credentials.locked(conn, sid):
+                                        await credentials.prepare_for_binding(
+                                            conn, row["issuance_id"], self.native
+                                        )
+                    held = await self.preparation_row(sid)
+                    self.assertEqual(held["prepare_state"], "confirmed")
+                    self.assertEqual(held["prepare_receipt"], row["prepare_receipt"])
+                    self.native.sessions[runtime] = ready
+                    await self.ready_preparation(sid, runtime)
+        self.assertEqual(len(self.native.prepares), 1)
+
+    async def test_changed_runtime_is_historical_only_after_settled_ready(self):
+        from models import WorkspaceObservedState
+
+        for field in ("generation_id", "actor_uid"):
+            with self.subTest(field=field):
+                _, _, attempt = await self.task()
+                sid = attempt.session_id
+                runtime = (await ns.get_binding(sid))["kagent_session_id"]
+                ready = self.native.sessions[runtime]
+                changed = replace(
+                    ready,
+                    state=RuntimeState.SUSPENDED,
+                    runtime_association=replace(
+                        ready.runtime_association, **{field: "new-" + field}
+                    ),
+                )
+                self.native.sessions[runtime] = changed
+                self.assertFalse(changed.workspace_preparation.historical)
+                self.assertTrue(
+                    (
+                        await self.native.get_session(runtime)
+                    ).workspace_preparation.historical
+                )
+                with patch.object(
+                    self.native, "ensure_ready", AsyncMock(return_value=ready)
+                ):
+                    with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                        await self.ready_preparation(sid, runtime)
+                self.assertEqual(
+                    (await self.preparation_row(sid))["prepare_state"], "confirmed"
+                )
+                self.assertEqual(
+                    await workspaces._observe(runtime, workspace_id=sid),
+                    (WorkspaceObservedState.SUSPENDED, None),
+                )
+                await self.native.resume_session(runtime)
+                self.assertTrue(
+                    (
+                        await self.native.get_session(runtime)
+                    ).workspace_preparation.historical
+                )
+                count = len(self.native.prepares)
+                with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                    await self.ready_preparation(sid, runtime)
+                self.assertEqual(
+                    (await self.preparation_row(sid))["prepare_state"], "failed"
+                )
+                self.assertEqual(
+                    await workspaces._observe(runtime, workspace_id=sid),
+                    (
+                        WorkspaceObservedState.FAILED,
+                        "Workspace preparation failed; replace the session",
+                    ),
+                )
+                with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                    await self.ready_preparation(sid, runtime)
+                self.assertEqual(len(self.native.prepares), count)
+
+    async def test_terminal_prepare_reply_during_suspension_waits_for_ready(self):
+        prepare = self.native.prepare_session_workspace
+        for classification in ("confirmed", "definite-failure"):
+            with self.subTest(classification=classification):
+                _, sid, runtime = await self.preparation_target()
+                self.native.prepare_classification = classification
+
+                async def suspend_before_reply(
+                    session_id, classification=classification, **kwargs
+                ):
+                    receipt = await prepare(session_id, **kwargs)
+                    await self.native.suspend_session(session_id)
+                    # A historical reply needs a fresh lifecycle observation; a
+                    # definite failure needs the same check even without this flag.
+                    return replace(receipt, historical=classification == "confirmed")
+
+                with patch.object(
+                    self.native, "prepare_session_workspace", suspend_before_reply
+                ):
+                    with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                        await self.ready_preparation(sid, runtime)
+                self.assertEqual(
+                    (await self.preparation_row(sid))["prepare_state"], "requested"
+                )
+                count = len(self.native.prepares)
+                await self.native.resume_session(runtime)
+                if classification == "confirmed":
+                    await self.ready_preparation(sid, runtime)
+                    self.assertEqual(
+                        (await self.preparation_row(sid))["prepare_state"], "confirmed"
+                    )
+                else:
+                    with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                        await self.ready_preparation(sid, runtime)
+                    self.assertEqual(
+                        (await self.preparation_row(sid))["prepare_state"], "failed"
+                    )
+                self.assertEqual(len(self.native.prepares), count)
+
+    async def test_prepare_refusal_during_operation_retries_same_action_after_resume(
+        self,
+    ):
+        _, sid, runtime = await self.preparation_target()
+        prepare = self.native.prepare_session_workspace
+        self.native.prepare_error = SessionError("lifecycle changed", grpc_status=9)
+
+        async def reject_during_resume(session_id, **kwargs):
+            try:
+                return await prepare(session_id, **kwargs)
+            finally:
+                self.native.sessions[session_id] = replace(
+                    self.native.sessions[session_id], operation=RuntimeOperation.RESUME
+                )
+
+        with patch.object(
+            self.native, "prepare_session_workspace", reject_during_resume
+        ):
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await self.ready_preparation(sid, runtime)
+        first = await self.preparation_row(sid)
+        self.assertEqual(first["prepare_state"], "requested")
+        self.native.prepare_error = None
+        self.native.sessions[runtime] = replace(
+            self.native.sessions[runtime], operation=RuntimeOperation.NONE
+        )
+        await self.ready_preparation(sid, runtime)
+        self.assertEqual(self.native.prepares[0], self.native.prepares[1])
+        row = await self.preparation_row(sid)
+        self.assertEqual(row["prepare_action_id"], first["prepare_action_id"])
+        self.assertEqual(row["prepare_state"], "confirmed")
+
+    async def test_preparation_pending_uncertain_confirmed_and_no_challenge(self):
+        from models import WorkspaceObservedState
+
+        operation, sid, runtime = await self.preparation_target()
+        self.native.prepare_classification = "pending"
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await self.ready_preparation(sid, runtime)
+        first = await self.preparation_row(sid)
+        self.assertEqual(first["prepare_state"], "requested")
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RESUMING, "Preparing workspace"),
+        )
+        for classification in ("uncertain", "confirmed"):
+            current = self.native.sessions[runtime]
+            receipt = replace(
+                current.workspace_preparation, classification=classification
+            )
+            self.native.sessions[runtime] = replace(
+                current, workspace_preparation=receipt
+            )
+            if classification == "uncertain":
+                with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                    await self.ready_preparation(sid, runtime)
+                await self.worker.reconcile(db, operation)
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT state FROM task_attempts WHERE session_id=$1", sid
+                    ),
+                    "creating",
+                )
+                self.assertEqual(self.spawn.call_count, 0)
+            else:
+                await self.ready_preparation(sid, runtime)
+        await self.ready_preparation(sid, runtime)
+        row = await self.preparation_row(sid)
+        self.assertEqual(row["prepare_state"], "confirmed")
+        self.assertEqual(row["prepare_action_id"], first["prepare_action_id"])
+        self.assertEqual(len(self.native.prepares), 1)
+        self.assertEqual(
+            json.loads(row["prepare_receipt"])["classification"], "confirmed"
+        )
+        await self.worker.reconcile(db, operation)
+        self.assertEqual(self.spawn.call_count, 1)
+
+    async def test_lost_prepare_without_receipt_retries_identical_bytes_after_pool_restart(
+        self,
+    ):
+        from models import WorkspaceObservedState
+
+        _, sid, runtime = await self.preparation_target()
+        self.native.prepare_not_received = True
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await self.ready_preparation(sid, runtime)
+        self.assertIsNone(self.native.sessions[runtime].workspace_preparation)
+        self.assertEqual(
+            await workspaces._observe(runtime, workspace_id=sid),
+            (WorkspaceObservedState.RESUMING, "Preparing workspace"),
+        )
+        first = await self.preparation_row(sid)
+        new = await asyncpg.create_pool(self.url, min_size=1, max_size=2)
+        old = db._pool
+        db._pool = new
+        try:
+            async with new.acquire() as conn:
+                await credentials.ready_for_binding(
+                    conn, sid, self.native.sessions[runtime], push=False
+                )
+        finally:
+            db._pool = old
+            await new.close()
+        self.assertEqual(self.native.prepares[0], self.native.prepares[1])
+        row = await self.preparation_row(sid)
+        self.assertEqual(row["prepare_action_id"], first["prepare_action_id"])
+        self.assertEqual(row["prepare_state"], "confirmed")
+        self.assertEqual(len(self.native.suspends), 1)
+
+    async def test_lost_prepare_reply_reconciles_receipt_without_resend(self):
+        _, sid, runtime = await self.preparation_target()
+        self.native.lose_prepare = True
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await self.ready_preparation(sid, runtime)
+        await self.ready_preparation(sid, runtime)
+        self.assertEqual(len(self.native.prepares), 1)
+        self.assertEqual(
+            (await self.preparation_row(sid))["prepare_state"], "confirmed"
+        )
+
+    async def test_prepare_already_exists_and_definite_rpc_failure_hold_original_action(
+        self,
+    ):
+        for status in (6, 3, 9):
+            with self.subTest(status=status):
+                _, sid, runtime = await self.preparation_target()
+                self.native.prepare_error = SessionError(
+                    "fixture rejection", grpc_status=status
+                )
+                code = "git_prepare_conflict" if status == 6 else "git_prepare_failed"
+                with self.assertRaisesRegex(ValueError, code):
+                    await self.ready_preparation(sid, runtime)
+                row = await self.preparation_row(sid)
+                self.assertEqual(row["prepare_state"], "failed")
+                count = len(self.native.prepares)
+                self.native.prepare_error = None
+                with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                    await self.ready_preparation(sid, runtime)
+                self.assertEqual(len(self.native.prepares), count)
+                self.assertEqual(
+                    (await self.preparation_row(sid))["prepare_action_id"],
+                    row["prepare_action_id"],
+                )
+
+    async def test_definite_failure_and_historical_receipts_hold(self):
+        from models import WorkspaceObservedState
+
+        for classification, historical in (
+            ("definite-failure", False),
+            ("confirmed", True),
+        ):
+            _, sid, runtime = await self.preparation_target()
+            self.native.prepare_classification = "pending"
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await self.ready_preparation(sid, runtime)
+            current = self.native.sessions[runtime]
+            receipt = replace(
+                current.workspace_preparation,
+                classification=classification,
+                historical=historical,
+            )
+            self.native.sessions[runtime] = replace(
+                current, workspace_preparation=receipt
+            )
+            with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                await self.ready_preparation(sid, runtime)
+            row = await self.preparation_row(sid)
+            self.assertEqual(row["prepare_state"], "failed")
+            self.assertEqual(
+                json.loads(row["prepare_receipt"])["historical"], historical
+            )
+            self.assertEqual(
+                await workspaces._observe(runtime, workspace_id=sid),
+                (
+                    WorkspaceObservedState.FAILED,
+                    "Workspace preparation failed; replace the session",
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+                await self.ready_preparation(sid, runtime)
+
+    async def test_profile_comes_from_binding_and_receipt_cannot_select_owner(self):
+        _, _, parent = await self.task()
+        _, _, child = await self.task(parent=parent)
+        for attempt, expected in ((parent, "supervisor"), (child, "child")):
+            runtime = (await ns.get_binding(attempt.session_id))["kagent_session_id"]
+            current = self.native.sessions[runtime]
+            self.assertEqual(
+                current.workspace_preparation.original.setup_profile, expected
+            )
+            request = next(
+                decoded
+                for raw in self.native.prepares
+                if (decoded := PreparationRequest.decode(raw)).session_id == runtime
+            )
+            self.assertEqual(request.setup_profile, expected)
+            enrollment = await self.enrolled(attempt.session_id)
+            self.assertEqual(
+                asdict(request.workspace), enrollment.plan.workspace.model_dump()
+            )
+            self.assertEqual(
+                asdict(request.development_environment),
+                enrollment.plan.development_environment.model_dump(
+                    include={"image", "platform", "policy_identity"}
+                ),
+            )
+            self.assertEqual(
+                asdict(request.runtime_composition),
+                enrollment.association.runtime_composition.model_dump(),
+            )
+            self.assertEqual(
+                (request.generation_id, request.actor_uid, request.prepared_revision),
+                (
+                    enrollment.association.runtime.generation_id,
+                    enrollment.association.runtime.actor_uid,
+                    enrollment.association.runtime.revision,
+                ),
+            )
+            malicious = replace(
+                current.workspace_preparation,
+                original=replace(
+                    current.workspace_preparation.original,
+                    setup_profile="agent",
+                    setup_digest="owner-claim",
+                ),
+            )
+            self.native.sessions[runtime] = replace(
+                current, workspace_preparation=malicious
+            )
+            count = len(self.native.prepares)
+            with self.assertRaisesRegex(ValueError, "git_prepare_conflict"):
+                await self.ready_preparation(attempt.session_id, runtime)
+            self.assertEqual(len(self.native.prepares), count)
+
+    async def test_every_send_requires_durable_confirmation_even_if_readiness_returns(
+        self,
+    ):
+        _, _, attempt = await self.task()
+        binding = await ns.get_binding(attempt.session_id)
+        current = self.native.sessions[binding["kagent_session_id"]]
+        emitted = []
+
+        async def send(*args, **kwargs):
+            emitted.append("turn bytes")
+            yield "event"
+
+        await self.pool.execute(
+            "UPDATE git_enrollments SET prepare_state='failed' WHERE binding_id=$1",
+            attempt.session_id,
+        )
+        with patch.object(
+            credentials, "ready_for_binding", AsyncMock(return_value=current)
+        ), patch.object(self.native, "send_message", send, create=True):
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await anext(ns._guarded_send(binding, current.agent))
+            await ns.ledger.bump_turns(attempt.session_id)
+            binding = await ns.get_binding(attempt.session_id)
+            self.assertEqual(binding["turns"], 1)
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await anext(ns._guarded_send(binding, current.agent))
+        self.assertFalse(emitted)
+
+    async def test_pre_send_waits_for_preparation_then_sends_once(self):
+        _, _, attempt = await self.task()
+        binding = await ns.get_binding(attempt.session_id)
+        current = self.native.sessions[binding["kagent_session_id"]]
+        confirmed = current.workspace_preparation
+        self.native.sessions[current.id] = replace(
+            current,
+            workspace_preparation=replace(confirmed, classification="uncertain"),
+        )
+        emitted = []
+
+        async def send(*args, **kwargs):
+            emitted.append("turn bytes")
+            yield "event"
+
+        with patch.object(self.native, "send_message", send, create=True):
+            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+                await anext(ns._guarded_send(binding, current.agent))
+            self.assertFalse(emitted)
+            self.native.sessions[current.id] = current
+            self.assertEqual(
+                await anext(ns._guarded_send(binding, current.agent)), "event"
+            )
+            self.assertEqual(emitted, ["turn bytes"])
+
+    async def test_prepare_marker_and_original_are_immutable_and_migration_reentrant(
+        self,
+    ):
+        _, _, attempt = await self.task()
+        await self.pool.execute(MIGRATION_SQL)
+        for query in (
+            "UPDATE git_enrollments SET prepare_action_id='other-action' WHERE binding_id=$1",
+            "UPDATE git_enrollments SET prepare_state='requested' WHERE binding_id=$1",
+            "UPDATE git_enrollments SET prepare_receipt=jsonb_set(prepare_receipt,'{original,setup_profile}','\"agent\"') WHERE binding_id=$1",
+        ):
+            with self.assertRaises(asyncpg.RaiseError):
+                await self.pool.execute(
+                    query,
+                    attempt.session_id,
+                )
+        self.assertEqual(
+            (await self.preparation_row(attempt.session_id))["prepare_state"],
+            "confirmed",
+        )
+
+    async def test_preparation_flags_off_preserve_native_task_behavior(self):
+        for git_enabled, push_enabled in ((False, False), (True, False), (False, True)):
+            count = len(self.native.prepares)
+            with patch.object(
+                settings, "git_transport_enabled", git_enabled
+            ), patch.object(settings, "push_gate_enabled", push_enabled):
+                _, _, attempt = await self.task()
+                self.assertEqual(attempt.state, "active")
+                binding = await ns.get_binding(attempt.session_id)
+                current = self.native.sessions[binding["kagent_session_id"]]
+
+                async def send(*args, **kwargs):
+                    yield "legacy event"
+
+                with patch.object(self.native, "send_message", send, create=True):
+                    self.assertEqual(
+                        await anext(ns._guarded_send(binding, current.agent)),
+                        "legacy event",
+                    )
+                self.assertEqual(len(self.native.prepares), count)
 
     async def test_actual_provisioning_active_parent_child_and_creating_read_only(self):
         from mainloop.tasks import lifecycle

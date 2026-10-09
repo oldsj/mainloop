@@ -321,6 +321,23 @@ same-session non-turn Suspend/Resume warmup and final fresh GetSession precede u
 UUID storage alone grants no authority. Unknown outcomes recover the original tuple; history
 without a plan is held rather than retrofitted. Default/protected workspaces receive read only.
 
+With both flags enabled, delegated supervisor/child sessions also prepare their checkout and
+native setup after read publication and before the first turn. Mainloop selects the setup
+profile only from its authoritative binding role; request data and receipts cannot select or
+change it. The original create plan and confirmed runtime association supply the fixed inputs.
+A durable requested action (including a lost reply), or a pending/uncertain receipt, displays
+`resuming` with "Preparing workspace". Ordinary suspension/resume keeps its lifecycle status,
+even when kagent temporarily projects a receipt as historical. Non-READY observations and
+operations in progress hold preparation without failing its durable state. A definite failure,
+conflicting action, or historical receipt from a fresh settled READY observation of the original
+runtime displays `failed` with "Workspace preparation failed; replace the session". Retrying
+cannot choose another action for that Session. A confirmed action is observed without calling
+Prepare again, which would open a new challenge. Owner (`agent`) setup remains unprepared
+pending the separate owner-profile integration; every Git-enrolled send requires confirmed
+preparation for its current issuance/create identity while both flags are enabled. A turn count
+retained from a previous native Session cannot bypass that gate. Disabling either flag preserves
+the existing preparation-free behavior.
+
 ## Task-backed workspaces
 
 Owner task creation and authenticated supervisor child creation use the same transaction-aware

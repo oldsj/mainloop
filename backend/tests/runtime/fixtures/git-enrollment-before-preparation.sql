@@ -1,6 +1,4 @@
-"""Git enrollment tombstones and evidence in the existing publication ledger."""
-
-GIT_TRANSPORT_MIGRATION_SQL = """
+-- Sanitized source migration from mainloop base 6ddd1610bc2034e29b950ac93a14427b6c50ceb4.
 -- NULL on preexisting bindings means their original dispatch history is unknown.
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS git_create_dispatched BOOLEAN;
 ALTER TABLE native_bindings ALTER COLUMN git_create_dispatched SET DEFAULT FALSE;
@@ -32,11 +30,6 @@ CREATE TABLE IF NOT EXISTS git_enrollments (
 );
 ALTER TABLE git_enrollments ADD COLUMN IF NOT EXISTS prepared_revision TEXT;
 ALTER TABLE git_enrollments ADD COLUMN IF NOT EXISTS reported_composition JSONB;
-ALTER TABLE git_enrollments ADD COLUMN IF NOT EXISTS prepare_action_id TEXT;
-ALTER TABLE git_enrollments ADD COLUMN IF NOT EXISTS prepare_state TEXT NOT NULL DEFAULT 'absent'
- CHECK(prepare_state IN ('absent','requested','confirmed','failed'));
--- Before dispatch this holds only the original request; classification is remote evidence.
-ALTER TABLE git_enrollments ADD COLUMN IF NOT EXISTS prepare_receipt JSONB;
 CREATE UNIQUE INDEX IF NOT EXISTS git_enrollment_live_binding
  ON git_enrollments(binding_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS git_enrollment_cleanup ON git_enrollments(issuance_id)
@@ -52,11 +45,6 @@ BEGIN
     OR (OLD.association IS NOT NULL AND NEW.association IS DISTINCT FROM OLD.association)
     OR (OLD.prepared_revision IS NOT NULL AND NEW.prepared_revision IS DISTINCT FROM OLD.prepared_revision)
     OR (OLD.reported_composition IS NOT NULL AND NEW.reported_composition IS DISTINCT FROM OLD.reported_composition)
-    OR (OLD.prepare_action_id IS NOT NULL AND NEW.prepare_action_id IS DISTINCT FROM OLD.prepare_action_id)
-    OR (OLD.prepare_receipt IS NOT NULL AND NEW.prepare_receipt->'original' IS DISTINCT FROM OLD.prepare_receipt->'original')
-    OR (OLD.prepare_state='failed' AND NEW.prepare_state<>'failed')
-    OR (OLD.prepare_state='confirmed' AND NEW.prepare_state NOT IN ('confirmed','failed'))
-    OR (OLD.prepare_state='requested' AND NEW.prepare_state='absent')
     OR (OLD.create_dispatched AND NOT NEW.create_dispatched)
     OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL) THEN
    RAISE EXCEPTION 'immutable Git enrollment';
@@ -79,4 +67,3 @@ UPDATE push_publications p SET owner_id=g.owner_id,
 CREATE INDEX IF NOT EXISTS push_unresolved_branch
  ON push_publications(owner_id,repository,branch)
  WHERE state IN ('dispatching','unknown');
-"""

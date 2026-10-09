@@ -17,7 +17,20 @@ from mainloop.push_gate import store
 from mainloop.push_gate.authorization import WORKSPACE_WRITER_PAIRS, protected_reason
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.agent_credentials import _binding_lock, reference_from_data
-from mainloop.runtime.kagent_client import RuntimeState, SessionCredential
+from mainloop.runtime.kagent_client import (
+    CHILD_SETUP_DIGEST,
+    SUPERVISOR_SETUP_DIGEST,
+    DevelopmentEnvironment,
+    OutcomeUnknown,
+    PreparationRequest,
+    RuntimeComposition,
+    RuntimeOperation,
+    RuntimeState,
+    SessionCredential,
+    SessionError,
+    SessionWorkspace,
+    Unreachable,
+)
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks import lifecycle
 
@@ -689,13 +702,37 @@ class GitSecretStore:
 secrets = GitSecretStore()
 
 
+async def _ready_preparation_session(client, runtime_id):
+    """Read the original runtime without turning lifecycle projections into failure.
+
+    kagent projects receipts as historical during suspension and operations. Only
+    a fresh READY/NONE GetSession can classify that evidence as terminal.
+    """
+    try:
+        current = await client.get_session(runtime_id)
+    except (OutcomeUnknown, Unreachable) as exc:
+        raise ValueError("git_prepare_pending") from exc
+    if (
+        current.state != RuntimeState.READY
+        or current.operation != RuntimeOperation.NONE
+    ):
+        raise ValueError("git_prepare_pending")
+    if current.id != runtime_id:
+        raise ValueError("runtime_changed")
+    return current
+
+
 async def reobserve(conn, enrollment, *, creating=False, trusted_client=None):
     no_transaction(conn)
     await validate_scope(conn, enrollment, creating=creating)
     if not enrollment.association:
         raise ValueError("git_enrollment_unconfirmed")
-    session = await (trusted_client or ns.get_client()).get_session(
-        enrollment.association.runtime.session_id
+    client = trusted_client or ns.get_client()
+    runtime_id = enrollment.association.runtime.session_id
+    session = (
+        await _ready_preparation_session(client, runtime_id)
+        if settings.git_transport_enabled and settings.push_gate_enabled
+        else await client.get_session(runtime_id)
     )
     if observation(enrollment.plan, session) != enrollment.association:
         raise ValueError("runtime_changed")
@@ -775,6 +812,169 @@ async def publish_read(conn, issuance_id):
 
 async def publish_push(conn, issuance_id):
     return await _publish(conn, issuance_id, "git-push")
+
+
+def preparation_profile_for_binding_role(role):
+    """Only the authoritative native binding selects standing, never a receipt.
+
+    Owner (agent) preparation awaits the separately qualified kagent agent profile.
+    """
+    if role == "agent":
+        return None
+    profiles = {
+        "supervisor": ("supervisor", SUPERVISOR_SETUP_DIGEST),
+        "child": ("child", CHILD_SETUP_DIGEST),
+    }
+    if role not in profiles:
+        raise ValueError("git_prepare_role_unsupported")
+    return profiles[role]
+
+
+async def _preparation_failed(
+    conn, issuance_id, code="git_prepare_failed", *, receipt=None
+):
+    async with conn.transaction():
+        await conn.execute(
+            """UPDATE git_enrollments SET prepare_state='failed',prepare_receipt=CASE
+            WHEN $2::jsonb IS NOT NULL AND prepare_receipt->'original'=$2::jsonb->'original'
+            THEN $2::jsonb ELSE prepare_receipt END WHERE issuance_id=$1""",
+            str(issuance_id),
+            json.dumps(asdict(receipt)) if receipt else None,
+        )
+    raise ValueError(code)
+
+
+async def prepare_for_binding(conn, issuance_id, client):
+    """Reconcile one immutable non-turn action under the caller's enrollment locks."""
+    if not (settings.git_transport_enabled and settings.push_gate_enabled):
+        return
+    no_transaction(conn)
+    row, enrollment = await enrollment_row(conn, issuance_id)
+    binding = await validate_scope(conn, enrollment, creating=True)
+    profile = preparation_profile_for_binding_role(binding["role"])
+    if profile is None:
+        return
+    if row["prepare_state"] == "failed":
+        raise ValueError("git_prepare_failed")
+    plan, association = enrollment.plan, enrollment.association
+    if (
+        not association
+        or not plan.development_environment
+        or not association.runtime_composition
+        or row["read_state"] != "published"
+    ):
+        await _preparation_failed(conn, issuance_id, "git_prepare_contract_unavailable")
+    action_id = "prep:" + str(plan.issuance_id)
+    # Every input comes from committed selection/association, including the role
+    # fetched above. Fresh Create/Get replies never supply setup inputs.
+    request = PreparationRequest(
+        session_id=association.runtime.session_id,
+        action_id=action_id,
+        create_request_id=str(plan.create_request_id),
+        generation_id=association.runtime.generation_id,
+        actor_uid=association.runtime.actor_uid,
+        prepared_revision=row["prepared_revision"],
+        workspace=SessionWorkspace(**plan.workspace.model_dump()),
+        development_environment=DevelopmentEnvironment(
+            **plan.development_environment.model_dump(
+                include={"image", "platform", "policy_identity"}
+            )
+        ),
+        runtime_composition=RuntimeComposition(
+            **association.runtime_composition.model_dump()
+        ),
+        setup_profile=profile[0],
+        setup_digest=profile[1],
+    )
+    original = asdict(request)
+    stored = json.loads(row["prepare_receipt"]) if row["prepare_receipt"] else None
+    if (row["prepare_action_id"] not in (None, action_id)) or (
+        stored is not None and stored.get("original") != original
+    ):
+        await _preparation_failed(conn, issuance_id, "git_prepare_conflict")
+    current = await _ready_preparation_session(client, request.session_id)
+    receipt = current.workspace_preparation
+    if receipt is None:
+        if row["prepare_state"] == "confirmed":
+            await _preparation_failed(conn, issuance_id, "git_prepare_receipt_missing")
+        if observation(plan, current) != association:
+            raise ValueError("runtime_changed")
+        # The request-only record is a local reservation, never completion evidence.
+        async with conn.transaction():
+            await conn.execute(
+                """UPDATE git_enrollments SET prepare_action_id=$2,
+                prepare_state='requested',prepare_receipt=$3::jsonb WHERE issuance_id=$1""",
+                str(issuance_id),
+                action_id,
+                json.dumps({"original": original}),
+            )
+        try:
+            receipt = await client.prepare_session_workspace(
+                request.session_id,
+                **{
+                    field: getattr(request, field)
+                    for field in original
+                    if field != "session_id"
+                },
+            )
+        except (OutcomeUnknown, Unreachable) as exc:
+            raise ValueError("git_prepare_pending") from exc
+        except SessionError as exc:
+            if exc.grpc_status != 6:
+                # A lifecycle race can reject Prepare after our READY read. Hold
+                # until READY again rather than permanently poisoning the action.
+                await _ready_preparation_session(client, request.session_id)
+            await _preparation_failed(
+                conn,
+                issuance_id,
+                (
+                    "git_prepare_conflict"
+                    if exc.grpc_status == 6
+                    else "git_prepare_failed"
+                ),
+            )
+        if receipt.historical or receipt.classification == "definite-failure":
+            # A Prepare reply has no current lifecycle state. Classify terminal
+            # evidence only through another fresh observation of the same runtime.
+            current = await _ready_preparation_session(client, request.session_id)
+            receipt = current.workspace_preparation
+            if receipt is None:
+                raise ValueError("git_prepare_pending")
+    elif row["prepare_action_id"] is None or stored is None:
+        # A foreign or historical action cannot be adopted into this enrollment.
+        await _preparation_failed(conn, issuance_id, "git_prepare_conflict")
+    if (
+        receipt.original != request
+        or receipt.context_id != association.context_id
+        or receipt.atespace != association.runtime.atespace
+        or receipt.actor_name != association.runtime.actor_name
+    ):
+        await _preparation_failed(conn, issuance_id, "git_prepare_conflict")
+    if receipt.historical or receipt.classification == "definite-failure":
+        state = "failed"
+    elif receipt.classification == "confirmed":
+        if observation(plan, current) != association:
+            await _preparation_failed(conn, issuance_id, "runtime_changed")
+        state = "confirmed"
+    elif receipt.classification in ("pending", "uncertain"):
+        # A read-only challenge can close admission after prior confirmation. Do
+        # not reopen our durable terminal state or dispatch another action.
+        if row["prepare_state"] == "confirmed":
+            raise ValueError("git_prepare_pending")
+        state = "requested"
+    else:
+        await _preparation_failed(conn, issuance_id, "git_prepare_receipt_invalid")
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE git_enrollments SET prepare_state=$2,prepare_receipt=$3::jsonb WHERE issuance_id=$1",
+            str(issuance_id),
+            state,
+            json.dumps(asdict(receipt)),
+        )
+    if state != "confirmed":
+        raise ValueError(
+            "git_prepare_failed" if state == "failed" else "git_prepare_pending"
+        )
 
 
 async def revoke_deferred(conn, binding_id):
@@ -857,6 +1057,12 @@ async def ready_for_binding(conn, binding_id, session, *, push=True):
         row, enrollment = await enrollment_row(conn, issuance)
         if row["revoked_at"]:
             raise ValueError("git_enrollment_revoked")
+        if (
+            settings.git_transport_enabled
+            and settings.push_gate_enabled
+            and row["prepare_state"] == "failed"
+        ):
+            raise ValueError("git_prepare_failed")
         await validate_scope(conn, enrollment, creating=True)
         client = ns.get_client()
         current = (
@@ -904,13 +1110,30 @@ async def ready_for_binding(conn, binding_id, session, *, push=True):
                     current, timeout=settings.kagent_session_ready_timeout_seconds
                 )
         # Never use Create/Resume/ensure_ready output as the association observation.
-        current = await client.get_session(session.id)
+        if settings.git_transport_enabled and settings.push_gate_enabled:
+            runtime_id = (
+                enrollment.association.runtime.session_id
+                if enrollment.association
+                else binding["kagent_session_id"]
+            )
+            if runtime_id != session.id:
+                raise ValueError("runtime_changed")
+            current = await _ready_preparation_session(client, runtime_id)
+            receipt = current.workspace_preparation
+            if receipt and (
+                receipt.historical or receipt.classification == "definite-failure"
+            ):
+                await _preparation_failed(conn, issuance, receipt=receipt)
+        else:
+            current = await client.get_session(session.id)
         enrollment = await confirm_ready(conn, binding_id, current)
         await conn.execute(
             "UPDATE git_enrollments SET warmup_state='complete' WHERE issuance_id=$1",
             issuance,
         )
         await publish_read(conn, issuance)
+        if settings.git_transport_enabled and settings.push_gate_enabled:
+            await prepare_for_binding(conn, issuance, client)
         from mainloop.push_gate import lifecycle as push_lifecycle
 
         if push:

@@ -164,7 +164,9 @@ def _manifest(row) -> WorkspaceManifest:
     )
 
 
-def state_of(session: KagentSession) -> tuple[WorkspaceObservedState, str | None]:
+def state_of(
+    session: KagentSession, *, prepare_state: str | None = None
+) -> tuple[WorkspaceObservedState, str | None]:
     """Map a kagent Session to a workspace state, with kagent's reason when it gave one."""
     if session.state == RuntimeState.FAILED:
         return (
@@ -187,6 +189,25 @@ def state_of(session: KagentSession) -> tuple[WorkspaceObservedState, str | None
         return WorkspaceObservedState.SUSPENDING, "Suspending."
     if session.state == RuntimeState.SUSPENDED:
         return WorkspaceObservedState.SUSPENDED, None
+    if (
+        settings.git_transport_enabled
+        and settings.push_gate_enabled
+        and session.state == RuntimeState.READY
+        and session.operation == RuntimeOperation.NONE
+    ):
+        receipt = session.workspace_preparation
+        if prepare_state == "failed" or (
+            receipt
+            and (receipt.historical or receipt.classification == "definite-failure")
+        ):
+            return (
+                WorkspaceObservedState.FAILED,
+                "Workspace preparation failed; replace the session",
+            )
+        if prepare_state == "requested" or (
+            receipt and receipt.classification in ("pending", "uncertain")
+        ):
+            return WorkspaceObservedState.RESUMING, "Preparing workspace"
     if session.state == RuntimeState.READY:
         return WorkspaceObservedState.RUNNING, None
     return WorkspaceObservedState.UNKNOWN, "kagent reported no state."
@@ -228,7 +249,25 @@ async def _observe(
         or session.runtime_composition is not None
     ):
         await ns.ledger.record_composition(workspace_id, session)
-    return state_of(session)
+    prepare_state = None
+    if (
+        workspace_id is not None
+        and settings.git_transport_enabled
+        and settings.push_gate_enabled
+    ):
+        async with db.connection() as conn:
+            preparation = await conn.fetchrow(
+                """SELECT e.prepare_state,e.create_request_id,b.session_id,b.kagent_request_id
+                FROM git_enrollments e JOIN native_bindings b ON b.session_id=e.binding_id
+                WHERE e.binding_id=$1 AND b.kagent_session_id=$2 AND e.revoked_at IS NULL""",
+                workspace_id,
+                session.id,
+            )
+            if preparation and preparation["create_request_id"] == ns._request_id(
+                dict(preparation)
+            ):
+                prepare_state = preparation["prepare_state"]
+    return state_of(session, prepare_state=prepare_state)
 
 
 async def _revoke_publication(
