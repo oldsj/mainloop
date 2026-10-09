@@ -273,6 +273,16 @@ is accepted as absence of rules from that endpoint and recorded in proposal CI e
 Readable GitHub rules remain enforced. Mainloop policy, protected paths, complete green CI,
 head SHA pinning and approval requirements remain mandatory.
 
+Queued app suites with no runs may be ignored only after a ten-minute creation-time
+grace period and only when their app cannot satisfy any app-bound required check.
+Missing or invalid age/app evidence stays pending. Required contexts still need
+successful existing runs/statuses; ignored suites never supply green evidence.
+The raw suite inventory and ignore reasons are persisted in CI evidence and covered
+by the proposal summary digest, with ignored suites excluded from active result
+counts. Fresh CI is re-evaluated before dispatch and recorded with the uncertain
+merge intent; settlement replaces that transient claim record with the outcome.
+See [Pull requests](pull-requests.md#evidence-and-dispatch) for the complete rule.
+
 ## Coding-task authority and settlement
 
 The task publication source pins task/attempt/workspace/writer generation in existing immutable

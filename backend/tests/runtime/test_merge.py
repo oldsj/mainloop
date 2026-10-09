@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import asyncpg
@@ -21,6 +22,7 @@ from mainloop.runtime.policy import PolicyError
 from mainloop.services import github_merge, merge, merge_authorization
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_repo import parse_github_repo
+from mainloop.tasks.projection import ci_state
 from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_context_model import KINDS, FakeStore
 from tests.runtime.test_hitl_observer import Gateway
@@ -36,6 +38,20 @@ from models.hitl import (
 SHA = "a" * 40
 BASE = "b" * 40
 MERGED = "c" * 40
+CAPTURED_AT = datetime(2026, 10, 9, 2, tzinfo=timezone.utc)
+
+
+def abandoned_suite(**changes):
+    return {
+        "id": 2,
+        "head_sha": SHA,
+        "app": {"id": 99, "slug": "cloudflare-workers-and-pages"},
+        "created_at": (CAPTURED_AT - timedelta(minutes=11)).isoformat(),
+        "latest_check_runs_count": 0,
+        "status": "queued",
+        "conclusion": None,
+        **changes,
+    }
 
 
 def default_branch_rules():
@@ -189,6 +205,273 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             "owner/repo", transport=app_transport(self.fake.handle)
         ) as client:
             return await client.evidence("owner/repo", 17, SHA)
+
+    async def captured_ci(self):
+        with patch.object(github_merge, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = CAPTURED_AT
+            ci = (await self.evidence())["ci"]
+            clock.now.assert_called_once_with(timezone.utc)
+            return ci
+
+    async def test_abandoned_suite_is_ignored_and_auditable(self):
+        suite = abandoned_suite()
+        self.fake.suites.append(suite)
+        ci = await self.captured_ci()
+        self.assertTrue(ci["green"])
+        self.assertFalse(ci["pending"])
+        self.assertFalse(ci["blocked"])
+        self.assertEqual(ci["captured_at"], "2026-10-09T02:00:00Z")
+        self.assertEqual(
+            ci["ignored_suites"],
+            [
+                {
+                    **suite,
+                    "reason": "queued_without_runs_past_grace_and_no_required_app",
+                }
+            ],
+        )
+        self.assertEqual(ci["suites"][1], suite)
+
+    async def test_collection_crossing_grace_does_not_ignore_pre_grace_suite(self):
+        for boundary in ("/branches/main/protection", "/rules/branches/main"):
+            with self.subTest(boundary=boundary):
+                self.fake = GitHub()
+                self.fake.suites.append(
+                    abandoned_suite(
+                        created_at=(CAPTURED_AT - timedelta(minutes=10)).isoformat()
+                    )
+                )
+                before = CAPTURED_AT - timedelta(seconds=1)
+                after = CAPTURED_AT + timedelta(seconds=1)
+                with patch.object(github_merge, "datetime", wraps=datetime) as clock:
+                    clock.now.return_value = before
+
+                    async def hook(req, boundary=boundary, after=after):
+                        if req.url.path.endswith(boundary):
+                            clock.now.return_value = after
+                            self.fake.runs.append(
+                                self.fake.run(
+                                    11,
+                                    name="deployment",
+                                    app={"id": 99},
+                                    check_suite={"id": 2},
+                                    status="in_progress",
+                                    conclusion=None,
+                                )
+                            )
+                            self.fake.suites[-1].update(
+                                status="in_progress", latest_check_runs_count=1
+                            )
+
+                    self.fake.hook = hook
+                    first = (await self.evidence())["ci"]
+                    self.fake.hook = None
+                    second = (await self.evidence())["ci"]
+                    self.assertEqual(clock.now.call_count, 2)
+
+                # The first inventory predates both grace expiry and the new run.
+                self.assertFalse(first["green"])
+                self.assertTrue(first["pending"])
+                self.assertEqual(first["captured_at"], "2026-10-09T01:59:59Z")
+                self.assertEqual(first["ignored_suites"], [])
+                self.assertEqual([run["id"] for run in first["checks"]], [10])
+                self.assertEqual(ci_state(first, SHA, now=after), "pending")
+                # A fresh collection must observe the new run and remain pending.
+                self.assertFalse(second["green"])
+                self.assertTrue(second["pending"])
+                self.assertEqual(second["captured_at"], "2026-10-09T02:00:01Z")
+                self.assertEqual(second["ignored_suites"], [])
+                self.assertEqual([run["id"] for run in second["checks"]], [10, 11])
+
+    async def test_suite_grace_boundary_and_invalid_creation_times_stay_pending(self):
+        for created_at in (
+            None,
+            "unparseable",
+            "2026-10-09T01:00:00",  # No timezone: age cannot be proved.
+            (CAPTURED_AT + timedelta(seconds=1)).isoformat(),
+            (CAPTURED_AT - timedelta(minutes=9)).isoformat(),
+            (CAPTURED_AT - github_merge.ABANDONED_SUITE_GRACE).isoformat(),
+        ):
+            with self.subTest(created_at=created_at):
+                self.fake.suites = [
+                    self.fake.suites[0],
+                    abandoned_suite(created_at=created_at),
+                ]
+                ci = await self.captured_ci()
+                self.assertFalse(ci["green"])
+                self.assertTrue(ci["pending"])
+                self.assertEqual(ci["ignored_suites"], [])
+        del self.fake.suites[-1]["created_at"]
+        self.assertTrue((await self.captured_ci())["pending"])
+
+    async def test_suite_age_uses_creation_time_and_timezone_not_update_time(self):
+        self.fake.suites.append(
+            abandoned_suite(
+                created_at="2026-10-08T17:49:59-08:00",
+                updated_at=CAPTURED_AT.isoformat(),
+            )
+        )
+        self.assertTrue((await self.captured_ci())["green"])
+
+    async def test_reported_suite_run_count_must_be_zero_or_absent(self):
+        for count in (1, None):
+            with self.subTest(count=count):
+                self.fake.suites = [
+                    self.fake.suites[0],
+                    abandoned_suite(latest_check_runs_count=count),
+                ]
+                ci = await self.captured_ci()
+                self.assertTrue(ci["pending"])
+                self.assertEqual(ci["ignored_suites"], [])
+        del self.fake.suites[-1]["latest_check_runs_count"]
+        self.assertTrue((await self.captured_ci())["green"])
+
+    async def test_suite_with_any_run_cannot_be_ignored_even_if_rerun_is_newer(self):
+        self.fake.suites.append(abandoned_suite())
+        self.fake.runs.insert(0, self.fake.run(9, check_suite={"id": 2}))
+        ci = await self.captured_ci()
+        self.assertFalse(ci["green"])
+        self.assertTrue(ci["pending"])
+        self.assertEqual(ci["ignored_suites"], [])
+
+    async def test_required_app_prevents_ignoring_suite_for_classic_and_rulesets(self):
+        self.fake.suites.append(abandoned_suite())
+        for source in ("classic", "ruleset"):
+            with self.subTest(source=source):
+                self.fake.protection = {"required_status_checks": None}
+                self.fake.rules = []
+                if source == "classic":
+                    self.fake.protection["required_status_checks"] = {
+                        "checks": [{"context": "build", "app_id": 99}],
+                        "contexts": [],
+                    }
+                else:
+                    self.fake.rules = [
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {
+                                "strict_required_status_checks_policy": False,
+                                "required_status_checks": [
+                                    {"context": "build", "integration_id": 99}
+                                ],
+                            },
+                        }
+                    ]
+                ci = await self.captured_ci()
+                self.assertFalse(ci["green"])
+                self.assertTrue(ci["pending"])
+                self.assertEqual(ci["ignored_suites"], [])
+
+    async def test_unbound_required_context_needs_an_existing_green_run_or_status(self):
+        self.fake.suites.append(abandoned_suite())
+        for app in (None, -1):
+            for source in ("run", "status", "missing"):
+                with self.subTest(app=app, source=source):
+                    self.fake.protection = {
+                        "required_status_checks": {
+                            "checks": [{"context": "required", "app_id": app}],
+                            "contexts": ["required"],
+                        }
+                    }
+                    self.fake.runs = [self.fake.run(10)]
+                    self.fake.statuses = []
+                    if source == "run":
+                        self.fake.runs.append(self.fake.run(11, name="required"))
+                    elif source == "status":
+                        self.fake.statuses = [
+                            {
+                                "id": 1,
+                                "context": "required",
+                                "state": "success",
+                                "created_at": "2026-10-09T01:00:00Z",
+                            }
+                        ]
+                    ci = await self.captured_ci()
+                    self.assertEqual(ci["green"], source != "missing")
+                    self.assertEqual(len(ci["ignored_suites"]), 1)
+
+    async def test_missing_suite_app_identity_stays_pending(self):
+        for app in (None, "absent"):
+            with self.subTest(app=app):
+                suite = abandoned_suite(app=app)
+                if app == "absent":
+                    del suite["app"]
+                self.fake.suites = [self.fake.suites[0], suite]
+                self.assertTrue((await self.captured_ci())["pending"])
+
+    async def test_suite_fields_used_for_ignoring_are_strictly_validated(self):
+        for field, value in (
+            ("app", {"id": "99"}),
+            ("app", {"id": True}),
+            ("app", {"id": 99, "slug": 123}),
+            ("created_at", 0),
+            ("latest_check_runs_count", "0"),
+            ("latest_check_runs_count", False),
+            ("latest_check_runs_count", -1),
+        ):
+            with self.subTest(field=field, value=value):
+                self.fake.suites = [
+                    self.fake.suites[0],
+                    abandoned_suite(**{field: value}),
+                ]
+                with self.assertRaises(ValueError):
+                    await self.captured_ci()
+
+    async def test_non_queued_suite_and_non_null_conclusion_cannot_be_ignored(self):
+        for status, conclusion, blocked in (
+            ("in_progress", None, False),
+            ("queued", "success", False),
+            ("completed", "failure", True),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.fake.suites = [
+                    self.fake.suites[0],
+                    abandoned_suite(status=status, conclusion=conclusion),
+                ]
+                ci = await self.captured_ci()
+                self.assertFalse(ci["green"])
+                self.assertEqual(ci["pending"], not blocked)
+                self.assertEqual(ci["blocked"], blocked)
+                self.assertEqual(ci["ignored_suites"], [])
+
+    async def test_only_ignored_suite_is_not_green_evidence(self):
+        self.fake.suites = [abandoned_suite()]
+        self.fake.runs = []
+        ci = await self.captured_ci()
+        self.assertFalse(ci["green"])
+        self.assertFalse(ci["pending"])
+        self.assertEqual(len(ci["ignored_suites"]), 1)
+
+    async def test_ignoring_suite_does_not_hide_unsuccessful_selected_runs_or_statuses(
+        self,
+    ):
+        self.fake.suites.append(abandoned_suite())
+        for status, conclusion, blocked in (
+            ("queued", None, False),
+            ("completed", "failure", True),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.fake.runs = [
+                    self.fake.run(11, status=status, conclusion=conclusion),
+                    self.fake.run(10),
+                ]
+                ci = await self.captured_ci()
+                self.assertFalse(ci["green"])
+                self.assertEqual(ci["pending"], not blocked)
+                self.assertEqual(ci["blocked"], blocked)
+                self.assertEqual(len(ci["checks"]), 1)
+        self.fake.runs = [self.fake.run(10)]
+        self.fake.statuses = [
+            {
+                "id": 1,
+                "context": "deploy",
+                "state": "failure",
+                "created_at": "2026-10-09T01:00:00Z",
+            }
+        ]
+        ci = await self.captured_ci()
+        self.assertFalse(ci["green"])
+        self.assertTrue(ci["blocked"])
 
     async def test_no_classic_protection_with_or_without_rulesets(self):
         self.fake.errors["/branches/main/protection"] = 404
@@ -1093,6 +1376,84 @@ class MergeTests(MergeFixture):
         self.assertEqual(
             json.loads(writes[0].content), {"sha": SHA, "merge_method": "squash"}
         )
+
+    async def test_ignored_suite_evidence_is_persisted_and_pinned_merge_can_succeed(
+        self,
+    ):
+        self.fake.suites.append(
+            abandoned_suite(
+                created_at=(
+                    datetime.now(timezone.utc) - timedelta(minutes=11)
+                ).isoformat()
+            )
+        )
+        proposal = await self.prepare()
+        self.assertEqual(proposal["summary"]["ci"]["ignored_suite_count"], 1)
+        self.assertEqual(proposal["summary"]["ci"]["pending_count"], 0)
+        saved = json.loads(
+            await self.pool.fetchval(
+                "SELECT facts FROM merge_proposals WHERE id=$1", proposal["proposal_id"]
+            )
+        )
+        self.assertEqual(
+            saved["ci"]["ignored_suites"], proposal["ci"]["ignored_suites"]
+        )
+        self.assertEqual((await self.execute(proposal))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_suite_can_age_past_grace_during_same_merge_evaluation(self):
+        captured_at = datetime.now(timezone.utc)
+        self.fake.suites.append(
+            abandoned_suite(
+                created_at=(captured_at - timedelta(minutes=11)).isoformat()
+            )
+        )
+        with patch.object(github_merge, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = captured_at - timedelta(minutes=2)
+            proposal = await self.prepare()
+            self.assertEqual(proposal["ci"]["ignored_suites"], [])
+            self.assertEqual((await self.execute(proposal))["state"], "evaluating")
+        self.assertEqual(len(self.fake.puts), 0)
+        self.assertEqual((await self.execute(proposal))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_ignored_suite_is_preserved_in_uncertain_intent(self):
+        self.fake.suites.append(
+            abandoned_suite(
+                created_at=(
+                    datetime.now(timezone.utc) - timedelta(minutes=11)
+                ).isoformat()
+            )
+        )
+        proposal = await self.prepare()
+        self.fake.lose = True
+        self.assertEqual((await self.execute(proposal))["state"], "uncertain")
+        intent = json.loads(
+            await self.pool.fetchval(
+                "SELECT result FROM merge_requests WHERE owner_id=$1", self.user
+            )
+        )
+        self.assertEqual(
+            intent["claim_evidence"]["ci"]["ignored_suites"],
+            proposal["ci"]["ignored_suites"],
+        )
+        self.assertEqual(intent["claim_evidence"]["ci_state"], "success")
+
+    async def test_fresh_run_prevents_previously_ignored_suite_from_authorizing_merge(
+        self,
+    ):
+        self.fake.suites.append(
+            abandoned_suite(
+                created_at=(
+                    datetime.now(timezone.utc) - timedelta(minutes=11)
+                ).isoformat()
+            )
+        )
+        proposal = await self.prepare()
+        self.assertTrue(proposal["ci"]["green"])
+        self.fake.runs.append(self.fake.run(11, check_suite={"id": 2}))
+        self.assertEqual((await self.execute(proposal))["state"], "evaluating")
+        self.assertEqual(len(self.fake.puts), 0)
 
     async def test_auto_no_human_card_pinned_squash_and_notification_dedup(self):
         results = await asyncio.gather(

@@ -50,6 +50,26 @@ def _ci_summary(ci):
         "captured_at": ci.get("captured_at"),
         "complete": ci.get("complete"),
     }
+    ignored = []
+    if "ignored_suites" in ci:
+        ignored = ci["ignored_suites"]
+        if not isinstance(ignored, list) or not all(
+            isinstance(item, dict)
+            and type(item.get("id")) is int
+            and isinstance(item.get("reason"), str)
+            and bool(item["reason"])
+            and item.get("status") == "queued"
+            and item.get("conclusion") is None
+            and {k: v for k, v in item.items() if k != "reason"} in suites
+            for item in ignored
+        ):
+            return None, None
+        ignored_ids = {item["id"] for item in ignored}
+        if len(ignored_ids) != len(ignored):
+            return None, None
+        # Preserve old immutable proposal digests when this field is absent.
+        inventory["ignored_suites"] = ignored
+        suites = [item for item in suites if item.get("id") not in ignored_ids]
     total = len(suites) + len(checks) + len(statuses)
     passed = sum(
         item.get("status") == "completed" and item.get("conclusion") == "success"
@@ -65,7 +85,7 @@ def _ci_summary(ci):
     pending = sum(
         item.get("status") in PENDING_CHECK_STATES for item in suites + checks
     ) + sum(item.get("state") == "pending" for item in statuses)
-    return {
+    summary = {
         "complete": ci.get("complete") is True
         and isinstance(ci.get("captured_at"), str)
         and bool(ci.get("captured_at")),
@@ -76,7 +96,10 @@ def _ci_summary(ci):
         "pending_count": pending,
         "green_at_preparation": ci.get("green") is True,
         "inventory_digest": canonical_digest(inventory),
-    }, inventory
+    }
+    if "ignored_suites" in ci:
+        summary["ignored_suite_count"] = len(ignored)
+    return summary, inventory
 
 
 def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
