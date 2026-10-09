@@ -92,7 +92,7 @@ class Gateway:
             creator="gateway-owner",
             agent=AgentRef("team", "agent"),
             prepared_revision="unknown-but-pinned",
-            a2a_authority=f"session-{sid}.team.actors.resources.substrate.ate.dev",
+            a2a_authority=f"session-{sid}-8e76f4241985b4a7.team.actors.resources.substrate.ate.dev",
         )
         self.sessions[sid] = session
         task = pending(session, f"task-{sid}", payload)
@@ -802,6 +802,30 @@ class HITLObserverTests(PostgresTestCase):
             ("missing-agent", {"agent": None}),
             ("bad-endpoint", {"agent": AgentRef("team", "../evil")}),
             ("bad-authority", {"a2a_authority": "https://attacker.example"}),
+            (
+                "other-session-authority",
+                {
+                    "a2a_authority": "session-other-8e76f4241985b4a7.team.actors.resources.substrate.ate.dev"
+                },
+            ),
+            (
+                "short-generation-authority",
+                {
+                    "a2a_authority": "session-short-generation-authority-8e76f42.team.actors.resources.substrate.ate.dev"
+                },
+            ),
+            (
+                "upper-generation-authority",
+                {
+                    "a2a_authority": "session-upper-generation-authority-8E76F4241985B4A7.team.actors.resources.substrate.ate.dev"
+                },
+            ),
+            (
+                "extra-label-authority",
+                {
+                    "a2a_authority": "session-extra-label-authority-8e76f4241985b4a7.x.team.actors.resources.substrate.ate.dev"
+                },
+            ),
             ("missing-revision", {"prepared_revision": ""}),
         ):
             session, _ = self.gateway.add(sid)

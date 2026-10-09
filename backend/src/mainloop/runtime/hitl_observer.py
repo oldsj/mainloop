@@ -82,9 +82,11 @@ class HITLObserver:
             raise Unavailable("Gateway agent identity is missing or invalid")
         if not live.prepared_revision or not live.context_id:
             raise Unavailable("Gateway revision/context is missing")
-        # This is a logical private actor identity, NEVER a URL to fetch.
+        # This is a logical private actor identity, NEVER a URL to fetch. kagent names
+        # each runtime generation's actor session-<id>-<16 hex>.
         if live.a2a_authority and not re.fullmatch(
-            rf"session-{re.escape(live.id)}\.{label}\.actors\.resources\.substrate\.ate\.dev",
+            rf"session-{re.escape(live.id)}(?:-[0-9a-f]{{16}})?\.{label}"
+            r"\.actors\.resources\.substrate\.ate\.dev",
             live.a2a_authority,
         ):
             raise Unavailable("Unexpected gateway runtime authority")
