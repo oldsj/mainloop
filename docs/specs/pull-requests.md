@@ -241,6 +241,31 @@ Every enumerated completed suite must have conclusion `success`, whether or not
 it emitted runs; a newer successful run or suite does not override an unsuccessful
 historical suite. Missing, unknown, cancelled, neutral and other non-success suite
 conclusions block merging. Normalized suite outcomes are retained in CI evidence.
+An abandoned app suite is ignored only when it is `queued` with a null conclusion,
+none of the commit's runs reference its suite ID, and its reported
+`latest_check_runs_count`, if present, is zero. Its timezone-qualified `created_at`
+must be more than ten minutes before the CI evidence's `captured_at`; missing,
+unparseable, timezone-free or future creation times remain pending. Missing app
+identity also remains pending. The suite's app ID must not match any app/integration
+ID required by classic protection or active rulesets, regardless of context name.
+An unbound required context (null or `-1` app ID) still needs an existing successful
+run or status; an ignored suite cannot satisfy it. Other nonterminal states remain
+pending, and completed suites still require success. Ignored suites alone never
+make CI green.
+
+The complete suite inventory is retained, with ignored suites additionally recorded
+in `ci.ignored_suites`, including suite ID, app ID/slug, creation time, reported run
+count and reason. The proposal CI inventory digest covers these decisions, while
+summary result/pass/fail/pending counts exclude ignored suites and report
+`ignored_suite_count` separately. Older proposals without this field retain their
+original summary digests. CI remains outside `pinned()` candidate identity: every
+evaluation reads it afresh, so a suite can age past the grace period within the
+existing deadline, and newly appearing runs or requirements can prevent an ignore.
+The uncertain merge intent records the fresh CI evidence accepted at dispatch;
+settlement replaces that transient claim record with the outcome. Proposal evidence
+remains immutable.
+See [GitHub check-suite API](https://docs.github.com/en/rest/checks/suites).
+
 Every selected run must be completed/success and every selected status success;
 neutral/skipped/unknown and empty overall evidence are never green. Required named
 and app-bound checks must exist. Check and status namespaces remain separate.
@@ -333,7 +358,7 @@ leaf's exact owner receipt. Task summaries and reports supply neither publicatio
 CI evidence records the exact head, collection timestamp, completeness and pending/failure
 state. Missing checks, unreadable evidence, a mismatched head, a future timestamp or evidence
 older than five minutes are unknown. Unknown and pending evidence cannot complete a task.
-The durable merge intent retains the successful exact-head evidence accepted at dispatch;
+The durable uncertain merge intent records the successful exact-head evidence accepted at dispatch;
 reconciliation of a lost response reads the PR and fresh exact-head checks without another PUT.
 A later policy edit cannot undo a merge already admitted under the recorded policy.
 
