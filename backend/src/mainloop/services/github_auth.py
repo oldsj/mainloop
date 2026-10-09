@@ -211,7 +211,10 @@ def endpoint(repository: str, method: str, path: str) -> dict[str, str]:
         if re.fullmatch(r"/issues/[0-9]+", suffix):
             return {"issues": "read"}
     elif method == "POST":
-        if suffix == "/pulls" or suffix.startswith("/pulls/"):
+        if suffix == "/pulls":
+            # GitHub validates the head branch, which needs Contents read.
+            return {"pull_requests": "write", "contents": "read"}
+        if suffix.startswith("/pulls/"):
             return {"pull_requests": "write"}
         if suffix.startswith("/issues/"):
             return {"pull_requests": "write"}

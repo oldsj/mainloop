@@ -327,7 +327,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ("GET", "/branches/main/protection", {"administration": "read"}),
             ("GET", "/rules/branches/main", {"metadata": "read"}),
             ("GET", "/pulls/17", {"pull_requests": "read"}),
-            ("POST", "/pulls", {"pull_requests": "write"}),
+            ("POST", "/pulls", {"pull_requests": "write", "contents": "read"}),
             ("GET", "/commits/abc/check-suites", {"checks": "read"}),
             ("GET", "/commits/abc/check-runs", {"checks": "read"}),
             ("GET", "/commits/abc/statuses", {"statuses": "read"}),
