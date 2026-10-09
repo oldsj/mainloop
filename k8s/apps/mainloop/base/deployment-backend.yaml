@@ -14,6 +14,8 @@ spec:
         app: mainloop-backend
     spec:
       serviceAccountName: mainloop-backend
+      securityContext:
+        fsGroup: 1000
       imagePullSecrets:
         - name: ghcr-secret
       containers:
@@ -140,3 +142,80 @@ spec:
               port: 8002
             initialDelaySeconds: 90
             periodSeconds: 10
+
+        - name: git
+          image: ghcr.io/oldsj/mainloop-backend:latest
+          command: [python, -m, mainloop.git_app]
+          ports:
+            - name: git-read
+              containerPort: 8003
+            - name: git-push
+              containerPort: 8004
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: mainloop-config
+            - secretRef:
+                name: mainloop-secrets
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-password
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-app-id
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-app-private-key
+          volumeMounts:
+            - name: git-spool
+              mountPath: /var/lib/mainloop/git
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+              ephemeral-storage: 1Gi
+            limits:
+              memory: 2Gi
+              cpu: 1000m
+              ephemeral-storage: 3Gi
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
+            initialDelaySeconds: 90
+            periodSeconds: 10
+      volumes:
+        - name: git-spool
+          emptyDir:
+            sizeLimit: 3Gi

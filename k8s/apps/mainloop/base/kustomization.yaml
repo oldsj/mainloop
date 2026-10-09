@@ -12,4 +12,6 @@ resources:
   - service-frontend.yaml
   - configmap.yaml
   - service-mcp.yaml
+  - service-git-read.yaml
+  - service-git-push.yaml
   - networkpolicy.yaml

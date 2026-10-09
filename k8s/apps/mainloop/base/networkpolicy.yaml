@@ -31,3 +31,27 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+---
+# Separate policy survives overlays that replace the REST/MCP ingress rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mainloop-git-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mainloop-backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+          podSelector:
+            matchLabels:
+              app: atenet-egress
+      ports:
+        - protocol: TCP
+          port: 8003
+        - protocol: TCP
+          port: 8004

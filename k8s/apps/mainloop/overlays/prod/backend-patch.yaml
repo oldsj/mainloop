@@ -50,3 +50,6 @@ spec:
             limits:
               cpu: 500m
               memory: 1Gi
+        - name: git
+          envFrom: *envFrom
+          env: *env

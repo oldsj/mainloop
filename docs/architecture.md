@@ -172,8 +172,14 @@ read revalidates the same credential stamp. No transaction spans external I/O.
 The existing publication ledger fences unresolved Git writes by owner/repository/branch across
 rotation, restart and successors. Cancellation revokes both purposes while retaining source,
 claim and operation state. Independent cleanup tombstones delete Git Secrets with UID
-preconditions. No production listeners, images, routes or Actor containment are installed;
-native handoff/retention/checkout adapters and live/runtime/package/GitOps gates remain separate.
+preconditions. Tracked source and GitOps manifests include the `mainloop.git_app` backend-image
+sidecar, `mainloop-git-read` / `mainloop-git-push` port-80 Services, and ingress restricted to
+`ate-system` pods labelled `app=atenet-egress` on listener ports 8003/8004. The upstream uses
+repository-scoped GitHub App installation tokens with `contents: read` for fetches and
+`contents: write` for pushes. `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` remain default off;
+disabled listeners refuse traffic. This tracked wiring is not proof of a deployed image,
+GitOps rollout or live Actor containment. Native handoff/retention/checkout adapters and
+live/runtime/package gates remain separate.
 See [Git authority](specs/push-gate.md).
 
 Native agents use the `mainloop` MCP server, a dedicated stateless Streamable HTTP listener
