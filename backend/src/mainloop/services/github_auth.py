@@ -171,12 +171,13 @@ class LoopCache:
 
 class GitHubAppAuth:
     def __init__(self, app_id: str, private_key: SecretStr):
+        app_id = app_id.strip(" \t\n\r\v\f")
         if not re.fullmatch(r"[1-9][0-9]*", app_id):
             raise PolicyError(
                 "configuration", "GITHUB_APP_ID must be a positive numeric App ID"
             )
         try:
-            encoded = private_key.get_secret_value()
+            encoded = private_key.get_secret_value().strip(" \t\n\r\v\f")
             pem = base64.b64decode(encoded, validate=True)
             key = load_pem_private_key(pem, password=None)
             if not isinstance(key, RSAPrivateKey) or key.key_size < 2048:

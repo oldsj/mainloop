@@ -127,7 +127,9 @@ see the [push gate specification](push-gate.md) for authority and remaining rele
 
 Backend GitHub REST calls use `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`, with no
 PAT or anonymous fallback. The private key is single-line standard base64 of an
-unencrypted RSA PEM, validated on first use without exposing the input. The App
+unencrypted RSA PEM, validated on first use without exposing the input. Leading and
+trailing ASCII whitespace is stripped from both values before validation; interior
+whitespace and wrapped base64 remain invalid. The App
 must be installed on each repository; installation IDs are discovered rather than
 configured. Tokens stay in backend memory and are narrowed to one repository and
 the endpoint's permissions. Native agents receive none of these App credentials.

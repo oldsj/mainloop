@@ -31,7 +31,9 @@ cannot authenticate to call `whoami`.
 Mainloop authenticates as a private GitHub App installed on selected repositories.
 The backend requires `GITHUB_APP_ID` (the positive numeric App ID) and
 `GITHUB_APP_PRIVATE_KEY` (single-line standard base64 of the complete unencrypted RSA PEM,
-at least 2048 bits). The key is decoded and validated at first GitHub use; invalid
+at least 2048 bits). Leading and trailing ASCII whitespace is stripped from both
+values; interior whitespace, including wrapped base64, is rejected. The key is
+decoded and validated at first GitHub use; invalid
 configuration errors never include its input. There is no installation ID setting,
 PAT fallback, or unauthenticated fallback. A repository without an installation is
 refused with `GitHub App not installed on <owner/repo>`.
