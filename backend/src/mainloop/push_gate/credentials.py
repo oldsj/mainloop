@@ -18,6 +18,7 @@ from mainloop.push_gate.authorization import WORKSPACE_WRITER_PAIRS, protected_r
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.agent_credentials import _binding_lock, reference_from_data
 from mainloop.runtime.kagent_client import (
+    AGENT_SETUP_DIGEST,
     CHILD_SETUP_DIGEST,
     SUPERVISOR_SETUP_DIGEST,
     DevelopmentEnvironment,
@@ -815,13 +816,9 @@ async def publish_push(conn, issuance_id):
 
 
 def preparation_profile_for_binding_role(role):
-    """Only the authoritative native binding selects standing, never a receipt.
-
-    Owner (agent) preparation awaits the separately qualified kagent agent profile.
-    """
-    if role == "agent":
-        return None
+    """Only the authoritative native binding selects standing, never a receipt."""
     profiles = {
+        "agent": ("agent", AGENT_SETUP_DIGEST),
         "supervisor": ("supervisor", SUPERVISOR_SETUP_DIGEST),
         "child": ("child", CHILD_SETUP_DIGEST),
     }

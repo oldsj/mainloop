@@ -6,12 +6,15 @@ import copy
 import json
 import uuid
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import asyncpg
+import httpx
 from kubernetes.client.exceptions import ApiException
+from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.postgres import MIGRATION_SQL
@@ -23,6 +26,7 @@ from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import workspaces
 from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.kagent_client import (
+    AGENT_SETUP_DIGEST,
     CurrentRuntimeAssociation,
     KagentSession,
     OutcomeUnknown,
@@ -33,12 +37,17 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SessionError,
 )
+from mainloop.services import github_checkout
+from mainloop.services.github_creation import GitHubCreationClient
 from mainloop.services.github_pr import RepoMetadata
 from mainloop.tasks.lifecycle import LifecycleDenied
+from tests.runtime.github_app_fake import app_settings
+from tests.runtime.test_github_checkout import CheckoutServer
 from tests.runtime.test_postgres_ledger import PostgresTestCase
 
 from models import WorkspaceManifest
 from models.push_gate import GitCreatePlan, ProtectedBranchPolicy, PushGrant
+from models.workspace import WorkspaceEnvironment
 
 
 class FakeGitSecrets:
@@ -262,9 +271,12 @@ class GitCredentialsCase(PostgresTestCase):
         await super().asyncSetUp()
         self.kube = FakeGitSecrets()
         self.native = NativeGitClient(self.pool, self.kube)
+        self.real_ref_resolver = github_checkout.resolve_checkout_ref
+        self.ref_resolver = AsyncMock(return_value="a" * 40)
         for patcher in (
             patch.object(settings, "git_transport_enabled", True),
             patch.object(settings, "push_gate_enabled", True),
+            patch.object(github_checkout, "resolve_checkout_ref", self.ref_resolver),
             patch.object(ns, "get_client", return_value=self.native),
             patch.object(credentials, "secrets", credentials.GitSecretStore(self.kube)),
             patch.object(
@@ -296,7 +308,7 @@ class GitCredentialsCase(PostgresTestCase):
         )
         self.authority = PostgresTransportAuthority(db, self.native, self.metadata)
 
-    async def enroll(self, branch="feature"):
+    async def enroll(self, branch="feature", ref=""):
         async with self.pool.acquire() as conn, conn.transaction():
             enrolled = await workspaces.enroll_session(
                 conn,
@@ -305,11 +317,17 @@ class GitCredentialsCase(PostgresTestCase):
                 role="agent",
                 mcp_grant_kind="workspace",
                 manifest=WorkspaceManifest(
-                    repo_url="https://github.com/Owner/Repo", branch=branch
+                    repo_url="https://github.com/Owner/Repo", branch=branch, ref=ref
                 ),
                 project_id=self.pid,
                 claim_branch=True,
-                environment=None,
+                environment=WorkspaceEnvironment(
+                    environment_id="fixture-env",
+                    version_id="fixture-version",
+                    image="ghcr.io/example/dev@sha256:" + "a" * 64,
+                    platform="linux/arm64",
+                    policy_identity="fixture-version:oci-static-v2",
+                ),
             )
         return enrolled.workspace_id
 
@@ -332,8 +350,261 @@ class GitCredentialsCase(PostgresTestCase):
             plan, "git-push"
         )
 
+    async def creation_counts(self):
+        return dict(
+            await self.pool.fetchrow(
+                """SELECT
+            (SELECT count(*) FROM main_threads) AS main_threads,
+            (SELECT count(*) FROM conversations) AS conversations,
+            (SELECT count(*) FROM sessions) AS sessions,
+            (SELECT count(*) FROM workspaces) AS workspaces,
+            (SELECT count(*) FROM native_bindings) AS native_bindings,
+            (SELECT count(*) FROM tasks) AS tasks,
+            (SELECT count(*) FROM task_attempts) AS task_attempts,
+            (SELECT count(*) FROM task_operations) AS task_operations,
+            (SELECT count(*) FROM workspace_writer_claims) AS workspace_writer_claims,
+            (SELECT count(*) FROM git_enrollments) AS git_enrollments"""
+            )
+        )
+
+
+class OwnerWorkspaceApiCheckoutTests(GitCredentialsCase):
+    """Public owner routes with real admission/DB and offline GitHub/native effects."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.server = CheckoutServer()
+        self.server.sha = "b" * 40
+        self.resolve = AsyncMock(wraps=self.real_ref_resolver)
+        for patcher in (
+            patch.object(settings, "owner_id", self.user),
+            patch.object(settings, "api_hosts", "test"),
+            app_settings(),
+            patch.object(github_checkout, "resolve_checkout_ref", self.resolve),
+            patch.object(
+                github_checkout,
+                "GitHubCreationClient",
+                partial(
+                    GitHubCreationClient,
+                    transport=httpx.MockTransport(self.server.handle),
+                ),
+            ),
+            patch(
+                "mainloop.environments.resolution.resolve",
+                AsyncMock(
+                    return_value=WorkspaceEnvironment(
+                        environment_id="fixture-env",
+                        version_id="fixture-version",
+                        image="ghcr.io/example/dev@sha256:" + "a" * 64,
+                        platform="linux/arm64",
+                        policy_identity="fixture-version:oci-static-v2",
+                    )
+                ),
+            ),
+            patch.object(workspaces, "publish", AsyncMock()),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=api.app), base_url="http://test"
+        )
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def project_count(self):
+        return await self.pool.fetchval("SELECT count(*) FROM projects")
+
+    async def assert_frozen(self, response, branch):
+        self.assertEqual(response.status_code, 201, response.text)
+        sid = response.json()["workspace_id"]
+        row = await self.pool.fetchrow(
+            "SELECT ref,branch FROM workspaces WHERE session_id=$1", sid
+        )
+        self.assertEqual((row["ref"], row["branch"]), (self.server.sha, branch))
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT base_branch FROM sessions WHERE id=$1", sid
+            ),
+            self.server.sha,
+        )
+        self.assertEqual((await self.enrolled(sid)).plan.workspace.ref, self.server.sha)
+
+    async def test_empty_owner_ref_uses_remote_default_even_with_a_stored_default(self):
+        await self.pool.execute(
+            "UPDATE projects SET default_branch='stale-main' WHERE id=$1", self.pid
+        )
+        for index, target in enumerate(
+            ({"project_id": self.pid}, {"repo": "Owner/Repo"})
+        ):
+            with self.subTest(target=target):
+                self.resolve.reset_mock()
+                branch = f"remote-default-{index}"
+                response = await self.client.post(
+                    "/workspaces", json={**target, "branch": branch}
+                )
+                await self.assert_frozen(response, branch)
+                self.resolve.assert_awaited_once_with("owner/repo", "")
+        commits = [
+            r.url.path for r in self.server.requests if "/commits/" in r.url.path
+        ]
+        self.assertEqual(commits, ["/repos/owner/repo/commits/trunk"] * 2)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT default_branch FROM projects WHERE id=$1", self.pid
+            ),
+            "stale-main",
+        )
+
+    async def test_unavailable_repo_ref_leaves_project_counts_unchanged(self):
+        self.server.status = 404
+        before_projects = await self.project_count()
+        before_rows = await self.creation_counts()
+        response = await self.client.post(
+            "/workspaces",
+            json={"repo": "owner/new-repo", "branch": "missing", "ref": "unavailable"},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("could not be resolved", response.json()["detail"])
+        self.resolve.assert_awaited_once_with("owner/new-repo", "unavailable")
+        self.assertEqual(await self.project_count(), before_projects)
+        self.assertEqual(await self.creation_counts(), before_rows)
+        self.assertFalse(self.native.creates)
+        self.assertFalse(self.kube.objects)
+
+    async def test_unavailable_repo_ref_does_not_touch_an_existing_project(self):
+        self.server.status = 404
+        await self.pool.execute(
+            "UPDATE projects SET last_used_at='2020-01-01T00:00:00Z' WHERE id=$1",
+            self.pid,
+        )
+        before = await self.pool.fetchrow(
+            "SELECT * FROM projects WHERE id=$1", self.pid
+        )
+        before_projects = await self.project_count()
+        before_rows = await self.creation_counts()
+        response = await self.client.post(
+            "/workspaces",
+            json={"repo": "owner/repo", "branch": "missing", "ref": "unavailable"},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(
+            await self.pool.fetchrow("SELECT * FROM projects WHERE id=$1", self.pid),
+            before,
+        )
+        self.assertEqual(await self.project_count(), before_projects)
+        self.assertEqual(await self.creation_counts(), before_rows)
+        self.assertFalse(self.native.creates)
+        self.assertFalse(self.kube.objects)
+
+    async def test_repo_ref_resolves_before_insert_and_is_reused_by_enrollment(self):
+        before_projects = await self.project_count()
+
+        async def resolve(repository, ref):
+            self.assertEqual(await self.project_count(), before_projects)
+            return await self.real_ref_resolver(repository, ref)
+
+        self.resolve.side_effect = resolve
+        response = await self.client.post(
+            "/workspaces",
+            json={
+                "repo": "owner/new-repo",
+                "branch": "new-workspace",
+                "ref": "base/topic",
+            },
+        )
+        await self.assert_frozen(response, "new-workspace")
+        self.resolve.assert_awaited_once_with("owner/new-repo", "base/topic")
+        self.assertEqual(await self.project_count(), before_projects + 1)
+        self.assertEqual(len(self.native.creates), 1)
+
 
 class GitCredentialTests(GitCredentialsCase):
+    async def test_owner_freezes_default_branch_tag_and_sha_before_rows(self):
+        from functools import partial
+
+        import httpx
+        from mainloop.services.github_creation import GitHubCreationClient
+        from tests.runtime.github_app_fake import app_settings
+        from tests.runtime.test_github_checkout import CheckoutServer
+
+        server = CheckoutServer()
+        with (
+            app_settings(),
+            patch.object(
+                github_checkout, "resolve_checkout_ref", self.real_ref_resolver
+            ),
+            patch.object(
+                github_checkout,
+                "GitHubCreationClient",
+                partial(
+                    GitHubCreationClient, transport=httpx.MockTransport(server.handle)
+                ),
+            ),
+        ):
+            for index, ref in enumerate(("", "base/topic", "v1.2.3", "a" * 40)):
+                sid = await self.enroll(branch=f"owner-ref-{index}", ref=ref)
+                row = await self.pool.fetchrow(
+                    "SELECT ref,branch FROM workspaces WHERE session_id=$1", sid
+                )
+                self.assertEqual(
+                    (row["ref"], row["branch"]), ("a" * 40, f"owner-ref-{index}")
+                )
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT base_branch FROM sessions WHERE id=$1", sid
+                    ),
+                    "a" * 40,
+                )
+        self.assertFalse(self.native.creates)
+
+    async def test_owner_ref_failure_precedes_any_enrollment_or_create(self):
+        before = await self.creation_counts()
+        self.ref_resolver.side_effect = github_checkout.CheckoutRefUnavailable(
+            "Checkout ref could not be resolved to a GitHub commit."
+        )
+        with self.assertRaisesRegex(
+            workspaces.WorkspaceRejected, "could not be resolved"
+        ):
+            await self.enroll(ref="missing")
+        self.assertEqual(await self.creation_counts(), before)
+        self.assertFalse(self.native.creates)
+        self.assertFalse(self.kube.objects)
+
+    async def test_owner_create_loss_retry_and_replacement_reuse_frozen_sha(self):
+        sid = await self.enroll(ref="feature/base")
+        self.ref_resolver.assert_awaited_once_with("owner/repo", "feature/base")
+        self.native.lose_create = True
+        await workspaces._create_session(sid, self.user, reject_removes_rows=False)
+        first = (await self.enrolled(sid)).plan
+        self.ref_resolver.return_value = "b" * 40
+        await workspaces._create_session(sid, self.user, reject_removes_rows=False)
+        self.assertEqual((await self.enrolled(sid)).plan, first)
+        self.assertEqual(self.native.creates[0], self.native.creates[1])
+        self.assertEqual(
+            (first.workspace.ref, first.workspace.branch), ("a" * 40, "feature")
+        )
+        old = await ns.get_binding(sid)
+        await self.native.delete_session(old["kagent_session_id"])
+        await ns._replace_kagent_session(old)
+        await workspaces._create_session(sid, self.user, reject_removes_rows=False)
+        replacement = (await self.enrolled(sid)).plan
+        self.assertNotEqual(replacement.create_request_id, first.create_request_id)
+        self.assertEqual(replacement.workspace.ref, first.workspace.ref)
+        self.assertEqual(self.ref_resolver.await_count, 1)
+
+    async def test_owner_enrollment_leaves_refs_unchanged_when_either_flag_is_off(self):
+        for git, push in ((False, False), (False, True), (True, False)):
+            with patch.object(settings, "git_transport_enabled", git), patch.object(
+                settings, "push_gate_enabled", push
+            ):
+                sid = await self.enroll(branch=f"off-{git}-{push}", ref="base-branch")
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT ref FROM workspaces WHERE session_id=$1", sid
+                    ),
+                    "base-branch",
+                )
+        self.ref_resolver.assert_not_awaited()
+
     async def test_replacement_first_send_requires_confirmation(self):
         # Adapted from prep-slice2/review-probes.py: use the actual replacement,
         # readiness and send paths, with a binding-wide completed-turn count.
@@ -345,7 +616,9 @@ class GitCredentialTests(GitCredentialsCase):
         old = await ns.get_binding(sid)
         await self.native.delete_session(old["kagent_session_id"])
         await ns._replace_kagent_session(old)
-        await workspaces._create_session(sid, self.user, reject_removes_rows=False)
+        self.native.prepare_not_received = True
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await workspaces._create_session(sid, self.user, reject_removes_rows=False)
         binding = await ns.get_binding(sid)
         row = await self.pool.fetchrow(
             "SELECT * FROM git_enrollments WHERE binding_id=$1 AND revoked_at IS NULL",
@@ -354,14 +627,15 @@ class GitCredentialTests(GitCredentialsCase):
         current = self.native.sessions[binding["kagent_session_id"]]
         self.assertNotEqual(current.id, old["kagent_session_id"])
         self.assertEqual(binding["turns"], 1)
-        self.assertEqual(row["prepare_state"], "absent")
-        self.assertFalse(self.native.prepares)
+        self.assertEqual(row["prepare_state"], "requested")
+        self.assertEqual(len(self.native.prepares), 1)
         emitted = []
 
         async def send(*args, **kwargs):
             emitted.append("turn bytes")
             yield "first event"
 
+        self.native.prepare_not_received = True
         error = None
         with patch.object(self.native, "send_message", send, create=True):
             events = ns._guarded_send(binding, current.agent)
@@ -399,14 +673,17 @@ class GitCredentialTests(GitCredentialsCase):
         for field in ("plan", "plan_digest", "association", "read_state", "push_state"):
             self.assertEqual(after[field], before[field])
 
-    async def test_owner_preparation_is_deferred_and_first_turn_is_held(self):
+    async def test_owner_preparation_uses_agent_profile_and_allows_first_turn(self):
         sid = await self.create()
         row = await self.pool.fetchrow(
             "SELECT * FROM git_enrollments WHERE binding_id=$1", sid
         )
-        self.assertEqual(row["prepare_state"], "absent")
-        self.assertIsNone(row["prepare_action_id"])
-        self.assertFalse(self.native.prepares)
+        self.assertEqual(row["prepare_state"], "confirmed")
+        request = PreparationRequest.decode(self.native.prepares[0])
+        self.assertEqual(
+            (request.setup_profile, request.setup_digest), ("agent", AGENT_SETUP_DIGEST)
+        )
+        self.assertEqual(request.workspace.ref, "a" * 40)
         binding = await ns.get_binding(sid)
         current = self.native.sessions[binding["kagent_session_id"]]
         emitted = []
@@ -416,9 +693,12 @@ class GitCredentialTests(GitCredentialsCase):
             yield "event"
 
         with patch.object(self.native, "send_message", send, create=True):
-            with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
-                await anext(ns._guarded_send(binding, current.agent))
-        self.assertFalse(emitted)
+            events = ns._guarded_send(binding, current.agent)
+            try:
+                self.assertEqual(await anext(events), "event")
+            finally:
+                await events.aclose()
+        self.assertEqual(emitted, ["turn bytes"])
 
     async def test_complete_native_enrollment_and_purpose_separation(self):
         sid = await self.create()
@@ -848,7 +1128,9 @@ class GitTaskCredentialTests(GitCredentialsCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    async def task(self, *, parent=None, ready=True, branch=None):
+    async def task(
+        self, *, parent=None, ready=True, branch=None, ref="a" * 40, request_id=None
+    ):
         from mainloop.tasks import lifecycle
         from mainloop.tasks.principal import TaskPrincipal
         from mainloop.tasks.service import mutate
@@ -862,13 +1144,13 @@ class GitTaskCredentialTests(GitCredentialsCase):
                     conn, await ns.get_binding(parent.session_id, conn=conn)
                 )
         request = TaskCreate(
-            request_id=uuid.uuid4().hex,
+            request_id=request_id or uuid.uuid4().hex,
             title="fixture",
             brief="fixture brief",
             mode="code",
             project_id=self.pid,
             checkout=TaskCheckout(
-                branch=branch or "feature/" + uuid.uuid4().hex, ref="a" * 40
+                branch=branch or "feature/" + uuid.uuid4().hex, ref=ref
             ),
         )
         async with self.pool.acquire() as conn, conn.transaction():
@@ -888,6 +1170,108 @@ class GitTaskCredentialTests(GitCredentialsCase):
         session = await ns._create_bound_session(binding)
         await ns.ledger.update_binding(attempt.session_id, kagent_session_id=session.id)
         return operation, attempt.session_id, session.id
+
+    async def test_task_freezes_default_ref_before_admission(self):
+        await self.assert_task_ref_frozen("")
+
+    async def test_task_freezes_branch_ref_before_admission(self):
+        await self.assert_task_ref_frozen("base/topic")
+
+    async def test_task_freezes_tag_ref_before_admission(self):
+        await self.assert_task_ref_frozen("v1.2.3")
+
+    async def test_task_verifies_full_sha_before_admission(self):
+        await self.assert_task_ref_frozen("a" * 40)
+
+    async def assert_task_ref_frozen(self, ref):
+        from functools import partial
+
+        import httpx
+        from mainloop.services.github_creation import GitHubCreationClient
+        from tests.runtime.github_app_fake import app_settings
+        from tests.runtime.test_github_checkout import CheckoutServer
+
+        server = CheckoutServer()
+        with (
+            app_settings(),
+            patch.object(
+                github_checkout, "resolve_checkout_ref", self.real_ref_resolver
+            ),
+            patch.object(
+                github_checkout,
+                "GitHubCreationClient",
+                partial(
+                    GitHubCreationClient, transport=httpx.MockTransport(server.handle)
+                ),
+            ),
+        ):
+            _, task, attempt = await self.task(ready=False, ref=ref)
+            self.assertEqual(task.checkout.ref, "a" * 40)
+            row = await self.pool.fetchrow(
+                "SELECT ref,branch FROM workspaces WHERE session_id=$1",
+                attempt.session_id,
+            )
+            self.assertEqual(
+                (row["ref"], row["branch"]), ("a" * 40, task.checkout.branch)
+            )
+        self.assertFalse(self.native.creates)
+
+    async def test_task_ref_failure_rolls_back_before_admission(self):
+        from mainloop.db.tasks import TaskError
+
+        before = await self.creation_counts()
+        self.ref_resolver.side_effect = github_checkout.CheckoutRefUnavailable(
+            "ref unavailable"
+        )
+        with self.assertRaises(TaskError) as raised:
+            await self.task(ready=False, ref="missing")
+        self.assertEqual(
+            (raised.exception.status, raised.exception.code),
+            (422, "checkout_ref_unavailable"),
+        )
+        self.assertEqual(await self.creation_counts(), before)
+        self.assertFalse(self.native.creates)
+        self.assertFalse(self.kube.objects)
+
+    async def test_task_idempotent_request_and_runtime_retry_keep_initial_sha(self):
+        args = dict(
+            ready=False,
+            branch="frozen-task",
+            ref="base-branch",
+            request_id="frozen-task-create",
+        )
+        operation, task, attempt = await self.task(**args)
+        self.ref_resolver.assert_awaited_once_with("Owner/Repo", "base-branch")
+        self.assertEqual(
+            (task.checkout.ref, task.checkout.branch), ("a" * 40, "frozen-task")
+        )
+        self.native.lose_create = True
+        await self.worker.reconcile(db, operation)
+        plan = (await self.enrolled(attempt.session_id)).plan
+        self.ref_resolver.return_value = "b" * 40
+        replay, task, replay_attempt = await self.task(**args)
+        self.assertEqual((replay.id, replay_attempt.id), (operation.id, attempt.id))
+        self.assertEqual(task.checkout.ref, "a" * 40)
+        await self.worker.reconcile(db, replay)
+        self.assertEqual((await self.enrolled(attempt.session_id)).plan, plan)
+        self.assertEqual(self.native.creates[0], self.native.creates[1])
+        self.assertEqual(self.ref_resolver.await_count, 1)
+
+    async def test_task_refs_unchanged_when_either_flag_is_off(self):
+        for git, push in ((False, False), (False, True), (True, False)):
+            with patch.object(settings, "git_transport_enabled", git), patch.object(
+                settings, "push_gate_enabled", push
+            ):
+                _, task, attempt = await self.task(ready=False, ref="base-branch")
+                self.assertEqual(task.checkout.ref, "base-branch")
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT ref FROM workspaces WHERE session_id=$1",
+                        attempt.session_id,
+                    ),
+                    "base-branch",
+                )
+        self.ref_resolver.assert_not_awaited()
 
     async def preparation_row(self, sid):
         return await self.pool.fetchrow(

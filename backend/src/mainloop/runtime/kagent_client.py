@@ -747,12 +747,13 @@ class CurrentRuntimeAssociation:
         return cls(*values, bool(active))
 
 
-# kagent Standing(), go/harness/runtime/workspace/preparation.go at d6de0e40.
+# kagent Standing(), go/harness/runtime/workspace/preparation.go at 796e90b5.
 # These are kagent's fixed setup inputs, independent of Mainloop's standing text.
 SUPERVISOR_SETUP_DIGEST = (
     "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6"
 )
 CHILD_SETUP_DIGEST = "7e8a64abb17aaa575ab317f07ad673defc495d97adb641283e5d1cc636b30258"
+AGENT_SETUP_DIGEST = "a5fb1bb1e406ff7937b9d9e2e862dff43925d4df54d4bdd9fb010d7e2825ccb3"
 
 
 def _preparation_fields(

@@ -38,6 +38,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SessionError,
 )
+from mainloop.services import github_checkout
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks import lifecycle
 from mainloop.tasks.principal import TaskPrincipal
@@ -108,6 +109,7 @@ class Provisioning:
 
         environment = None
         manifest = None
+        checkout = request.checkout
         if request.mode == "code":
             project = await store.project(conn, request.project_id, principal.owner_id)
             from mainloop.db.environments import EnvironmentError
@@ -120,11 +122,19 @@ class Provisioning:
             except EnvironmentError as exc:
                 raise store.TaskError(422, "environment_unavailable") from exc
             repository = parse_github_repo(project["full_name"]).full_name
+            if settings.git_transport_enabled and settings.push_gate_enabled:
+                try:
+                    sha = await github_checkout.resolve_checkout_ref(
+                        repository, checkout.ref
+                    )
+                except github_checkout.CheckoutRefUnavailable as exc:
+                    raise store.TaskError(422, "checkout_ref_unavailable") from exc
+                checkout = checkout.model_copy(update={"ref": sha})
             manifest = WorkspaceManifest(
                 repo_url=f"https://github.com/{repository}",
-                ref=request.checkout.ref,
-                branch=request.checkout.branch,
-                depth=request.checkout.depth,
+                ref=checkout.ref,
+                branch=checkout.branch,
+                depth=checkout.depth,
                 agent_kind=profile.id,
             )
 
@@ -145,7 +155,7 @@ class Provisioning:
             selection_source=source,
             provider_constraint=constraint,
             accepted_environment=environment,
-            checkout=request.checkout,
+            checkout=checkout,
             created_at=now,
             updated_at=now,
         )
@@ -170,6 +180,7 @@ class Provisioning:
                 prompt=task.brief,
                 environment=environment,
                 claim_branch=False,
+                checkout_resolved=True,
             )
         except (workspaces.WorkspaceConflict, workspaces.WorkspaceRejected) as exc:
             raise store.TaskError(422, "workspace_unavailable") from exc
@@ -806,6 +817,7 @@ async def enroll_successor(conn, task, source, profile, operation, checkpoint):
         prompt=task.brief,
         environment=task.accepted_environment,
         claim_branch=False,
+        checkout_resolved=True,
     )
     attempt = await lifecycle.save_attempt(
         conn,

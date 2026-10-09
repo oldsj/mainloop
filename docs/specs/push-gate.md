@@ -38,6 +38,12 @@ MCP/read/optional-push references, attempt/claim generation and reserved push ve
 and protected workspaces reserve read only; coordination sessions receive no Git plan. Historical
 or dispatched bindings without a plan cannot be retrofitted. Missing dispatch history is a hold.
 
+With both gates enabled, new task and owner workspace checkouts resolve to full commit SHAs
+through the repository-scoped GitHub App commits endpoint (`contents: read`) before admission
+rows and the create plan are frozen. Empty refs resolve GitHub's current default branch; explicit
+branches, tags and SHAs are verified. An unavailable ref refuses creation. Retries reuse the
+frozen SHA; handoff successors retain their verified `remote_sha`, and existing refs are untouched.
+
 Issuance uses HMAC-SHA256 with the existing `AGENT_TOKEN_KEY`, a versioned Git domain, independent
 purpose and immutable issuance/version/binding/create identity. Read values start with `gread_`;
 push values retain `push_`. PostgreSQL stores hashes and references, never capability or App-token bytes.
@@ -52,7 +58,7 @@ The confirmed association is immutable. A changed generation or UID refuses old 
 
 Read publication follows confirmation; delegated creating targets receive read only. Push follows
 active/current admission. Native send confirms required publications before external turn bytes.
-With both flags enabled, delegated setup additionally requires a nonhistorical confirmed
+With both flags enabled, workspace setup additionally requires a nonhistorical confirmed
 workspace preparation receipt. Mainloop commits one stable preparation action and its original
 request before dispatch, using only the frozen create plan, confirmed runtime association and
 authoritative binding role. The `prepare_receipt` row initially contains only that local
@@ -63,7 +69,10 @@ challenge. ALREADY_EXISTS, definite failure, receipt identity/profile disagreeme
 receipts hold the enrollment for Session replacement. A non-READY Session or an operation in
 progress holds preparation without failing its durable state. kagent temporarily projects
 historical receipts during ordinary suspension/resume; only a fresh settled READY observation
-of the original runtime can classify history as terminal. Owner setup is deferred; every native
+of the original runtime can classify history as terminal. The authoritative binding role alone
+selects the profile: owner `agent` maps to kagent `agent` with setup digest
+`a5fb1bb1e406ff7937b9d9e2e862dff43925d4df54d4bdd9fb010d7e2825ccb3` pinned to Standing at
+kagent `796e90b5`; supervisor and child mappings and digests are unchanged. Every native
 send requires durable `prepare_state=confirmed` for its current issuance/create identity when
 both flags are enabled. A binding's previous turn count grants no preparation authority.
 Unknown create recovery, including revoked cancellation recovery, uses the complete original

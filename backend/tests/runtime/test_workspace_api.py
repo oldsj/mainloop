@@ -13,6 +13,7 @@ import httpx
 from mainloop import api
 from mainloop.config import settings
 from mainloop.runtime import workspaces
+from mainloop.services import github_checkout
 from mainloop.services.github_repo import GithubRepo
 
 from models import WorkspaceLifecycle, WorkspaceObservedState
@@ -32,6 +33,8 @@ class CreateWorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         for patcher in (
             patch.object(settings, "owner_id", "user-1"),
             patch.object(settings, "api_hosts", "test"),
+            patch.object(settings, "git_transport_enabled", False),
+            patch.object(settings, "push_gate_enabled", False),
             patch.object(workspaces, "project_for", self.project_for),
             patch.object(workspaces, "project_for_repo", self.project_for_repo),
             patch.object(workspaces, "create", self.create),
@@ -45,7 +48,9 @@ class CreateWorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.client.aclose)
 
     @staticmethod
-    def lifecycle(user_id, project_id, manifest) -> WorkspaceLifecycle:
+    def lifecycle(
+        user_id, project_id, manifest, *, checkout_resolved=False
+    ) -> WorkspaceLifecycle:
         return WorkspaceLifecycle(
             workspace_id="ws-1",
             session_id="ws-1",
@@ -74,6 +79,45 @@ class CreateWorkspaceApiTests(unittest.IsolatedAsyncioTestCase):
         self.project_for.return_value = None
         response = await self.post(project_id="nope", branch="x")
         self.assertEqual(response.status_code, 404)
+        self.create.assert_not_called()
+
+    async def test_empty_gated_project_ref_reaches_enrollment_unchanged(self):
+        with (
+            patch.object(settings, "git_transport_enabled", True),
+            patch.object(settings, "push_gate_enabled", True),
+        ):
+            response = await self.post(project_id="proj-1", branch="feature/x")
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(self.manifest().ref, "")
+        self.assertFalse(self.create.call_args.kwargs["checkout_resolved"])
+
+    async def test_stored_default_remains_when_either_gate_is_off(self):
+        with patch.object(
+            github_checkout, "resolve_checkout_ref", AsyncMock()
+        ) as resolve:
+            for git, push in ((False, False), (False, True), (True, False)):
+                with (
+                    self.subTest(git=git, push=push),
+                    patch.object(settings, "git_transport_enabled", git),
+                    patch.object(settings, "push_gate_enabled", push),
+                ):
+                    for target in (
+                        {"project_id": "proj-1"},
+                        {"repo": "oldsj/mainloop"},
+                    ):
+                        response = await self.post(**target, branch="feature/x")
+                        self.assertEqual(response.status_code, 201, response.text)
+                        self.assertEqual(self.manifest().ref, "main")
+                        self.assertFalse(
+                            self.create.call_args.kwargs["checkout_resolved"]
+                        )
+            resolve.assert_not_awaited()
+
+    async def test_http_cannot_supply_a_resolved_checkout_bypass(self):
+        for field, value in (("checkout_resolved", True), ("resolved_ref", "a" * 40)):
+            response = await self.post(repo="oldsj/mainloop", **{field: value})
+            self.assertEqual(response.status_code, 422, response.text)
+        self.project_for_repo.assert_not_awaited()
         self.create.assert_not_called()
 
     async def test_repo_finds_or_creates_the_project_then_creates_the_workspace(self):

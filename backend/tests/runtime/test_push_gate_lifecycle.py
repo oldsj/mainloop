@@ -1,10 +1,11 @@
 """Lifecycle integration against PostgreSQL and a sanitized fake kagent gateway."""
 
 import asyncio
+import json
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import replace
-from unittest.mock import patch
+from dataclasses import asdict, replace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from mainloop import api
@@ -18,16 +19,21 @@ from mainloop.runtime import workspaces
 from mainloop.runtime.kagent_client import (
     CurrentRuntimeAssociation,
     OutcomeUnknown,
+    PreparationReceipt,
+    PreparationRequest,
+    RuntimeComposition,
     RuntimeOperation,
     RuntimeState,
     SessionError,
 )
+from mainloop.services import github_checkout
 from tests.runtime.test_git_credentials_postgres import FakeGitSecrets
 from tests.runtime.test_postgres_ledger import KagentFakeCase
 from tests.runtime.test_push_gate import UPDATE
 
 from models import SessionStatus, WorkspaceManifest
 from models.push_gate import ProtectedBranchPolicy, PushGrant
+from models.workspace import WorkspaceEnvironment
 
 
 class PushLifecycleTests(KagentFakeCase):
@@ -44,6 +50,27 @@ class PushLifecycleTests(KagentFakeCase):
         )
         git_store.start()
         self.addCleanup(git_store.stop)
+        environment = WorkspaceEnvironment(
+            environment_id="fixture-env",
+            version_id="fixture-version",
+            image="ghcr.io/example/dev@sha256:" + "a" * 64,
+            platform="linux/arm64",
+            policy_identity="fixture-version:oci-static-v2",
+        )
+        for patcher in (
+            patch.object(
+                github_checkout,
+                "resolve_checkout_ref",
+                AsyncMock(return_value="a" * 40),
+            ),
+            patch(
+                "mainloop.environments.resolution.resolve",
+                AsyncMock(return_value=environment),
+            ),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.preparations = {}
         get = ns.get_client().get_session
 
         async def observed(sid):
@@ -52,6 +79,17 @@ class PushLifecycleTests(KagentFakeCase):
                 session,
                 creator="mainloop",
                 prepared_revision="fixture-revision",
+                runtime_composition=(
+                    RuntimeComposition(
+                        session.development_environment.image,
+                        "fixture",
+                        1,
+                        "fixture-cli",
+                    )
+                    if session.development_environment
+                    else None
+                ),
+                workspace_preparation=self.preparations.get(sid),
                 runtime_association=CurrentRuntimeAssociation(
                     "generation-" + sid,
                     "fixture-space",
@@ -65,6 +103,37 @@ class PushLifecycleTests(KagentFakeCase):
         association = patch.object(ns.get_client(), "get_session", observed)
         association.start()
         self.addCleanup(association.stop)
+
+        async def prepare(sid, **kwargs):
+            request = PreparationRequest(session_id=sid, **kwargs)
+            row = await self.pool.fetchrow(
+                "SELECT * FROM git_enrollments WHERE prepare_action_id=$1",
+                request.action_id,
+            )
+            self.assertEqual(row["prepare_state"], "requested")
+            self.assertEqual(
+                json.loads(row["prepare_receipt"])["original"], asdict(request)
+            )
+            self.assertEqual(request.workspace.encode(), self.fake.workspaces[sid])
+            self.assertEqual(
+                request.development_environment.encode(),
+                self.fake.session_environments[sid],
+            )
+            receipt = PreparationReceipt(
+                original=request,
+                context_id=sid,
+                atespace="fixture-space",
+                actor_name="actor-" + sid,
+                classification="confirmed",
+            )
+            self.preparations[sid] = receipt
+            return receipt
+
+        preparation = patch.object(
+            ns.get_client(), "prepare_session_workspace", prepare
+        )
+        preparation.start()
+        self.addCleanup(preparation.stop)
         self.pid = "push-" + uuid.uuid4().hex
         self.repo = "https://github.com/example/" + self.pid
         await self.pool.execute(

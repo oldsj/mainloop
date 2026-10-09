@@ -391,8 +391,15 @@ class LifecycleCallerTests(fixtures.GitCredentialsCase):
         self.assertEqual(len(self.native.gets), gets)
 
     async def test_current_enrolled_owner_first_send_waits_for_preparation(self):
-        sid = await self.create()
+        self.native.prepare_classification = "pending"
+        sid = await self.enroll()
+        with self.assertRaisesRegex(ValueError, "git_prepare_pending"):
+            await workspaces._create_session(sid, self.user, reject_removes_rows=False)
         await self.final_send(await ns.get_binding(sid), denied="git_prepare_pending")
+
+    async def test_confirmed_owner_first_send_succeeds(self):
+        sid = await self.create()
+        await self.final_send(await ns.get_binding(sid))
 
     async def test_live_ordinary_no_plan_send_remains_usable(self):
         with patch.object(settings, "git_transport_enabled", False), patch.object(
