@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from mainloop.runtime.kagent_client import (
+    AGENT_SETUP_DIGEST,
     CHILD_SETUP_DIGEST,
     SUPERVISOR_SETUP_DIGEST,
     A2AError,
@@ -282,15 +283,16 @@ class PreparationWireTests(unittest.TestCase):
             ).read_text()
         )
         self.assertEqual(
-            fixture["revision"], "d6de0e40a0fbe505d943daeb2757c40b6d920c7b"
+            fixture["revision"], "796e90b53f3e48bfd0353133641debb2c78344fd"
         )
         self.assertEqual(
             fixture["source"], "go/harness/runtime/workspace/preparation.go"
         )
-        self.assertEqual(set(fixture["standing"]), {"supervisor", "child"})
+        self.assertEqual(set(fixture["standing"]), {"supervisor", "child", "agent"})
         for profile, digest in (
             ("supervisor", SUPERVISOR_SETUP_DIGEST),
             ("child", CHILD_SETUP_DIGEST),
+            ("agent", AGENT_SETUP_DIGEST),
         ):
             text = fixture["standing"][profile]
             self.assertTrue(
@@ -300,6 +302,19 @@ class PreparationWireTests(unittest.TestCase):
                 text.endswith("Your tools come from the `mainloop` MCP server.\n")
             )
             self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), digest)
+
+    def test_preparation_profile_mapping_uses_binding_roles_only(self):
+        from mainloop.push_gate.credentials import preparation_profile_for_binding_role
+
+        for role, digest in (
+            ("agent", AGENT_SETUP_DIGEST),
+            ("supervisor", SUPERVISOR_SETUP_DIGEST),
+            ("child", CHILD_SETUP_DIGEST),
+        ):
+            self.assertEqual(preparation_profile_for_binding_role(role), (role, digest))
+        for role in ("main", "owner", "", "unknown"):
+            with self.assertRaisesRegex(ValueError, "git_prepare_role_unsupported"):
+                preparation_profile_for_binding_role(role)
 
     def test_composition_encoding_fields_defaults_and_uint32_bounds(self):
         value = preparation_request().runtime_composition

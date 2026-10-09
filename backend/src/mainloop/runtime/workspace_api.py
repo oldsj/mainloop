@@ -4,9 +4,11 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from mainloop.config import settings
 from mainloop.identity import current_user
 from mainloop.runtime import workspaces
 from mainloop.runtime.preview_proxy import workspace_preview_ports
+from mainloop.services import github_checkout
 from mainloop.services.github_repo import InvalidGithubRepo, parse_github_repo
 from pydantic import (
     BaseModel,
@@ -36,8 +38,8 @@ class CreateWorkspaceRequest(BaseModel):
     repo: StrictStr | None = None
     # Local branch to create or switch to; empty always means a new ``mainloop/<8 hex>`` branch.
     branch: StrictStr = ""
-    # Branch, tag or commit to start from; empty means the project's default branch, or the
-    # remote's default when none is recorded.
+    # Branch, tag or commit to start from. Under both Git gates, empty selects GitHub's current
+    # default; otherwise it uses the stored project default, or the remote default if absent.
     ref: StrictStr = ""
     depth: Annotated[int, Field(ge=0, le=1000)] = 0
     dev: WorkspaceDev = WorkspaceDev()
@@ -79,6 +81,9 @@ async def create_workspace(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     branch = request.branch or f"mainloop/{uuid.uuid4().hex[:8]}"
+    gated = settings.git_transport_enabled and settings.push_gate_enabled
+    ref = request.ref
+    checkout_resolved = False
 
     def manifest_for(repo_url: str, ref: str) -> WorkspaceManifest:
         try:
@@ -104,15 +109,30 @@ async def create_workspace(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         # Refuse a bad branch or ref before the project is found or created.
         manifest_for(repo.html_url, request.ref)
+        if gated:
+            # This helper commits a project insert or touch. Refuse an unavailable checkout
+            # first, then carry the verified SHA through enrollment without another lookup.
+            try:
+                ref = await github_checkout.resolve_checkout_ref(
+                    repo.full_name.lower(), request.ref
+                )
+            except github_checkout.CheckoutRefUnavailable as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            checkout_resolved = True
         project = await workspaces.project_for_repo(owner, repo)
     else:
         project = await workspaces.project_for(owner, request.project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-    manifest = manifest_for(
-        project["html_url"], request.ref or project["default_branch"] or ""
+    if not gated:
+        ref = request.ref or project["default_branch"] or ""
+    manifest = manifest_for(project["html_url"], ref)
+    return await _run(
+        owner,
+        workspaces.create(
+            owner, project["id"], manifest, checkout_resolved=checkout_resolved
+        ),
     )
-    return await _run(owner, workspaces.create(owner, project["id"], manifest))
 
 
 @router.get("", response_model=list[WorkspaceLifecycle])

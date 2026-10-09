@@ -43,6 +43,7 @@ from mainloop.runtime.kagent_client import (
     SessionError,
     Unreachable,
 )
+from mainloop.services import github_checkout
 from mainloop.services.github_repo import (
     GithubRepo,
     InvalidGithubRepo,
@@ -467,6 +468,7 @@ async def enroll_session(
     prompt: str = "Development workspace",
     environment=_RESOLVE,
     claim_branch: bool = False,
+    checkout_resolved: bool = False,
 ) -> Enrolled:
     """Write the session, checkout and native identity rows in the caller's transaction.
 
@@ -477,6 +479,10 @@ async def enroll_session(
     ``environment`` is resolved from the project unless the caller supplies the one a task
     accepted. ``claim_branch`` takes the owner workspace's writer claim (a delegated attempt's
     claim is taken by its admission instead).
+
+    With both Git gates enabled, resolve a new checkout before writing any rows. Task callers
+    supply an already resolved initial checkout or a verified handoff remote SHA; the owner
+    repo route resolves before its project insert/touch.
 
     Nothing here calls kagent or publishes a credential; those happen after the commit.
     """
@@ -520,6 +526,18 @@ async def enroll_session(
                 "Workspace repository must match an owner-owned GitHub project."
             )
         repository = project_repo.full_name.lower()
+        if (
+            settings.git_transport_enabled
+            and settings.push_gate_enabled
+            and not checkout_resolved
+        ):
+            try:
+                sha = await github_checkout.resolve_checkout_ref(
+                    repository, manifest.ref
+                )
+            except github_checkout.CheckoutRefUnavailable as exc:
+                raise WorkspaceRejected(str(exc)) from exc
+            manifest = manifest.model_copy(update={"ref": sha})
         if environment is _RESOLVE:
             from mainloop.db.environments import EnvironmentError
             from mainloop.environments.resolution import resolve
@@ -606,7 +624,11 @@ async def enroll_session(
 
 
 async def create(
-    user_id: str, project_id: str, manifest: WorkspaceManifest
+    user_id: str,
+    project_id: str,
+    manifest: WorkspaceManifest,
+    *,
+    checkout_resolved: bool = False,
 ) -> WorkspaceLifecycle:
     """Create the session rows and the kagent Session carrying the workspace.
 
@@ -617,6 +639,9 @@ async def create(
     removes the rows again and raises ``WorkspaceRejected``. The workspace takes the branch's
     writer claim in the same transaction, so a second writer on the branch (the default branch
     included) is refused with ``WorkspaceConflict``.
+
+    ``checkout_resolved`` is server-internal: the owner repo route supplies the SHA it verified
+    before creating or touching the project.
     """
     from mainloop.providers import registry
 
@@ -636,6 +661,7 @@ async def create(
                 manifest=manifest,
                 project_id=project_id,
                 claim_branch=True,
+                checkout_resolved=checkout_resolved,
             )
     workspace_id = enrolled.workspace_id
     await _create_session(workspace_id, user_id, reject_removes_rows=True)

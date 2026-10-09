@@ -225,8 +225,9 @@ class ProviderApiTests(unittest.IsolatedAsyncioTestCase):
 
         from models import WorkspaceLifecycle, WorkspaceObservedState
 
-        async def create(owner, project, manifest):
+        async def create(owner, project, manifest, *, checkout_resolved=False):
             self.assertEqual(manifest.agent_kind, "codex-review")
+            self.assertFalse(checkout_resolved)
             return WorkspaceLifecycle(
                 workspace_id="w",
                 session_id="w",

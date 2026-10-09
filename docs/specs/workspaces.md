@@ -39,11 +39,26 @@ workspace operations.
   in workspace and session lists. Creation opens the workspace; a `422` and other API errors show
   inline.
 - A project created this way stores the canonical `https://github.com/owner/name` URL and no
-  default branch: nothing asks GitHub at this point. With no `ref` the clone uses the remote's
   default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch
   from GitHub. A project that already exists for that repository keeps its stored URL and
   metadata. A bad `branch` or `ref` is refused before any project is created; the project does
   outlive a workspace that kagent then rejects, so a retry finds it again.
+- With both `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` enabled, enrollment resolves the
+  checkout base through the repository-scoped GitHub App client to a full commit SHA before
+  storing the session, workspace or frozen create plan. An empty owner request ref selects
+  GitHub's current default branch, even if the project has a different stored default; branches,
+  tags and explicit SHAs are verified through the commits endpoint with `contents: read`.
+  An unavailable ref returns a clear `422` refusal before
+  workspace creation. The repo route resolves before inserting or touching the project, and
+  enrollment reuses that verified SHA. The selected workspace branch is unchanged. Create
+  retries and runtime replacements reuse the stored SHA; existing workspace refs are never
+  rewritten. With either
+  flag off, an empty request uses the stored project default if present, otherwise the remote
+  default at clone time; no GitHub ref resolution is performed during admission.
+- Under both gates, owner workspace preparation selects kagent's `agent` profile from the
+  authoritative native binding role, preserving the selected development environment. Its
+  fixed standing context permits direct work with the owner, with no delegation or task/report
+  duties. The first send waits for confirmed preparation through the existing readiness path.
 - Before the first kagent call, creation transactionally stores the owner project, session,
   checkout and a per-binding `workspace` MCP grant with its non-secret credential reference.
   The reference uses a unique Secret key for this session. Claude and Codex workspaces use the

@@ -22,9 +22,15 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
-An omitted or empty checkout `ref` selects the repository's remote default branch. Explicit
-commit SHAs, branches and tags are passed through unchanged. The required checkout `branch`
-remains the feature branch used for the writer claim and push target, independently of `ref`.
+An omitted or empty checkout `ref` selects the repository's remote default branch. With both
+`GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` enabled, Mainloop resolves that default or an
+explicit branch, tag or commit through its repository-scoped GitHub App client before task
+admission. The task and workspace store the full commit SHA; an unavailable ref returns `422`
+with `checkout_ref_unavailable` and leaves no task, attempt, workspace or create plan. Retries
+with the same request ID reuse the stored SHA even if the remote ref moves. Successors continue
+using their checkpoint's verified `remote_sha`. With either flag off, refs pass through unchanged.
+Existing task checkouts are not rewritten. The required checkout `branch` remains the feature
+branch used for the writer claim and push target, independently of `ref`.
 
 Public status is `queued`, `running`, `waiting`, `blocked`, `completed`, `failed` or
 `cancelled`. Reasons distinguish awaiting child, approval, CI, publication, handoff and

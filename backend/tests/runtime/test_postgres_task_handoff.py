@@ -245,6 +245,41 @@ class RetentionUpgradePostgresTests(PostgresTestCase):
 
 
 class CoordinatorPostgresTests(s1.TaskProvisioningPostgresTests):
+    async def test_successor_keeps_checkpoint_sha_without_resolution_under_both_gates(
+        self,
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from mainloop.config import settings
+        from mainloop.runtime import workspaces
+        from mainloop.services import github_checkout
+
+        enroll = workspaces.enroll_session
+        successors = []
+        resolver = AsyncMock(
+            side_effect=AssertionError("handoff must retain verified remote_sha")
+        )
+
+        async def observe(conn, **kwargs):
+            if kwargs.get("description") != "Task successor attempt":
+                return await enroll(conn, **kwargs)
+            self.assertTrue(kwargs["checkout_resolved"])
+            self.assertEqual(kwargs["manifest"].ref, "a" * 40)
+            with (
+                patch.object(settings, "git_transport_enabled", True),
+                patch.object(settings, "push_gate_enabled", True),
+                patch.object(github_checkout, "resolve_checkout_ref", resolver),
+            ):
+                enrolled = await enroll(conn, **kwargs)
+            successors.append(enrolled)
+            return enrolled
+
+        with patch.object(workspaces, "enroll_session", observe):
+            await self.run_handoff("claude", "codex")
+        self.assertEqual(len(successors), 1)
+        self.assertEqual(successors[0].manifest.ref, "a" * 40)
+        resolver.assert_not_awaited()
+
     def coordinator(self, *, crash=None, outcome="ready", hitl_pending=False):
         import uuid
         from datetime import UTC, datetime
