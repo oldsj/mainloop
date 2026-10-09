@@ -15,6 +15,7 @@ from mainloop.runtime.hitl_observer import HITLObserver
 from mainloop.runtime.kagent_client import (
     AgentRef,
     KagentAgent,
+    KagentClient,
     KagentSession,
     Message,
     OutcomeUnknown,
@@ -181,6 +182,74 @@ class HITLObserverTests(PostgresTestCase):
         return ToolApprovalResponse(
             type="tool_approval_response",
             approvals=(ToolApproval(id="call", approved=approved),),
+        )
+
+    async def test_response_wire_acceptance_is_confirmed_by_original_task_history(self):
+        import json
+
+        session, task = self.gateway.add("restored")
+        await self.cycle()
+        projection = (await self.projections())[0]
+        native_send = self.gateway.send_hitl_response
+        requests = []
+
+        async def handler(request):
+            wire = json.loads(request.content)["params"]["message"]
+            requests.append(wire)
+            # The pinned harness SDK refuses an empty envelope before storing
+            # the continuation. Model that boundary rather than accepting all sends.
+            if not wire.get("parts"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": "message parts is required",
+                        },
+                    },
+                )
+            async for event in native_send(
+                session.agent,
+                response=ToolApprovalResponse.model_validate_json(
+                    json.dumps(wire["metadata"][HITL_EXTENSION])
+                ),
+                message_id=wire["messageId"],
+                task_id=wire["taskId"],
+                context_id=wire["contextId"],
+            ):
+                return httpx.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "result": event.model_dump(mode="json", by_alias=True),
+                    },
+                )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://fake"
+        ) as http:
+            client = KagentClient("http://fake", user_id="configured", client=http)
+            with patch.object(
+                self.gateway, "send_hitl_response", new=client.send_hitl_response
+            ):
+                result = await continuation.submit(
+                    self.user,
+                    projection.id,
+                    "reject",
+                    self.response(False),
+                    service=self.service,
+                )
+        self.assertEqual(result["transport_state"], "accepted")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["taskId"], task.id)
+        self.assertEqual(requests[0]["contextId"], session.context_id)
+        self.assertEqual(
+            requests[0]["messageId"], result["response"]["outbound_message_id"]
+        )
+        self.assertEqual(task.history[-1].message_id, requests[0]["messageId"])
+        self.assertFalse(
+            task.history[-1].metadata[HITL_EXTENSION]["approvals"][0]["approved"]
         )
 
     async def test_startup_observer_standalone_restart_and_owner_api(self):

@@ -226,7 +226,9 @@ replacement or prompt delivery. The decision and outbound message ID are durable
 send attempt is claimed. A crash while still `recorded` can recover and send; persisted
 `sending` after a crash is uncertain and is observed without replay. Only exact outbound
 message identity and structured response in the original task history prove acceptance;
-a changed status alone does not. The client only automatically retries the documented definite
+a changed status alone does not. Structured continuations include the required A2A message
+part; the decision remains in HITL extension metadata and targets the original task/context.
+The client only automatically retries the documented definite
 `KAGENT_SEND_NOT_ACCEPTED`; a definite pre-send connection failure also leaves the recorded
 attempt eligible. Uncertain decisions cannot be submitted again through a child alias.
 A confirmed invalid destination before dispatch becomes `rejected_transport`; uncertainty

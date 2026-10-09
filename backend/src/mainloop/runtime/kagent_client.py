@@ -1490,7 +1490,9 @@ class KagentClient:
                     "contextId": context_id,
                     "taskId": task_id,
                     "role": "ROLE_USER",
-                    "parts": [],
+                    # The harness's A2A handler requires a part before it can
+                    # validate HITL metadata. Decisions stay in the extension.
+                    "parts": [{"text": "HITL response"}],
                     "extensions": [HITL_EXTENSION],
                     "metadata": {
                         HITL_EXTENSION: response.model_dump(
