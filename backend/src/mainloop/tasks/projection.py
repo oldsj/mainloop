@@ -221,7 +221,7 @@ class Projection:
                     linkage = {"repository_id": creation["repo_id"]}
             now = datetime.now(UTC)
             try:
-                async with GitHubMergeClient() as github:
+                async with GitHubMergeClient(repository) as github:
                     pr, ci = await github.observation(repository, number)
                 if any(
                     ref.repo.id != linkage["repository_id"]

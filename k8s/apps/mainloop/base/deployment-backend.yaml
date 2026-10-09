@@ -47,11 +47,16 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
-            - name: GITHUB_TOKEN
+            - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
                   name: mainloop-secrets
-                  key: github-token
+                  key: github-app-id
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-app-private-key
           resources:
             requests:
               memory: 1Gi
@@ -108,11 +113,16 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
-            - name: GITHUB_TOKEN
+            - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
                   name: mainloop-secrets
-                  key: github-token
+                  key: github-app-id
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: github-app-private-key
           resources:
             requests:
               memory: 1Gi

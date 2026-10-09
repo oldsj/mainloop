@@ -632,6 +632,7 @@ class FixedOriginReaderTests(unittest.IsolatedAsyncioTestCase):
         import httpx
         from mainloop.services.github_creation import GitHubCreationClient, GitHubError
         from mainloop.tasks.checkpoint import FixedOriginCheckpointReader
+        from tests.runtime.github_app_fake import app_settings, app_transport
 
         evidence = HandoffEvidenceTests().checkpoint()
         observer = SimpleNamespace(checkpoint=AsyncMock(return_value=evidence))
@@ -643,9 +644,12 @@ class FixedOriginReaderTests(unittest.IsolatedAsyncioTestCase):
                 302, headers={"Location": "https://untrusted.invalid/checkpoint"}
             )
 
-        transport = httpx.MockTransport(respond)
+        transport = app_transport(respond)
         reader = FixedOriginCheckpointReader(
-            observer, client_factory=lambda: GitHubCreationClient(transport=transport)
+            observer,
+            client_factory=lambda repository: GitHubCreationClient(
+                repository, transport=transport
+            ),
         )
         with patch(
             "mainloop.tasks.checkpoint.store.project",
@@ -655,12 +659,7 @@ class FixedOriginReaderTests(unittest.IsolatedAsyncioTestCase):
                     "html_url": "https://github.com/example/app",
                 }
             ),
-        ), patch(
-            "mainloop.services.github_creation.settings.github_token",
-            "sanitized-test-token",
-        ), self.assertRaises(
-            GitHubError
-        ):
+        ), app_settings(), self.assertRaises(GitHubError):
             await reader.read(
                 None,
                 SimpleNamespace(
@@ -710,7 +709,7 @@ class ComposedCheckpointFreshnessTests(unittest.IsolatedAsyncioTestCase):
                 )
                 reader = FixedOriginCheckpointReader(
                     SimpleNamespace(checkpoint=AsyncMock(return_value=value)),
-                    client_factory=lambda client=client: client,
+                    client_factory=lambda repository, client=client: client,
                 )
                 with patch(
                     "mainloop.tasks.checkpoint.store.project",

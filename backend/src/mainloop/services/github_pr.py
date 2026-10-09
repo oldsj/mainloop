@@ -4,8 +4,9 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-from githubkit import GitHub
-from mainloop.config import settings
+from mainloop.runtime.policy import PolicyError
+from mainloop.services.github_repo import parse_github_repo
+from mainloop.services.github_sdk import RepositoryGitHub
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -51,33 +52,14 @@ class PRStatus(BaseModel):
     review_decision: str | None  # APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, etc.
 
 
-def _get_github() -> GitHub:
-    """Get a GitHub client instance.
-
-    Returns:
-        GitHub client configured with the token from settings
-
-    """
-    return GitHub(settings.github_token) if settings.github_token else GitHub()
+def _get_github(repository: str) -> RepositoryGitHub:
+    """Construct a fixed-origin client for one canonical repository."""
+    return RepositoryGitHub(repository)
 
 
 def _parse_repo(repo_url: str) -> tuple[str, str]:
-    """Parse owner and repo from a GitHub URL.
-
-    Args:
-        repo_url: URL like https://github.com/owner/repo
-
-    Returns:
-        Tuple of (owner, repo)
-
-    """
-    # Handle various GitHub URL formats
-    url = repo_url.rstrip("/")
-    if url.endswith(".git"):
-        url = url[:-4]
-
-    parts = url.split("/")
-    return parts[-2], parts[-1]
+    repo = parse_github_repo(repo_url)
+    return repo.owner, repo.name
 
 
 async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
@@ -92,7 +74,7 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.pulls.async_get(
@@ -117,6 +99,8 @@ async def get_pr_status(repo_url: str, pr_number: int) -> PRStatus | None:
             mergeable=data.mergeable,
             review_decision=data.review_decision,
         )
+    except PolicyError:
+        raise
     except Exception:
         return None
 
@@ -139,7 +123,7 @@ async def get_pr_comments(
     """
     owner, repo = _parse_repo(repo_url)
     comments = []
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         # Get issue comments (general PR comments)
@@ -179,6 +163,8 @@ async def get_pr_comments(
                     is_review_comment=True,
                 )
             )
+    except PolicyError:
+        raise
     except Exception:
         pass
 
@@ -207,7 +193,7 @@ async def get_pr_reviews(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.pulls.async_list_reviews(
@@ -229,6 +215,8 @@ async def get_pr_reviews(
             )
 
         return reviews
+    except PolicyError:
+        raise
     except Exception:
         return []
 
@@ -327,7 +315,7 @@ async def get_check_status(repo_url: str, pr_number: int) -> CombinedCheckStatus
         )
 
     head_sha = pr_status.head_sha
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.checks.async_list_for_ref(
@@ -336,6 +324,8 @@ async def get_check_status(repo_url: str, pr_number: int) -> CombinedCheckStatus
             ref=head_sha,
         )
         data = response.parsed_data
+    except PolicyError:
+        raise
     except Exception:
         return CombinedCheckStatus(
             status="pending",
@@ -523,7 +513,7 @@ async def add_reaction_to_comment(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         if is_review_comment:
@@ -543,8 +533,10 @@ async def add_reaction_to_comment(
                 content=reaction,
             )
         return True
-    except Exception as e:
-        logger.warning(f"Failed to add reaction to comment {comment_id}: {e}")
+    except PolicyError:
+        raise
+    except Exception:
+        logger.warning(f"Failed to add reaction to comment {comment_id}")
         return False
 
 
@@ -720,7 +712,7 @@ async def get_issue_status(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.issues.async_get(
@@ -750,6 +742,8 @@ async def get_issue_status(
                 else None
             ),
         )
+    except PolicyError:
+        raise
     except Exception:
         return ConditionalResponse(data={"state": "not_found"})
 
@@ -773,7 +767,7 @@ async def get_issue_comments(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.issues.async_list_comments(
@@ -799,6 +793,8 @@ async def get_issue_comments(
             data=comments,
             etag=response.headers.get("etag") if hasattr(response, "headers") else None,
         )
+    except PolicyError:
+        raise
     except Exception:
         return ConditionalResponse(
             data=[],
@@ -943,7 +939,7 @@ async def create_github_issue(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.issues.async_create(
@@ -960,8 +956,10 @@ async def create_github_issue(
             url=data.html_url,
             title=data.title,
         )
-    except Exception as e:
-        logger.error(f"Failed to create GitHub issue: {e}")
+    except PolicyError:
+        raise
+    except Exception:
+        logger.error("Failed to create GitHub issue")
         return None
 
 
@@ -993,7 +991,7 @@ async def update_github_issue(
     if all(v is None for v in [title, body, state, labels]):
         return True  # Nothing to update
 
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         await gh.rest.issues.async_update(
@@ -1007,8 +1005,10 @@ async def update_github_issue(
         )
         logger.info(f"Updated issue #{issue_number} in {owner}/{repo}")
         return True
-    except Exception as e:
-        logger.error(f"Failed to update GitHub issue #{issue_number}: {e}")
+    except PolicyError:
+        raise
+    except Exception:
+        logger.error(f"Failed to update GitHub issue #{issue_number}")
         return False
 
 
@@ -1031,7 +1031,7 @@ async def add_issue_comment(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.issues.async_create_comment(
@@ -1044,8 +1044,10 @@ async def add_issue_comment(
         if return_id:
             return response.parsed_data.id
         return True
-    except Exception as e:
-        logger.error(f"Failed to add comment to issue #{issue_number}: {e}")
+    except PolicyError:
+        raise
+    except Exception:
+        logger.error(f"Failed to add comment to issue #{issue_number}")
         return 0 if return_id else False
 
 
@@ -1064,7 +1066,7 @@ async def get_comment_reactions(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.reactions.async_list_for_issue_comment(
@@ -1073,8 +1075,10 @@ async def get_comment_reactions(
             comment_id=comment_id,
         )
         return [r.content for r in response.parsed_data]
-    except Exception as e:
-        logger.error(f"Failed to get reactions for comment {comment_id}: {e}")
+    except PolicyError:
+        raise
+    except Exception:
+        logger.error(f"Failed to get reactions for comment {comment_id}")
         return []
 
 
@@ -1105,7 +1109,7 @@ async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.repos.async_get(
@@ -1123,6 +1127,8 @@ async def get_repo_metadata(repo_url: str) -> RepoMetadata | None:
             html_url=data.html_url,
             open_issues_count=data.open_issues_count or 0,
         )
+    except PolicyError:
+        raise
     except Exception:
         return None
 
@@ -1152,7 +1158,7 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.pulls.async_list(
@@ -1176,6 +1182,8 @@ async def list_open_prs(repo_url: str, limit: int = 10) -> list[ProjectPRSummary
             )
             for pr in response.parsed_data
         ]
+    except PolicyError:
+        raise
     except Exception:
         return []
 
@@ -1205,7 +1213,7 @@ async def list_recent_commits(
 
     """
     owner, repo = _parse_repo(repo_url)
-    gh = _get_github()
+    gh = _get_github(f"{owner}/{repo}")
 
     try:
         response = await gh.rest.repos.async_list_commits(
@@ -1224,5 +1232,7 @@ async def list_recent_commits(
             )
             for commit in response.parsed_data
         ]
+    except PolicyError:
+        raise
     except Exception:
         return []

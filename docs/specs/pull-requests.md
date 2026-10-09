@@ -28,12 +28,56 @@ project ID, workspace/session ID, canonical repository and stored branch. It ret
 `scope_unavailable` if the grant exists but its scope rows do not agree. An ungranted binding
 cannot authenticate to call `whoami`.
 
-Mainloop uses the backend `GITHUB_TOKEN` setting. Requests go only to `https://api.github.com`,
+Mainloop authenticates as a private GitHub App installed on selected repositories.
+The backend requires `GITHUB_APP_ID` (the positive numeric App ID) and
+`GITHUB_APP_PRIVATE_KEY` (single-line standard base64 of the complete unencrypted RSA PEM,
+at least 2048 bits). The key is decoded and validated at first GitHub use; invalid
+configuration errors never include its input. There is no installation ID setting,
+PAT fallback, or unauthenticated fallback. A repository without an installation is
+refused with `GitHub App not installed on <owner/repo>`.
+
+An RS256 App JWT uses the App ID as issuer, an issued-at time 60 seconds in the past,
+and expiry nine minutes in the future. Mainloop discovers the installation with
+`GET /repos/{owner}/{repo}/installation`, then requests an installation token with
+`repositories: [name]` and only the permissions required by the endpoint. Tokens are
+cached in process per installation, canonical repository, and sorted permission set
+until 60 seconds before expiry. Concurrent callers for the same repository share
+one mint. Refresh rechecks the repository installation. Each client is bound to one
+repository and refuses cross-repository use before HTTP. JWTs, keys, tokens and raw
+upstream failures are never logged or returned.
+
+Configure the App with Checks read, Commit statuses read, Contents read/write,
+Pull requests read/write, Administration read, Workflows read/write, and Metadata read.
+Tokens request Metadata read for repository lookup and branch rules, Contents read for branches
+and commits, Administration read for classic protection, Checks read
+for runs/suites, Commit statuses read for status contexts, Pull requests read for PRs,
+files, reviews and comments, Pull requests write for PR creation and review-comment reactions, and
+Contents write for squash merge. Current API callers do not need Workflows write;
+that registration permission is not included in their tokens.
+
+PR/project monitoring uses the same repository-scoped transport and App auth.
+Legacy issue creation and issue-detail helpers additionally need Issues write/read;
+they fail closed if the App does not grant those permissions. The registration above
+does not grant Issues permissions. Other issue/comment helpers use the permitted
+Pull requests scope where GitHub supports it. Listing or creating reactions on issue comments
+(including general PR discussion comments) requires Issues read/write. Mainloop refuses these
+operations before HTTP with `GitHub App issue-comment reactions require Issues permissions,
+which are not granted`. Reactions on pull-request review comments keep Pull requests scope;
+the App registration is unchanged. See [GitHub's reaction API](https://docs.github.com/en/rest/reactions/reactions).
+This migration changes backend REST
+authentication; the separate default-off Git publication transport retains its own
+credential contract in [Git authority](push-gate.md).
+
+Requests go only to `https://api.github.com`,
 with bounded timeouts, response sizes, and pagination; redirects and environment proxies
 are disabled. Each API call has a 15 second total deadline, a 10 second network timeout,
 a 2 MB response limit, and PR listing stops at 10 pages of 100 results. Hitting a limit
 fails closed. GitHub error bodies, transport errors, and credentials are never returned to
 the agent. Returned PR links are constructed from verified repository identity and number.
+Compressed wire bodies are decoded once; the size limit applies to decoded bytes and
+reconstructed responses omit wire encoding/framing headers. Installation-token mint failures,
+including 404, remain opaque authentication failures. Only a genuine 404 from the classic
+protection read supports treating classic protection as absent.
 The REST endpoints are described in [GitHub's pull request API](https://docs.github.com/en/rest/pulls/pulls).
 
 ## Deduplication and uncertain results

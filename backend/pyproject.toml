@@ -21,6 +21,7 @@ dependencies = [
   "pydantic-ai[dbos]>=1.39.0",
   "kubernetes>=34.1.0",
   "mcp>=1.25.0",
+  "pyjwt[crypto]>=2.10.1",
 ]
 
 [project.scripts]

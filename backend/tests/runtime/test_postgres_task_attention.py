@@ -386,14 +386,16 @@ class TaskAttentionTests(MergeFixture):
     async def test_head_change_and_closed_unmerged_observation_never_complete(self):
         p = await self.prepare()
         self.fake.pr.update(state="closed", merged=False)
-        import httpx
         from mainloop.services import github_merge
+        from tests.runtime.github_app_fake import app_transport
 
         cls = github_merge.GitHubMergeClient
         with patch.object(
             github_merge,
             "GitHubMergeClient",
-            lambda: cls(transport=httpx.MockTransport(self.fake.handle)),
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
         ):
             await Projection().refresh(db, self.task.id)
             first, value = await self.view()
@@ -455,8 +457,8 @@ class TaskAttentionTests(MergeFixture):
         self.assertFalse(self.fake.puts)
 
     async def test_pr_creation_result_attaches_once_to_exact_attempt(self):
-        import httpx
         from mainloop.services import github_creation
+        from tests.runtime.github_app_fake import app_transport
         from tests.runtime.test_open_pull_request import ARGS, FakeGitHub
 
         fake = FakeGitHub()
@@ -474,7 +476,7 @@ class TaskAttentionTests(MergeFixture):
         with patch.object(
             github_creation,
             "GitHubCreationClient",
-            lambda: cls(transport=httpx.MockTransport(fake.handle)),
+            lambda repository: cls(repository, transport=app_transport(fake.handle)),
         ):
             result = await github_creation.open_pull_request(self.binding, arguments)
             first, projection = await self.view()

@@ -25,6 +25,7 @@ from mainloop.services import github_creation as creation
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks import lifecycle
 from pydantic import ValidationError
+from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_postgres_ledger import PostgresTestCase, _init_schema
 
 from models.agent_tools import OpenPullRequest
@@ -291,9 +292,9 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         for status in (301, 302, 307, 401, 403, 429, 500):
             fake = FakeGitHub()
             fake.refusal = status
-            with patch.object(settings, "github_token", "secret-fixture"):
+            with app_settings():
                 async with creation.GitHubCreationClient(
-                    transport=httpx.MockTransport(fake.handle)
+                    "owner/repo", transport=app_transport(fake.handle)
                 ) as client:
                     with self.assertRaises(creation.GitHubError) as error:
                         await client.repo("owner/repo")
@@ -315,26 +316,27 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
                 headers={"Link": '<https://evil.invalid/>; rel="next"'},
             )
 
-        with patch.object(settings, "github_token", "fixture"):
+        with app_settings():
             async with creation.GitHubCreationClient(
-                transport=httpx.MockTransport(handle)
+                "owner/repo", transport=app_transport(handle)
             ) as client:
                 with self.assertRaises(creation.GitHubError):
                     await client.find("owner/repo", "feature/fix", "trunk")
         self.assertEqual(count, 10)
 
-    async def test_missing_token_refuses_before_http(self):
-        with patch.object(settings, "github_token", ""):
+    async def test_missing_app_refuses_before_http(self):
+        with patch.object(settings, "github_app_id", ""):
             with self.assertRaises(creation.PolicyError) as error:
-                creation.GitHubCreationClient()
+                creation.GitHubCreationClient("owner/repo")
             self.assertEqual(error.exception.code, "configuration")
 
     async def test_response_size_is_bounded(self):
-        with patch.object(settings, "github_token", "fixture"):
+        with app_settings():
             async with creation.GitHubCreationClient(
-                transport=httpx.MockTransport(
+                "owner/repo",
+                transport=app_transport(
                     lambda _: httpx.Response(200, content=b"x" * 2_000_001)
-                )
+                ),
             ) as client:
                 with self.assertRaises(creation.GitHubError):
                     await client.repo("owner/repo")
@@ -345,13 +347,12 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.05)
                 yield json.dumps(REPO).encode()
 
-        with patch.object(settings, "github_token", "fixture"), patch.object(
-            creation, "REQUEST_TIMEOUT_SECONDS", 0.01
-        ):
+        with app_settings(), patch.object(creation, "REQUEST_TIMEOUT_SECONDS", 0.01):
             async with creation.GitHubCreationClient(
-                transport=httpx.MockTransport(
+                "owner/repo",
+                transport=app_transport(
                     lambda _: httpx.Response(200, stream=SlowStream())
-                )
+                ),
             ) as client:
                 with self.assertRaises(creation.GitHubError):
                     await client.repo("owner/repo")
@@ -377,14 +378,14 @@ class PRPostgresTests(PostgresTestCase):
         self.service = AgentService(PgStore())
         self.ctx = await self.service.authenticate(token_for(self.sid))
         client_class = creation.GitHubCreationClient
-        self.token_patch = patch.object(settings, "github_token", "fixture-only")
+        self.token_patch = app_settings()
         self.token_patch.start()
         self.addCleanup(self.token_patch.stop)
         self.client_patch = patch.object(
             creation,
             "GitHubCreationClient",
-            side_effect=lambda: client_class(
-                transport=httpx.MockTransport(self.fake.handle)
+            side_effect=lambda repository: client_class(
+                repository, transport=app_transport(self.fake.handle)
             ),
         )
         self.client_patch.start()
