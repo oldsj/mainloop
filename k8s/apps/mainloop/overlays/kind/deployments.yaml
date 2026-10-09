@@ -24,6 +24,14 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: AGENT_TOKEN_KEY
+        - name: git
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: AGENT_TOKEN_KEY
 ---
 apiVersion: apps/v1
 kind: Deployment

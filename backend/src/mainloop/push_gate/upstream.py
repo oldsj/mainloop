@@ -1,14 +1,74 @@
 """Three fixed GitHub operations. Actor headers and arbitrary fetch URLs are absent."""
 
 import base64
+import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 from mainloop.push_gate.protocol import Limits, TransportError
+from mainloop.services.github_auth import GitHubError, app_auth, http_client
 from mainloop.services.github_repo import parse_github_repo
+
+
+@dataclass
+class _HttpOperation:
+    active: bool = True
+
+
+_credential_http: ContextVar[_HttpOperation | None] = ContextVar(
+    "credential_http", default=None
+)
+
+
+class _HttpLogFactory:
+    """Redact transport records before any handler sees headers or exceptions.
+
+    Logger levels are process-wide; the context token isolates concurrent clients.
+    Chain the existing record factory and leave unrelated clients/loggers intact.
+    """
+
+    def __init__(self, previous):
+        self.previous = previous
+
+    def __call__(self, *args, **kwargs):
+        record = self.previous(*args, **kwargs)
+        operation = _credential_http.get()
+        if (
+            operation is not None
+            and operation.active
+            and record.name.split(".", 1)[0] in ("httpcore", "httpx")
+        ):
+            # Trace arguments may contain headers, request objects or exception
+            # text before the caller can check reflection. Retain only provenance
+            # and severity, including HTTPX's response reason-phrase log at INFO.
+            record.msg = "credentialed_http_transport"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return record
+
+
+@asynccontextmanager
+async def _private_http_logs():
+    factory = logging.getLogRecordFactory()
+    if not isinstance(factory, _HttpLogFactory):
+        logging.setLogRecordFactory(_HttpLogFactory(factory))
+    operation = _HttpOperation()
+    marker = _credential_http.set(operation)
+    try:
+        yield
+    finally:
+        # Descendant tasks copy the context but share this token. End redaction
+        # for them too, including on failure/cancellation; reset restores any
+        # still-active outer operation in the exiting task's context.
+        operation.active = False
+        _credential_http.reset(marker)
 
 
 @dataclass(frozen=True)
@@ -113,7 +173,7 @@ class FixedGitUpstream:
             if self._transport_factory
             else httpx.AsyncHTTPTransport(retries=0, verify=True, trust_env=False)
         )
-        async with httpx.AsyncClient(
+        async with _private_http_logs(), httpx.AsyncClient(
             transport=transport,
             trust_env=False,
             follow_redirects=False,
@@ -201,3 +261,64 @@ class FixedGitUpstream:
         return await self._request(
             "git-receive-pack", discovery=False, body=body, secrets=secrets
         )
+
+
+class GitHubAppUpstream(FixedGitUpstream):
+    """Request-local Git upstream using the shared repository/permission token cache.
+
+    Tokens are acquired only when dispatch authority calls an operation. Quarantine
+    reads use contents:read even on a push request; receive operations use write.
+    Each operation retains its own fixed client and authorization header.
+    """
+
+    def __init__(
+        self,
+        repository: str,
+        limits: Limits,
+        *,
+        auth=None,
+        fixture: LoopbackFixture | None = None,
+    ):
+        self.repository = parse_github_repo(repository).full_name.lower()
+        self.limits = limits
+        self._auth = auth
+        self._fixture = fixture
+        self._secrets = ()
+
+    async def _request(
+        self,
+        service: str,
+        *,
+        discovery: bool,
+        protocol: str | None = None,
+        body: bytes | Path = b"",
+        secrets: tuple[bytes, ...] = (),
+    ) -> bytes:
+        if service not in ("git-upload-pack", "git-receive-pack"):
+            raise TransportError("upstream_service")
+        permissions = {"contents": "read" if service == "git-upload-pack" else "write"}
+        try:
+            async with _private_http_logs(), http_client() as client:
+                token = await (self._auth or app_auth()).token(
+                    client, self.repository, permissions
+                )
+        except GitHubError:
+            raise TransportError("upstream_credential_unavailable") from None
+        # PolicyError retains the authenticator's safe missing-installation refusal.
+        upstream = FixedGitUpstream(
+            self.repository, token, self.limits, fixture=self._fixture
+        )
+        self._secrets = tuple(set((*self._secrets, *upstream._secrets)))
+        try:
+            result = await upstream._request(
+                service,
+                discovery=discovery,
+                protocol=protocol,
+                body=body,
+                secrets=secrets,
+            )
+            self.check_output(result, secrets)
+            return result
+        except httpx.HTTPError:
+            # HTTPX exceptions may retain credential-bearing requests.
+            raise TransportError("upstream_unavailable") from None

@@ -3,15 +3,30 @@
 ## Implemented source, default off
 
 `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` default to `false`. Source includes injectable
-read/push ASGI applications, PostgreSQL authority and native enrollment callers. This slice
-installs no production listener, image, route, credential mount or Actor containment. Real local
-PostgreSQL with fake kagent/Kubernetes and a fixed local Git upstream proves source behavior only.
+read/push ASGI applications, PostgreSQL authority and native enrollment callers. Tracked GitOps
+manifests now include the `mainloop.git_app` backend-image sidecar, port-80 Services
+`mainloop-git-read` and `mainloop-git-push` in `mainloop`, and a separate ingress NetworkPolicy
+allowing only `ate-system` pods labelled `app=atenet-egress` to listener ports 8003 and 8004.
+The sidecar shares one database pool, kagent client and pack-validation slot across both ports;
+repository upstreams are request-local. Its disk-backed, bounded emptyDir holds quarantine data.
+Read requires `GIT_TRANSPORT_ENABLED`; push also requires `PUSH_GATE_ENABLED`. Disabled listeners
+refuse every HTTP request before authentication, token minting or upstream traffic. With Git
+transport off, startup needs no database or GitHub App connection. Flags remain off by default.
+These are installed source/manifests, not a deployed image or live Actor containment proof.
+Real local PostgreSQL with fake kagent/Kubernetes and a fixed local Git upstream proves source
+behavior only.
 
-Trusted outbound read and push clients use the same owner's existing PAT outside the actor.
+Trusted outbound clients use the existing GitHub App authenticator outside the actor. Each Git
+operation obtains a cached installation token scoped to the authenticated repository with only
+`contents: read` for upload-pack (including quarantine seeds), or `contents: write` for
+receive-pack/discovery. Tokens are minted only after current dispatch authority succeeds, never
+from an Actor-supplied credential. The existing “GitHub App not installed on <repo>” refusal
+remains fail-closed. Mint failures never dispatch Git traffic; credentials and upstream exception
+text never become Git responses or logs. No PAT is used by the production listeners.
 Actor capabilities are independent for the exact origins
 `http://mainloop-git-read.mainloop.svc.cluster.local` and
 `http://mainloop-git-push.mainloop.svc.cluster.local`. Neither purpose grants MCP or owner API
-access. No new GitHub credential or principal is introduced. Legacy random hash-only grants
+access. No new GitHub principal is introduced. Legacy random hash-only grants
 remain compatible when Git transport is disabled; they publish no Git Secret and cannot
 authenticate on the new listener. Storing a Session UUID no longer enrolls a grant.
 
@@ -25,7 +40,7 @@ or dispatched bindings without a plan cannot be retrofitted. Missing dispatch hi
 
 Issuance uses HMAC-SHA256 with the existing `AGENT_TOKEN_KEY`, a versioned Git domain, independent
 purpose and immutable issuance/version/binding/create identity. Read values start with `gread_`;
-push values retain `push_`. PostgreSQL stores hashes and references, never capability or PAT bytes.
+push values retain `push_`. PostgreSQL stores hashes and references, never capability or App-token bytes.
 Missing keys and recovery hash mismatches fail closed, without rotating the issuance.
 
 The complete tuple and dispatch marker commit before CreateSession bytes. Usable Git Secrets
@@ -116,7 +131,7 @@ MCP cleanup keeps its separate existing behavior.
 
 ## Remaining release gates
 
-Native handoff/retention/checkout adapters, listeners, packaging, image provenance, GitOps,
+Native handoff/retention/checkout adapters, published packaging/image provenance, GitOps rollout,
 old-session inventory/drain and actual Actor/provider/cache qualification remain separate gates.
 Runtime must support frozen refs with delayed Git values and remove effective direct GitHub/PAT
 paths from actors. Usable Secrets cannot be published early to work around bootstrap failures.

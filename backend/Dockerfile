@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS dev
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends curl ca-certificates git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/*
 
@@ -80,9 +80,9 @@ CMD ["uvicorn", "mainloop.api:app", "--host", "0.0.0.0", "--port", "8000", "--re
 # Runtime stage (production)
 FROM python:3.13-slim AS prod
 
-# Install the health-check client and CA certificates.
+# Install the health-check client and Git for push-gate pack validation.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends curl ca-certificates git \
     && apt-get purge -y --auto-remove ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/*

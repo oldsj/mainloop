@@ -28,7 +28,7 @@ def build(path: Path) -> list[dict]:
     if kubectl is None:
         raise unittest.SkipTest("kubectl is not installed")
     out = subprocess.run(  # nosec B603 - the resolved kubectl, run on a tracked kustomization
-        [kubectl, "kustomize", str(path)],
+        [kubectl, "--context=offline-render", "kustomize", str(path)],
         check=True,
         capture_output=True,
         text=True,
@@ -106,10 +106,117 @@ class KindOverlayTests(unittest.TestCase):
         pod = self.resource("Deployment", "mainloop-backend")["spec"]["template"][
             "spec"
         ]
-        self.assertEqual({c["name"] for c in pod["containers"]}, {"backend", "mcp"})
+        self.assertEqual(
+            {c["name"] for c in pod["containers"]}, {"backend", "mcp", "git"}
+        )
         self.assertFalse(pod.get("imagePullSecrets"))
         self.resource("StatefulSet", "mainloop-postgres")
         self.resource("NetworkPolicy", "mainloop-backend-ingress")
+
+    def test_git_listeners_are_internal_and_configured_in_each_overlay(self):
+        for overlay in (
+            BASE,
+            ROOT / "k8s/apps/mainloop/overlays/kind",
+            ROOT / "k8s/apps/mainloop/overlays/prod",
+        ):
+            docs = build(overlay)
+
+            def resource(kind, name, docs=docs):
+                return next(
+                    doc
+                    for doc in docs
+                    if doc["kind"] == kind and doc["metadata"]["name"] == name
+                )
+
+            with self.subTest(overlay=overlay.name):
+                deployment = resource("Deployment", "mainloop-backend")
+                pod = deployment["spec"]["template"]["spec"]
+                containers = {
+                    container["name"]: container for container in pod["containers"]
+                }
+                git = containers["git"]
+                self.assertEqual(git["image"], containers["backend"]["image"])
+                self.assertEqual(git["command"], ["python", "-m", "mainloop.git_app"])
+                self.assertEqual(
+                    {port["containerPort"] for port in git["ports"]}, {8003, 8004}
+                )
+                for name in ("DB_USER", "DB_PASSWORD", "AGENT_TOKEN_KEY"):
+                    env = {entry["name"]: entry for entry in git["env"]}
+                    backend_env = {
+                        entry["name"]: entry for entry in containers["backend"]["env"]
+                    }
+                    self.assertEqual(env.get(name), backend_env.get(name))
+                self.assertEqual(git["envFrom"], containers["backend"]["envFrom"])
+                self.assertTrue(git["securityContext"]["runAsNonRoot"])
+                self.assertFalse(git["securityContext"]["allowPrivilegeEscalation"])
+                self.assertEqual(
+                    git["volumeMounts"],
+                    [{"name": "git-spool", "mountPath": "/var/lib/mainloop/git"}],
+                )
+                volume = next(
+                    volume for volume in pod["volumes"] if volume["name"] == "git-spool"
+                )
+                self.assertEqual(volume["emptyDir"], {"sizeLimit": "3Gi"})
+                self.assertEqual(pod["securityContext"]["fsGroup"], 1000)
+                for purpose, port in (("read", 8003), ("push", 8004)):
+                    service = resource("Service", f"mainloop-git-{purpose}")
+                    self.assertEqual(service["metadata"]["namespace"], "mainloop")
+                    self.assertEqual(
+                        service["spec"].get("type", "ClusterIP"), "ClusterIP"
+                    )
+                    self.assertEqual(
+                        service["spec"]["selector"], {"app": "mainloop-backend"}
+                    )
+                    self.assertEqual(
+                        service["spec"]["ports"],
+                        [{"name": f"git-{purpose}", "port": 80, "targetPort": port}],
+                    )
+                config = resource("ConfigMap", "mainloop-config")["data"]
+                for flag in ("GIT_TRANSPORT_ENABLED", "PUSH_GATE_ENABLED"):
+                    self.assertEqual(config.get(flag, "false").lower(), "false")
+
+    def test_no_additive_network_policy_opens_git_ports_to_another_peer(self):
+        expected_peer = [
+            {
+                "namespaceSelector": {
+                    "matchLabels": {"kubernetes.io/metadata.name": "ate-system"}
+                },
+                "podSelector": {"matchLabels": {"app": "atenet-egress"}},
+            }
+        ]
+        for overlay in (
+            BASE,
+            ROOT / "k8s/apps/mainloop/overlays/kind",
+            ROOT / "k8s/apps/mainloop/overlays/prod",
+        ):
+            docs = build(overlay)
+            allowed = set()
+            for policy in (doc for doc in docs if doc["kind"] == "NetworkPolicy"):
+                selector = policy["spec"]["podSelector"]
+                if selector.get("matchLabels", {}).get("app") not in (
+                    None,
+                    "mainloop-backend",
+                ):
+                    continue
+                for rule in policy["spec"].get("ingress", []):
+                    self.assertTrue(
+                        rule.get("ports"), "Unbounded ingress opens both Git listeners"
+                    )
+                    for port in rule["ports"]:
+                        if port["port"] in (8003, 8004, "git-read", "git-push"):
+                            self.assertEqual(rule["from"], expected_peer)
+                            self.assertEqual(port["protocol"], "TCP")
+                            allowed.add(port["port"])
+            self.assertEqual(allowed, {8003, 8004}, overlay.name)
+
+    def test_backend_image_installs_git_for_validation(self):
+        dockerfile = (ROOT / "backend/Dockerfile").read_text()
+        for stage in ("dev", "prod"):
+            stage_body = dockerfile.split(f"AS {stage}\n", 1)[1].split("\nFROM ", 1)[0]
+            install = next(
+                line for line in stage_body.splitlines() if "apt-get install" in line
+            )
+            self.assertIn("git", install.split())
 
     def test_backend_processes_use_only_app_secret_references(self):
         for overlay in (
