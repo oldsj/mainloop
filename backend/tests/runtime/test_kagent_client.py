@@ -1,28 +1,44 @@
 """kagent client against a fake gateway (fixture-backed; no network, no live kagent)."""
 
+import hashlib
+import json
 import unittest
+from dataclasses import fields as dataclass_fields
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from mainloop.runtime.kagent_client import (
+    CHILD_SETUP_DIGEST,
+    SUPERVISOR_SETUP_DIGEST,
     A2AError,
     AgentRef,
+    DevelopmentEnvironment,
     KagentClient,
     OutcomeUnknown,
+    PreparationReceipt,
+    PreparationRequest,
+    PreparationTimestamp,
+    RuntimeComposition,
     RuntimeOperation,
     RuntimeState,
     SendNotAccepted,
     SessionError,
+    SessionWorkspace,
     StreamEvent,
     TaskNotFound,
     TaskProjection,
     Unreachable,
     _field_bytes,
     _field_str,
+    _field_varint,
     assistant_message_id,
     decode_agent_response,
     decode_fields,
+    decode_preparation_response,
+    decode_session_response,
+    grpc_web_frame,
     is_parked,
     is_terminal,
     normalise_state,
@@ -174,6 +190,518 @@ class RuntimeAssociationWireTests(unittest.TestCase):
         for raw in invalid:
             with self.subTest(raw=raw[:20]), self.assertRaises(OutcomeUnknown):
                 decode_session_response(_field_bytes(1, base + raw))
+
+
+def preparation_request() -> PreparationRequest:
+    return PreparationRequest(
+        session_id="00000000-0000-4000-8000-000000000001",
+        action_id="prep:fixture",
+        create_request_id="create-fixture",
+        generation_id="00000000-0000-4000-8000-000000000002",
+        actor_uid="fixture-uid",
+        prepared_revision="fixture-revision",
+        workspace=SessionWorkspace(
+            "https://github.com/example/repo", "a" * 40, "feature", 7
+        ),
+        development_environment=DevelopmentEnvironment(
+            "example/dev@sha256:" + "b" * 64, "linux/amd64", "fixture-policy"
+        ),
+        runtime_composition=RuntimeComposition(
+            "example/payload@sha256:" + "c" * 64, "codex", 1, "0.148.0"
+        ),
+        setup_profile="child",
+        setup_digest=CHILD_SETUP_DIGEST,
+    )
+
+
+def preparation_receipt_message(
+    *, classification="confirmed", historical=False, original=None
+) -> bytes:
+    """Synthetic receipt using all fields from sessions.proto at d6de0e40."""
+    return (
+        _field_bytes(1, (original or preparation_request()).encode())
+        + b"".join(
+            _field_str(n, value)
+            for n, value in {
+                2: "d" * 64,
+                3: "execution-fixture",
+                4: preparation_request().session_id,
+                5: "fixture-space",
+                6: "fixture-actor",
+                7: classification,
+                8: "challenge-fixture",
+                10: "a" * 40,
+                11: "feature",
+                12: "e" * 64,
+                13: "f" * 64,
+                14: "0" * 64,
+                15: "developer_instruction",
+            }.items()
+        )
+        + _field_varint(9, 12)
+        + _field_bytes(
+            16, _field_varint(1, 1_700_000_000) + _field_varint(2, 123_456_789)
+        )
+        + _field_bytes(
+            17, _field_varint(1, 1_700_000_001) + _field_varint(2, 987_654_321)
+        )
+        + (_field_varint(18, 1) if historical else b"")
+    )
+
+
+def replace_wire_field(raw: bytes, number: int, replacement: bytes) -> bytes:
+    return (
+        b"".join(
+            (
+                _field_bytes(n, value)
+                if isinstance(value, bytes)
+                else _field_varint(n, value)
+            )
+            for n, values in decode_fields(raw).items()
+            if n != number
+            for value in values
+        )
+        + replacement
+    )
+
+
+class PreparationWireTests(unittest.TestCase):
+    def test_preparation_workspace_depth_accepts_inclusive_boundaries(self):
+        original = preparation_request()
+        for depth in (0, 1000):
+            request = replace(
+                original, workspace=replace(original.workspace, depth=depth)
+            )
+            with self.subTest(depth=depth):
+                self.assertEqual(PreparationRequest.decode(request.encode()), request)
+
+    def test_setup_digests_match_verified_kagent_standing_fixture(self):
+        fixture = json.loads(
+            (
+                Path(__file__).parent / "fixtures/kagent/preparation-standing.json"
+            ).read_text()
+        )
+        self.assertEqual(
+            fixture["revision"], "d6de0e40a0fbe505d943daeb2757c40b6d920c7b"
+        )
+        self.assertEqual(
+            fixture["source"], "go/harness/runtime/workspace/preparation.go"
+        )
+        self.assertEqual(set(fixture["standing"]), {"supervisor", "child"})
+        for profile, digest in (
+            ("supervisor", SUPERVISOR_SETUP_DIGEST),
+            ("child", CHILD_SETUP_DIGEST),
+        ):
+            text = fixture["standing"][profile]
+            self.assertTrue(
+                text.startswith(f"# Mainloop standing context ({profile})\n\n")
+            )
+            self.assertTrue(
+                text.endswith("Your tools come from the `mainloop` MCP server.\n")
+            )
+            self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), digest)
+
+    def test_composition_encoding_fields_defaults_and_uint32_bounds(self):
+        value = preparation_request().runtime_composition
+        self.assertEqual(
+            decode_fields(value.encode()),
+            {1: [value.payload_image.encode()], 2: [b"codex"], 3: [1], 4: [b"0.148.0"]},
+        )
+        for composition in (
+            value,
+            RuntimeComposition("", "", 0, ""),
+            replace(value, schema=0xFFFFFFFF),
+        ):
+            self.assertEqual(
+                RuntimeComposition.decode(composition.encode()), composition
+            )
+        self.assertEqual(RuntimeComposition("", "", 0, "").encode(), b"")
+        for schema in (-1, 1 << 32):
+            with self.subTest(schema=schema), self.assertRaises(ValueError):
+                replace(value, schema=schema).encode()
+
+    def test_prepare_request_fields_and_nested_round_trip(self):
+        value = preparation_request()
+        encoded = value.encode()
+        self.assertEqual(PreparationRequest.decode(encoded), value)
+        self.assertEqual(PreparationRequest.decode(encoded).encode(), encoded)
+        self.assertEqual(
+            decode_fields(encoded),
+            {
+                1: [value.session_id.encode()],
+                2: [b"prep:fixture"],
+                3: [b"create-fixture"],
+                4: [value.generation_id.encode()],
+                5: [b"fixture-uid"],
+                6: [b"fixture-revision"],
+                7: [value.workspace.encode()],
+                8: [value.development_environment.encode()],
+                9: [value.runtime_composition.encode()],
+                10: [b"child"],
+                11: [CHILD_SETUP_DIGEST.encode()],
+            },
+        )
+        self.assertEqual(
+            decode_fields(value.workspace.encode()),
+            {
+                1: [b"https://github.com/example/repo"],
+                2: [b"a" * 40],
+                3: [b"feature"],
+                4: [7],
+            },
+        )
+        self.assertEqual(
+            decode_fields(value.development_environment.encode()),
+            {
+                1: [("example/dev@sha256:" + "b" * 64).encode()],
+                2: [b"linux/amd64"],
+                3: [b"fixture-policy"],
+            },
+        )
+
+    def test_receipt_decodes_every_field_and_keeps_nanoseconds(self):
+        receipt = PreparationReceipt.decode(
+            preparation_receipt_message(historical=True)
+        )
+        self.assertEqual(
+            receipt,
+            PreparationReceipt(
+                original=preparation_request(),
+                request_digest="d" * 64,
+                execution_id="execution-fixture",
+                context_id=preparation_request().session_id,
+                atespace="fixture-space",
+                actor_name="fixture-actor",
+                classification="confirmed",
+                challenge_id="challenge-fixture",
+                observation_sequence=12,
+                head="a" * 40,
+                branch="feature",
+                transport_digest="e" * 64,
+                config_digest="f" * 64,
+                mcp_digest="0" * 64,
+                native_hook="developer_instruction",
+                effect_observed_at=PreparationTimestamp(1_700_000_000, 123_456_789),
+                observed_at=PreparationTimestamp(1_700_000_001, 987_654_321),
+                historical=True,
+            ),
+        )
+
+    def test_pending_receipt_optional_scalars_and_unknown_fields(self):
+        raw = (
+            _field_bytes(1, preparation_request().encode())
+            + _field_str(7, "pending")
+            + _field_varint(99, 1)
+        )
+        receipt = PreparationReceipt.decode(raw)
+        self.assertEqual(receipt.classification, "pending")
+        self.assertEqual(receipt.observation_sequence, 0)
+        self.assertFalse(receipt.historical)
+        self.assertIsNone(receipt.effect_observed_at)
+        self.assertIsNone(receipt.observed_at)
+        for classification in ("pending", "uncertain", "confirmed", "definite-failure"):
+            self.assertEqual(
+                PreparationReceipt.decode(
+                    preparation_receipt_message(classification=classification)
+                ).classification,
+                classification,
+            )
+
+    def test_session_receipt_field_21_and_absence(self):
+        base = _field_str(1, preparation_request().session_id) + _field_str(
+            14, preparation_request().session_id
+        )
+        self.assertIsNone(
+            decode_session_response(_field_bytes(1, base)).workspace_preparation
+        )
+        raw = preparation_receipt_message(historical=True)
+        session = decode_session_response(_field_bytes(1, base + _field_bytes(21, raw)))
+        self.assertEqual(session.workspace_preparation, PreparationReceipt.decode(raw))
+        for invalid in (
+            _field_bytes(21, raw) * 2,
+            _field_varint(21, 1),
+            b"\xad\x01" + b"\x00" * 4,
+            b"\xa9\x01" + b"\x00" * 8,
+            _field_bytes(21, b""),
+            _field_bytes(21, raw[:-1]),
+        ):
+            with self.subTest(raw=invalid[:20]), self.assertRaises(OutcomeUnknown):
+                decode_session_response(_field_bytes(1, base + invalid))
+
+    def test_receipt_rejects_duplicate_wrong_wire_and_invalid_utf8_fields(self):
+        raw = preparation_receipt_message(historical=True)
+        for number in range(1, 19):
+            value = decode_fields(raw)[number][0]
+            duplicate = (
+                _field_bytes(number, value)
+                if isinstance(value, bytes)
+                else _field_varint(number, value)
+            )
+            wrong = (
+                _field_varint(number, 1)
+                if isinstance(value, bytes)
+                else _field_str(number, "wrong")
+            )
+            for invalid in (raw + duplicate, replace_wire_field(raw, number, wrong)):
+                with (
+                    self.subTest(number=number, invalid=invalid[-20:]),
+                    self.assertRaises(OutcomeUnknown),
+                ):
+                    PreparationReceipt.decode(invalid)
+        for number in (*range(2, 9), *range(10, 16)):
+            with self.subTest(number=number), self.assertRaises(OutcomeUnknown):
+                PreparationReceipt.decode(
+                    replace_wire_field(raw, number, _field_bytes(number, b"\xff"))
+                )
+        for number, value in ((9, 1 << 64), (18, 2)):
+            with self.subTest(number=number), self.assertRaises(OutcomeUnknown):
+                PreparationReceipt.decode(
+                    replace_wire_field(raw, number, _field_varint(number, value))
+                )
+
+    def test_original_rejects_duplicate_wrong_wire_utf8_and_missing_selection(self):
+        raw = preparation_request().encode()
+        for number in range(1, 12):
+            for invalid in (
+                raw + _field_bytes(number, b"duplicate"),
+                replace_wire_field(raw, number, _field_varint(number, 1)),
+            ):
+                with self.subTest(number=number), self.assertRaises(OutcomeUnknown):
+                    PreparationRequest.decode(invalid)
+        for number in (1, 2, 3, 4, 5, 6, 10, 11):
+            with self.subTest(number=number), self.assertRaises(OutcomeUnknown):
+                PreparationRequest.decode(
+                    replace_wire_field(raw, number, _field_bytes(number, b"\xff"))
+                )
+        for number in (7, 8, 9):
+            with self.subTest(number=number), self.assertRaises(OutcomeUnknown):
+                PreparationRequest.decode(replace_wire_field(raw, number, b""))
+
+    def test_original_rejects_malformed_nested_selection(self):
+        raw = preparation_request().encode()
+        for number, nested in (
+            (7, _field_str(1, "duplicate") * 2),
+            (7, _field_varint(1, 1)),
+            (7, _field_bytes(1, b"\xff")),
+            (7, _field_varint(4, 1 << 31)),
+            (7, _field_str(4, "wrong")),
+            (7, _field_varint(4, 1) * 2),
+            (8, _field_str(1, "duplicate") * 2),
+            (8, _field_varint(2, 1)),
+            (8, _field_bytes(3, b"\xff")),
+            (9, _field_str(1, "duplicate") * 2),
+            (9, _field_str(3, "wrong")),
+            (9, _field_varint(3, 1 << 32)),
+            (9, _field_bytes(4, b"\xff")),
+        ):
+            with (
+                self.subTest(number=number, nested=nested),
+                self.assertRaises(OutcomeUnknown),
+            ):
+                PreparationRequest.decode(
+                    replace_wire_field(raw, number, _field_bytes(number, nested))
+                )
+
+    def test_timestamp_presence_signed_seconds_and_invalid_fields(self):
+        self.assertEqual(PreparationTimestamp.decode(b""), PreparationTimestamp(0, 0))
+        self.assertEqual(
+            PreparationTimestamp.decode(_field_varint(1, (1 << 64) - 1)),
+            PreparationTimestamp(-1, 0),
+        )
+        for invalid in (
+            _field_varint(1, 1) * 2,
+            _field_varint(2, 1) * 2,
+            _field_str(1, "wrong"),
+            _field_str(2, "wrong"),
+            _field_varint(2, 1_000_000_000),
+            _field_varint(1, 1 << 64),
+            _field_varint(1, 253402300800),
+            b"\x08",
+        ):
+            with self.subTest(raw=invalid), self.assertRaises(OutcomeUnknown):
+                PreparationTimestamp.decode(invalid)
+
+    def test_prepare_response_uses_its_own_receipt_decoder(self):
+        raw = preparation_receipt_message()
+        self.assertEqual(
+            decode_preparation_response(
+                _field_bytes(1, raw) + _field_str(99, "future")
+            ),
+            PreparationReceipt.decode(raw),
+        )
+        for invalid in (
+            b"",
+            _field_str(99, "future"),
+            _field_bytes(1, b""),
+            _field_bytes(1, raw) * 2,
+            _field_varint(1, 1),
+            b"\x0d" + b"\x00" * 4,
+            b"\x09" + b"\x00" * 8,
+            _field_bytes(1, raw)[:-1],
+            _field_bytes(1, _field_str(1, "session")),
+            b"\x80",
+        ):
+            with self.subTest(raw=invalid[:20]), self.assertRaises(OutcomeUnknown):
+                decode_preparation_response(invalid)
+
+
+class PreparationServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def prepare(self, client, *, request=None):
+        request = request or preparation_request()
+        kwargs = {
+            field.name: getattr(request, field.name)
+            for field in dataclass_fields(request)
+            if field.name != "session_id"
+        }
+        return await client.prepare_session_workspace(request.session_id, **kwargs)
+
+    async def test_invalid_workspace_depth_rejects_before_encoding_or_http(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return grpc_response(None)
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://k.test"
+        ) as http:
+            client = KagentClient("http://k.test", user_id="mainloop", client=http)
+            original = preparation_request()
+            for depth in (-1, -(1 << 31), 1001, (1 << 31) - 1):
+                request = replace(
+                    original, workspace=replace(original.workspace, depth=depth)
+                )
+                with (
+                    self.subTest(depth=depth),
+                    patch(
+                        "mainloop.runtime.kagent_client._field_str",
+                        side_effect=AssertionError(
+                            "invalid preparation must not begin encoding"
+                        ),
+                    ) as encode_field,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "depth must be between 0 and 1000"
+                    ):
+                        await self.prepare(client, request=request)
+                    encode_field.assert_not_called()
+                    self.assertEqual(calls, [])
+
+    async def test_prepare_uses_session_grpc_web_path_and_exact_request(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return grpc_response(
+                _field_bytes(1, preparation_receipt_message(classification="pending"))
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://k.test"
+        ) as http:
+            result = await self.prepare(
+                KagentClient("http://k.test", user_id="mainloop", client=http)
+            )
+        self.assertEqual(result.classification, "pending")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0].url.path,
+            "/kagent.api.v1alpha1.SessionService/PrepareSessionWorkspace",
+        )
+        self.assertEqual(calls[0].headers["content-type"], "application/grpc-web+proto")
+        self.assertEqual(calls[0].headers["x-user-id"], "mainloop")
+        self.assertEqual(
+            calls[0].content, grpc_web_frame(preparation_request().encode())
+        )
+
+    async def test_mismatched_original_or_context_is_an_unknown_outcome(self):
+        receipt = preparation_receipt_message()
+        wrong_context = replace_wire_field(receipt, 4, _field_str(4, "other"))
+        for response in (
+            wrong_context,
+            *(
+                preparation_receipt_message(
+                    original=replace(preparation_request(), **change)
+                )
+                for change in (
+                    {"session_id": "other"},
+                    {"action_id": "other"},
+                    {"generation_id": "other"},
+                    {
+                        "workspace": replace(
+                            preparation_request().workspace, branch="other"
+                        )
+                    },
+                    {
+                        "runtime_composition": replace(
+                            preparation_request().runtime_composition, provider="claude"
+                        )
+                    },
+                )
+            ),
+        ):
+            with self.subTest(response=response[-20:]):
+                async with httpx.AsyncClient(
+                    transport=httpx.MockTransport(
+                        lambda request, response=response: grpc_response(
+                            _field_bytes(1, response)
+                        )
+                    ),
+                    base_url="http://k.test",
+                ) as http:
+                    with self.assertRaises(OutcomeUnknown):
+                        await self.prepare(
+                            KagentClient(
+                                "http://k.test", user_id="mainloop", client=http
+                            )
+                        )
+
+    async def test_errors_are_not_retried_and_keep_session_error_classification(self):
+        cases = [
+            (grpc_response(None, status=6), SessionError),
+            (grpc_response(None, status=3), SessionError),
+            *(
+                (grpc_response(None, status=status), OutcomeUnknown)
+                for status in (4, 10, 13, 14)
+            ),
+            (httpx.Response(500), OutcomeUnknown),
+            (grpc_response(None), OutcomeUnknown),
+            (grpc_response(b""), OutcomeUnknown),
+            (httpx.ReadTimeout("lost reply"), OutcomeUnknown),
+            (httpx.ConnectError("offline"), Unreachable),
+            (
+                httpx.Response(
+                    200,
+                    content=grpc_web_frame(
+                        _field_bytes(1, preparation_receipt_message())
+                    )
+                    * 2,
+                ),
+                OutcomeUnknown,
+            ),
+        ]
+        for response, error in cases:
+            calls = []
+
+            def handler(request, calls=calls, response=response):
+                calls.append(request)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+            with self.subTest(response=response, error=error):
+                async with httpx.AsyncClient(
+                    transport=httpx.MockTransport(handler), base_url="http://k.test"
+                ) as http:
+                    with self.assertRaises(error) as ctx:
+                        await self.prepare(
+                            KagentClient(
+                                "http://k.test", user_id="mainloop", client=http
+                            )
+                        )
+                    if isinstance(ctx.exception, SessionError):
+                        self.assertIn(ctx.exception.grpc_status, (3, 6))
+                self.assertEqual(len(calls), 1)
 
 
 class StateHelperTests(unittest.TestCase):

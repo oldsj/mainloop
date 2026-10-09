@@ -31,7 +31,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any
+from typing import Any, overload
 
 import httpx
 from mainloop.runtime.control_credentials import (
@@ -705,6 +705,16 @@ class RuntimeComposition:
     schema: int
     cli_version: str
 
+    def encode(self) -> bytes:
+        if not 0 <= self.schema <= 0xFFFFFFFF:
+            raise ValueError("runtime composition schema must be a uint32")
+        return (
+            _field_str(1, self.payload_image)
+            + _field_str(2, self.provider)
+            + (_field_varint(3, self.schema) if self.schema else b"")
+            + _field_str(4, self.cli_version)
+        )
+
     @classmethod
     def decode(cls, raw: bytes) -> "RuntimeComposition":
         fields = _composition_fields(raw, {1: 2, 2: 2, 3: 0, 4: 2})
@@ -737,6 +747,180 @@ class CurrentRuntimeAssociation:
         return cls(*values, bool(active))
 
 
+# kagent Standing(), go/harness/runtime/workspace/preparation.go at d6de0e40.
+# These are kagent's fixed setup inputs, independent of Mainloop's standing text.
+SUPERVISOR_SETUP_DIGEST = (
+    "c9b2c5bf815f6b0dd45ee11f02e343ab6a25d4ce39c93663e6feb25281cb87f6"
+)
+CHILD_SETUP_DIGEST = "7e8a64abb17aaa575ab317f07ad673defc495d97adb641283e5d1cc636b30258"
+
+
+def _preparation_fields(
+    raw: bytes, wire_types: dict[int, int], text_fields: tuple[int, ...] = ()
+) -> dict[int, list[int | bytes]]:
+    try:
+        if not isinstance(raw, bytes):
+            raise ValueError("preparation message must be bytes")
+        fields = decode_fields(raw, wire_types=wire_types)
+        if any(len(fields.get(number, [])) > 1 for number in wire_types):
+            raise ValueError("duplicate preparation field")
+        for number in text_fields:
+            _text(fields, number)  # Reject invalid UTF-8, including optional text.
+        return fields
+    except (ValueError, TypeError) as exc:
+        raise OutcomeUnknown("Malformed kagent preparation response") from exc
+
+
+@dataclass(frozen=True)
+class PreparationRequest:
+    """The immutable PrepareSessionWorkspaceRequest echoed by a receipt."""
+
+    session_id: str
+    action_id: str
+    create_request_id: str
+    generation_id: str
+    actor_uid: str
+    prepared_revision: str
+    workspace: SessionWorkspace
+    development_environment: DevelopmentEnvironment
+    runtime_composition: RuntimeComposition
+    setup_profile: str
+    setup_digest: str
+
+    def encode(self) -> bytes:
+        if not 0 <= self.workspace.depth <= 1000:
+            raise ValueError("preparation workspace depth must be between 0 and 1000")
+        return (
+            _field_str(1, self.session_id)
+            + _field_str(2, self.action_id)
+            + _field_str(3, self.create_request_id)
+            + _field_str(4, self.generation_id)
+            + _field_str(5, self.actor_uid)
+            + _field_str(6, self.prepared_revision)
+            + _field_bytes(7, self.workspace.encode())
+            + _field_bytes(8, self.development_environment.encode())
+            + _field_bytes(9, self.runtime_composition.encode())
+            + _field_str(10, self.setup_profile)
+            + _field_str(11, self.setup_digest)
+        )
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "PreparationRequest":
+        fields = _preparation_fields(
+            raw, dict.fromkeys(range(1, 12), 2), (1, 2, 3, 4, 5, 6, 10, 11)
+        )
+        if any(not fields.get(number) for number in (7, 8, 9)):
+            raise OutcomeUnknown(
+                "Preparation original has no frozen workspace selection"
+            )
+        workspace_fields = _preparation_fields(
+            fields[7][0], {1: 2, 2: 2, 3: 2, 4: 0}, (1, 2, 3)
+        )
+        if _number(workspace_fields, 4) > 0x7FFFFFFF:
+            raise OutcomeUnknown("Malformed kagent preparation workspace depth")
+        return cls(
+            *(_text(fields, number) for number in range(1, 7)),
+            SessionWorkspace.decode(fields[7][0]),
+            DevelopmentEnvironment.decode(fields[8][0]),
+            RuntimeComposition.decode(fields[9][0]),
+            _text(fields, 10),
+            _text(fields, 11),
+        )
+
+
+@dataclass(frozen=True)
+class PreparationTimestamp:
+    """A protobuf Timestamp retaining nanoseconds and message presence."""
+
+    seconds: int
+    nanos: int
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "PreparationTimestamp":
+        fields = _preparation_fields(raw, {1: 0, 2: 0})
+        seconds, nanos = _number(fields, 1), _number(fields, 2)
+        if seconds > 0xFFFFFFFFFFFFFFFF:
+            raise OutcomeUnknown("Malformed kagent preparation timestamp")
+        if seconds >= 1 << 63:
+            seconds -= 1 << 64
+        if (
+            not -62135596800 <= seconds <= 253402300799
+            or not 0 <= nanos < 1_000_000_000
+        ):
+            raise OutcomeUnknown("Malformed kagent preparation timestamp")
+        return cls(seconds, nanos)
+
+
+@dataclass(frozen=True)
+class PreparationReceipt:
+    """Historical action evidence; classification alone cannot authorize native work."""
+
+    original: PreparationRequest
+    request_digest: str = ""
+    execution_id: str = ""
+    context_id: str = ""
+    atespace: str = ""
+    actor_name: str = ""
+    classification: str = ""
+    challenge_id: str = ""
+    observation_sequence: int = 0
+    head: str = ""
+    branch: str = ""
+    transport_digest: str = ""
+    config_digest: str = ""
+    mcp_digest: str = ""
+    native_hook: str = ""
+    effect_observed_at: PreparationTimestamp | None = None
+    observed_at: PreparationTimestamp | None = None
+    historical: bool = False
+
+    @classmethod
+    def decode(cls, raw: bytes) -> "PreparationReceipt":
+        text_fields = {
+            2: "request_digest",
+            3: "execution_id",
+            4: "context_id",
+            5: "atespace",
+            6: "actor_name",
+            7: "classification",
+            8: "challenge_id",
+            10: "head",
+            11: "branch",
+            12: "transport_digest",
+            13: "config_digest",
+            14: "mcp_digest",
+            15: "native_hook",
+        }
+        fields = _preparation_fields(
+            raw, {**dict.fromkeys(range(1, 19), 2), 9: 0, 18: 0}, tuple(text_fields)
+        )
+        if not fields.get(1):
+            raise OutcomeUnknown("Preparation receipt has no original request")
+        sequence, historical = _number(fields, 9), _number(fields, 18)
+        if sequence > 0xFFFFFFFFFFFFFFFF or historical not in (0, 1):
+            raise OutcomeUnknown("Malformed kagent preparation receipt scalar")
+        return cls(
+            original=PreparationRequest.decode(fields[1][0]),
+            **{name: _text(fields, number) for number, name in text_fields.items()},
+            observation_sequence=sequence,
+            effect_observed_at=(
+                PreparationTimestamp.decode(fields[16][0]) if fields.get(16) else None
+            ),
+            observed_at=(
+                PreparationTimestamp.decode(fields[17][0]) if fields.get(17) else None
+            ),
+            historical=bool(historical),
+        )
+
+
+def decode_preparation_response(message: bytes) -> PreparationReceipt:
+    """Decode PrepareSessionWorkspaceResponse{receipt = 1}, never a Session response."""
+    fields = _preparation_fields(message, {1: 2})
+    if not fields.get(1):
+        raise OutcomeUnknown("PrepareSessionWorkspace response carried no receipt")
+    return PreparationReceipt.decode(fields[1][0])
+
+
 @dataclass(frozen=True)
 class KagentSession:
     """The Session fields Mainloop uses. ``id`` is also the A2A ``contextId``."""
@@ -757,6 +941,7 @@ class KagentSession:
     runtime_composition: RuntimeComposition | None = None
     runtime_association: CurrentRuntimeAssociation | None = None
     context_confirmed: bool = True
+    workspace_preparation: PreparationReceipt | None = None
 
     @property
     def settled(self) -> bool:
@@ -799,7 +984,9 @@ def _decode_session(raw: bytes) -> KagentSession:
 
 
 def _decode_session_fields(raw: bytes) -> KagentSession:
-    fields = decode_fields(raw, wire_types={18: 2, 19: 2, 20: 2})
+    fields = decode_fields(raw, wire_types={18: 2, 19: 2, 20: 2, 21: 2})
+    if len(fields.get(21, [])) > 1:
+        raise OutcomeUnknown("Ambiguous kagent workspace preparation")
     if len(fields.get(20, [])) > 1:
         raise OutcomeUnknown("Ambiguous kagent runtime association")
     if any(len(fields.get(number, [])) > 1 for number in (1, 2, 5, 6, 14, 15, 18, 19)):
@@ -835,6 +1022,9 @@ def _decode_session_fields(raw: bytes) -> KagentSession:
         ),
         runtime_association=(
             CurrentRuntimeAssociation.decode(fields[20][0]) if fields.get(20) else None
+        ),
+        workspace_preparation=(
+            PreparationReceipt.decode(fields[21][0]) if fields.get(21) else None
         ),
         prepared_revision=_text(fields, 5),
         a2a_authority=_text(fields, 6),
@@ -925,11 +1115,33 @@ class KagentClient:
 
     # ---- SessionService ----------------------------------------------------------------
 
-    async def _session_call(self, method: str, message: bytes) -> KagentSession:
+    @overload
+    async def _session_call(self, method: str, message: bytes) -> KagentSession: ...
+
+    @overload
+    async def _session_call(
+        self,
+        method: str,
+        message: bytes,
+        *,
+        decoder: Callable[[bytes], PreparationReceipt],
+    ) -> PreparationReceipt: ...
+
+    async def _session_call(
+        self,
+        method: str,
+        message: bytes,
+        *,
+        decoder: Callable[
+            [bytes], KagentSession | PreparationReceipt
+        ] = decode_session_response,
+    ) -> KagentSession | PreparationReceipt:
         messages = await self._session_frames(method, message)
         if not messages:
             raise OutcomeUnknown(f"SessionService {method} returned no message")
-        return decode_session_response(messages[0])
+        if decoder is decode_preparation_response and len(messages) != 1:
+            raise OutcomeUnknown(f"SessionService {method} returned multiple messages")
+        return decoder(messages[0])
 
     async def _session_frames(self, method: str, message: bytes) -> list[bytes]:
         return await self._grpc_web_frames(
@@ -1048,6 +1260,50 @@ class KagentClient:
 
     async def get_session(self, session_id: str) -> KagentSession:
         return await self._identified_session_call("GetSession", session_id)
+
+    async def prepare_session_workspace(
+        self,
+        session_id: str,
+        *,
+        action_id: str,
+        create_request_id: str,
+        generation_id: str,
+        actor_uid: str,
+        prepared_revision: str,
+        workspace: SessionWorkspace,
+        development_environment: DevelopmentEnvironment,
+        runtime_composition: RuntimeComposition,
+        setup_profile: str,
+        setup_digest: str,
+    ) -> PreparationReceipt:
+        """Submit one fixed preparation action; no retry, polling, or model turn.
+
+        Reconcile the receipt before retrying the same inputs and action ID. Calling
+        again after confirmation opens a new challenge and closes task admission.
+        """
+        original = PreparationRequest(
+            session_id,
+            action_id,
+            create_request_id,
+            generation_id,
+            actor_uid,
+            prepared_revision,
+            workspace,
+            development_environment,
+            runtime_composition,
+            setup_profile,
+            setup_digest,
+        )
+        receipt = await self._session_call(
+            "PrepareSessionWorkspace",
+            original.encode(),
+            decoder=decode_preparation_response,
+        )
+        if receipt.original != original or receipt.context_id != session_id:
+            raise OutcomeUnknown(
+                "PrepareSessionWorkspace returned a different frozen action"
+            )
+        return receipt
 
     async def _identified_session_call(
         self, method: str, session_id: str
