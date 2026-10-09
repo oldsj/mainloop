@@ -3,7 +3,7 @@
 from urllib.parse import quote_plus, urlsplit
 
 from mainloop.runtime.control_credentials import read_control_token
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from models.provider import ProviderProfile
@@ -186,7 +186,10 @@ class Settings(BaseSettings):
     dev_mode: bool = False
 
     # GitHub
-    github_token: str = ""
+    github_app_id: str = ""
+    # Single-line base64 of the RSA PEM; validated on first GitHub use without
+    # exposing input through Pydantic validation errors or settings repr.
+    github_app_private_key: SecretStr = Field(default=SecretStr(""), repr=False)
 
     # Server
     host: str = "0.0.0.0"
@@ -241,6 +244,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        hide_input_in_errors=True,
     )
 
 

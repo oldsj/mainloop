@@ -71,7 +71,7 @@ async def read_evidence(binding, body):
     async with db.connection() as conn:
         project, name = await authority(conn, binding, body.project_id)
     try:
-        async with asyncio.timeout(60), GitHubMergeClient() as github:
+        async with asyncio.timeout(60), GitHubMergeClient(name) as github:
             facts = await github.evidence(name, body.pr_number, body.expected_sha)
     except (
         GitHubError,
@@ -400,7 +400,7 @@ async def reconcile(binding, p, candidate):
     # resend a PUT, including a crash between intent commit and network dispatch.
     facts = p["facts"]
     try:
-        async with GitHubMergeClient() as github:
+        async with GitHubMergeClient(facts["repository"]) as github:
             pr = await github.pull(facts["repository"], facts["pr_number"])
             ci = (
                 await github.checks(
@@ -704,7 +704,7 @@ async def execute(binding, arguments, *, approved):
     # Durable uncertainty precedes the only network write. Cancellation/crash is
     # conservative even if no bytes were sent; a lease cannot authorize a replay.
     try:
-        async with GitHubMergeClient() as github:
+        async with GitHubMergeClient(facts["repository"]) as github:
             result = await github.merge(
                 facts["repository"], facts["pr_number"], facts["head_sha"]
             )

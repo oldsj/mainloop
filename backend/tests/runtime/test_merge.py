@@ -10,7 +10,6 @@ from unittest.mock import patch
 import asyncpg
 import httpx
 from fastapi.testclient import TestClient
-from mainloop.config import settings
 from mainloop.db import db
 from mainloop.mcp_app import create_app, invoke
 from mainloop.runtime import hitl_continuation, native_sessions
@@ -22,6 +21,7 @@ from mainloop.runtime.policy import PolicyError
 from mainloop.services import github_merge, merge, merge_authorization
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_repo import parse_github_repo
+from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_context_model import KINDS, FakeStore
 from tests.runtime.test_hitl_observer import Gateway
 from tests.runtime.test_postgres_ledger import PostgresTestCase, _init_schema
@@ -180,13 +180,13 @@ class GitHub:
 class EvidenceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fake = GitHub()
-        p = patch.object(settings, "github_token", "fixture")
+        p = app_settings()
         p.start()
         self.addCleanup(p.stop)
 
     async def evidence(self):
         async with github_merge.GitHubMergeClient(
-            transport=httpx.MockTransport(self.fake.handle)
+            "owner/repo", transport=app_transport(self.fake.handle)
         ) as client:
             return await client.evidence("owner/repo", 17, SHA)
 
@@ -237,7 +237,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
 
             with self.subTest(endpoint=endpoint):
                 async with github_merge.GitHubMergeClient(
-                    transport=httpx.MockTransport(handle)
+                    "owner/repo", transport=app_transport(handle)
                 ) as client:
                     with self.assertRaises(GitHubError):
                         await client.evidence("owner/repo", 17, SHA)
@@ -256,7 +256,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             return await self.fake.handle(req)
 
         async with github_merge.GitHubMergeClient(
-            transport=httpx.MockTransport(handle)
+            "owner/repo", transport=app_transport(handle)
         ) as client:
             with self.assertRaises(GitHubError):
                 await client.evidence("owner/repo", 17, SHA)
@@ -812,11 +812,13 @@ class MergeFixture(PostgresTestCase):
         cls = github_merge.GitHubMergeClient
         for p in (
             patch.dict(os.environ, MAINLOOP_MERGE_TOOLS_ENABLED="true"),
-            patch.object(settings, "github_token", "fixture"),
+            app_settings(),
             patch.object(
                 merge,
                 "GitHubMergeClient",
-                lambda: cls(transport=httpx.MockTransport(self.fake.handle)),
+                lambda repository: cls(
+                    repository, transport=app_transport(self.fake.handle)
+                ),
             ),
         ):
             p.start()
@@ -1600,12 +1602,12 @@ class MergeTests(MergeFixture):
         factory = merge.GitHubMergeClient
         calls = 0
 
-        def crash_on_dispatch():
+        def crash_on_dispatch(repository):
             nonlocal calls
             calls += 1
             if calls == 2:
                 raise asyncio.CancelledError
-            return factory()
+            return factory(repository)
 
         with patch.object(merge, "GitHubMergeClient", crash_on_dispatch):
             with self.assertRaises(asyncio.CancelledError):

@@ -97,7 +97,7 @@ class FixedOriginCheckpointReader:
         )
         verify_checkpoint(value, repository=repository, branch=task.checkout.branch)
         factory = self.client_factory or GitHubCreationClient
-        async with factory() as client:
+        async with factory(repository) as client:
             remote_repo = await client.repo(repository)
             if (
                 remote_repo.full_name.lower() != repository

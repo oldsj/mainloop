@@ -1,18 +1,15 @@
 """Bounded, fixed-origin merge evidence. No remote writes during preparation."""
 
-import asyncio
 import hashlib
-import json
 from datetime import datetime, timezone
 from urllib.parse import quote
 
 import httpx
 from mainloop.runtime.policy import PolicyError
+from mainloop.services.github_auth import GitHubNotFound
 from mainloop.services.github_creation import (
-    REQUEST_TIMEOUT_SECONDS,
     GitHubCreationClient,
     GitHubError,
-    GitHubNotFound,
     PullRequest,
     Repo,
 )
@@ -189,29 +186,18 @@ class GitHubMergeClient(GitHubCreationClient):
     async def branch_rules_request(self, path, **kwargs):
         # Only these read endpoints may interpret the specific plan refusal.
         try:
-            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS), self.client.stream(
-                "GET", path, **kwargs
-            ) as response:
-                if response.status_code == 404:
-                    raise GitHubNotFound
-                if response.status_code not in (200, 403):
-                    raise GitHubError
-                data = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    data.extend(chunk)
-                    if len(data) > 2_000_000:
-                        raise GitHubError
-                payload = json.loads(data)
-                if response.status_code == 403:
-                    if (
-                        isinstance(payload, dict)
-                        and kwargs.get("params", {}).get("page", 1) == 1
-                        and payload.get("message")
-                        == "Upgrade to GitHub Pro or make this repository public to enable this feature."
-                    ):
-                        raise GitHubPlanUnavailable
-                    raise GitHubError
-                return payload
+            response = await self._response("GET", path, accepted=(200, 403), **kwargs)
+            payload = response.json()
+            if response.status_code == 403:
+                if (
+                    isinstance(payload, dict)
+                    and kwargs.get("params", {}).get("page", 1) == 1
+                    and payload.get("message")
+                    == "Upgrade to GitHub Pro or make this repository public to enable this feature."
+                ):
+                    raise GitHubPlanUnavailable
+                raise GitHubError
+            return payload
         except (httpx.HTTPError, ValueError, TimeoutError):
             raise GitHubError from None
 

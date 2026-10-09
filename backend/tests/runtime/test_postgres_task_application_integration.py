@@ -23,6 +23,7 @@ from mainloop.tasks import attention, lifecycle, projection, provisioning, servi
 from tests.runtime import test_postgres_task_attention as fixtures
 from tests.runtime import test_postgres_task_handoff as s3
 from tests.runtime import test_postgres_task_provisioning as s1
+from tests.runtime.github_app_fake import app_transport
 from tests.runtime.test_merge import MergeFixture
 
 from models.hitl import (
@@ -193,7 +194,9 @@ class TaskApplicationIntegrationTests(MergeFixture):
         with patch.object(
             github_merge,
             "GitHubMergeClient",
-            lambda: cls(transport=httpx.MockTransport(self.fake.handle)),
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
         ):
             await service.reconcile_once(
                 db,

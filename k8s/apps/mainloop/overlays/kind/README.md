@@ -20,9 +20,16 @@ the installed fork before deploying through the authorized spike workflow.
 ## Installation inputs
 
 - A fresh Mainloop database, with the Kind storage provisioner available for the 1 Gi PVC.
-- Existing `mainloop/mainloop-secrets` with keys `db-username`, `db-password`, `github-token`
-  (may be empty for public metadata) and a separate nonempty `AGENT_TOKEN_KEY`. Both backend
-  processes require the same token key. The overlay contains no credential values.
+- Existing `mainloop/mainloop-secrets` with keys `db-username`, `db-password`,
+  `github-app-id` (positive numeric GitHub App ID), `github-app-private-key`
+  (single-line standard base64 of the unencrypted RSA PEM, at least 2048 bits), and
+  a separate nonempty `AGENT_TOKEN_KEY`. Both backend processes read the same App
+  credentials and token key. In Secret `stringData`, the App key value is already
+  base64 of the PEM; in Secret `data`, encode that value once more for Kubernetes.
+  Install the private App on each managed repository. There is no backend PAT or
+  anonymous fallback; see [App permissions](../../../../../docs/specs/pull-requests.md).
+  The overlay contains no credential values. The legacy Kind secret creation script
+  still needs an App-aware update before use.
 - Existing `kagent/mainloop-workspace-git`, key `authorization`, containing the installation's
   Git authorization header. Edit `git.origins` in `k8s/integrations/kagent/kind/workspace-agents.yaml`
   to match the permitted repository origins. Per-user Git credentials are a separate follow-up.

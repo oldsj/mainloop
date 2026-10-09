@@ -3,15 +3,13 @@
 import copy
 import unittest
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
-import httpx
-from mainloop.config import settings
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_merge import GitHubMergeClient, MergePR
 from mainloop.tasks.attention import owns_leaf
 from mainloop.tasks.projection import ci_state, observed
+from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_merge import SHA, GitHub
 
 from models.hitl import LeafIdentity
@@ -135,13 +133,13 @@ class PublicationFactsTests(unittest.TestCase):
 class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fake = GitHub()
-        self.patcher = patch.object(settings, "github_token", "fixture")
+        self.patcher = app_settings()
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
     async def observe(self):
         async with GitHubMergeClient(
-            transport=httpx.MockTransport(self.fake.handle)
+            "owner/repo", transport=app_transport(self.fake.handle)
         ) as client:
             return await client.observation("owner/repo", 17)
 

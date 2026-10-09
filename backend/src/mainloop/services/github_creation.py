@@ -12,10 +12,17 @@ import json
 from urllib.parse import quote
 
 import httpx
-from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.postgres import PRCreationConflict
 from mainloop.runtime.policy import PolicyError
+from mainloop.services.github_auth import (
+    GitHubError,
+    app_auth,
+    bounded_response,
+    endpoint,
+    http_client,
+    repository_name,
+)
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
     repository_scope,
@@ -26,14 +33,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from models.agent_tools import OpenPullRequest
 
 REQUEST_TIMEOUT_SECONDS = 15
-
-
-class GitHubError(Exception):
-    """Opaque upstream failure, deliberately without response/request/token text."""
-
-
-class GitHubNotFound(GitHubError):
-    """Opaque 404, interpreted only by endpoints where absence is supported."""
 
 
 class Repo(BaseModel):
@@ -67,21 +66,12 @@ class PullRequest(BaseModel):
 
 
 class GitHubCreationClient:
-    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None):
-        if not settings.github_token:
-            raise PolicyError("configuration", "backend GITHUB_TOKEN is required")
-        self.client = httpx.AsyncClient(
-            base_url="https://api.github.com",
-            headers={
-                "Authorization": f"Bearer {settings.github_token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2026-03-10",
-            },
-            timeout=httpx.Timeout(10.0),
-            follow_redirects=False,
-            trust_env=False,
-            transport=transport,
-        )
+    def __init__(
+        self, repository: str, *, transport: httpx.AsyncBaseTransport | None = None
+    ):
+        self.repository_name = repository_name(repository)
+        self.auth = app_auth()
+        self.client = http_client(transport)
 
     async def __aenter__(self):
         return self
@@ -89,22 +79,24 @@ class GitHubCreationClient:
     async def __aexit__(self, *_):
         await self.client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs):
+    async def _response(self, method: str, path: str, **kwargs):
+        permissions = endpoint(self.repository_name, method, path)
         try:
-            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS), self.client.stream(
-                method, path, **kwargs
-            ) as response:
-                if response.status_code == 404:
-                    raise GitHubNotFound
-                if response.status_code not in (200, 201):
-                    raise GitHubError
-                data = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    data.extend(chunk)
-                    if len(data) > 2_000_000:
-                        raise GitHubError
-                return json.loads(data)
+            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                token = await self.auth.token(
+                    self.client, self.repository_name, permissions
+                )
+                # Internal callers cannot substitute credential or routing headers.
+                kwargs["headers"] = {"Authorization": f"Bearer {token}"}
+                return await bounded_response(self.client, method, path, **kwargs)
         except (httpx.HTTPError, ValueError, TimeoutError):
+            raise GitHubError from None
+
+    async def _request(self, method: str, path: str, **kwargs):
+        response = await self._response(method, path, **kwargs)
+        try:
+            return response.json()
+        except ValueError:
             raise GitHubError from None
 
     async def repo(self, full_name: str) -> Repo:
@@ -236,7 +228,7 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
         await publication.attach_creation(db, binding, prior, full_name)
         result = prior["result"]
         return json.loads(result) if isinstance(result, str) else result
-    async with GitHubCreationClient() as github:
+    async with GitHubCreationClient(full_name) as github:
         try:
             repo = await github.repo(full_name)
             _verify_repo(repo, full_name, body)

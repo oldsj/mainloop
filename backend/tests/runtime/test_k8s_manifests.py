@@ -111,6 +111,39 @@ class KindOverlayTests(unittest.TestCase):
         self.resource("StatefulSet", "mainloop-postgres")
         self.resource("NetworkPolicy", "mainloop-backend-ingress")
 
+    def test_backend_processes_use_only_app_secret_references(self):
+        for overlay in (
+            BASE,
+            ROOT / "k8s/apps/mainloop/overlays/kind",
+            ROOT / "k8s/apps/mainloop/overlays/prod",
+        ):
+            deployment = next(
+                doc
+                for doc in build(overlay)
+                if doc["kind"] == "Deployment"
+                and doc["metadata"]["name"] == "mainloop-backend"
+            )
+            for container in deployment["spec"]["template"]["spec"]["containers"]:
+                with self.subTest(overlay=overlay.name, container=container["name"]):
+                    env = {entry["name"]: entry for entry in container.get("env", [])}
+                    self.assertNotIn("GITHUB_TOKEN", env)
+                    for name, key in (
+                        ("GITHUB_APP_ID", "github-app-id"),
+                        ("GITHUB_APP_PRIVATE_KEY", "github-app-private-key"),
+                    ):
+                        self.assertEqual(
+                            env[name],
+                            {
+                                "name": name,
+                                "valueFrom": {
+                                    "secretKeyRef": {
+                                        "name": "mainloop-secrets",
+                                        "key": key,
+                                    }
+                                },
+                            },
+                        )
+
     def test_binding_secret_publisher_permissions(self):
         role = self.resource("Role", "mainloop-agent-tokens")
         self.assertEqual(
@@ -150,7 +183,8 @@ class KindOverlayTests(unittest.TestCase):
                             "DB_PASSWORD",
                             "POSTGRES_PASSWORD",
                             "AGENT_TOKEN_KEY",
-                            "GITHUB_TOKEN",
+                            "GITHUB_APP_ID",
+                            "GITHUB_APP_PRIVATE_KEY",
                         ):
                             self.assertIn("secretKeyRef", env["valueFrom"])
 

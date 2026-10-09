@@ -53,6 +53,16 @@ make dev
 # Backend:  http://localhost:8000/docs
 ```
 
+## GitHub API authentication
+
+Install a private GitHub App on the repositories Mainloop should manage. Set
+`GITHUB_APP_ID` to its numeric App ID and `GITHUB_APP_PRIVATE_KEY` to single-line
+base64 of its unencrypted RSA PEM (at least 2048 bits), through backend secret
+configuration. Mainloop discovers installations and mints short-lived tokens for
+one repository and the requested operation's permissions. There is no backend PAT
+or anonymous fallback. App permissions, cache behavior and the issue-helper
+limitation are in [Pull requests](docs/specs/pull-requests.md).
+
 ## Production Deployment
 
 The Kubernetes manifests under `k8s/apps/mainloop/` provide reusable bases and example overlays. Supply environment-specific images, domains, credentials, and storage through your deployment configuration, and apply production changes through your GitOps workflow.
