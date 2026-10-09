@@ -313,7 +313,9 @@ class HITLObserverTests(PostgresTestCase):
                         f"/hitl/{projection.id}/respond", json=body
                     )
                     self.assertEqual(result.status_code, 200, result.text)
-                    self.assertEqual(result.json()["transport_state"], "accepted")
+                    self.assertEqual(result.json()["transport_state"], "recorded")
+                    delivered = await client.get(f"/hitl/{projection.id}")
+                    self.assertEqual(delivered.json()["transport_state"], "accepted")
                     duplicate = await client.post(
                         f"/hitl/{projection.id}/respond", json=body
                     )

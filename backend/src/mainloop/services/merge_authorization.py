@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from mainloop.runtime.hitl_correlation import canonical_operation
 from mainloop.runtime.hitl_observer import observer
@@ -195,6 +196,31 @@ async def decision_inputs(
     return config, mapping_evidence, prepared
 
 
+def approval_unavailable(p, candidate, policy_version, rejected):
+    """Return the stored refusal reason for cards and locked approval validation."""
+    if not candidate or candidate["active_proposal_id"] != p["id"]:
+        return "Merge proposal was replaced; prepare a fresh operation"
+    if rejected:
+        return "Merge candidate was rejected; prepare a fresh operation"
+    if (
+        candidate["state"] in ("prepared", "evaluating")
+        and candidate["deadline"]
+        and candidate["deadline"] <= datetime.now(timezone.utc)
+    ):
+        return "Merge proposal expired; prepare a fresh operation"
+    if candidate["state"] != "prepared":
+        if candidate["state"] == "evaluating":
+            return (
+                "Merge is evaluating CI; a second approval is unavailable. "
+                "Any recorded consent remains bound to its original invocation. "
+                "Prepare a fresh operation if it expires."
+            )
+        return f"Merge proposal is {candidate['state']}; prepare a fresh operation"
+    if policy_version != p["facts"]["policy_version"]:
+        return "Merge policy changed; prepare a fresh operation"
+    return None
+
+
 async def lock_decision(conn, owner, prepared):
     # Lock projects first in sorted order, then candidate locks, across a batch.
     proposals = [p for p, _ in prepared.values()]
@@ -245,15 +271,16 @@ async def lock_decision(conn, owner, prepared):
             or p["runtime_session_id"] != key.leaf_runtime_session_id
         ):
             raise ValueError("Proposal leaf mismatch")
-        if candidate["state"] in ("merging", "uncertain", "merged"):
+        if candidate and candidate["state"] in ("merging", "uncertain", "merged"):
             raise ValueError("Merge intent already claimed; cannot change its decision")
+        if approved:
+            reason = approval_unavailable(
+                p, candidate, policy["merge_policy_version"], rejected
+            )
+            if reason:
+                raise ValueError(reason)
         if approved and (
-            rejected
-            or candidate["active_proposal_id"] != p["id"]
-            or candidate["state"] != "prepared"
-            or fresh is None
-            or merge.pinned(fresh) != merge.pinned(p["facts"])
-            or policy["merge_policy_version"] != p["facts"]["policy_version"]
+            fresh is None or merge.pinned(fresh) != merge.pinned(p["facts"])
         ):
             raise ValueError("Merge proposal is stale; prepare a fresh operation")
 
@@ -286,7 +313,7 @@ async def enrichment(conn, projection, *, service=None):
                 ):
                     continue
                 candidate = await conn.fetchrow(
-                    "SELECT active_proposal_id,state FROM merge_requests WHERE id=$1",
+                    "SELECT active_proposal_id,state,deadline FROM merge_requests WHERE id=$1",
                     p["candidate_id"],
                 )
                 policy = await conn.fetchval(
@@ -302,16 +329,25 @@ async def enrichment(conn, projection, *, service=None):
                 freshness_reason = (
                     "The reviewed template mapping changed or is unavailable. Reject the call or refresh the request."
                     if evidence_changed
-                    else None
+                    else approval_unavailable(
+                        p,
+                        candidate,
+                        policy,
+                        await merge.rejection(conn, p["candidate_id"]),
+                    )
                 )
                 values.append(
                     {
                         "tool_id": tool.id,
                         "proposal_id": p["id"],
                         **p["facts"],
-                        "stale": evidence_changed
-                        or candidate["active_proposal_id"] != p["id"]
-                        or policy != p["facts"]["policy_version"],
+                        "stale": freshness_reason is not None,
+                        "state": candidate["state"] if candidate else None,
+                        "deadline": (
+                            candidate["deadline"].isoformat()
+                            if candidate and candidate["deadline"]
+                            else None
+                        ),
                         "mapping_unavailable": evidence_changed,
                         "freshness_reason": freshness_reason,
                     }

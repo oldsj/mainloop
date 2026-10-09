@@ -199,6 +199,16 @@ No manifest enables it. Fresh ownership/task checks, exact batch validation, sor
 leaf locks and route revalidation precede immutable recording. Same action/body is idempotent;
 another action or contradictory batch cannot take any already-recorded leaf member.
 
+After recording, the HTTP response returns the immutable receipt and current transport
+state before native dispatch. Dispatch runs after the response; the existing durable
+response reconciler recovers a receipt if that callback is lost. The POST response omits
+remote merge enrichment; GET supplies the current card summary. Neither a slow native
+stream nor post-recording remote card reads delay acknowledgement of recorded consent.
+The client bounds this POST to 90 seconds, including the pre-recording evidence reads.
+Timeouts and network/5xx errors retain uncertain delivery and reconcile the stored receipt
+without resubmitting. A 4xx displays the server's detail and ends the recording state;
+an unsuccessful subsequent refresh preserves that detail.
+
 Trusted associations are read only from the server-owned association store. No public endpoint
 imports associations and no payload field creates them. Deployment integration must populate
 that store from verified creation/continuation evidence before propagated answers work.
@@ -262,6 +272,58 @@ consent. That digest is removed from the native kagent response. Rejections rema
 without a current summary. This presentation does not add a separate approval queue or merge
 execution action; see [Pull requests](pull-requests.md#approval-card-summary) for its sources,
 limits, and API contract.
+
+Approval availability uses the same stored candidate gates as response validation:
+the proposal must be active, the candidate must be `prepared`, its evaluation deadline
+must not have expired, no candidate rejection may exist, and the policy version must
+match. An `evaluating`, blocked, expired, superseded or claimed candidate is displayed
+as stale with its reason. Reject remains available before an intent is claimed.
+Fresh remote evidence and reviewed-summary validation can still refuse an approval if
+facts change after GET.
+
+An approved merge call makes one evaluation pass with a 20-second total budget,
+including locks, evidence collection and dispatch. A timeout gets a separate two-second
+DB-only result-read budget. Pending or unknown CI and settling mergeability return
+`evaluating`, the fixed 30-minute deadline, and instructions to let Mainloop continue
+under the original exact consent. The agent should not invoke the protected tool again.
+Automatic merges retain their explicit-retry behavior while CI evaluates.
+
+The existing backend native/HITL reconciler consumes one due approved candidate per
+pass. PostgreSQL stores the positive receipt action, original invocation ID and deadline
+before evidence collection. It stores the last continuation attempt before remote work,
+rotates candidates across passes and restarts, and spaces attempts by at least ten seconds.
+Expired evaluations are immediately eligible. Earlier evaluations whose receipt references
+were not stored before intent claim are discovered from immutable invocation/receipt
+records and revalidated through the same exact consent gate. There is no separate worker, new ledger,
+or DBOS workflow. Each pass has its own bounded scheduling share (25 seconds including
+selection), with no connection or publication/candidate lock held between passes.
+
+Every evaluation validates the same owner, leaf binding/runtime, proposal, invocation
+request ID, argument hash and positive receipt. It rechecks pinned facts, current policy
+version and fresh GitHub evidence before committing the existing at-most-once intent.
+The deadline never resets. Expiry, failed CI or changed authority/facts end without a
+merge; known CI failure blocks even while mergeability is unknown. Once intent is
+committed, recovery only observes GitHub and never resends the PUT, including cancellation
+before network dispatch. A same-ID retry while evaluating returns stored progress under
+its existing consent without remote reads. A different request ID or proposal requires
+fresh exact consent; no approval transfers between operations.
+
+Task projections expose `evaluating`, `merged`, `blocked` and `expired` for the exact
+current attempt. Blocking or expiring a merge removes only its answered canonical
+approval links; unrelated pending questions and approvals retain task attention.
+Terminal outcomes also enter the owner's informational inbox. Agents
+read the durable outcome with the ordinary, non-protected
+`get_pull_request_merge_status` tool, passing the original `proposal_id` and `request_id`.
+This tool reads PostgreSQL only and cannot trigger evaluation, approval or dispatch.
+Its reads have a two-second budget. Contention returns a retriable `status_timeout`
+error; retrying the status read leaves durable merge continuation and consent intact.
+An exact completed task binding with a held current writer claim and retained positive
+receipt can authenticate solely for this immutable result read. The shared lifecycle
+resolver relaxes only the leaf's completed product state; full current scope and parent
+ancestry checks still apply, including parent token, runtime, archive, attempt and claim.
+Execution authority stays closed. Replaced, revoked, archived or deleted bindings and
+children with revoked ancestors cannot use this access. No native
+turn or unsolicited message is sent by merge settlement.
 
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,

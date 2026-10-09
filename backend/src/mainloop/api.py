@@ -10,7 +10,7 @@ from typing import Literal
 from urllib.parse import quote, urlsplit
 
 from dbos import DBOS
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mainloop.config import settings
@@ -685,6 +685,8 @@ async def hitl_presentation(conn, result):
             "base_sha": entry.get("base_sha"),
             "protected_matches": entry.get("protected_matches", []),
             "stale": stale,
+            "state": entry.get("state"),
+            "deadline": entry.get("deadline"),
         }
         if (
             isinstance(repository, str)
@@ -884,13 +886,20 @@ async def get_hitl_merge_details(
 
 @app.post("/hitl/{request_id}/respond")
 async def respond_to_hitl(
-    request_id: str, decision: HITLDecisionInput, user_id: str = Depends(current_user)
+    request_id: str,
+    decision: HITLDecisionInput,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(current_user),
 ):
     if os.environ.get("MAINLOOP_OWNER_HITL_WRITES_ENABLED") != "true":
         raise HTTPException(status_code=503, detail="Owner HITL writes are disabled")
     try:
         result = await hitl_continuation.submit(
-            user_id, request_id, decision.action_id, decision.response
+            user_id,
+            request_id,
+            decision.action_id,
+            decision.response,
+            background_tasks=background_tasks,
         )
         async with db.connection() as conn:
             return await hitl_presentation(conn, result)

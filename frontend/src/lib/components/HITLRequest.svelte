@@ -280,6 +280,9 @@
                 {facts.freshness_reason ?? 'Approval context is unavailable. Refresh this request.'}
               </p>
             {/if}
+            {#if facts.deadline}
+              <p class="context">Evaluation deadline: {formatCapturedAt(facts.deadline)}</p>
+            {/if}
             <p>Head: {summary.head} · <code>{summary.head_sha}</code></p>
             <p>Base: {summary.base} · <code>{summary.base_sha}</code></p>
             <p class="context">

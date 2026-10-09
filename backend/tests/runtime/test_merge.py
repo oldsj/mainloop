@@ -2063,9 +2063,14 @@ class MergeTests(MergeFixture):
                         )
 
                 self.fake.hook = introduce_run
-                self.assertEqual(
-                    (await self.execute(p, approved=approved))["state"], "evaluating"
+                # Exercise a fresh server pass; public retries only read pending state.
+                result = await merge.execute_once(
+                    self.binding,
+                    {"proposal_id": p["proposal_id"], "request_id": "invoke-1"},
+                    approved=approved,
+                    reevaluate=True,
                 )
+                self.assertEqual(result["state"], "evaluating")
                 self.assertTrue(observed)
                 current = await self.pool.fetchval(
                     "SELECT deadline FROM merge_requests WHERE owner_id=$1", self.user
@@ -2084,6 +2089,8 @@ class MergeTests(MergeFixture):
                 self.fake.runs[-1].update(status="completed", conclusion="success")
         self.fake.hook = None
         self.fake.suites[0].update(status="completed", conclusion="success")
+        if approved:
+            await merge.reconcile_approved_merges()
         self.assertEqual((await self.execute(p, approved=approved))["state"], "merged")
         self.assertEqual(
             await self.pool.fetchval(

@@ -139,18 +139,28 @@ def proposal_tools(leaf_request, response, proposals, configuration):
     }
 
 
-async def submit(owner, request_id, action_id, response, *, service=None):
+async def submit(
+    owner, request_id, action_id, response, *, service=None, background_tasks=None
+):
     service = service or observer()
     projection, receipt, fresh = await record_response(
         owner, request_id, action_id, response, service=service
     )
-    if fresh:
+    if fresh and background_tasks is not None:
+        background_tasks.add_task(dispatch, receipt, service=service)
+    elif fresh:
         await dispatch(receipt, service=service)
     else:
         # Same-action replay repairs presentation without another native send.
         await refresh_receipt_attention(receipt)
     async with db.connection() as conn:
-        return await view(conn, projection, receipt, service=service)
+        return await view(
+            conn,
+            projection,
+            receipt,
+            service=service,
+            enrich_merge=background_tasks is None,
+        )
 
 
 async def record_response(owner, request_id, action_id, response, *, service):
@@ -285,7 +295,7 @@ async def record_response(owner, request_id, action_id, response, *, service):
     return projection, receipt, True
 
 
-async def view(conn, projection, receipt=None, *, service=None):
+async def view(conn, projection, receipt=None, *, service=None, enrich_merge=True):
     if receipt is None:
         raw = await conn.fetchval(
             """SELECT r.snapshot FROM native_hitl_responses r
@@ -319,7 +329,9 @@ async def view(conn, projection, receipt=None, *, service=None):
     from mainloop.services.merge_authorization import enrichment
 
     return {
-        "merge_enrichment": await enrichment(conn, projection, service=service),
+        "merge_enrichment": (
+            await enrichment(conn, projection, service=service) if enrich_merge else []
+        ),
         "request": projection.model_dump(mode="json"),
         "response": receipt.model_dump(mode="json") if receipt else None,
         "transport_state": state,
@@ -564,3 +576,12 @@ async def reconcile_hitl_responses():
     # Attention gets a separate share so an outage cannot use the transport
     # recovery budget. Finished transports need no further native reads or sends.
     await reconcile_receipt_attention(service)
+    # Approved merge evaluation has its own bounded pass and durable PG source;
+    # it shares startup/restart recovery, not the native-response send budget.
+    from mainloop.services.merge import reconcile_approved_merges
+
+    try:
+        async with asyncio.timeout(25):
+            await reconcile_approved_merges()
+    except TimeoutError:
+        pass

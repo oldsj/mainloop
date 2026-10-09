@@ -733,6 +733,7 @@ export const api = {
   async respondHITL(id: string, action_id: string, responseBody: HITLResponse): Promise<HITLView> {
     const response = await apiFetch(`${API_URL}/hitl/${encodeURIComponent(id)}/respond`, {
       method: 'POST',
+      signal: AbortSignal.timeout(90000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action_id, response: responseBody })
     });
