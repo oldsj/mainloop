@@ -920,6 +920,47 @@ class DeleteTests(WorkspaceTestCase):
 
 
 class LifecycleMappingTests(unittest.TestCase):
+    def test_preparation_state_mapping_and_disabled_behavior(self):
+        session = KagentSession(
+            id="s",
+            state=RuntimeState.READY,
+            operation=RuntimeOperation.NONE,
+            context_id="s",
+        )
+        for git_enabled, push_enabled in (
+            (True, True),
+            (False, False),
+            (True, False),
+            (False, True),
+        ):
+            with (
+                patch.object(workspaces.settings, "git_transport_enabled", git_enabled),
+                patch.object(workspaces.settings, "push_gate_enabled", push_enabled),
+            ):
+                for state in ("requested", "failed"):
+                    observed, detail = workspaces.state_of(session, prepare_state=state)
+                    if git_enabled and push_enabled:
+                        self.assertEqual(
+                            observed,
+                            (
+                                WorkspaceObservedState.RESUMING
+                                if state == "requested"
+                                else WorkspaceObservedState.FAILED
+                            ),
+                        )
+                        self.assertEqual(
+                            detail,
+                            (
+                                "Preparing workspace"
+                                if state == "requested"
+                                else "Workspace preparation failed; replace the session"
+                            ),
+                        )
+                    else:
+                        self.assertEqual(
+                            (observed, detail), (WorkspaceObservedState.RUNNING, None)
+                        )
+
     def state(self, state, operation=RuntimeOperation.NONE, **kw):
         return workspaces.state_of(
             KagentSession(

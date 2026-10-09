@@ -390,9 +390,9 @@ class LifecycleCallerTests(fixtures.GitCredentialsCase):
         await self.final_send(binding, denied="git_plan_missing")
         self.assertEqual(len(self.native.gets), gets)
 
-    async def test_current_enrolled_owner_send_remains_usable(self):
+    async def test_current_enrolled_owner_first_send_waits_for_preparation(self):
         sid = await self.create()
-        await self.final_send(await ns.get_binding(sid))
+        await self.final_send(await ns.get_binding(sid), denied="git_prepare_pending")
 
     async def test_live_ordinary_no_plan_send_remains_usable(self):
         with patch.object(settings, "git_transport_enabled", False), patch.object(

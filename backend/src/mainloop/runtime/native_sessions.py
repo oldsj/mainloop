@@ -1563,6 +1563,16 @@ async def _guarded_send(binding, agent, **kwargs):
                         current_binding["kagent_session_id"]
                     )
                     await ready_for_binding(conn, binding["session_id"], current)
+                    if (
+                        settings.git_transport_enabled
+                        and settings.push_gate_enabled
+                        and await conn.fetchval(
+                            "SELECT prepare_state FROM git_enrollments WHERE issuance_id=$1",
+                            issuance,
+                        )
+                        != "confirmed"
+                    ):
+                        raise ValueError("git_prepare_pending")
                 try:
                     first = await anext(events)
                 except StopAsyncIteration:

@@ -37,6 +37,20 @@ The confirmed association is immutable. A changed generation or UID refuses old 
 
 Read publication follows confirmation; delegated creating targets receive read only. Push follows
 active/current admission. Native send confirms required publications before external turn bytes.
+With both flags enabled, delegated setup additionally requires a nonhistorical confirmed
+workspace preparation receipt. Mainloop commits one stable preparation action and its original
+request before dispatch, using only the frozen create plan, confirmed runtime association and
+authoritative binding role. The `prepare_receipt` row initially contains only that local
+`original` request reservation, without a remote classification; it grants no preparation
+authority. Lost replies with no receipt retry identical bytes and the same action. Pending or
+uncertain receipts are polled without reissuing Prepare; confirmed receipts never open another
+challenge. ALREADY_EXISTS, definite failure, receipt identity/profile disagreement and historical
+receipts hold the enrollment for Session replacement. A non-READY Session or an operation in
+progress holds preparation without failing its durable state. kagent temporarily projects
+historical receipts during ordinary suspension/resume; only a fresh settled READY observation
+of the original runtime can classify history as terminal. Owner setup is deferred; every native
+send requires durable `prepare_state=confirmed` for its current issuance/create identity when
+both flags are enabled. A binding's previous turn count grants no preparation authority.
 Unknown create recovery, including revoked cancellation recovery, uses the complete original
 tuple without restoring hashes or republishing. Replacement requires a new create identity.
 
