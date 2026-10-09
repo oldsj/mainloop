@@ -55,6 +55,11 @@ class FakeGitHub:
         self.refusal = None
         self.pr_changes = None
         self.on_request = None
+        self.create_status = None
+        self.create_error = {
+            "message": "Validation Failed",
+            "errors": [{"resource": "PullRequest", "field": "head", "code": "invalid"}],
+        }
 
     def pr(self):
         pr = {
@@ -98,6 +103,8 @@ class FakeGitHub:
             body = json.loads(request.content)
             if set(body) != {"head", "base", "title", "body"}:
                 raise AssertionError("unexpected creation authority")
+            if self.create_status is not None:
+                return httpx.Response(self.create_status, json=self.create_error)
             pr = self.pr()
             self.prs.append(pr)
             if self.lose_response:
@@ -643,6 +650,198 @@ class PRPostgresTests(PostgresTestCase):
         self.fake.prs = []
         self.assertEqual((await self.call()).structuredContent["state"], "uncertain")
         self.assertEqual(len(self.fake.posts), 1)
+
+    async def test_refusal_and_overlapping_reconciliation_return_same_terminal_result(
+        self,
+    ):
+        # Adopted from the reviewer's CreationRaceReview: release a stale valid
+        # listing only after the sole POST has recorded its definite refusal.
+        post_started = asyncio.Event()
+        release_post = asyncio.Event()
+        find_started = asyncio.Event()
+        release_find = asyncio.Event()
+        self.fake.create_status = 422
+
+        async def on_request(request):
+            if request.url.path != "/repos/owner/repo/pulls":
+                return
+            if request.method == "POST":
+                post_started.set()
+                await release_post.wait()
+            elif asyncio.current_task().get_name() == "review-reconciler":
+                self.fake.prs = [self.fake.pr()]
+                find_started.set()
+                await release_find.wait()
+
+        self.fake.on_request = on_request
+        creator = asyncio.create_task(self.call(), name="review-creator")
+        reconciler = None
+        try:
+            await asyncio.wait_for(post_started.wait(), 5)
+            reconciler = asyncio.create_task(self.call(), name="review-reconciler")
+            await asyncio.wait_for(find_started.wait(), 5)
+            release_post.set()
+            refused = await asyncio.wait_for(creator, 5)
+            release_find.set()
+            reconciled = await asyncio.wait_for(reconciler, 5)
+            replay = await self.call()
+            self.assertEqual(len(self.fake.posts), 1)
+            for response in (refused, reconciled, replay):
+                self.assertFalse(response.isError, response.content)
+                self.assertEqual(response.structuredContent["state"], "refused")
+                self.assertEqual(response.structuredContent, refused.structuredContent)
+        finally:
+            release_post.set()
+            release_find.set()
+            running = [r for r in (creator, reconciler) if r is not None]
+            for task in running:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*running, return_exceptions=True)
+
+    async def test_task_reconciliation_returns_settled_refusal_without_attachment(self):
+        await self.child()
+        refusal = creation.GitHubRefusal()
+        refusal.status = 422
+        with self.assertLogs(creation.logger, level="WARNING"):
+            result = creation._refused(refusal)
+
+        async def settle_before_listing(request):
+            if (
+                request.method == "GET"
+                and request.url.path == "/repos/owner/repo/pulls"
+            ):
+                intent_id = await self.pool.fetchval(
+                    "SELECT id FROM pr_creations WHERE user_id=$1", self.user
+                )
+                await db.refuse_pr_creation(intent_id, result)
+                self.fake.prs = [self.fake.pr()]
+                self.fake.on_request = None
+
+        self.fake.on_request = settle_before_listing
+        with patch.object(
+            creation.publication, "attach_creation", new=AsyncMock()
+        ) as attach:
+            response = await self.call()
+            self.assertFalse(response.isError, response.content)
+            self.assertEqual(response.structuredContent, result)
+            attach.assert_not_awaited()
+        self.assertEqual(len(self.fake.posts), 0)
+        task_id = await self.pool.fetchval(
+            "SELECT task_id FROM task_attempts WHERE binding_id=$1",
+            self.ctx.binding["session_id"],
+        )
+        self.assertIsNone(
+            await self.pool.fetchval(
+                "SELECT projection->>'pr_number' FROM tasks WHERE id=$1", task_id
+            )
+        )
+
+    async def test_definite_refusal_is_durable_and_new_id_can_create(self):
+        for status in (400, 401, 403, 404, 405, 409, 422):
+            with self.subTest(status=status):
+                request_id = f"refused-{status}"
+                self.fake.create_status = status
+                with self.assertLogs(creation.logger, level="WARNING") as logs:
+                    first = await self.call(request_id=request_id)
+                self.assertFalse(first.isError, first.content)
+                result = first.structuredContent
+                self.assertEqual(result["state"], "refused")
+                self.assertEqual(result["http_status"], status)
+                self.assertEqual(result["github_message"], "Validation Failed")
+                self.assertEqual(
+                    result["github_errors"], self.fake.create_error["errors"]
+                )
+                self.assertEqual(result["github_hints"], ["invalid_head"])
+                self.assertIn(f"status={status}", logs.output[0])
+                self.assertIn("'code': 'invalid'", logs.output[0])
+                self.assertIn("Validation Failed", logs.output[0])
+                self.service = AgentService(PgStore())
+                self.ctx = await self.service.authenticate(token_for(self.sid))
+                before = len(self.fake.requests)
+                second = await self.call(request_id=request_id)
+                self.assertEqual(second.structuredContent, result)
+                self.assertEqual(len(self.fake.requests), before)
+                row = await db.get_pr_creation_request(
+                    self.user,
+                    request_id,
+                    creation.hashlib.sha256(
+                        json.dumps(
+                            OpenPullRequest.model_validate(
+                                {**self.args, "request_id": request_id}
+                            ).model_dump(exclude={"request_id"}),
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest(),
+                )
+                self.assertEqual(row["state"], "refused")
+                changed = await self.call(request_id=request_id, title="changed")
+                self.assertTrue(changed.isError)
+                self.assertIn("[conflict]", changed.content[0].text)
+        self.assertEqual(len(self.fake.posts), 7)
+        self.fake.create_status = None
+        responses = await asyncio.gather(
+            *(
+                self.call(request_id=f"retry-{n % 3}", title="Corrected title")
+                for n in range(9)
+            )
+        )
+        self.assertTrue(all(not r.isError for r in responses), responses)
+        self.assertTrue(
+            any(r.structuredContent["state"] == "created" for r in responses)
+        )
+        for n in range(3):
+            self.assertEqual(
+                (
+                    await self.call(request_id=f"retry-{n}", title="Corrected title")
+                ).structuredContent["state"],
+                "created",
+            )
+        self.assertEqual(len(self.fake.posts), 8)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM pr_creations WHERE user_id=$1 AND state='refused'",
+                self.user,
+            ),
+            7,
+        )
+        # An old request must retain its own refusal after the replacement succeeds.
+        self.assertEqual(
+            (await self.call(request_id="refused-422")).structuredContent["state"],
+            "refused",
+        )
+
+    async def test_retryable_and_server_statuses_remain_fenced(self):
+        for status in (408, 429, 500, 502, 503):
+            with self.subTest(status=status):
+                # Different heads isolate the genuinely uncertain intents.
+                self.args["branch"] = f"feature/status-{status}"
+                self.args["request_id"] = f"status-{status}"
+                self.fake.create_status = status
+                first = await self.call()
+                self.assertEqual(first.structuredContent["state"], "uncertain")
+                self.fake.create_status = None
+                second = await self.call()
+                other = await self.call(request_id=f"other-{status}")
+                self.assertEqual(second.structuredContent["state"], "uncertain")
+                self.assertEqual(other.structuredContent["state"], "uncertain")
+        self.assertEqual(len(self.fake.posts), 5)
+
+    async def test_refusal_does_not_leave_unresolved_task_publication(self):
+        await self.child()
+        self.fake.create_status = 422
+        with self.assertLogs(creation.logger, level="WARNING"):
+            refused = await self.call()
+        self.assertEqual(refused.structuredContent["state"], "refused")
+        async with db.connection() as conn, conn.transaction():
+            owned = await creation.publication.current(conn, self.ctx.binding)
+            self.assertEqual(
+                await creation.publication.unresolved_intents(conn, *owned), ()
+            )
+        self.fake.create_status = None
+        created = await self.call(request_id="task-retry")
+        self.assertEqual(created.structuredContent["state"], "created")
+        self.assertEqual(len(self.fake.posts), 2)
 
     async def test_request_hash_and_tuple_conflicts_rollback(self):
         await self.call()

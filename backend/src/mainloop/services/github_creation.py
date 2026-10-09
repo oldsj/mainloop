@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from urllib.parse import quote
 
 import httpx
@@ -17,6 +18,7 @@ from mainloop.db.postgres import PRCreationConflict
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_auth import (
     GitHubError,
+    GitHubRefusal,
     app_auth,
     bounded_response,
     endpoint,
@@ -33,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from models.agent_tools import OpenPullRequest
 
 REQUEST_TIMEOUT_SECONDS = 15
+logger = logging.getLogger(__name__)
 
 
 class Repo(BaseModel):
@@ -82,7 +85,7 @@ class GitHubCreationClient:
     def _permissions(self, method: str, path: str) -> dict[str, str]:
         return endpoint(self.repository_name, method, path)
 
-    async def _response(self, method: str, path: str, **kwargs):
+    async def _response(self, method: str, path: str, *, refusal=None, **kwargs):
         permissions = self._permissions(method, path)
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
@@ -91,8 +94,16 @@ class GitHubCreationClient:
                 )
                 # Internal callers cannot substitute credential or routing headers.
                 kwargs["headers"] = {"Authorization": f"Bearer {token}"}
-                return await bounded_response(self.client, method, path, **kwargs)
+                return await bounded_response(
+                    self.client,
+                    method,
+                    path,
+                    refusal=refusal,
+                    **kwargs,
+                )
         except (httpx.HTTPError, ValueError, TimeoutError):
+            if refusal is not None and refusal.status is not None:
+                raise refusal from None
             raise GitHubError from None
 
     async def _request(self, method: str, path: str, **kwargs):
@@ -142,6 +153,7 @@ class GitHubCreationClient:
             await self._request(
                 "POST",
                 f"/repos/{full_name}/pulls",
+                refusal=GitHubRefusal(),
                 json={
                     "head": body.branch,
                     "base": base,
@@ -208,6 +220,37 @@ def _uncertain(request_id: str) -> dict:
     }
 
 
+def _refused(error: GitHubRefusal) -> dict:
+    diagnostics = {"errors": error.errors}
+    if error.message is not None:
+        diagnostics["message"] = error.message
+    if error.hints:
+        diagnostics["hints"] = error.hints
+    logger.warning(
+        "PR creation refused: status=%s diagnostics=%s", error.status, diagnostics
+    )
+    message = f": {error.message}" if error.message is not None else ""
+    result = {
+        "text": f"GitHub refused PR creation (HTTP {error.status}){message}. "
+        "No PR was created by this POST. Correct the cause and use a new request_id.",
+        "state": "refused",
+        "http_status": error.status,
+        "github_errors": error.errors,
+    }
+    if error.message is not None:
+        result["github_message"] = error.message
+    if error.hints:
+        result["github_hints"] = error.hints
+    return result
+
+
+async def _settled_result(binding: dict, intent: dict, full_name: str) -> dict:
+    if intent["state"] == "created":
+        await publication.attach_creation(db, binding, intent, full_name)
+    result = intent["result"]
+    return json.loads(result) if isinstance(result, str) else result
+
+
 @publication.guarded(schema=OpenPullRequest)
 async def open_pull_request(binding: dict, arguments: dict) -> dict:
     body = OpenPullRequest.model_validate(arguments)
@@ -226,11 +269,9 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
         )
     except PRCreationConflict:
         raise PolicyError("conflict", "request ID has a different payload") from None
-    if prior and prior["state"] == "created":
+    if prior and prior["state"] in ("created", "refused"):
         await publication.bind_creation(db, binding, prior)
-        await publication.attach_creation(db, binding, prior, full_name)
-        result = prior["result"]
-        return json.loads(result) if isinstance(result, str) else result
+        return await _settled_result(binding, prior, full_name)
     async with GitHubCreationClient(full_name) as github:
         try:
             repo = await github.repo(full_name)
@@ -253,10 +294,8 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                     "conflict", "request ID or repo/head/base has a different payload"
                 ) from None
             await publication.bind_creation(db, binding, intent, newly_claimed=creator)
-            if intent["state"] == "created":
-                await publication.attach_creation(db, binding, intent, full_name)
-                result = intent["result"]
-                return json.loads(result) if isinstance(result, str) else result
+            if intent["state"] in ("created", "refused"):
+                return await _settled_result(binding, intent, full_name)
             matches = await github.find(full_name, intent["head"], intent["base"])
             if len(matches) > 1:
                 return _uncertain(body.request_id)
@@ -268,9 +307,8 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                     intent["base"],
                     intent["expected_sha"],
                 )
-                await db.finish_pr_creation(intent["id"], result)
-                await publication.attach_creation(db, binding, intent, full_name)
-                return result
+                settled = await db.finish_pr_creation(intent["id"], result)
+                return await _settled_result(binding, settled, full_name)
             if not creator:
                 return _uncertain(body.request_id)
             # Refresh immediately before dispatch; a moved default/base is not silently retargeted.
@@ -293,12 +331,15 @@ async def open_pull_request(binding: dict, arguments: dict) -> dict:
                 result = _result(
                     pr, repo, intent["head"], intent["base"], intent["expected_sha"]
                 )
+            except GitHubRefusal as error:
+                result = _refused(error)
+                settled = await db.refuse_pr_creation(intent["id"], result)
+                return await _settled_result(binding, settled, full_name)
             except (GitHubError, ValidationError, PolicyError):
                 # POST may have succeeded even when its response is unusable. Never repeat it.
                 return _uncertain(body.request_id)
-            await db.finish_pr_creation(intent["id"], result)
-            await publication.attach_creation(db, binding, intent, full_name)
-            return result
+            settled = await db.finish_pr_creation(intent["id"], result)
+            return await _settled_result(binding, settled, full_name)
         except (GitHubError, ValidationError):
             raise PolicyError(
                 "github",
