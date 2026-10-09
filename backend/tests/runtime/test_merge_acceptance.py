@@ -3,16 +3,18 @@
 import asyncio
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import asyncpg
 import httpx
+from fastapi import BackgroundTasks
 from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db import hitl as store
-from mainloop.runtime import native_sessions
+from mainloop.runtime import hitl_continuation, native_sessions
 from mainloop.runtime.hitl_correlation import task_identity
 from mainloop.runtime.hitl_observer import HITLObserver
 from mainloop.runtime.kagent_client import RuntimeState, Task
@@ -371,17 +373,17 @@ class MergeAcceptanceTests(support.MergeFixture):
         # can be measured after the aged request is answered, before any PUT.
         self.fake.runs[0].update(status="queued", conclusion=None)
         evaluation_started = await self.pool.fetchval("SELECT now()")
-        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        async with asyncio.timeout(2):
+            pending = await self.execute(p, approved=True)
+        self.assertEqual(pending["state"], "evaluating")
+        self.assertIn("Do not call", pending["text"])
+        deadline = datetime.fromisoformat(pending["deadline"])
         evaluation_observed = await self.pool.fetchval("SELECT now()")
-        deadline = await self.pool.fetchval(
-            "SELECT deadline FROM merge_requests WHERE owner_id=$1",
-            self.user,
-        )
         self.assertGreaterEqual(deadline, evaluation_started + timedelta(minutes=30))
         self.assertLessEqual(deadline, evaluation_observed + timedelta(minutes=30))
         self.assertEqual(self.fake.puts, [])
         self.fake.runs[0].update(status="completed", conclusion="success")
-        self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        await self.observe(self.observer(gateway))
         self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
         self.assertEqual(
             await self.pool.fetchval(
@@ -407,6 +409,359 @@ class MergeAcceptanceTests(support.MergeFixture):
         self.assertEqual(
             await self.pool.fetchval("SELECT count(*) FROM native_deliveries"), 0
         )
+
+    async def test_approved_runless_pending_suite_settles_without_another_approval(
+        self,
+    ):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        self.fake.suites.append(
+            support.abandoned_suite(created_at=datetime.now(timezone.utc).isoformat())
+        )
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+
+        async with asyncio.timeout(2):
+            pending = await self.execute(p, approved=True)
+        self.assertEqual(pending["state"], "evaluating")
+        deadline = datetime.fromisoformat(pending["deadline"])
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(
+                await conn.fetchval(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))",
+                    f"merge:{self.user}:123:17",
+                )
+            )
+        with self.assertRaisesRegex(support.PolicyError, "exact owner decision"):
+            await self.execute(p, request="new-invocation", approved=True)
+        calls = len(self.fake.calls)
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        self.assertEqual(len(self.fake.calls), calls)
+        view = (await self.http(gateway, "GET", f"/hitl/{projection.id}")).json()
+        self.assertEqual(view["merge"][0]["availability"], "stale")
+        self.assertIn("evaluating CI", view["merge"][0]["freshness_reason"])
+        self.assertEqual(view["merge"][0]["deadline"], deadline.isoformat())
+        self.fake.suites[-1].update(status="completed", conclusion="success")
+        await merge.reconcile_approved_merges()
+        self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+        self.assertEqual(len(gateway.sent), 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_hitl_responses WHERE owner_id=$1",
+                self.user,
+            ),
+            1,
+        )
+
+    async def test_approved_pending_ci_expires_without_a_merge(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        await self.pool.execute(
+            "UPDATE merge_requests SET deadline=now()-interval '1 second' WHERE owner_id=$1",
+            self.user,
+        )
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        await merge.reconcile_approved_merges()
+        self.assertEqual(self.fake.puts, [])
+        self.assertEqual((await self.execute(p, approved=True))["state"], "expired")
+
+    async def test_approved_pending_ci_failure_blocks_even_with_unknown_mergeability(
+        self,
+    ):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        self.fake.runs[0].update(status="completed", conclusion="failure")
+        self.fake.pr["mergeable"] = None
+        result = await merge.reconcile_approved_merges()
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(self.fake.puts, [])
+
+    async def test_restart_mid_evaluation_resumes_only_with_exact_consent(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        # Restart the actual database facade: there is no in-memory merge worker.
+        await self.pool.close()
+        self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
+        db._pool = self.pool
+        candidate = await self.pool.fetchrow(
+            "SELECT state,deadline,intent_id FROM merge_requests WHERE owner_id=$1",
+            self.user,
+        )
+        self.assertEqual(candidate["state"], "evaluating")
+        self.assertIsNone(candidate["intent_id"])
+        with self.assertRaisesRegex(support.PolicyError, "exact owner decision"):
+            await self.execute(p, request="new-invocation", approved=True)
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        await self.observe(self.observer(gateway))
+        self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT deadline FROM merge_requests WHERE owner_id=$1", self.user
+            ),
+            candidate["deadline"],
+        )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_reconciler_recovers_pre_repair_evaluation_from_exact_receipt(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        pending = await self.execute(p, approved=True)
+        # The former service only populated these references at intent claim.
+        await self.pool.execute(
+            "UPDATE merge_requests SET receipt_action_id=NULL,intent_invocation_id=NULL WHERE owner_id=$1",
+            self.user,
+        )
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        result = await merge.reconcile_approved_merges()
+        self.assertEqual(result["state"], "merged")
+        self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        self.assertEqual(
+            (
+                await self.pool.fetchval(
+                    "SELECT deadline FROM merge_requests WHERE owner_id=$1", self.user
+                )
+            ).isoformat(),
+            pending["deadline"],
+        )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_auto_evaluation_without_receipt_is_not_continued(self):
+        p = await self.prepare()
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        self.assertEqual((await self.execute(p))["state"], "evaluating")
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        self.assertIsNone(await merge.reconcile_approved_merges())
+        self.assertEqual(self.fake.puts, [])
+        self.assertEqual((await self.execute(p))["state"], "merged")
+
+    async def test_reconciler_rechecks_policy_before_merging(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        await self.execute(p, approved=True)
+        await self.pool.execute(
+            "UPDATE projects SET merge_policy_version=merge_policy_version+1 WHERE id=$1",
+            self.project.id,
+        )
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], "blocked")
+        self.assertEqual(self.fake.puts, [])
+
+    async def test_reconciler_refuses_replacement_runtime(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        await self.execute(p, approved=True)
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_session_id='replacement' WHERE session_id=$1",
+            self.sid,
+        )
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], "blocked")
+        self.assertEqual(self.fake.puts, [])
+
+    async def test_bounded_evidence_timeout_retains_durable_consent(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        entered = asyncio.Event()
+
+        async def stalled_read(req):
+            if req.url.path.endswith("/check-runs"):
+                entered.set()
+                await asyncio.Event().wait()
+
+        self.fake.hook = stalled_read
+        with patch.object(merge, "EVALUATION_BUDGET_SECONDS", 0.1):
+            async with asyncio.timeout(2):
+                result = await self.execute(p, approved=True)
+        self.assertTrue(entered.is_set())
+        self.assertEqual(result["state"], "evaluating")
+        self.assertEqual(self.fake.puts, [])
+        self.fake.hook = None
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_retry_racing_continuation_never_repeats_put(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        self.assertEqual((await self.execute(p, approved=True))["state"], "evaluating")
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        claimed, release = asyncio.Event(), asyncio.Event()
+
+        async def hold_put(req):
+            if req.method == "PUT":
+                claimed.set()
+                await release.wait()
+
+        self.fake.hook = hold_put
+        continuation = asyncio.create_task(merge.reconcile_approved_merges())
+        try:
+            async with asyncio.timeout(2):
+                await claimed.wait()
+                retry = await self.execute(p, approved=True)
+            self.assertEqual(retry["state"], "uncertain")
+            self.assertEqual(len(self.fake.puts), 1)
+        finally:
+            release.set()
+            result = await continuation
+        self.assertEqual(result["state"], "merged")
+        await merge.reconcile_approved_merges()
+        self.assertEqual((await self.execute(p, approved=True))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_cancelled_put_recovers_read_only_after_restart(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        await self.assert_receipt(await self.answer(gateway, projection), projection, p)
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        await self.execute(p, approved=True)
+        self.fake.runs[0].update(status="completed", conclusion="success")
+
+        async def lose_after_dispatch(req):
+            if req.method == "PUT":
+                self.fake.pr.update(
+                    merged=True, state="closed", merge_commit_sha=support.MERGED
+                )
+                raise asyncio.CancelledError
+
+        self.fake.hook = lose_after_dispatch
+        with self.assertRaises(asyncio.CancelledError):
+            await merge.reconcile_approved_merges()
+        self.assertEqual(len(self.fake.puts), 1)
+        self.fake.hook = None
+        await self.pool.close()
+        self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
+        db._pool = self.pool
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_card_and_respond_agree_on_candidate_state_and_deadline(self):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        for state, expired in (
+            ("evaluating", False),
+            ("evaluating", True),
+            ("prepared", True),
+            ("blocked", False),
+            ("expired", False),
+            ("superseded", False),
+            ("merging", False),
+            ("uncertain", False),
+            ("merged", False),
+        ):
+            with self.subTest(state=state, expired=expired):
+                await self.pool.execute(
+                    "UPDATE merge_requests SET state=$2,deadline=$3 WHERE owner_id=$1",
+                    self.user,
+                    state,
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=-1 if expired else 60),
+                )
+                view = (
+                    await self.http(gateway, "GET", f"/hitl/{projection.id}")
+                ).json()
+                self.assertEqual(view["merge"][0]["availability"], "stale")
+                self.assertTrue(view["merge"][0]["stale"])
+                self.assertIn("fresh operation", view["merge"][0]["freshness_reason"])
+                response = await self.answer(gateway, projection)
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertIn(
+                    (
+                        "expired"
+                        if expired
+                        else (
+                            "intent"
+                            if state in ("merging", "uncertain", "merged")
+                            else state
+                        )
+                    ),
+                    response.json()["detail"],
+                )
+        self.assertEqual(gateway.sent, [])
+        self.assertEqual(self.fake.puts, [])
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_hitl_responses WHERE owner_id=$1",
+                self.user,
+            ),
+            0,
+        )
+
+    async def test_respond_returns_recorded_receipt_before_dispatch_or_remote_enrichment(
+        self,
+    ):
+        self.fake.files[0]["filename"] = "k8s/app.yaml"
+        p = await self.prepare()
+        gateway, projection = await self.inventory(p)
+        tasks = BackgroundTasks()
+        decision = api.HITLDecisionInput.model_validate(
+            {
+                "action_id": "desktop",
+                "response": {
+                    "type": "tool_approval_response",
+                    "approvals": [{"id": "call", "approved": True}],
+                    "reviewed_context": {"call": p["summary_digest"]},
+                },
+            }
+        )
+        with (
+            patch.dict(os.environ, MAINLOOP_OWNER_HITL_WRITES_ENABLED="true"),
+            patch.object(
+                hitl_continuation, "observer", return_value=self.observer(gateway)
+            ),
+            patch(
+                "mainloop.services.merge_authorization.enrichment",
+                new=AsyncMock(
+                    side_effect=AssertionError(
+                        "remote enrichment must not delay receipt"
+                    )
+                ),
+            ),
+        ):
+            result = await api.respond_to_hitl(
+                projection.id, decision, tasks, self.user
+            )
+        self.assertEqual(result["transport_state"], "recorded")
+        self.assertEqual(result["response"]["action_id"], "desktop")
+        self.assertEqual(gateway.sent, [])
+        self.assertEqual(len(tasks.tasks), 1)
+        # Dropping the process-local background callback does not lose delivery.
+        with patch.object(
+            hitl_continuation, "observer", return_value=self.observer(gateway)
+        ):
+            await hitl_continuation.reconcile_hitl_responses()
+        self.assertEqual(len(gateway.sent), 1)
+        await tasks()
+        self.assertEqual(len(gateway.sent), 1)
 
     async def test_summary_details_are_owner_and_proposal_scoped_and_bounded(self):
         proposal = await self.prepare()

@@ -74,6 +74,12 @@ class AgentService:
         policy.may_call(ctx.actor, "merge_pull_request_with_approval")
         return await execute(ctx.binding, arguments, approved=True)
 
+    async def get_pull_request_merge_status(self, ctx: Ctx, **arguments) -> dict:
+        from mainloop.services.merge import status
+
+        policy.may_call(ctx.actor, "get_pull_request_merge_status")
+        return await status(ctx.binding, arguments)
+
     async def authenticate(self, token: str) -> Ctx:
         binding = await self.store.binding_by_token_hash(hash_token(token))
         grant_kind = binding.get("mcp_grant_kind") if binding else None
@@ -105,6 +111,20 @@ class AgentService:
                     raise ValueError("task principal required")
                 depth = principal.depth
             except (lifecycle.LifecycleDenied, ValueError) as exc:
+                from mainloop.services.merge import completed_status_binding, enabled
+
+                if enabled() and grant_kind == "workspace":
+                    depth = await completed_status_binding(binding)
+                    if depth is not None:
+                        return Ctx(
+                            binding,
+                            Actor(
+                                binding["role"],
+                                depth,
+                                grant_kind,
+                                merge_status_only=True,
+                            ),
+                        )
                 raise HTTPException(401, detail="unknown agent token") from exc
         return Ctx(binding, Actor(binding["role"], depth, grant_kind))
 

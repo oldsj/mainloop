@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import vm from 'node:vm';
+import { transpileModule, ModuleKind } from 'typescript';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import {
@@ -296,6 +298,104 @@ test('another-device conflict refreshes the immutable decision', async () => {
   assert.equal(latest.uncertain, false);
 });
 
+test('4xx refusals show the server detail and end recording even if refresh fails', async () => {
+  for (const status of [400, 403, 409, 422]) {
+    let failRead = false;
+    const channel = createHITLChannel(
+      async () => {
+        if (failRead) throw new Error('Offline');
+        return view();
+      },
+      async () => {
+        failRead = true;
+        throw Object.assign(new Error('Merge proposal expired; prepare a fresh operation'), {
+          status
+        });
+      },
+      () => 'action'
+    );
+    let latest = state(view());
+    channel.subscribe('request', (s) => (latest = s));
+    await channel.refresh('request');
+    await channel.respond('request', draft());
+    assert.equal(latest.busy, false);
+    assert.equal(latest.uncertain, false);
+    assert.equal(latest.stale, true);
+    assert.match(latest.error!, /Merge proposal expired; prepare a fresh operation/);
+    const r = await renderer();
+    try {
+      const html = r.html(latest);
+      assert.match(html, /role="alert"[^>]*>Merge proposal expired/);
+      assert.doesNotMatch(html, /Recording…/);
+    } finally {
+      await r.close();
+    }
+  }
+});
+
+test('a hanging owner POST times out and reconciles consent without another submission', async () => {
+  const source = await readFile(new URL('./api.ts', import.meta.url), 'utf8');
+  const controller = new AbortController();
+  let timeout = 0;
+  let sends = 0;
+  const context = vm.createContext({
+    API_URL: 'http://fixture',
+    DOMException,
+    connection: { reportFailure() {} },
+    AbortSignal: {
+      timeout(ms: number) {
+        timeout = ms;
+        return controller.signal;
+      }
+    },
+    fetch: async (_url: string, init: RequestInit) => {
+      sends++;
+      return new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+      });
+    }
+  });
+  vm.runInContext(
+    transpileModule(source.replace(/import [\s\S]*?;/g, '').replace(/export /g, ''), {
+      compilerOptions: { module: ModuleKind.None }
+    }).outputText,
+    context
+  );
+  let current = view();
+  const channel = createHITLChannel(
+    async () => current,
+    (id, action, response) => {
+      context.id = id;
+      context.action = action;
+      context.response = response;
+      return vm.runInContext('api.respondHITL(id, action, response)', context);
+    },
+    () => 'action'
+  );
+  let latest = state(current);
+  channel.subscribe('request', (s) => (latest = s));
+  await channel.refresh('request');
+  const posting = channel.respond('request', draft());
+  assert.equal(latest.busy, true);
+  assert.equal(timeout, 90000);
+  controller.abort(new DOMException('Timed out', 'TimeoutError'));
+  await posting;
+  assert.equal(latest.busy, false);
+  assert.equal(latest.uncertain, true);
+  assert.match(latest.error!, /Decision delivery uncertain/);
+  await channel.respond('request', draft());
+  assert.equal(sends, 1);
+  current = {
+    ...current,
+    response: { response: buildHITLResponse(payload, draft()) },
+    answerable: false,
+    transport_state: 'accepted'
+  };
+  await channel.refresh('request');
+  assert.equal(latest.uncertain, false);
+  assert.equal(latest.error, null);
+});
+
 async function renderer() {
   const source = await readFile(
     new URL('./components/HITLRequest.svelte', import.meta.url),
@@ -536,6 +636,8 @@ test('merge display handles batches, stale evidence, and missing or untrusted fa
       stale: true,
       path: 'k8s/<script>.yaml'
     });
+    facts.state = 'evaluating';
+    facts.deadline = '2026-10-09T23:00:00Z';
     v.merge = [
       facts,
       {
@@ -558,6 +660,7 @@ test('merge display handles batches, stale evidence, and missing or untrusted fa
     assert.match(html, /owner\/repo #17/);
     assert.match(html, /owner\/repo #18/);
     assert.match(html, /The proposal is no longer current/);
+    assert.match(html, /Evaluation deadline:/);
     assert.match(html, /CI results recorded at/);
     assert.match(html, /CI evidence unavailable/);
     assert.match(html, /button[^>]*disabled[^>]*>Approve/);

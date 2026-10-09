@@ -31,6 +31,7 @@ class Actor:
     role: str  # main | supervisor | child | agent
     depth: int
     mcp_grant_kind: str = "coordination"
+    merge_status_only: bool = False
 
 
 def check_spawn(
@@ -98,11 +99,18 @@ MERGE_TOOLS = frozenset(
         "prepare_pull_request_merge",
         "merge_pull_request",
         "merge_pull_request_with_approval",
+        "get_pull_request_merge_status",
     }
 )
 
 
 def tools_for(actor: Actor) -> frozenset[str]:
+    if actor.merge_status_only:
+        return (
+            frozenset({"get_pull_request_merge_status"})
+            if os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true"
+            else frozenset()
+        )
     if (actor.role, actor.depth, actor.mcp_grant_kind) == ("main", 0, "coordination"):
         tools = frozenset(
             {

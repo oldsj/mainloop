@@ -47,7 +47,12 @@ TOOLS = {
     ),
     "merge_pull_request_with_approval": (
         MergePullRequestWithApproval,
-        "Merge an exact proposal with its recorded owner HITL decision and fresh gates.",
+        "Evaluate an exact approved merge once; Mainloop continues pending CI under that consent. "
+        "Do not call again while evaluating; read get_pull_request_merge_status instead.",
+    ),
+    "get_pull_request_merge_status": (
+        MergePullRequestWithApproval,
+        "Read stored merge state using the original proposal_id and request_id, without approval or execution.",
     ),
     "open_pull_request": (
         OpenPullRequest,

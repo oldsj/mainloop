@@ -112,6 +112,8 @@ export interface VerifiedMergeContext {
   base_sha: string;
   protected_matches: string[];
   stale: boolean;
+  state?: string | null;
+  deadline?: string | null;
 }
 export type HITLMergeDetailSection = 'description' | 'files' | 'checks';
 export interface HITLMergeDetails {
@@ -419,7 +421,10 @@ export function createHITLChannel(
       if (version === e.version && (!signal?.aborted || signal.reason?.name === 'TimeoutError'))
         update(id, {
           stale: true,
-          error: 'Could not refresh this request. Responses are disabled until it reconnects.'
+          error:
+            e.state.error && !e.state.error.startsWith('Could not refresh')
+              ? e.state.error
+              : 'Could not refresh this request. Responses are disabled until it reconnects.'
         });
     } finally {
       e.reading = false;

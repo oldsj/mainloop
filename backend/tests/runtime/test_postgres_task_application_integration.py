@@ -470,6 +470,449 @@ class TaskApplicationIntegrationTests(MergeFixture):
             "uncertain",
         )
 
+    async def approved_merge(self):
+        await self.pool.execute(
+            "UPDATE projects SET merge_policy='approval' WHERE id=$1", self.project.id
+        )
+        proposal = await self.prepare()
+        observer, card, _ = await self.pause(proposal)
+        await self.decide(observer, card)
+        return proposal, card
+
+    async def completed_child(self):
+        parent, parent_sid = await self.child()
+        proposal, _ = await self.approved_merge()
+        self.assertEqual(
+            (await self.execute(proposal, approved=True))["state"], "merged"
+        )
+        return (
+            parent,
+            parent_sid,
+            {"proposal_id": proposal["proposal_id"], "request_id": "invoke-1"},
+        )
+
+    def binding_fences(self, sid, attempt_id):
+        return (
+            (
+                "token_revoked",
+                "SELECT token_hash FROM native_bindings WHERE session_id=$1",
+                "UPDATE native_bindings SET token_hash=$2 WHERE session_id=$1",
+                sid,
+                None,
+                True,
+            ),
+            (
+                "runtime_deleted",
+                "SELECT kagent_deleted_at FROM native_bindings WHERE session_id=$1",
+                "UPDATE native_bindings SET kagent_deleted_at=$2 WHERE session_id=$1",
+                sid,
+                datetime.now(UTC),
+                True,
+            ),
+            (
+                "archived",
+                "SELECT archived_at FROM sessions WHERE id=$1",
+                "UPDATE sessions SET archived_at=$2 WHERE id=$1",
+                sid,
+                datetime.now(UTC),
+                True,
+            ),
+            (
+                "attempt_superseded",
+                "SELECT state FROM task_attempts WHERE id=$1",
+                "UPDATE task_attempts SET state=$2 WHERE id=$1",
+                attempt_id,
+                "superseded",
+                True,
+            ),
+            (
+                "claim_released",
+                "SELECT held FROM workspace_writer_claims WHERE attempt_id=$1",
+                "UPDATE workspace_writer_claims SET held=$2 WHERE attempt_id=$1",
+                attempt_id,
+                False,
+                False,
+            ),
+        )
+
+    async def test_completed_child_result_preserves_parent_authority_fences(self):
+        from fastapi import HTTPException
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        parent, parent_sid, args = await self.completed_child()
+        parent_attempt = await self.pool.fetchval(
+            "SELECT current_attempt_id FROM tasks WHERE id=$1", parent.id
+        )
+        agent = AgentService(PgStore())
+        token = token_for(self.sid)
+        context = await agent.authenticate(token)
+        self.assertTrue(context.actor.merge_status_only)
+        result = await invoke(agent, context, "get_pull_request_merge_status", args)
+        self.assertFalse(result.isError, result.content)
+        self.assertEqual(result.structuredContent["state"], "merged")
+        calls, reads = len(self.fake.calls), len(self.gateway.reads)
+        cases = self.binding_fences(parent_sid, parent_attempt)
+        cases = (
+            *cases[:-1],
+            (
+                "parent_completed",
+                "SELECT status FROM tasks WHERE id=$1",
+                "UPDATE tasks SET status=$2 WHERE id=$1",
+                parent.id,
+                "completed",
+                True,
+            ),
+            cases[-1],
+        )
+        for label, read_query, write_query, identity, value, restore in cases:
+            with self.subTest(fence=label):
+                before = await self.pool.fetchval(read_query, identity)
+                await self.pool.execute(write_query, identity, value)
+                try:
+                    with self.assertRaises(HTTPException):
+                        await agent.authenticate(token)
+                    # Revalidate after authentication too: a cached MCP context
+                    # and direct immutable replay must not bypass a later fence.
+                    denied = await invoke(
+                        agent, context, "get_pull_request_merge_status", args
+                    )
+                    self.assertTrue(denied.isError, label)
+                    self.assertIsNone(
+                        await merge.completed_replay(
+                            context.binding, args, approved=True
+                        )
+                    )
+                finally:
+                    # Claim release is irreversible by its generation trigger;
+                    # keep it last, as in the review probe.
+                    if restore:
+                        await self.pool.execute(
+                            write_query,
+                            identity,
+                            before,
+                        )
+        self.assertEqual(
+            (len(self.fake.calls), len(self.gateway.reads)), (calls, reads)
+        )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_completed_child_own_fences_and_other_tools_stay_denied(self):
+        from fastapi import HTTPException
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+        from mainloop.runtime.policy import surface_tools
+
+        parent_proposal = await self.prepare(request_id="parent-prepare")
+        _, _, args = await self.completed_child()
+        agent = AgentService(PgStore())
+        token = token_for(self.sid)
+        context = await agent.authenticate(token)
+        self.assertEqual(
+            surface_tools(context.actor), {"get_pull_request_merge_status"}
+        )
+        other = await invoke(
+            agent,
+            context,
+            "get_pull_request_merge_status",
+            {**args, "proposal_id": parent_proposal["proposal_id"]},
+        )
+        self.assertTrue(other.isError)
+        for name in (
+            "whoami",
+            "task_get",
+            "report",
+            "open_pull_request",
+            "prepare_pull_request_merge",
+            "merge_pull_request",
+            "merge_pull_request_with_approval",
+        ):
+            self.assertTrue((await invoke(agent, context, name, {})).isError, name)
+        cases = self.binding_fences(self.sid, self.attempt.id)
+        for label, read_query, write_query, identity, value, restore in cases:
+            with self.subTest(fence=label):
+                before = await self.pool.fetchval(read_query, identity)
+                await self.pool.execute(write_query, identity, value)
+                try:
+                    with self.assertRaises(HTTPException):
+                        await agent.authenticate(token)
+                    self.assertTrue(
+                        (
+                            await invoke(
+                                agent, context, "get_pull_request_merge_status", args
+                            )
+                        ).isError
+                    )
+                finally:
+                    if restore:
+                        await self.pool.execute(
+                            write_query,
+                            identity,
+                            before,
+                        )
+
+    async def test_status_row_lock_times_out_retriably_without_stopping_continuation(
+        self,
+    ):
+        from mainloop.mcp_app import create_app
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        proposal, _ = await self.approved_merge()
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        pending = await self.execute(proposal, approved=True)
+        args = {"proposal_id": proposal["proposal_id"], "request_id": "invoke-1"}
+        app = create_app(AgentService(PgStore()))
+        async with (
+            app.app.router.lifespan_context(app.app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers={
+                    "Authorization": f"Bearer {token_for(self.sid)}",
+                    "Accept": "application/json, text/event-stream",
+                },
+            ) as client,
+        ):
+
+            async def read_status():
+                return await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "get_pull_request_merge_status",
+                            "arguments": args,
+                        },
+                    },
+                )
+
+            calls, reads = len(self.fake.calls), len(self.gateway.reads)
+            async with self.pool.acquire() as holding, holding.transaction():
+                await holding.fetchval(
+                    "SELECT id FROM tasks WHERE id=$1 FOR UPDATE", self.task.id
+                )
+                with patch.object(merge, "STATUS_BUDGET_SECONDS", 0.05):
+                    # The conflicting lock remains held until the response has
+                    # arrived; releasing it cannot be what makes this test pass.
+                    response = await asyncio.wait_for(read_status(), timeout=1)
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()["result"]
+                self.assertTrue(result["isError"])
+                self.assertIn("[status_timeout]", result["content"][0]["text"])
+                self.assertIn("Retry", result["content"][0]["text"])
+                self.assertEqual(
+                    (len(self.fake.calls), len(self.gateway.reads)), (calls, reads)
+                )
+            retry = (await read_status()).json()["result"]
+            self.assertFalse(retry.get("isError"), retry)
+            self.assertEqual(retry["structuredContent"]["state"], "evaluating")
+            self.assertEqual(
+                retry["structuredContent"]["deadline"], pending["deadline"]
+            )
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_continuation_preserves_consent_when_fallback_status_is_contended(
+        self,
+    ):
+        proposal, _ = await self.approved_merge()
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        pending = await self.execute(proposal, approved=True)
+        async with self.pool.acquire() as holding, holding.transaction():
+            await holding.fetchval(
+                "SELECT id FROM tasks WHERE id=$1 FOR UPDATE", self.task.id
+            )
+            with (
+                patch.object(merge, "EVALUATION_BUDGET_SECONDS", 0.05),
+                patch.object(merge, "STATUS_BUDGET_SECONDS", 0.05),
+            ):
+                self.assertIsNone(
+                    await asyncio.wait_for(merge.reconcile_approved_merges(), 1)
+                )
+            candidate = await self.pool.fetchrow(
+                "SELECT state,deadline,intent_id,receipt_action_id FROM merge_requests WHERE owner_id=$1",
+                self.user,
+            )
+            self.assertEqual(candidate["state"], "evaluating")
+            self.assertEqual(candidate["deadline"].isoformat(), pending["deadline"])
+            self.assertIsNotNone(candidate["receipt_action_id"])
+            self.assertIsNone(candidate["intent_id"])
+        self.fake.runs[0].update(status="completed", conclusion="success")
+        with patch.object(merge, "CI_POLL_SECONDS", 0):
+            self.assertEqual(
+                (await merge.reconcile_approved_merges())["state"], "merged"
+            )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def assert_terminal_merge_preserves_other_attention(self, terminal):
+        proposal, card = await self.approved_merge()
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        self.assertEqual(
+            (await self.execute(proposal, approved=True))["state"], "evaluating"
+        )
+        await self.pool.execute(
+            """UPDATE tasks SET projection=jsonb_set(projection,'{pending_approval_ids}',$2::jsonb),
+               status='waiting',snapshot=jsonb_set(jsonb_set(snapshot,'{status}','"waiting"'),
+               '{reason}','"approval"') WHERE id=$1""",
+            self.task.id,
+            json.dumps([card.id, "unrelated-native-question"]),
+        )
+        if terminal == "expired":
+            await self.pool.execute(
+                "UPDATE merge_requests SET deadline=now()-interval '1 second' WHERE owner_id=$1",
+                self.user,
+            )
+        else:
+            self.fake.runs[0].update(status="completed", conclusion="failure")
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], terminal)
+        task, value = await self.view()
+        self.assertEqual(value.merge_state, terminal)
+        self.assertEqual(value.pending_approval_ids, ("unrelated-native-question",))
+        self.assertEqual((task.status, task.reason), ("waiting", "approval"))
+        self.assertFalse(self.fake.puts)
+
+    async def test_expired_merge_preserves_unrelated_pending_attention(self):
+        await self.assert_terminal_merge_preserves_other_attention("expired")
+
+    async def test_blocked_merge_preserves_unrelated_pending_attention(self):
+        await self.assert_terminal_merge_preserves_other_attention("blocked")
+
+    async def assert_merge_outcome_visibility(self, terminal):
+        from fastapi import HTTPException
+        from mainloop.mcp_app import create_app
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
+        await self.pool.execute(
+            "UPDATE projects SET merge_policy='approval' WHERE id=$1", self.project.id
+        )
+        p = await self.prepare()
+        observer, card, _ = await self.pause(p)
+        await self.decide(observer, card)
+        args = {"proposal_id": p["proposal_id"], "request_id": "invoke-1"}
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        app = create_app(AgentService(PgStore()))
+        async with app.app.router.lifespan_context(app.app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers={
+                    "Authorization": f"Bearer {token_for(self.sid)}",
+                    "Accept": "application/json, text/event-stream",
+                },
+            ) as client:
+
+                async def rpc(path, method, params):
+                    response = await client.post(
+                        path,
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": method,
+                            "params": params,
+                        },
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    return response.json()["result"]
+
+                async with asyncio.timeout(2):
+                    pending = await rpc(
+                        "/mcp/merge-approval",
+                        "tools/call",
+                        {"name": "merge_pull_request_with_approval", "arguments": args},
+                    )
+                self.assertFalse(pending.get("isError"), pending)
+                self.assertEqual(pending["structuredContent"]["state"], "evaluating")
+                self.assertIn("Do not call", pending["content"][0]["text"])
+                self.assertEqual(
+                    (await self.get(self.user)).json()["projection"]["merge_state"],
+                    "evaluating",
+                )
+                tools = await rpc("/mcp", "tools/list", {})
+                self.assertIn(
+                    "get_pull_request_merge_status",
+                    {tool["name"] for tool in tools["tools"]},
+                )
+                if terminal == "expired":
+                    await self.pool.execute(
+                        "UPDATE merge_requests SET deadline=now()-interval '1 second' WHERE owner_id=$1",
+                        self.user,
+                    )
+                else:
+                    self.fake.runs[0].update(
+                        status="completed",
+                        conclusion="success" if terminal == "merged" else "failure",
+                    )
+                with patch.object(continuation, "observer", return_value=observer):
+                    await native_sessions.reconcile_once(sweep=False)
+                calls = len(self.fake.calls)
+                state = await rpc(
+                    "/mcp",
+                    "tools/call",
+                    {"name": "get_pull_request_merge_status", "arguments": args},
+                )
+                self.assertFalse(state.get("isError"), state)
+                self.assertEqual(state["structuredContent"]["state"], terminal)
+                self.assertEqual(len(self.fake.calls), calls)
+                self.assertEqual(
+                    (await self.get(self.user)).json()["projection"]["merge_state"],
+                    terminal,
+                )
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT count(*) FROM queue_items WHERE user_id=$1 AND id LIKE 'merge-outcome:%'",
+                        self.user,
+                    ),
+                    1,
+                )
+                if terminal == "merged":
+                    tools = await rpc("/mcp", "tools/list", {})
+                    self.assertEqual(
+                        {tool["name"] for tool in tools["tools"]},
+                        {"get_pull_request_merge_status"},
+                    )
+                    refused = await rpc(
+                        "/mcp",
+                        "tools/call",
+                        {"name": "open_pull_request", "arguments": {}},
+                    )
+                    self.assertTrue(refused["isError"])
+                    wrong = await rpc(
+                        "/mcp",
+                        "tools/call",
+                        {
+                            "name": "get_pull_request_merge_status",
+                            "arguments": {**args, "request_id": "other"},
+                        },
+                    )
+                    self.assertTrue(wrong["isError"])
+                    async with self.pool.acquire() as conn:
+                        with self.assertRaises(lifecycle.LifecycleDenied):
+                            await lifecycle.check(conn, self.sid, "submit")
+        self.assertEqual(len(self.fake.puts), int(terminal == "merged"))
+        if terminal == "merged":
+            await self.pool.execute(
+                "UPDATE workspace_writer_claims SET held=false WHERE attempt_id=$1",
+                self.attempt.id,
+            )
+            with self.assertRaises(HTTPException):
+                await AgentService(PgStore()).authenticate(token_for(self.sid))
+
+    async def test_agent_and_owner_read_merged_outcome_after_task_completion(self):
+        await self.assert_merge_outcome_visibility("merged")
+
+    async def test_agent_and_owner_read_blocked_outcome(self):
+        await self.assert_merge_outcome_visibility("blocked")
+
+    async def test_agent_and_owner_read_expired_outcome(self):
+        await self.assert_merge_outcome_visibility("expired")
+
     async def test_completed_leaf_recovers_active_ancestor_without_submit_or_parent_consent(
         self,
     ):

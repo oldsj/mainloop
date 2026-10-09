@@ -184,8 +184,15 @@ async def guard(session_id: str, action: str, *, conn=None):
         yield conn
 
 
-async def authenticate_binding(conn, binding: dict, *, allow_creating=False):
-    """Resolve a delegated principal from durable identities and exact task ancestry."""
+async def authenticate_binding(
+    conn, binding: dict, *, allow_creating=False, allow_completed_read=False
+):
+    """Resolve current scope and ancestry, optionally reading a completed leaf.
+
+    The read exception permits only this leaf's completed product state. Its
+    attempt/claim must still be active, and ancestors retain every normal gate.
+    Execution callers never enable this exception.
+    """
     from mainloop.tasks.principal import TaskPrincipal
 
     row = await conn.fetchrow(
@@ -235,7 +242,10 @@ async def authenticate_binding(conn, binding: dict, *, allow_creating=False):
         or row["workspace_id"] != row["binding_id"]
         or row["owner_id"] != row["user_id"]
         or row["project_id"] != row["session_project_id"]
-        or row["task_status"] in ("completed", "failed", "cancelled")
+        or (
+            row["task_status"] in ("completed", "failed", "cancelled")
+            and not (allow_completed_read and row["task_status"] == "completed")
+        )
         or row["mcp_grant_kind"]
         != ("workspace" if row["mode"] == "code" else "coordination")
         or row["token_hash"] != binding.get("token_hash")
@@ -284,7 +294,7 @@ async def authenticate_binding(conn, binding: dict, *, allow_creating=False):
             "SELECT * FROM native_bindings WHERE session_id=$1", row["parent_binding"]
         )
         # Validate the parent's complete persisted scope too, including its checkout
-        # claim and self-rooted task. Reuse this resolver for runtime and push authority.
+        # claim and self-rooted task. Never propagate the leaf's read exception.
         await authenticate_binding(conn, dict(parent))
     if row["mode"] == "code":
         from mainloop.services.github_repo import parse_github_repo
