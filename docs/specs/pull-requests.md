@@ -84,7 +84,8 @@ Requests go only to `https://api.github.com`,
 with bounded timeouts, response sizes, and pagination; redirects and environment proxies
 are disabled. Each API call has a 15 second total deadline, a 10 second network timeout,
 a 2 MB response limit, and PR listing stops at 10 pages of 100 results. Hitting a limit
-fails closed. GitHub error bodies, transport errors, and credentials are never returned to
+fails closed. Creation POST refusals expose only the bounded validation fields described
+below; other upstream bodies, transport errors, and credentials are never returned to
 the agent. Returned PR links are constructed from verified repository identity and number.
 Compressed wire bodies are decoded once; the size limit applies to decoded bytes and
 reconstructed responses omit wire encoding/framing headers. Installation-token mint failures,
@@ -92,13 +93,15 @@ including 404, remain opaque authentication failures. Only a genuine 404 from th
 protection read supports treating classic protection as absent.
 The REST endpoints are described in [GitHub's pull request API](https://docs.github.com/en/rest/pulls/pulls).
 
-## Deduplication and uncertain results
+## Deduplication, refusals and uncertain results
 
 A PostgreSQL ledger records request IDs and normalized payload hashes per owner, and
 serializes creation for each owner/repository ID/head/base tuple. Reusing an ID with another
 payload conflicts. Another request ID for the same tuple and payload shares its creation;
-a changed payload conflicts. Reusing a branch for a different candidate is therefore not
-supported by this slice; use a new feature branch.
+a changed payload conflicts while that intent is uncertain or created. A definite refusal
+releases the tuple so a new request ID can create a new intent with the same or corrected
+payload. Old request IDs remain bound to their original terminal refusal. A created tuple
+still requires a new feature branch for a different candidate.
 
 Before creating, Mainloop lists matching PRs, including closed PRs, and verifies their
 repository IDs, branches, and head SHA. A single matching PR returns `state: created`,
@@ -112,6 +115,46 @@ send another creation POST, even if the list is empty: absence cannot prove that
 creation will never appear. A crash before the first POST can likewise leave an intent
 uncertain. Uncertain results return `state: uncertain` and the request ID; they do not claim
 success or failure. Already recorded results are returned without another creation.
+
+A creation POST returning HTTP 4xx, excluding 408 and 429, is a definite refusal and
+records `state: refused`, integer `http_status` and `github_errors`. Diagnostics use
+fixed allowlists; upstream free text is never echoed or truncated into a result or log.
+`github_message` is included only for the exact messages `Validation Failed`, `Not Found`,
+`Resource not accessible by integration`, `Must have admin rights to Repository.`, and
+`Bad credentials`; other messages are omitted. Errors retain at most ten entries, with
+only `resource`, `field` and `code`. Unknown or malformed values become `null`.
+Resources are `PullRequest` or `Repository`. Fields are `head`, `base`, `title`, `body`,
+`issue`, `draft`, `head_repo`, `maintainer_can_modify`, `head.ref`, `head.sha`, `base.ref`,
+or `base.sha`. Resources and codes must also match `[A-Za-z][A-Za-z0-9_]{0,39}`;
+fields must match `[A-Za-z][A-Za-z0-9_.]{0,63}`. A name grammar alone can admit encoded
+credentials, so names must belong to the fixed vocabulary as well.
+Codes are limited to GitHub's [documented validation codes](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#validation-failed):
+`missing`, `missing_field`, `invalid`, `already_exists`, `unprocessable`, or `custom`.
+Free-text `errors[].message` is never returned. Recognized messages may instead produce
+`github_hints` containing only `no_commits`, `already_exists`, or `draft_unsupported`;
+an invalid `head` field produces `invalid_head`. Hints are deduplicated and bounded to
+these four values. Server logs include only the status and the same allowlisted diagnostics.
+No headers, arbitrary error fields or full bodies are exposed. Malformed, oversized or incomplete error bodies
+still yield a definite refusal once the HTTP status is observed, with generic diagnostics
+if necessary. Reusing that request ID returns its recorded refusal without GitHub calls.
+Correct the reported cause and use a new request ID to try again; each new intent still
+lists matching PRs and refreshes authority and the branch before its sole POST.
+
+Transport failures before a definite status, timeouts, HTTP 408/429, HTTP 5xx, redirects
+and invalid 2xx bodies remain uncertain. Installation discovery or token-mint refusals
+never count as creation POST refusals.
+
+Creation and refusal settlement share the tuple lock and return the authoritative stored
+row. If another caller has already settled the intent, its recorded result wins. A stale
+matching PR listing cannot replace a recorded refusal or attach that PR to the task;
+the caller returns the same refusal as subsequent request-ID replays.
+
+The migration preserves legacy uncertain intents and their request mappings; missing PRs
+or age cannot prove an earlier POST failed. A legacy intent can be recovered using
+`Database.refuse_pr_creation` only with trusted evidence of a definite creation POST
+refusal, storing a sanitized result without inventing discarded validation details.
+This releases the tuple for a new request ID while every old ID returns the same refusal.
+Unverified legacy intents retain their existing fence.
 
 GitHub does not provide a head-SHA precondition for PR creation. Mainloop validates the head
 immediately before POST and verifies the response; if the branch changes during creation,

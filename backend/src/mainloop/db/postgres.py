@@ -456,6 +456,21 @@ CREATE TABLE IF NOT EXISTS pr_creation_requests (
     creation_id TEXT NOT NULL REFERENCES pr_creations(id),
     PRIMARY KEY (user_id, request_id)
 );
+-- Existing uncertain rows have no HTTP evidence and must stay fenced. A verified
+-- refusal is terminal for its request IDs, but releases the tuple for a new intent.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname='pr_creations_state_v2_check'
+            AND conrelid='pr_creations'::regclass
+    ) THEN
+        ALTER TABLE pr_creations DROP CONSTRAINT IF EXISTS pr_creations_state_check;
+        ALTER TABLE pr_creations ADD CONSTRAINT pr_creations_state_v2_check
+            CHECK (state IN ('uncertain', 'created', 'refused'));
+    END IF;
+END $$;
+ALTER TABLE pr_creations DROP CONSTRAINT IF EXISTS pr_creations_user_id_repo_id_head_base_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_creations_active_tuple
+    ON pr_creations(user_id,repo_id,head,base) WHERE state <> 'refused';
 """
 
 
@@ -556,12 +571,17 @@ class Database:
                     if row["repo_id"] != repo_id:
                         raise PRCreationConflict
                     return dict(row), False
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+                    json.dumps([user_id, repo_id, head, base]),
+                )
                 creation_id = str(uuid.uuid4())
                 inserted = await conn.fetchrow(
                     """INSERT INTO pr_creations
                        (id,user_id,project_id,repo_id,head,base,expected_sha,payload_hash)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-                       ON CONFLICT (user_id,repo_id,head,base) DO NOTHING RETURNING *""",
+                       ON CONFLICT (user_id,repo_id,head,base) WHERE state <> 'refused'
+                       DO NOTHING RETURNING *""",
                     creation_id,
                     user_id,
                     project_id,
@@ -573,7 +593,8 @@ class Database:
                 )
                 row = inserted or await conn.fetchrow(
                     """SELECT * FROM pr_creations
-                       WHERE user_id=$1 AND repo_id=$2 AND head=$3 AND base=$4""",
+                       WHERE user_id=$1 AND repo_id=$2 AND head=$3 AND base=$4
+                         AND state <> 'refused'""",
                     user_id,
                     repo_id,
                     head,
@@ -605,14 +626,46 @@ class Database:
             raise PRCreationConflict
         return dict(row) if row else None
 
-    async def finish_pr_creation(self, creation_id: str, result: dict) -> None:
-        async with self.connection() as conn:
+    async def finish_pr_creation(self, creation_id: str, result: dict) -> dict:
+        """Settle verified creation, or return the winner of an earlier settlement."""
+        return await self._settle_pr_creation(creation_id, "created", result)
+
+    async def refuse_pr_creation(self, creation_id: str, result: dict) -> dict:
+        """Persist a verified POST refusal, retaining every old request mapping.
+
+        Also usable for legacy recovery when an operator has definite HTTP refusal
+        evidence; missing PRs or elapsed time alone never authorize this transition.
+        """
+        return await self._settle_pr_creation(creation_id, "refused", result)
+
+    async def _settle_pr_creation(
+        self, creation_id: str, state: str, result: dict
+    ) -> dict:
+        """Only uncertain rows transition; a terminal row is authoritative."""
+        async with self.connection() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM pr_creations WHERE id=$1", creation_id
+            )
+            if row is None:
+                raise PRCreationConflict
             await conn.execute(
-                """UPDATE pr_creations SET state='created', result=$2::jsonb
-                   WHERE id=$1 AND state='uncertain'""",
+                "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+                json.dumps([row["user_id"], row["repo_id"], row["head"], row["base"]]),
+            )
+            stored = await conn.fetchrow(
+                """UPDATE pr_creations SET state=$3, result=$2::jsonb
+                   WHERE id=$1 AND state='uncertain' RETURNING *""",
                 creation_id,
                 json.dumps(result),
+                state,
             )
+            if stored is None:
+                stored = await conn.fetchrow(
+                    "SELECT * FROM pr_creations WHERE id=$1", creation_id
+                )
+                if stored is None:
+                    raise PRCreationConflict
+            return dict(stored)
 
     # ============= Main Thread Operations =============
 

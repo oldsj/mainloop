@@ -41,6 +41,125 @@ class GitHubNotFound(GitHubError):
     """An endpoint-specific 404; installation absence is a PolicyError instead."""
 
 
+VALIDATION_CODES = {
+    value: value
+    for value in (
+        "missing",
+        "missing_field",
+        "invalid",
+        "already_exists",
+        "unprocessable",
+        "custom",
+    )
+}
+VALIDATION_MESSAGES = {
+    value: value
+    for value in (
+        "Validation Failed",
+        "Not Found",
+        "Resource not accessible by integration",
+        "Must have admin rights to Repository.",
+        "Bad credentials",
+    )
+}
+VALIDATION_RESOURCES = {value: value for value in ("PullRequest", "Repository")}
+VALIDATION_FIELDS = {
+    value: value
+    for value in (
+        "head",
+        "base",
+        "title",
+        "body",
+        "issue",
+        "draft",
+        "head_repo",
+        "maintainer_can_modify",
+        "head.ref",
+        "head.sha",
+        "base.ref",
+        "base.sha",
+    )
+}
+VALIDATION_HINTS = (
+    ("No commits between", "no_commits"),
+    ("A pull request already exists", "already_exists"),
+    ("Draft pull requests are not supported", "draft_unsupported"),
+)
+
+
+def _identifier(value, allowed, pattern) -> str | None:
+    # A grammar alone accepts opaque tokens and encoded secrets. Emit only a
+    # constant from the known vocabulary, never a slice of upstream free text.
+    if isinstance(value, str) and re.fullmatch(pattern, value):
+        return allowed.get(value)
+    return None
+
+
+class ValidationDetails(BaseModel):
+    model_config = ConfigDict(strict=True)
+    message: str | None = None
+    errors: list[dict | str | None] | None = None
+
+
+class GitHubRefusal(GitHubError):
+    """A creation POST refusal; contains only bounded validation diagnostics.
+
+    The caller supplies this holder before dispatch so a deadline while reading
+    the error body cannot discard an already observed definite HTTP refusal.
+    Authentication calls never receive it.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.status: int | None = None
+        self.message: str | None = None
+        self.errors: list[dict[str, str | None]] = []
+        self.hints: list[str] = []
+
+    def _hints(self, value) -> None:
+        if isinstance(value, str):
+            for text, hint in VALIDATION_HINTS:
+                if text in value and hint not in self.hints:
+                    self.hints.append(hint)
+
+    def details(self, response: httpx.Response) -> None:
+        try:
+            value = ValidationDetails.model_validate(response.json())
+        except (ValueError, ValidationError):
+            return
+        self.message = VALIDATION_MESSAGES.get(value.message)
+        self._hints(value.message)
+        errors = value.errors
+        if isinstance(errors, list):
+            for error in errors[:10]:
+                if isinstance(error, dict):
+                    fields = {
+                        "resource": _identifier(
+                            error.get("resource"),
+                            VALIDATION_RESOURCES,
+                            r"[A-Za-z][A-Za-z0-9_]{0,39}",
+                        ),
+                        "field": _identifier(
+                            error.get("field"),
+                            VALIDATION_FIELDS,
+                            r"[A-Za-z][A-Za-z0-9_.]{0,63}",
+                        ),
+                        "code": _identifier(
+                            error.get("code"),
+                            VALIDATION_CODES,
+                            r"[A-Za-z][A-Za-z0-9_]{0,39}",
+                        ),
+                    }
+                    self.errors.append(fields)
+                    self._hints(error.get("message"))
+                    if (
+                        fields["field"] == "head"
+                        and fields["code"] == "invalid"
+                        and "invalid_head" not in self.hints
+                    ):
+                        self.hints.append("invalid_head")
+
+
 def repository_name(value: str) -> str:
     try:
         return parse_github_repo(value).full_name.lower()
@@ -116,14 +235,23 @@ def http_client(transport=None) -> httpx.AsyncClient:
     )
 
 
-async def bounded_response(client, method, path, *, accepted=(200, 201), **kwargs):
+async def bounded_response(
+    client, method, path, *, accepted=(200, 201), refusal=None, **kwargs
+):
     try:
         async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS), client.stream(
             method, path, **kwargs
         ) as response:
-            if response.status_code == 404:
+            refused = (
+                refusal is not None
+                and 400 <= response.status_code < 500
+                and response.status_code not in (408, 429)
+            )
+            if refused:
+                refusal.status = response.status_code
+            elif response.status_code == 404:
                 raise GitHubNotFound
-            if response.status_code not in accepted:
+            if not refused and response.status_code not in accepted:
                 raise GitHubError
             data = bytearray()
             async for chunk in response.aiter_bytes(chunk_size=65536):
@@ -139,10 +267,20 @@ async def bounded_response(client, method, path, *, accepted=(200, 201), **kwarg
                 if name.lower()
                 not in ("content-encoding", "content-length", "transfer-encoding")
             }
-            return httpx.Response(
+            decoded = httpx.Response(
                 response.status_code, headers=headers, content=bytes(data)
             )
+            if refused:
+                refusal.details(decoded)
+                raise refusal
+            return decoded
+    except GitHubError:
+        if refusal is not None and refusal.status is not None:
+            raise refusal from None
+        raise
     except (httpx.HTTPError, ValueError, TimeoutError):
+        if refusal is not None and refusal.status is not None:
+            raise refusal from None
         raise GitHubError from None
 
 
