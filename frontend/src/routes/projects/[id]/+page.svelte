@@ -109,6 +109,7 @@
 
     <!-- Header -->
     <header class="border-term-border border-b px-6 py-4">
+      <a href="/health?project_id={encodeURIComponent(project.id)}" class="text-term-accent mb-3 block text-sm underline underline-offset-4">Orchestration health</a>
       <button
         type="button"
         onclick={() => goto('/')}

@@ -370,6 +370,7 @@ class TaskProjection:
         if event.artifact_update is not None:
             update = event.artifact_update
             self.task_id = self.task_id or update.task_id
+            self.context_id = self.context_id or update.context_id
             artifact = update.artifact
             existing = self.artifacts.get(artifact.artifact_id)
             if update.append and existing is not None:

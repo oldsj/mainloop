@@ -252,6 +252,7 @@
     {/if}
 
     <NativeIdentityStrip sessionId={session.id} />
+    <a href="/health?session_id={encodeURIComponent(session.id)}" class="text-term-accent border-term-border block border-b px-4 py-2 text-sm underline underline-offset-4">Orchestration health</a>
 
     {#if owningTask}
       <div

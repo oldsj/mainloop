@@ -668,6 +668,34 @@ async function environmentRequest<T>(path: string, method = 'GET', body?: unknow
 }
 
 export const api = {
+  async orchestrationHealth(
+    filters: HealthFilters = {},
+    signal?: AbortSignal
+  ): Promise<HealthView> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters))
+      if (value !== '' && value != null) query.set(key, String(value));
+    const response = await apiFetch(`${API_URL}/orchestration-health?${query}`, { signal });
+    if (!response.ok)
+      throw new ApiError(
+        await errorDetail(response, 'Health could not be loaded.'),
+        response.status
+      );
+    return response.json();
+  },
+  async healthEvents(sessionId: string, hours = 24): Promise<HealthEvents> {
+    const query = new URLSearchParams({
+      session_id: sessionId,
+      hours: String(hours)
+    });
+    const response = await apiFetch(`${API_URL}/orchestration-health/events?${query}`);
+    if (!response.ok)
+      throw new ApiError(
+        await errorDetail(response, 'Observations could not be loaded.'),
+        response.status
+      );
+    return response.json();
+  },
   listEnvironments: () => environmentRequest<DevEnvironment[]>('/environments'),
   listEnvironmentVersions: (id: string) =>
     environmentRequest<EnvironmentVersion[]>(`/environments/${encodeURIComponent(id)}/versions`),
@@ -1144,3 +1172,58 @@ export const api = {
     if (!response.ok) throw new Error('Failed to dismiss notification');
   }
 };
+
+export interface HealthFilters {
+  project_id?: string;
+  task_id?: string;
+  attempt_id?: string;
+  session_id?: string;
+  provider?: string;
+  hours?: number;
+}
+export interface HealthTotals {
+  turns: number;
+  usage_observed_turns: number;
+  usage_complete_turns: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  failures: number | null;
+  repeated_failure_groups: number | null;
+  unresolved_calls: number;
+  coverage: 'complete' | 'partial' | 'unknown';
+}
+export interface HealthView {
+  rows: {
+    id: string;
+    task_id: string | null;
+    project_id: string | null;
+    title: string | null;
+    totals: HealthTotals;
+    expected_receipts: number;
+    sessions: {
+      session_id: string | null;
+      attempt_id: string | null;
+      title: string | null;
+      provider: string;
+      totals: HealthTotals;
+    }[];
+    reports: { id: string; attempt_id: string; outcome: 'blocked' | 'failed' }[];
+    approvals: { id: string; state: string }[];
+    gaps: string[];
+  }[];
+  partial: boolean;
+  hours: number;
+  retention: { events_days: number; summaries_days: number };
+}
+export interface HealthEvents {
+  events: {
+    event_id: string;
+    payload: {
+      kind: 'tool' | 'turn' | 'usage';
+      sequence: number;
+      source: string;
+      tool?: { tool_class: string; outcome: string; category: string; path: string | null };
+    };
+  }[];
+  partial: boolean;
+}
