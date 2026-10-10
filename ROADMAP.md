@@ -113,6 +113,14 @@ Capacity reporting keeps distinct signals separate:
 
 Mainloop does not invent conversions between tokens, subscription limits, monetary cost, or remaining tasks. Routing profiles are evaluated by time and usage through accepted work, including checks, review, and repair.
 
+Proposed [orchestration health](docs/specs/orchestration-health.md) adds privacy-safe native
+telemetry for friction, repeated file reads, tokens/cache and compaction, with per-task and
+per-agent rollups that expose missing measurements. Start with Claude tool failures and
+input/output counts on one page. Follow with model/effort fit against labeled difficulty and
+outcomes, subscription limits/reset windows with clearly sourced headroom or estimates, and
+scheduled merged-diff reviews for design-cohesion findings. These views inform owner steering;
+they do not authorize provider switches or another scheduler.
+
 ## Delivery, recovery, and review
 
 Messages receive stable identities and are persisted before delivery. Retries with the same identity do not create a second logical instruction.
