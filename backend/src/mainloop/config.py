@@ -12,6 +12,15 @@ from models.provider import ProviderProfile
 class Settings(BaseSettings):
     """Application settings."""
 
+    health_event_retention_days: int = Field(30, ge=1, le=365)
+    health_summary_retention_days: int = Field(365, ge=30, le=3650)
+
+    @model_validator(mode="after")
+    def _health_retention_order(self):
+        if self.health_summary_retention_days < self.health_event_retention_days:
+            raise ValueError("Health summary retention must cover event retention")
+        return self
+
     # Reserved contract only; this slice installs no listener even when enabled.
     push_gate_enabled: bool = Field(False, validation_alias="PUSH_GATE_ENABLED")
     git_transport_enabled: bool = False

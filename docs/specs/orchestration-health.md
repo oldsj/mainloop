@@ -1,14 +1,16 @@
 # Orchestration health
 
-Status: **proposed**, inventory and design only, 2026-10-10. No health collector,
-aggregation API, page, scheduled review or routing change is implemented by this spec.
+Status: **slice 2 implemented and fixture-qualified**, 2026-10-10. Claude friction and
+reported input/output have a durable collector, owner API and responsive page. This is not
+live qualification; a kagent Claude harness rollout and separately authorized live task remain.
+Slices 3–5, scheduled reviews and model/subscription routing remain proposed.
 
 Mainloop should show where orchestration encounters friction, spends context and tokens,
 and needs design attention. Start with Claude tool failures and token counts on one page.
 Keep delivery, task completion, approval, workspace health and publication state separate.
 Model and subscription fit follow that first usable path; they do not block it.
 
-## Source inventory
+## Source inventory at slice 1
 
 This inventory examines Mainloop `f3b672054c913ebd6837eab14d09c983ed7e27a1` and
 the kagent fork branch `fork/mainloop-substrate-0-4` at
@@ -37,9 +39,9 @@ Partial signals are named explicitly rather than presented as complete coverage.
 | ChatGPT/Codex subscription utilization and resets | App Server defines `account/rateLimits/read` and `account/rateLimits/updated`, with named buckets and primary/secondary windows. Native token-count metadata also has optional limits. Harness neither queries nor translates these. X1, P4, P5.                                              | N                 | No subscription identity/window snapshots or headroom. Provider/account-wide consumption includes activity outside Mainloop; token totals cannot be converted to subscription percent.                                                                                   |
 | Claude subscription utilization and resets        | Claude documents plan usage bars in `/usage`. Current harness exposes neither a quota query nor a normalized limit event; unknown stream event types are dropped. Interactive availability is not a supported headless contract. C1, P6.                                                      | N                 | No subscription limit/reset snapshots. API rate limits and session cost estimates are different quantities. Use owner-entered snapshots initially; qualify a supported native limit event/read interface before automating collection.                                   |
 
-### End-to-end boundary
+### End-to-end boundary at slice 1
 
-Today the path is native CLI → provider driver → shared `EventSink` → A2A artifacts/status
+At the inventory revision, the path is native CLI → provider driver → shared `EventSink` → A2A artifacts/status
 → kagent gateway storage → Mainloop client projection → delivery ledger and conversation.
 `EventSink` exposes session start, text, tool call and tool result, with no health/usage method
 (K0). The gateway transactionally stores task projections and events, including artifact data
@@ -49,6 +51,69 @@ must use `GetTask` for each known task (M11).
 
 The old journal's `native_events`, lineage and context-token columns were explicitly removed
 (M1). Extend the current kagent path; do not resurrect that adapter or add a session owner.
+
+## Implemented slice 2
+
+The Claude driver now emits allowlisted `turn`, `tool` and `usage` observations through the
+shared `EventSink.Health` method. A2A data artifacts use schema/name
+`kagent.dev/orchestration-health/v1`, stable `epoch:sequence` event/artifact IDs and ordered
+sequences. A live process retains its producer epoch across parked approval resumes. A new
+process starts a new epoch; multiple epochs under the same A2A receipt mark a producer gap.
+EOF closes observed coverage; truncation or the post-result execution ceiling leaves it partial.
+Tool grouping uses opaque tool-operation/call keys, action, safe path and category. Generic MCP
+errors stay `mcp_error`; error text does not establish permission denial or an HTTP status.
+Health delivery is best-effort: the driver queues observations without blocking, a sink error
+or stall never fails, delays or blocks cancellation of the turn, and dropped observations leave
+a sequence gap that Mainloop reports as partial coverage.
+
+Result usage is a qualified single-result **turn total** (`basis=turn_total`), never added to
+assistant-response counters. Input means Claude's reported `input_tokens`, not an inferred
+cache-inclusive input total. Root totals are treated conservatively as potentially tree-inclusive:
+separate native-child usage is not accepted or added. Repeated result UUIDs do not add another
+sample. Multiple result iterations produce a replacement revision with unavailable counters;
+their additive/cumulative semantics are not qualified. Missing counts also remain unavailable.
+Cache, child attribution and context occupancy remain unknown.
+
+Mainloop validates the strict shared [event model](../../models/src/models/orchestration_health.py)
+and binds attribution through sessions, attempts and delivery receipts. Stream artifacts and
+`GetTask` snapshots share the same transactional importer. Delivery handling only queues an
+import; one background worker imports from a bounded queue with time-limited database and lock
+waits, so health work never delays terminal delivery. A full queue or failed import is left to
+recovery. The queue lives in process memory, so imports still queued when Mainloop exits are
+lost until recovery re-imports them. The existing reconciliation sweep and the owner read API
+recover completed receipts too, and the sweep also applies health retention; neither path sends
+a prompt or changes delivery success. Receipt recovery is bounded to the 100 newest receipts and
+five seconds per pass, covering every lookup, import and gap write, so an older lost receipt
+stays partial; limits are visible, with a session filter available for narrower recovery. Import allows 2,048
+health events per receipt and 8 KiB per payload; overflow and integrity failures mark gaps.
+
+The [health ledger](../../backend/src/mainloop/db/health.py) enforces event/sequence uniqueness,
+retains source timestamp precision, rebuilds path-free turn summaries and serializes retention
+against imports. Same identity/same payload is a no-op; conflicts record bounded categories.
+Deleting workspace rows cannot erase persisted attribution. Project deletion cascades health
+rows; the owner-removal operation deletes health only. Retention freezes a turn before removing
+its detail. Expired replay cannot restore detail or increment frozen totals. Retention settings
+are `HEALTH_EVENT_RETENTION_DAYS` (30) and `HEALTH_SUMMARY_RETENTION_DAYS` (365), with summaries
+required to outlive detail. Independent report/decision/conversation retention is unchanged.
+
+`GET /orchestration-health` and `GET /orchestration-health/events` are scoped to the configured
+owner, including filter authorization. The [/health page](../../frontend/src/routes/health/+page.svelte)
+is linked from project and session pages and uses `frontend/src/lib/api.ts`, the existing theme,
+HITLCard and NativeIdentityStrip. Its default is 24 hours; filters cover project, product task,
+attempt, session and provider. It shows distinct failures, groups of three or more failed calls,
+reported input/output, coverage, existing blocked/failed report IDs and approval state. Main and
+owner sessions without product tasks appear as **Unassigned**. Product child tasks remain
+separate rows, so their totals are not added to the parent's reported root total. Unknown metrics
+show **Unavailable**; partial sources and supported-versus-observed turn coverage stay explicit.
+Collection gaps count only for receipts or turns inside the selected window. Task, session and
+attempt choices list the whole project, provider and window scope, so a scoped entry link does
+not restrict later choices.
+
+Fixture acceptance is implemented in
+[Mainloop's PostgreSQL tests](../../backend/tests/runtime/test_orchestration_health.py).
+The same sanitized A2A data fixture is round-tripped by kagent's gateway PostgreSQL test;
+Claude driver/A2A and parked-resume fixtures check the producer boundary. No live provider,
+production rollout or subscription proof is claimed.
 
 ## Proposed views
 
@@ -155,8 +220,8 @@ Normalize paths lexically relative to the known checkout; omit outside-workspace
 mask sensitive paths such as credential files using a project-scoped opaque key. No filesystem
 read or symlink traversal is needed to collect a path. Paths remain owner-private metadata.
 
-Proposed defaults: events and path-level detail **30 days**; path-free turn/task/agent/day
-rollups **365 days**. Retention is configurable and project/owner deletion also removes health
+Implemented defaults: events and path-level detail **30 days**; path-free turn summaries
+**365 days**. Task/session totals derive from those summaries. Retention is configurable and project/owner deletion also removes health
 data and associated opaque keys. Do not alter the independent retention of conversations,
 reports, immutable owner decision receipts or publication audit. Rebuild rollups while their
 inputs exist; older aggregates are frozen with an aggregation-version and coverage marker.
@@ -294,9 +359,9 @@ can suggest follow-up tasks but do not authorize changes, post comments or resol
 
 ## Vertical slices and acceptance
 
-1. **Inventory/design (this slice):** this proposed spec and roadmap entry, immutable source
+1. **Inventory/design (implemented):** this proposed spec and roadmap entry, immutable source
    references and synthetic fixture inventory. No product behavior or live qualification.
-2. **Claude friction and input/output, one page:** extend driver/shared sink/A2A schema;
+2. **Claude friction and input/output, one page (implemented, fixtures only):** extend driver/shared sink/A2A schema;
    prove gateway persistence; ingest validated health artifacts from streams and `GetTask`;
    add owner-scoped PostgreSQL turn summaries and one responsive page. Show distinct tool
    failures/repeated failures, existing blocked report claims/approval state, and input/output

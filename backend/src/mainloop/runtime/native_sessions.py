@@ -1727,6 +1727,8 @@ async def _consume(
     proj = TaskProjection()
     recorded = False
     saved_text = ""
+    from mainloop.health import collector as health_collector
+
     try:
         async for event in events:
             proj.apply(event)
@@ -1745,6 +1747,22 @@ async def _consume(
                 if standing_hash:
                     # kagent has the standing context now; never prefix it again.
                     await ledger.update_binding(session_id, standing_hash=standing_hash)
+            if event.artifact_update:
+                health_collector.schedule(
+                    session_id,
+                    message_id,
+                    event.artifact_update.task_id,
+                    event.artifact_update.context_id,
+                    [event.artifact_update.artifact],
+                )
+            elif event.task:
+                health_collector.schedule(
+                    session_id,
+                    message_id,
+                    proj.task_id,
+                    proj.context_id,
+                    event.task.artifacts,
+                )
     except ServiceConfigurationError as exc:
         if snapshot or proj.task_id:
             # Existing delivery evidence survives an observation refusal.
@@ -1877,6 +1895,9 @@ async def _resolve(
         task_id=task.id,
         evidence_ref=f"a2a:task/{task.id}",
     )
+    from mainloop.health.collector import schedule
+
+    schedule(session_id, message_id, task.id, task.context_id, task.artifacts)
     if proj.terminal:
         return await _finalize(session_id, message_id, proj)
     return None
@@ -2090,6 +2111,9 @@ async def _observe(session_id: str, binding: dict, delivery: dict) -> str | None
         task_id=task.id,
         evidence_ref=f"a2a:task/{task.id}",
     )
+    from mainloop.health.collector import schedule
+
+    schedule(session_id, message_id, task.id, task.context_id, task.artifacts)
     if proj.terminal:
         return await _finalize(session_id, message_id, proj)
     if not proj.parked and message_id not in _streaming:
@@ -2442,6 +2466,13 @@ async def reconcile_once(*, sweep: bool) -> None:
     await _reconcile_step("workspace_creates", workspaces.retry_creates)
     if not sweep:
         return
+    from mainloop.health import collector
+
+    # Resolve attributes inside each step so a missing helper fails only that step.
+    await _reconcile_step("health_retention", lambda: collector.retention())
+    await _reconcile_step(
+        "health_recovery", lambda: collector.recover(settings.owner_id)
+    )
     from mainloop.runtime.agent_credentials import reconcile_cleanup
 
     await _reconcile_step("credential_cleanup", reconcile_cleanup)

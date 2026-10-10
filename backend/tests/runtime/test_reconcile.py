@@ -6,6 +6,7 @@ import logging
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from mainloop.health import collector
 from mainloop.push_gate import credentials as git_credentials
 from mainloop.runtime import agent_credentials
 from mainloop.runtime import native_sessions as ns
@@ -23,6 +24,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             "reconcile_archived_deletes": AsyncMock(),
             "suspend_idle": AsyncMock(return_value=[]),
             "retry_creates": AsyncMock(return_value=[]),
+            "retention": AsyncMock(),
+            "recover": AsyncMock(return_value=False),
         }
         steps.update(overrides)
         ledger = AsyncMock()
@@ -47,6 +50,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             patch.object(git_credentials, "cleanup_all", steps["cleanup_all"]),
             patch.object(workspaces, "suspend_idle", steps["suspend_idle"]),
             patch.object(workspaces, "retry_creates", steps["retry_creates"]),
+            patch.object(collector, "retention", steps["retention"]),
+            patch.object(collector, "recover", steps["recover"]),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -87,6 +92,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(steps["sync"].await_count, 3)
         steps["suspend_idle"].assert_not_awaited()
         steps["reconcile_cleanup"].assert_not_awaited()
+        steps["retention"].assert_not_awaited()
+        steps["recover"].assert_not_awaited()
         # Unconfirmed workspace creates back off from 15 s, so they are checked every pass.
         steps["retry_creates"].assert_awaited_once_with()
         steps["cleanup_all"].assert_not_awaited()
@@ -99,6 +106,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         )
         order = []
         for name in (
+            "retention",
+            "recover",
             "reconcile_cleanup",
             "cleanup_all",
             "reconcile_archived_deletes",
@@ -118,6 +127,8 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             order,
             [
+                "retention",
+                "recover",
                 "reconcile_cleanup",
                 "cleanup_all",
                 "reconcile_archived_deletes",
@@ -131,8 +142,10 @@ class ReconcileStepTests(unittest.IsolatedAsyncioTestCase):
             [(r.step, r.session_id, r.error_class) for r in logs.records],
             [("git_credential_cleanup", "-", "OSError")],
         )
+        steps["recover"].assert_awaited_once_with(ns.settings.owner_id)
         for name in order:
-            steps[name].assert_awaited_once_with()
+            if name != "recover":
+                steps[name].assert_awaited_once_with()
 
     async def test_a_failure_listing_open_work_still_runs_the_sweep(self):
         steps = self.patched()

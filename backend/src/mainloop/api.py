@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from mainloop.config import settings
 from mainloop.db import db
 from mainloop.environments.api import router as environment_api_router
+from mainloop.health.api import router as health_api_router
 from mainloop.identity import current_user
 from mainloop.models import (
     ChatRequest,
@@ -391,6 +392,7 @@ async def list_topics(user_id: str = Depends(current_user)):
 app.include_router(workspace_api_router)
 app.include_router(environment_api_router)
 app.include_router(task_api_router)
+app.include_router(health_api_router)
 register_preview_proxy(app)
 
 
