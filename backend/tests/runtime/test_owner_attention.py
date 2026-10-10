@@ -3,8 +3,10 @@
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
+import httpx
 from mainloop import api
 from mainloop.attention import read
+from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db import tasks as store
 from mainloop.runtime.kagent_client import TaskStatus
@@ -50,6 +52,43 @@ class OwnerAttentionTests(MergeFixture):
                 task.status,
                 task.current_attempt_id,
             )
+
+    async def test_session_reads_ignore_identity_headers_and_exclude_other_owners(self):
+        session = await db.get_session(self.sid)
+        foreign = session.model_copy(
+            update={"id": "foreign-session", "user_id": "other-owner"}
+        )
+        await db.create_session(foreign)
+        with (
+            patch.object(settings, "owner_id", self.user),
+            patch.object(settings, "api_hosts", "test"),
+        ):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=api.app), base_url="http://test"
+            ) as client:
+                for headers in (
+                    {},
+                    {"X-User-ID": self.user},
+                    {"X-User-ID": foreign.user_id},
+                ):
+                    with self.subTest(headers=headers):
+                        owned = await client.get(
+                            f"/sessions/{self.sid}", headers=headers
+                        )
+                        self.assertEqual(owned.status_code, 200)
+                        self.assertEqual(owned.json()["user_id"], self.user)
+                        denied = await client.get(
+                            f"/sessions/{foreign.id}", headers=headers
+                        )
+                        self.assertEqual(denied.status_code, 404)
+                        listed = await client.get("/sessions", headers=headers)
+                        self.assertEqual(listed.status_code, 200)
+                        rows = listed.json()
+                        self.assertIn(self.sid, {row["id"] for row in rows})
+                        self.assertNotIn(foreign.id, {row["id"] for row in rows})
+                        self.assertTrue(
+                            all(row["user_id"] == self.user for row in rows)
+                        )
 
     async def test_fyi_is_activity_and_never_badge_attention(self):
         item = QueueItem(

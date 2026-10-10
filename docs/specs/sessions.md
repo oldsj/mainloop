@@ -38,6 +38,10 @@ report remains an unverified claim until the task's own completion rules are sat
 Explicit owner-decision blockers also set `needs_owner`, independently of activity; these
 sessions display **NEEDS YOU**. Idleness alone never sets it. Session reads and list filters
 use the server projection; SSE prompts a fresh read instead of copying raw activity flags.
+An idle child with no report and an idle standalone agent stay `idle`, including when their
+previous activity status was `waiting_on_user`. Live owner requests are projected separately.
+Both session detail and list reads scope that projection to the configured owner and ignore
+`X-User-ID`; another owner's session returns `404` and never appears in the list.
 
 The list includes all active and needs-you sessions plus the latest 100 unarchived history
 records. History and idle toggle counts describe that returned window. Older sessions remain

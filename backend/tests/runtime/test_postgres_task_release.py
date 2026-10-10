@@ -196,9 +196,24 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
         event_id = recorded["structuredContent"]["event_id"]
         self.assertEqual(
             await self.pool.fetchval(
-                "SELECT count(*) FROM task_event_deliveries WHERE event_id=$1", event_id
+                "SELECT event_key FROM task_events WHERE id=$1", event_id
             ),
-            1 if self.task.parent_task_id is None else 2,
+            f"report:{recorded['structuredContent']['report_id']}",
+        )
+        recipients = (
+            [(f"parent-task:{self.task.parent_task_id}", "pending")]
+            if self.task.parent_task_id
+            else []
+        )
+        self.assertEqual(
+            [
+                (row["recipient_key"], row["state"])
+                for row in await self.pool.fetch(
+                    "SELECT recipient_key,state FROM task_event_deliveries WHERE event_id=$1",
+                    event_id,
+                )
+            ],
+            recipients,
         )
         for tool in (
             "delegate",

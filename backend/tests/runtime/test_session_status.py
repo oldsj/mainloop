@@ -43,9 +43,12 @@ class NextStatusTests(unittest.TestCase):
         )
         self.assertEqual(status(S.ACTIVE, is_child=True, reported=True), S.COMPLETED)
 
-    def test_an_idle_child_that_has_not_reported_waits_on_the_user(self):
-        self.assertEqual(status(S.ACTIVE, is_child=True), S.WAITING_ON_USER)
+    def test_an_idle_child_that_has_not_reported_needs_no_owner_input(self):
+        for current in (S.ACTIVE, S.WAITING_ON_USER, S.IDLE):
+            with self.subTest(current=current):
+                self.assertEqual(status(current, is_child=True), S.IDLE)
 
-    def test_an_idle_stand_alone_agent_waits_on_the_user(self):
-        self.assertEqual(status(S.ACTIVE), S.WAITING_ON_USER)
-        self.assertEqual(status(S.COMPLETED), S.WAITING_ON_USER)
+    def test_an_idle_stand_alone_agent_needs_no_owner_input(self):
+        for current in (S.ACTIVE, S.COMPLETED, S.WAITING_ON_USER, S.IDLE):
+            with self.subTest(current=current):
+                self.assertEqual(status(current), S.IDLE)

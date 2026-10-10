@@ -8,10 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from mainloop import api
+from mainloop.attention import OwnerProjection
 from mainloop.config import settings
 from mainloop.runtime import preview_proxy
 
 from models import Session
+from models.attention import AttentionSnapshot
 
 OWNER = "the-owner"
 OTHER = "someone-else"
@@ -24,7 +26,6 @@ ROUTES = [
     ("GET", "/projects/x", "get_project"),
     ("POST", "/projects/x/refresh", "get_project"),
     ("GET", "/projects/x/detail", "get_project"),
-    ("GET", "/sessions/x", "get_session"),
     ("GET", "/sessions/x/conversation", "get_session"),
     ("GET", "/sessions/x/native", "get_session"),
     ("POST", "/sessions/x/stop-turn", "get_session"),
@@ -78,11 +79,34 @@ class IdentitySeamTests(unittest.IsolatedAsyncioTestCase):
             prompt="p",
             conversation_id="c",
         )
-        with patch.object(api.db, "get_session", AsyncMock(return_value=session)):
+        projection = OwnerProjection(
+            AttentionSnapshot(), {session.id: session}, [session], []
+        )
+        with patch(
+            "mainloop.attention.read", AsyncMock(return_value=projection)
+        ) as seen:
             response = await self.client.get(
                 "/sessions/x", headers={"X-User-ID": OTHER}
             )
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user_id"], OWNER)
+        seen.assert_awaited_once_with(
+            api.db, OWNER, session_id="x", include_activity=False
+        )
+
+    async def test_session_outside_the_owner_projection_is_404(self):
+        projection = OwnerProjection(AttentionSnapshot(), {}, [], [])
+        for header in (OTHER, OWNER):
+            with self.subTest(header=header), patch(
+                "mainloop.attention.read", AsyncMock(return_value=projection)
+            ) as seen:
+                response = await self.client.get(
+                    "/sessions/x", headers={"X-User-ID": header}
+                )
+                self.assertEqual(response.status_code, 404)
+                seen.assert_awaited_once_with(
+                    api.db, OWNER, session_id="x", include_activity=False
+                )
 
     async def test_dismiss_is_scoped_to_the_owner(self):
         dismiss = AsyncMock(return_value=False)
@@ -98,10 +122,12 @@ class IdentitySeamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
 
     async def test_lists_are_the_owners_whatever_the_header(self):
-        seen = AsyncMock(return_value=[])
-        with patch.object(api.db, "list_sessions", seen):
-            await self.client.get("/sessions", headers={"X-User-ID": OTHER})
-        self.assertEqual(seen.await_args.kwargs["user_id"], OWNER)
+        seen = AsyncMock(return_value=OwnerProjection(AttentionSnapshot(), {}, [], []))
+        with patch("mainloop.attention.read", seen):
+            response = await self.client.get("/sessions", headers={"X-User-ID": OTHER})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        seen.assert_awaited_once_with(api.db, OWNER, include_activity=False)
 
     async def test_the_preview_proxy_resolves_the_owner(self):
         self.assertIn("current_user", vars(preview_proxy))

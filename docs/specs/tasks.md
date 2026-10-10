@@ -17,6 +17,14 @@ enqueue a main-agent chat turn. Parent-task notifications retain their existing 
 blocked and failed reports still notify the main agent. The main agent reads routine results
 through `task_get`, `task_list`, and standing task context on its next turn.
 
+This routing also applies to a final `completed` report from an agent whose coding task was
+already completed by verified merge: its report and event remain durable, with no main-thread
+delivery and exactly one parent-task delivery when it has a parent. Replaying the same report
+request creates no duplicate report or delivery. Recording it preserves the completed task's
+status, publication projection, result reference and held capacity. The completed binding's
+restricted tool scope and current authority checks still apply; Approval and protected-path
+routes require the exact original owner receipt.
+
 Implemented through S2: task/attempt/operation persistence, owner reads, project provider
 preferences, transactional admission, S1 native provisioning/cancellation and durable task
 notifications. MCP `delegate`, `report`, `task_get`, `task_list`, `task_history` and `task_cancel`
