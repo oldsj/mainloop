@@ -54,8 +54,6 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.34.1
-      - name: Install locked backend dependencies
-        run: make install-backend
       - name: Disable durability on the disposable PostgreSQL service
         env:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
@@ -81,14 +79,10 @@ jobs:
         with:
           node-version: 24
       - uses: pnpm/action-setup@v4
-      - name: Install locked frontend dependencies
-        run: make install-frontend
       - name: Test command deadlines and process cleanup
         run: make test-timeouts
-      - name: Check frontend diagnostics
-        run: make check-frontend
-      - name: Run frontend unit tests
-        run: make test-frontend
+      - name: Check frontend diagnostics and run unit tests
+        run: make check-frontend test-frontend
 
   lint:
     name: Lint

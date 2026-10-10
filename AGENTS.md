@@ -91,7 +91,9 @@ requires PostgreSQL so database coverage cannot silently skip. Use
 `MAINLOOP_TEST_TIMINGS=/path/to/timings.json` for module/test timing evidence.
 Timeouts print the active test or fixture and all thread stacks, then fail the run.
 
-In a Mainloop workspace, run the backend suite as `dev-postgres run make test-backend`.
+In a Mainloop workspace, `dev-postgres run make check` is the one command that
+installs dependencies and runs all offline checks. Run only the backend suite with
+`dev-postgres run make test-backend`; it also installs its dependencies.
 The helper starts and stops scratch PostgreSQL and exports `MAINLOOP_TEST_DATABASE_URL`.
 Run checks in the foreground and wait for them to finish before ending your turn.
 
