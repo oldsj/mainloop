@@ -4,6 +4,12 @@
 -include .env
 export
 
+# Shared foreground caps; setup and checks never fetch a timeout runtime.
+CAP := node "$(CURDIR)/scripts/with-timeout.mjs"
+UV_HTTP_TIMEOUT := 30
+UV_HTTP_RETRIES := 1
+.PHONY: install-backend install-models install-frontend check check-frontend test-frontend frontend-build test-timeouts _install _check _fmt _fmt-all
+
 # Configuration
 # Set GHCR_USER in .env file (see .env.example)
 GHCR_REGISTRY := ghcr.io
@@ -46,9 +52,18 @@ dev-legacy: ## Start with docker compose (no hot reload)
 # =============================================================================
 
 install: ## Install all dependencies
-	pnpm install
-	cd backend && uv sync
-	cd models && uv sync
+	@$(CAP) 240 'make install' -- $(MAKE) --no-print-directory _install
+
+_install: install-frontend install-backend install-models
+
+install-frontend: ## Install locked frontend dependencies (120s cap)
+	@$(CAP) 120 'pnpm install' -- pnpm install --frozen-lockfile
+
+install-backend: ## Sync locked backend dependencies (120s cap)
+	@cd backend && $(CAP) 120 'uv sync backend' -- uv sync --frozen --python 3.13
+
+install-models: ## Sync shared model dependencies (120s cap)
+	@cd models && $(CAP) 120 'uv sync models' -- uv sync --python 3.13
 
 clean: ## Clean build artifacts
 	rm -rf frontend/.svelte-kit frontend/build
@@ -56,18 +71,42 @@ clean: ## Clean build artifacts
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
 lint: ## Lint files changed since main
-	trunk check --upstream origin/main
+	@$(CAP) 120 'make lint' -- trunk check --upstream origin/main
 
 lint-all: ## Lint all files
-	trunk check -a
+	@$(CAP) 240 'make lint-all' -- trunk check -a
 
 fmt: ## Format and fix files changed since main
+	@$(CAP) 180 'make fmt' -- $(MAKE) --no-print-directory _fmt
+
+_fmt:
 	trunk fmt --upstream origin/main
 	trunk check --upstream origin/main -y
 
 fmt-all: ## Format and fix all files
+	@$(CAP) 300 'make fmt-all' -- $(MAKE) --no-print-directory _fmt-all
+
+_fmt-all:
 	trunk fmt -a
 	trunk check -a -y
+
+check: ## All offline checks in one turn (570s total; sync dependencies first)
+	@$(CAP) 570 'make check' -- $(MAKE) --no-print-directory _check
+
+_check:
+	@$(MAKE) --no-print-directory test-timeouts test-backend check-frontend test-frontend frontend-build fmt lint
+
+check-frontend: ## Frontend diagnostics (120s cap)
+	@$(CAP) 120 'make check-frontend' -- pnpm check
+
+test-frontend: ## Frontend unit tests (60s cap)
+	@$(CAP) 60 'make test-frontend' -- pnpm --dir frontend test:unit
+
+frontend-build: ## Build the frontend application (120s cap)
+	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
+
+test-timeouts: ## Timeout helper regression tests (30s cap)
+	@$(CAP) 30 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs
 
 # Backend commands
 backend-dev: ## Run backend in development mode
@@ -79,12 +118,13 @@ frontend-dev: ## Run frontend in development mode
 
 # Docker image commands
 build-backend: ## Build backend Docker image
-	docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
+	@$(CAP) 480 'make build-backend' -- docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) .
 
 build-frontend: ## Build frontend Docker image
-	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
+	@$(CAP) 480 'make build-frontend' -- docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) .
 
-build-all: build-backend build-frontend ## Build all Docker images
+build-all: ## Build all Docker images (550s total cap)
+	@$(CAP) 550 'make build-all' -- $(MAKE) --no-print-directory build-backend build-frontend
 
 push-backend: build-backend ## Push backend to GHCR
 	docker push $(BACKEND_IMAGE)
@@ -96,11 +136,7 @@ push-all: push-backend push-frontend ## Push all images to GHCR
 
 # Parallel build + push (much faster)
 build-all-parallel: ## Build all Docker images in parallel
-	@echo "Building all images in parallel..."
-	@docker build -f backend/Dockerfile -t $(BACKEND_IMAGE) . & \
-	docker build -f frontend/Dockerfile -t $(FRONTEND_IMAGE) . & \
-	wait
-	@echo "All builds complete"
+	@$(CAP) 480 'make build-all-parallel' -- $(MAKE) --no-print-directory -j2 build-backend build-frontend
 
 push-all-parallel: build-all-parallel ## Build and push all images in parallel
 	@echo "Pushing all images in parallel..."
@@ -170,7 +206,7 @@ TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
 
 test-backend: ## Offline backend + scratch PostgreSQL; 60s/test, 9m/suite
-	@cd backend && uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
+	@cd backend && $(CAP) 550 'make test-backend' -- uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
 
 test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
 	@./scripts/e2e-guard.sh

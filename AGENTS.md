@@ -79,6 +79,11 @@ make lint                # lint files changed from main
 pnpm check               # workspace frontend/type checks
 ```
 
+Use `make install-backend install-frontend` for bounded dependency setup and
+`dev-postgres run make check` for the complete offline check set under a
+570-second aggregate deadline. [Foreground deadline table](docs/dev-environment.md#foreground-deadlines)
+lists all caps and timeout diagnostics, including CI jobs.
+
 Set `MAINLOOP_TEST_DATABASE_URL` to a disposable PostgreSQL server first, or use
 `dev-postgres run make test-backend` in the development image. The capped command
 requires PostgreSQL so database coverage cannot silently skip. Use

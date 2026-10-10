@@ -3,13 +3,14 @@ FROM node:22-alpine AS base
 
 WORKDIR /app
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs nodejs
 
 # Copy root package files
-COPY --chown=nodejs:nodejs package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=nodejs:nodejs package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=nodejs:nodejs scripts/with-timeout.mjs ./scripts/with-timeout.mjs
 
 # Copy workspace packages
 COPY --chown=nodejs:nodejs packages ./packages
@@ -18,7 +19,7 @@ COPY --chown=nodejs:nodejs frontend ./frontend
 # Development stage
 FROM base AS dev
 
-RUN pnpm install --frozen-lockfile
+RUN node scripts/with-timeout.mjs 120 'pnpm install' -- pnpm install --frozen-lockfile
 
 RUN chown -R nodejs:nodejs /app
 
@@ -33,7 +34,7 @@ CMD ["pnpm", "dev", "--host", "0.0.0.0", "--port", "3000"]
 # Build stage for production
 FROM base AS builder
 
-RUN pnpm install --frozen-lockfile
+RUN node scripts/with-timeout.mjs 120 'pnpm install' -- pnpm install --frozen-lockfile
 
 WORKDIR /app/frontend
 ARG VITE_API_URL=https://mainloop-api.olds.network
@@ -45,10 +46,11 @@ FROM node:22-alpine AS prod
 
 WORKDIR /app
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@9.15.9 --fetch-timeout=30000 --fetch-retries=1
 
 # Copy root package files
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc ./
+COPY --from=builder /app/scripts ./scripts
 
 # Copy workspace packages
 COPY --from=builder /app/packages ./packages
@@ -56,7 +58,7 @@ COPY --from=builder /app/packages ./packages
 # Copy frontend
 COPY --from=builder /app/frontend ./frontend
 
-RUN pnpm install --frozen-lockfile --prod
+RUN node scripts/with-timeout.mjs 120 'pnpm install --prod' -- pnpm install --frozen-lockfile --prod
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 

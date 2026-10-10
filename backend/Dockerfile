@@ -11,7 +11,7 @@ WORKDIR /src
 
 RUN git init \
     && git remote add origin "${SUBSTRATE_REPOSITORY}" \
-    && git fetch --depth=1 origin "${SUBSTRATE_COMMIT}" \
+    && timeout --verbose --kill-after=5s 120s git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 fetch --depth=1 origin "${SUBSTRATE_COMMIT}" \
     && git checkout --detach FETCH_HEAD \
     && mkdir -p /out \
     && CGO_ENABLED=0 go build -trimpath -o /out/kubectl-ate ./cmd/kubectl-ate
@@ -26,6 +26,7 @@ ENV UV_COMPILE_BYTECODE=1
 
 # Copy from cache instead of linking
 ENV UV_LINK_MODE=copy
+ENV UV_HTTP_TIMEOUT=30 UV_HTTP_RETRIES=1
 
 # Copy dependency files first (for layer caching)
 COPY backend/pyproject.toml backend/uv.lock backend/README.md ./

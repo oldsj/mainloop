@@ -2,6 +2,7 @@
   "name": "mainloop",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "pnpm": {
     "overrides": {
       "cookie": "^0.7.0"
@@ -9,10 +10,10 @@
   },
   "scripts": {
     "dev": "docker compose up --watch",
-    "build": "pnpm -r build",
-    "lint": "pnpm -r lint",
-    "format": "prettier --write .",
-    "check": "pnpm -r check"
+    "build": "node scripts/with-timeout.mjs 120 'pnpm build' -- pnpm -r build",
+    "lint": "node scripts/with-timeout.mjs 120 'pnpm lint' -- pnpm -r lint",
+    "format": "node scripts/with-timeout.mjs 180 'pnpm format' -- prettier --write .",
+    "check": "node scripts/with-timeout.mjs 120 'pnpm check' -- pnpm -r check"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

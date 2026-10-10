@@ -121,25 +121,30 @@ passed on a Linux amd64 development host; gVisor/arm64 workspace qualification o
 `make test-backend` is pending.
 
 ```bash
-# Backend dependency sync
-(cd backend && uv sync --frozen --python 3.13)
+# Backend dependency sync (bounded, locked)
+make install-backend
 
 # Offline backend and disposable PostgreSQL (60 seconds/test, 9 minutes/suite)
 dev-postgres run make test-backend
 
 # Frontend dependency install
 pnpm --version
-pnpm install --frozen-lockfile
+make install-frontend
 
 # Frontend type/diagnostic check
 pnpm check
 
 # Frontend unit tests (lib)
-(cd frontend && node --test src/lib/*.test.ts)
+make test-frontend
 
 # Lint
 make lint
 ```
+
+After dependency setup, `dev-postgres run make check` runs the complete offline
+check set with a 570-second aggregate deadline. See the
+[foreground deadline table](docs/dev-environment.md#foreground-deadlines) for
+per-command caps, network retry limits and timeout diagnostics.
 
 ## Pull Request Guidelines
 

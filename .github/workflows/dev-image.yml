@@ -6,12 +6,14 @@ on:
     paths:
       - .devcontainer/**
       - .trunk/**
+      - scripts/with-timeout.mjs
       - .github/workflows/dev-image.yml
   push:
     branches: [main]
     paths:
       - .devcontainer/**
       - .trunk/**
+      - scripts/with-timeout.mjs
       - .github/workflows/dev-image.yml
 
 permissions:
@@ -26,6 +28,7 @@ jobs:
     name: Validate ${{ matrix.arch }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
     permissions:
       contents: read
     strategy:
@@ -55,6 +58,7 @@ jobs:
     name: Publish amd64 digest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -85,6 +89,7 @@ jobs:
     name: Publish arm64 digest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -116,6 +121,7 @@ jobs:
     needs: [publish-amd64, publish-arm64]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     permissions:
       contents: read
       packages: write
