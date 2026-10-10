@@ -92,6 +92,7 @@ class MemoryLedger:
             "turns": 0,
             "standing_hash": None,
             "reported_at": None,
+            "kagent_deleted_at": None,
         }
         self.queue_held = False
         self.rows: dict[str, dict] = {}
@@ -272,6 +273,7 @@ class MemoryLedger:
 
     async def mark_kagent_deleted(self, session_id, *, conn=None):
         self.kagent_deleted = True
+        self.binding["kagent_deleted_at"] = object()
 
     async def set_delivery(
         self, message_id, state, *, task_id=None, evidence_ref=None, detail=None
