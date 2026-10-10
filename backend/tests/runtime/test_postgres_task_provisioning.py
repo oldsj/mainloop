@@ -1954,6 +1954,28 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
                 await ns.cancel(child.session_id)
                 await ns.cancel(parent.session_id)
 
+    async def test_writer_checkout_depth_defaults_to_runtime_and_keeps_explicit(self):
+        _, task, attempt = await self.create_task()
+        self.assertEqual(task.checkout.depth, 0)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT depth FROM workspaces WHERE session_id=$1", attempt.session_id
+            ),
+            0,
+        )
+        request = self.request()
+        request = request.model_copy(
+            update={"checkout": request.checkout.model_copy(update={"depth": 1})}
+        )
+        _, task, attempt = await self.create_task(request)
+        self.assertEqual(task.checkout.depth, 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT depth FROM workspaces WHERE session_id=$1", attempt.session_id
+            ),
+            1,
+        )
+
     async def test_parent_authority_invalidates_old_and_new_child_push_grants(self):
         _, _, parent = await self.create_task()
         _, _, child = await self.create_task(principal=await self.principal(parent))

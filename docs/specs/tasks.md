@@ -22,6 +22,9 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
+An omitted checkout `depth` is 0, which clones full history; a positive
+value requests that shallow depth. Existing tasks keep the depth stored in their snapshot.
+
 An omitted or empty checkout `ref` selects the repository's remote default branch. With both
 `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` enabled, Mainloop resolves that default or an
 explicit branch, tag or commit through its repository-scoped GitHub App client before task
@@ -86,7 +89,7 @@ Example create input:
   "mode": "code",
   "project_id": "project-1",
   "provider_profile_id": "codex",
-  "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 1 }
+  "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 0 }
 }
 ```
 
@@ -138,7 +141,7 @@ Example disconnected-port read state (S1 installs cancellation; S3 handoff remai
     "reason": null,
     "current_attempt_id": null,
     "version": 1,
-    "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 1 },
+    "checkout": { "branch": "feature/task-list", "ref": "main", "depth": 0 },
     "created_at": "2026-10-07T00:00:00Z",
     "updated_at": "2026-10-07T00:00:00Z"
   },

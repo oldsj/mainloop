@@ -133,6 +133,13 @@ revalidates the original stamp without substituting another issuance. The facade
 port and reuses an existing dispatch connection. Spooling and CPU/object validation remain outside
 locks. Production construction requires this factory; P1 parsing/pack/body/resource rules remain.
 
+Shallow clients (a checkout with a positive depth; depth 0 clones full history) send `shallow <oid>` lines before the
+command list. The gate accepts distinct, lowercase, non-zero SHA-1 lines only in that position and
+forwards them upstream inside the unchanged body. They grant nothing: ref policy, old-oid,
+fast-forward and fsck checks run against the quarantine's full-history seed of the target and
+default branches, so a push whose history connects only through a client graft is refused.
+Push certificates remain unsupported.
+
 ## Durable uncertainty and cleanup
 
 The existing publication ledger stores immutable request/update/version/body/association/stamp

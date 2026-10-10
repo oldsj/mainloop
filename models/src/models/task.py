@@ -54,7 +54,8 @@ class TaskCheckout(ContractModel):
     branch: Annotated[str, Field(strict=True, min_length=1, max_length=255)]
     # Empty selects the remote's default branch, matching the workspace contract.
     ref: Annotated[str, Field(strict=True, max_length=255)] = ""
-    depth: Annotated[int, Field(strict=True, ge=0, le=1000)] = 1
+    # 0 defers clone depth to the runtime default; callers may still request shallow.
+    depth: Annotated[int, Field(strict=True, ge=0, le=1000)] = 0
 
     @model_validator(mode="after")
     def valid_refs(self):
