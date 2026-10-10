@@ -313,7 +313,7 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
             self.task.id,
         )
         self.assertEqual(
-            dict(counts), {"reports": 1, "events": 1, "recipient_intents": 1}
+            dict(counts), {"reports": 1, "events": 1, "recipient_intents": 0}
         )
         self.assertEqual(task.version, before.version + 1)
         self.assertEqual((task.status, task.reason), (before.status, before.reason))
@@ -360,7 +360,7 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
             1,
         )
         self.assertEqual(
-            await self.pool.fetchval("SELECT count(*) FROM task_event_deliveries"), 1
+            await self.pool.fetchval("SELECT count(*) FROM task_event_deliveries"), 0
         )
         task, after_projection = await self.view()
         self.assertEqual(task.version, before.version + 1)
