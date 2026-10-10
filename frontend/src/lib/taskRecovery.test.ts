@@ -56,6 +56,7 @@ test('lost reply remains resendable after eligibility and current provider chang
       resolve(dir, 'store.mjs'),
       transpileModule(
         source
+          .replace("import { browser } from '$app/environment';", 'const browser = true;')
           .replace(/'\$lib\/(api|sse)'/g, "'./boundaries.mjs'")
           .replace(/'\$lib\/(taskActions|taskEvents|taskState)'/g, "'./logic.mjs'"),
         { compilerOptions: { module: ModuleKind.ESNext } }
@@ -230,6 +231,7 @@ test('background task failures warn on cached detail and only that task success 
       resolve(dir, 'store.mjs'),
       transpileModule(
         source
+          .replace("import { browser } from '$app/environment';", 'const browser = true;')
           .replace(/'\$lib\/(api|sse)'/g, "'./boundaries.mjs'")
           .replace(/'\$lib\/(taskActions|taskEvents|taskState)'/g, "'./logic.mjs'"),
         { compilerOptions: { module: ModuleKind.ESNext } }

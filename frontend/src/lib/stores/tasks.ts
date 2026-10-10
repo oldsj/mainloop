@@ -6,6 +6,7 @@
  * and never change a task locally: the owner sees the new state when the server reports it.
  */
 import { derived, get, writable } from 'svelte/store';
+import { browser } from '$app/environment';
 import { api, type ProviderProfile, type TaskActionKind, type TaskView } from '$lib/api';
 import { getSSEClient } from '$lib/sse';
 import { createActionTracker, type ActionIntent, type ActionOutcome } from '$lib/taskActions';
@@ -108,6 +109,7 @@ function createTasksStore() {
   });
 
   function startListening() {
+    if (!browser) return;
     stopListening();
     sync.reset();
     const client = getSSEClient();

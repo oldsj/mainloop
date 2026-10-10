@@ -216,15 +216,18 @@ async def supersede_task_projections(conn, projection):
 
 async def refresh_card(conn, request_id):
     """Derive inbox presentation from projection and durable delivery, never vice versa."""
+    from mainloop.tasks.inbox import TERMINAL_SOURCES
+
     await conn.execute(
-        """UPDATE queue_items q SET
+        f"""UPDATE queue_items q SET
         title=CASE WHEN t.state='uncertain' OR t.state='sending' THEN 'Decision delivery uncertain'
             WHEN t.state='accepted' THEN 'Decision delivered'
             WHEN t.state='rejected_transport' THEN 'Decision destination unavailable'
             WHEN t.state='recorded' THEN 'Decision recorded'
             WHEN r.snapshot->>'availability'='pending' THEN 'Session needs input'
             ELSE 'Session input unavailable' END,
-        status=CASE WHEN r.superseded THEN 'expired' WHEN t.state='accepted' THEN 'responded' ELSE 'pending' END,
+        status=CASE WHEN r.superseded THEN 'expired' WHEN t.state='accepted' THEN 'responded'
+            WHEN {TERMINAL_SOURCES} THEN 'expired' ELSE 'pending' END,
         context=jsonb_build_object('hitl_request_id',r.id,'availability',r.snapshot->>'availability',
             'unavailable_reason',r.snapshot->>'unavailable_reason','transport_state',t.state,
             'observed_at',r.observed_at)
@@ -234,7 +237,7 @@ async def refresh_card(conn, request_id):
             JOIN native_hitl_response_members m ON m.leaf_key=a.leaf_key
             JOIN native_hitl_response_transport transport USING(owner_id,action_id)
             WHERE a.request_id=r.id LIMIT 1
-        ) t ON true WHERE q.hitl_request_id=r.id AND r.id=$1""",
+        ) t ON true WHERE q.hitl_request_id=r.id AND r.id=$1""",  # nosec B608 - constant SQL fragment; request ID is bound
         request_id,
     )
 

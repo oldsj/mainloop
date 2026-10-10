@@ -10,12 +10,14 @@ import httpx
 from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db
+from mainloop.db import hitl as hitl_store
 from mainloop.db import tasks as store
 from mainloop.identity import current_user
 from mainloop.runtime import hitl_continuation as continuation
 from mainloop.runtime import native_sessions
 from mainloop.runtime.agent_credentials import revoke
 from mainloop.runtime.delegation import PgStore
+from mainloop.runtime.hitl_correlation import task_identity
 from mainloop.runtime.kagent_client import OutcomeUnknown
 from mainloop.runtime.policy import PolicyError
 from mainloop.services import github_merge, merge
@@ -29,8 +31,11 @@ from tests.runtime.test_merge import MergeFixture
 from models.hitl import (
     HITL_EXTENSION,
     DecisionReceipt,
+    HITLProjection,
     ToolApproval,
     ToolApprovalResponse,
+    VerifiedAssociation,
+    normalized_hash,
 )
 from models.task import TaskAction, TaskReassign, TaskReport
 
@@ -782,6 +787,422 @@ class TaskApplicationIntegrationTests(MergeFixture):
 
     async def test_blocked_merge_preserves_unrelated_pending_attention(self):
         await self.assert_terminal_merge_preserves_other_attention("blocked")
+
+    async def assert_stale_native_retry_stays_waiting(self, terminal):
+        proposal, _ = await self.approved_merge()
+        self.fake.runs[0].update(status="queued", conclusion=None)
+        self.assertEqual(
+            (await self.execute(proposal, approved=True))["state"], "evaluating"
+        )
+        _, retry, _ = await self.pause(
+            proposal, call_id="native-retry", tool_id="retry"
+        )
+        # Reproduce the older projection that lost the pending retry before expiry.
+        await self.pool.execute(
+            "UPDATE tasks SET projection=jsonb_set(projection,'{pending_approval_ids}','[]') WHERE id=$1",
+            self.task.id,
+        )
+        if terminal == "expired":
+            await self.pool.execute(
+                "UPDATE merge_requests SET deadline=now()-interval '1 second' WHERE owner_id=$1",
+                self.user,
+            )
+        else:
+            self.fake.runs[0].update(status="completed", conclusion="failure")
+        self.assertEqual((await merge.reconcile_approved_merges())["state"], terminal)
+        task, value = await self.view()
+        self.assertEqual(
+            (task.status, task.reason, value.pending_approval_ids),
+            ("waiting", "approval", (retry.id,)),
+        )
+        await attention.refresh(db, self.sid)
+        refreshed, value = await self.view()
+        self.assertEqual(refreshed.version, task.version)
+        self.assertEqual(value.pending_approval_ids, (retry.id,))
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT status FROM queue_items WHERE hitl_request_id=$1", retry.id
+            ),
+            "pending",
+        )
+        self.assertFalse(self.fake.puts)
+
+    async def test_expired_merge_recovers_unanswered_stale_native_retry(self):
+        await self.assert_stale_native_retry_stays_waiting("expired")
+
+    async def test_blocked_merge_recovers_unanswered_stale_native_retry(self):
+        await self.assert_stale_native_retry_stays_waiting("blocked")
+
+    async def queue_read(self, path, *, owner=None, method="GET"):
+        api.app.dependency_overrides[current_user] = lambda: owner or self.user
+        try:
+            with (
+                patch.object(settings, "dev_mode", True),
+                patch.object(api, "notify_inbox_updated", new=AsyncMock()),
+            ):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=api.app),
+                    base_url="http://localhost",
+                ) as client:
+                    return await client.request(method, path)
+        finally:
+            api.app.dependency_overrides.pop(current_user, None)
+
+    async def test_terminal_unavailable_card_leaves_pending_queue_and_badge_with_audit(
+        self,
+    ):
+        p = await self.prepare()
+        _, card, _ = await self.pause(p)
+        snapshot = card.model_copy(
+            update={
+                "availability": "unavailable",
+                "leaves": (),
+                "unavailable_reason": "Session input unavailable",
+            }
+        )
+        await self.pool.execute(
+            "UPDATE native_hitl_requests SET snapshot=$2::jsonb WHERE id=$1",
+            card.id,
+            snapshot.model_dump_json(),
+        )
+        # Unavailability on its own must not discard an active task's attention card.
+        self.assertEqual(len((await self.queue_read("/queue")).json()), 1)
+        await self.pool.execute(
+            "UPDATE tasks SET status='cancelled' WHERE id=$1", self.task.id
+        )
+        self.assertEqual(
+            (await self.queue_read("/queue/unread/count")).json(), {"count": 0}
+        )
+        self.assertEqual((await self.queue_read("/queue?status=pending")).json(), [])
+        history = (await self.queue_read("/queue?status=expired")).json()
+        self.assertEqual([item["hitl_request_id"] for item in history], [card.id])
+        self.assertEqual(
+            store.decode(
+                await self.pool.fetchval(
+                    "SELECT snapshot FROM native_hitl_requests WHERE id=$1", card.id
+                )
+            ),
+            snapshot.model_dump(mode="json"),
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_hitl_aliases WHERE request_id=$1", card.id
+            ),
+            1,
+        )
+        self.assertFalse(self.gateway.sent)
+        self.assertFalse(self.fake.puts)
+
+    async def test_terminal_uncertain_card_retires_without_changing_decision_or_transport(
+        self,
+    ):
+        _, card = await self.approved_merge()
+        await self.pool.execute(
+            "UPDATE native_hitl_response_transport SET state='uncertain' WHERE owner_id=$1",
+            self.user,
+        )
+        await self.pool.execute(
+            "UPDATE queue_items SET status='pending',title='Decision delivery uncertain' WHERE hitl_request_id=$1",
+            card.id,
+        )
+        before = await self.counts(card)
+        await self.pool.execute(
+            "UPDATE tasks SET status='failed' WHERE id=$1", self.task.id
+        )
+        self.assertEqual((await self.queue_read("/queue")).json(), [])
+        self.assertEqual(await self.counts(card), before)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT state FROM native_hitl_response_transport WHERE owner_id=$1",
+                self.user,
+            ),
+            "uncertain",
+        )
+        self.assertEqual(
+            (await self.queue_read(f"/queue/hitl-{card.id}")).status_code, 200
+        )
+
+    async def test_observer_refresh_preserves_terminal_expiry_and_reopens_active_source(
+        self,
+    ):
+        from mainloop.tasks.inbox import retire_terminal_cards
+
+        proposal = await self.prepare()
+        _, card, _ = await self.pause(proposal)
+        await self.pool.execute(
+            "UPDATE tasks SET status='cancelled' WHERE id=$1", self.task.id
+        )
+        await retire_terminal_cards(db, self.user)
+        async with self.pool.acquire() as conn, conn.transaction():
+            await hitl_store.save_projection(conn, card)
+        # Same unchanged native observation between route cleanup and list/count.
+        self.assertEqual(await db.list_queue_items(self.user), [])
+        self.assertEqual(await db.count_unread_queue_items(self.user), 0)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT status FROM queue_items WHERE hitl_request_id=$1", card.id
+            ),
+            "expired",
+        )
+        await self.pool.execute(
+            "UPDATE tasks SET status='running' WHERE id=$1", self.task.id
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            await hitl_store.save_projection(conn, card)
+        self.assertEqual(
+            [item.hitl_request_id for item in await db.list_queue_items(self.user)],
+            [card.id],
+        )
+        self.assertEqual(await db.count_unread_queue_items(self.user), 1)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT status FROM queue_items WHERE hitl_request_id=$1", card.id
+            ),
+            "pending",
+        )
+
+    async def test_pending_list_and_count_recheck_terminality_after_cleanup(self):
+        from mainloop.tasks.inbox import retire_terminal_cards
+
+        proposal = await self.prepare()
+        _, card, _ = await self.pause(proposal)
+        await retire_terminal_cards(db, self.user)
+        # Terminality can commit after route cleanup but before its list/count.
+        await self.pool.execute(
+            "UPDATE tasks SET status='completed' WHERE id=$1", self.task.id
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT status FROM queue_items WHERE hitl_request_id=$1", card.id
+            ),
+            "pending",
+        )
+        self.assertEqual(await db.list_queue_items(self.user), [])
+        self.assertEqual(await db.count_unread_queue_items(self.user), 0)
+
+    async def test_expiry_revalidates_verified_sources_after_observer_request_lock(
+        self,
+    ):
+        from mainloop.tasks.inbox import retire_terminal_cards
+
+        proposal = await self.prepare()
+        _, card, _ = await self.pause(proposal)
+        active_sid, _ = await self.bound_session(
+            role="supervisor", mcp_grant_kind="workspace"
+        )
+        active_task, active_attempt = await self.enroll(active_sid, "expiry-active")
+        leaf = card.leaves[0].model_copy(
+            update={
+                "binding_id": active_sid,
+                "runtime_session_id": f"runtime-{active_sid}",
+                "context_id": f"context-runtime-{active_sid}",
+                "task_id": f"task-runtime-{active_sid}",
+            }
+        )
+        payload = type(card.payload).model_validate(
+            {
+                **card.payload.model_dump(mode="json"),
+                "nested": {
+                    "task_id": leaf.task_id,
+                    "context_id": leaf.context_id,
+                    "tools": [
+                        tool.model_dump(mode="json") for tool in card.payload.tools
+                    ],
+                },
+            }
+        )
+        outer = card.outer.model_copy(
+            update={"request_hash": normalized_hash(payload.model_dump(mode="json"))}
+        )
+        request_id = str(uuid.uuid5(uuid.NAMESPACE_URL, outer.model_dump_json()))
+        unavailable = HITLProjection(
+            id=request_id,
+            owner_id=self.user,
+            outer=outer,
+            payload=payload,
+            availability="unavailable",
+            unavailable_reason="Fixture: awaiting trusted association",
+        )
+        association = VerifiedAssociation(
+            owner_id=self.user,
+            outer=task_identity(outer),
+            leaf=task_identity(leaf),
+            evidence_source="gateway_continuation",
+            evidence_reference="fixture:trusted-gateway-record",
+        )
+        resolved = unavailable.model_copy(
+            update={
+                "leaves": (leaf,),
+                "associations": (association,),
+                "availability": "pending",
+                "unavailable_reason": None,
+            }
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            await hitl_store.save_projection(conn, unavailable)
+        await self.pool.execute(
+            "UPDATE tasks SET status='completed' WHERE id=$1", self.task.id
+        )
+        expiry = None
+        try:
+            async with self.pool.acquire() as writer, writer.transaction():
+                # The actual observer holds its request/card writes uncommitted
+                # while expiry starts with the old unavailable source snapshot.
+                await hitl_store.save_association(writer, association)
+                await hitl_store.save_projection(writer, resolved)
+                self.assertEqual(
+                    await attention.pending(
+                        writer, active_task, active_attempt, leaf.runtime_session_id
+                    ),
+                    (request_id,),
+                )
+                expiry = asyncio.create_task(retire_terminal_cards(db, self.user))
+                async with self.pool.acquire() as monitor:
+                    for _ in range(150):
+                        blocked = await monitor.fetchval(
+                            """SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+                               AND wait_event_type='Lock' AND query LIKE '%SELECT id FROM native_hitl_requests%' """
+                        )
+                        if blocked:
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertTrue(
+                        blocked,
+                        "expiry never reached the observer request-lock barrier",
+                    )
+            # Observer committed a pending card whose verified source is active.
+            await asyncio.wait_for(expiry, 3)
+        finally:
+            if expiry is not None and not expiry.done():
+                expiry.cancel()
+                await asyncio.gather(expiry, return_exceptions=True)
+        status = await self.pool.fetchval(
+            "SELECT status FROM queue_items WHERE hitl_request_id=$1", request_id
+        )
+        snapshot = store.decode(
+            await self.pool.fetchval(
+                "SELECT snapshot FROM native_hitl_requests WHERE id=$1", request_id
+            )
+        )
+        active_state = await self.pool.fetchval(
+            "SELECT status FROM tasks WHERE id=$1", active_task.id
+        )
+        self.assertEqual(snapshot["leaves"][0]["binding_id"], active_sid)
+        self.assertEqual(active_state, "running")
+        async with self.pool.acquire() as conn:
+            attention_ids = await attention.pending(
+                conn, active_task, active_attempt, leaf.runtime_session_id
+            )
+        print(
+            "source-change race: verified leaf task =",
+            active_state,
+            "; queue status =",
+            status,
+            "; native availability =",
+            snapshot["availability"],
+            "; task attention =",
+            attention_ids,
+        )
+        self.assertEqual(
+            status,
+            "pending",
+            "expiry used pre-observer sources after its row-lock wait",
+        )
+
+        self.assertEqual(attention_ids, (request_id,))
+        self.assertEqual(await db.count_unread_queue_items(self.user), 1)
+        self.assertEqual(
+            [item.hitl_request_id for item in await db.list_queue_items(self.user)],
+            [request_id],
+        )
+
+    async def test_retirement_preserves_unknown_and_active_leaf_and_other_owner(self):
+        p = await self.prepare()
+        _, card, _ = await self.pause(p)
+        terminal = self.task
+        sid, _ = await self.bound_session(role="supervisor", mcp_grant_kind="workspace")
+        await self.enroll(sid, "other-active")
+        mixed = card.model_copy(
+            update={
+                "leaves": (
+                    *card.leaves,
+                    card.leaves[0].model_copy(
+                        update={
+                            "binding_id": sid,
+                            "runtime_session_id": "other-runtime",
+                        }
+                    ),
+                )
+            }
+        )
+        await self.pool.execute(
+            "UPDATE native_hitl_requests SET snapshot=$2::jsonb WHERE id=$1",
+            card.id,
+            mixed.model_dump_json(),
+        )
+        await self.pool.execute(
+            "UPDATE tasks SET status='completed' WHERE id=$1", terminal.id
+        )
+        self.assertEqual(len((await self.queue_read("/queue")).json()), 1)
+        unknown = mixed.model_copy(
+            update={
+                "leaves": (
+                    mixed.leaves[0].model_copy(update={"binding_id": "unknown"}),
+                )
+            }
+        )
+        await self.pool.execute(
+            "UPDATE native_hitl_requests SET snapshot=$2::jsonb WHERE id=$1",
+            card.id,
+            unknown.model_dump_json(),
+        )
+        self.assertEqual(len((await self.queue_read("/queue")).json()), 1)
+        await self.pool.execute(
+            "UPDATE native_hitl_requests SET snapshot=$2::jsonb WHERE id=$1",
+            card.id,
+            card.model_dump_json(),
+        )
+        self.assertEqual(
+            (await self.queue_read("/queue", owner="other-owner")).json(), []
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT status FROM queue_items WHERE hitl_request_id=$1", card.id
+            ),
+            "pending",
+        )
+        self.assertEqual((await self.queue_read("/queue")).json(), [])
+
+    async def test_only_owner_can_dismiss_uncorrelated_diagnostic_and_never_native_card(
+        self,
+    ):
+        thread = await self.thread()
+        await self.pool.execute(
+            "INSERT INTO queue_items(id,main_thread_id,user_id,item_type,title,content) VALUES('diagnostic',$1,$2,'hitl_request','Session input unavailable','Fixture diagnostic')",
+            thread,
+            self.user,
+        )
+        url = "/queue/diagnostic/dismiss"
+        self.assertEqual(
+            (
+                await self.queue_read(url, method="POST", owner="other-owner")
+            ).status_code,
+            404,
+        )
+        self.assertEqual((await self.queue_read(url, method="POST")).status_code, 200)
+        self.assertEqual((await self.queue_read(url, method="POST")).status_code, 200)
+        history = (await self.queue_read("/queue?status=expired")).json()
+        self.assertEqual(history[0]["content"], "Fixture diagnostic")
+        p = await self.prepare()
+        _, card, _ = await self.pause(p)
+        self.assertEqual(
+            (
+                await self.queue_read(f"/queue/hitl-{card.id}/dismiss", method="POST")
+            ).status_code,
+            409,
+        )
+        self.assertFalse(self.gateway.sent)
+        self.assertFalse(self.fake.puts)
 
     async def assert_merge_outcome_visibility(self, terminal):
         from fastapi import HTTPException

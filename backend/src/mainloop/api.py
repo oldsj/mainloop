@@ -458,6 +458,9 @@ async def list_queue_items(
         task_id: Filter by task ID
 
     """
+    from mainloop.tasks.inbox import retire_terminal_cards
+
+    await retire_terminal_cards(db, user_id)
     items = await db.list_queue_items(
         user_id=user_id,
         status=status,
@@ -472,6 +475,9 @@ async def get_unread_count(
     user_id: str = Depends(current_user),
 ):
     """Get the count of unread queue items (for inbox badge)."""
+    from mainloop.tasks.inbox import retire_terminal_cards
+
+    await retire_terminal_cards(db, user_id)
     count = await db.count_unread_queue_items(user_id)
     return UnreadCountResponse(count=count)
 
@@ -504,6 +510,27 @@ async def mark_queue_item_read(
     unread_count = await db.count_unread_queue_items(user_id)
     await notify_inbox_updated(user_id, item_id=item_id, unread_count=unread_count)
 
+    return {"status": "ok"}
+
+
+@app.post("/queue/{item_id}/dismiss")
+async def dismiss_queue_diagnostic(item_id: str, user_id: str = Depends(current_user)):
+    """Dismiss an uncorrelated input diagnostic; this records no native decision."""
+    item = await db.get_queue_item(item_id)
+    if not item or item.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+    if item.item_type != "hitl_request" or item.hitl_request_id is not None:
+        raise HTTPException(
+            status_code=409, detail="Native requests remain in task attention"
+        )
+    from mainloop.tasks.inbox import dismiss_diagnostic
+
+    if not await dismiss_diagnostic(db, user_id, item_id):
+        raise HTTPException(
+            status_code=409, detail="Input notice changed; refresh the inbox"
+        )
+    unread_count = await db.count_unread_queue_items(user_id)
+    await notify_inbox_updated(user_id, item_id=item_id, unread_count=unread_count)
     return {"status": "ok"}
 
 

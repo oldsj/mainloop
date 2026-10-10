@@ -60,7 +60,6 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
                 {
                     "merge_proposal_id": None,
                     "merge_state": None,
-                    "pending_approval_ids": (),
                 }
                 if changed
                 else {}

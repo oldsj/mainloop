@@ -73,7 +73,7 @@ class PublicationFactsTests(unittest.TestCase):
             observed_at=self.now,
         )
 
-    def test_head_change_invalidates_approval_links(self):
+    def test_head_change_invalidates_merge_but_preserves_native_attention(self):
         previous = TaskProjection(
             pr_head_sha=SHA,
             merge_proposal_id="proposal",
@@ -85,7 +85,7 @@ class PublicationFactsTests(unittest.TestCase):
         value = self.project(data, previous)
         self.assertEqual(value.ci_state, "unknown")
         self.assertIsNone(value.merge_proposal_id)
-        self.assertEqual(value.pending_approval_ids, ())
+        self.assertEqual(value.pending_approval_ids, ("card",))
 
     def test_closed_unmerged_is_separate_and_observation_is_not_settlement(self):
         data = copy.deepcopy(GitHub().pr)

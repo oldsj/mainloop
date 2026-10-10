@@ -18,6 +18,7 @@
   let respondingItemId = $state<string | null>(null);
   let customResponses = $state<Record<string, string>>({});
   let expandedPlanId = $state<string | null>(null);
+  let dismissErrors = $state<Record<string, string>>({});
 
   function formatTime(dateStr: string): string {
     const date = new Date(dateStr);
@@ -112,9 +113,29 @@
             {#if item.item_type === 'hitl_request'}
               {#if typeof item.context.hitl_request_id === 'string'}
                 <HITLCard requestId={item.context.hitl_request_id} />
-              {:else}<p class="text-term-fg-muted p-4">
-                  Session input unavailable: missing request reference.
-                </p>{/if}
+              {:else}<div class="text-term-fg-muted border-term-border border-b p-4">
+                  <p>Session input unavailable: missing request reference.</p>
+                  <button
+                    type="button"
+                    class="border-term-border mt-2 min-h-11 border px-3 py-2 text-sm"
+                    disabled={respondingItemId === item.id}
+                    onclick={async () => {
+                      respondingItemId = item.id;
+                      delete dismissErrors[item.id];
+                      try {
+                        await inbox.dismissDiagnostic(item.id);
+                      } catch (error) {
+                        dismissErrors[item.id] =
+                          error instanceof Error ? error.message : 'Could not dismiss notice';
+                      } finally {
+                        respondingItemId = null;
+                      }
+                    }}>Dismiss notice</button
+                  >
+                  {#if dismissErrors[item.id]}
+                    <p class="text-term-red mt-2 text-sm" role="alert">{dismissErrors[item.id]}</p>
+                  {/if}
+                </div>{/if}
             {:else}
               <div
                 class="border-term-border border-b border-l-2 p-4 transition-colors {priorityStyles[

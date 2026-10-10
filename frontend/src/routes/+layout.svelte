@@ -9,7 +9,6 @@
   import { notifications } from '$lib/stores/notifications';
   import { themeStore } from '$lib/stores/theme';
   import { mobileTab } from '$lib/stores/mobileTab';
-  import { isMobile } from '$lib/stores/viewport';
   import { connection } from '$lib/stores/connection';
   import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
   import { navigationContext, isZoomed } from '$lib/stores/navigationContext';
@@ -27,6 +26,10 @@
   import { page } from '$app/stores';
 
   let { children, data }: { children: any; data: LayoutData } = $props();
+
+  let viewportWidth = $state<number>();
+  // Keep the pane decision reactive in this component, including live resizing.
+  const compactLayout = $derived((viewportWidth ?? 1024) < 1024);
 
   // Derive activeTab directly from store for reliable reactivity
   let activeTab = $derived($mobileTab);
@@ -139,7 +142,7 @@
   });
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} />
+<svelte:window onkeydown={handleGlobalKeydown} bind:innerWidth={viewportWidth} />
 
 <!-- Session picker (global overlay) -->
 {#if $navigationContext.pickerOpen}
@@ -149,22 +152,24 @@
 <!-- Notification toasts -->
 <NotificationToast />
 
-{#if $isMobile}
+{#if compactLayout}
   <!-- Mobile Layout -->
   <div class="flex h-dvh flex-col">
-    <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
-      <h1 class="text-xl text-term-accent">
+    <header
+      class="border-term-border bg-term-bg flex items-center justify-between border-b px-4 py-3"
+    >
+      <h1 class="text-term-accent text-xl">
         <span class="text-term-fg-muted">$</span> mainloop
       </h1>
       <ThemeSelector />
     </header>
     <ConnectionBanner />
 
-    <div class="flex-1 overflow-hidden pb-16">
+    <div class="min-h-0 min-w-0 flex-1 overflow-hidden pb-16">
       {#if $navigationContext.zoomedSession}
         <ZoomedSessionView sessionId={$navigationContext.zoomedSession} />
       {:else if activeTab === 'chat'}
-        <div class="h-full overflow-hidden">
+        <div class="h-full min-w-0 overflow-hidden">
           {@render children()}
         </div>
       {:else if activeTab === 'sessions'}
@@ -179,20 +184,26 @@
 {:else}
   <!-- Desktop Layout -->
   <div class="flex h-dvh flex-col">
-    <header class="flex items-center justify-between border-b border-term-border bg-term-bg px-4 py-3">
-      <h1 class="text-xl text-term-accent">
+    <header
+      class="border-term-border bg-term-bg flex items-center justify-between border-b px-4 py-3"
+    >
+      <h1 class="text-term-accent text-xl">
         <span class="text-term-fg-muted">$</span> mainloop
       </h1>
       <div class="flex items-center gap-3">
-        <a href="/agents" class="text-sm text-term-accent hover:underline" data-testid="header-new-agent">new agent session</a>
+        <a
+          href="/agents"
+          class="text-term-accent text-sm hover:underline"
+          data-testid="header-new-agent">new agent session</a
+        >
         <ThemeSelector />
         <TasksBadge />
       </div>
     </header>
     <ConnectionBanner />
 
-    <div class="flex flex-1 overflow-hidden">
-      <main class="flex-1 overflow-hidden">
+    <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <main class="min-w-0 flex-1 overflow-hidden">
         {#if $navigationContext.zoomedSession}
           <ZoomedSessionView sessionId={$navigationContext.zoomedSession} />
         {:else}
@@ -202,12 +213,16 @@
 
       <!-- Desktop: Always visible side panels (hidden in zoom mode) -->
       {#if !$navigationContext.zoomedSession}
-        <div class="flex w-full max-w-md flex-col border-l border-term-border bg-term-bg">
+        <div
+          class="border-term-border bg-term-bg flex w-96 shrink-0 flex-col border-l xl:w-[28rem]"
+        >
           <!-- Sessions take the space; inbox and projects size to their content (capped). -->
-          <div class="min-h-0 flex-1 overflow-hidden border-b border-term-border">
+          <div class="border-term-border min-h-0 flex-1 overflow-hidden border-b">
             <SessionList />
           </div>
-          <div class="flex max-h-[30%] min-h-0 shrink-0 flex-col overflow-hidden border-b border-term-border">
+          <div
+            class="border-term-border flex max-h-[30%] min-h-0 shrink-0 flex-col overflow-hidden border-b"
+          >
             <TasksPanel desktop={true} />
           </div>
           <div class="max-h-[45%] shrink-0 overflow-y-auto">

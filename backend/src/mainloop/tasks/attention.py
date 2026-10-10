@@ -6,7 +6,7 @@ from mainloop.tasks import lifecycle, publication
 from mainloop.tasks.principal import TaskPrincipal
 from mainloop.tasks.projection import persist
 
-from models.hitl import HITLProjection, ToolApprovalRequest
+from models.hitl import HITLProjection
 
 
 def owns_leaf(leaf, *, owner_id, binding_id, runtime_session_id):
@@ -27,7 +27,6 @@ async def pending(conn, task, attempt, runtime_id):
         task.owner_id,
     )
     result = set()
-    projection = await store.projection(conn, task.id)
     for row in rows:
         request = HITLProjection.model_validate(store.decode(row["snapshot"]))
         for leaf in request.leaves:
@@ -44,47 +43,9 @@ async def pending(conn, task, attempt, runtime_id):
                 leaf.key(),
             ):
                 continue
-            stale = False
-            if isinstance(request.payload, ToolApprovalRequest):
-                tools = (
-                    request.payload.nested.tools
-                    if request.payload.nested
-                    else request.payload.tools
-                )
-                for tool in tools:
-                    pid = (
-                        tool.args.get("proposal_id")
-                        if isinstance(tool.args, dict)
-                        else None
-                    )
-                    proposal = (
-                        await conn.fetchrow(
-                            """SELECT p.facts,p.binding_id,c.active_proposal_id,c.state
-                           FROM merge_proposals p JOIN merge_requests c ON c.id=p.candidate_id
-                           WHERE p.id=$1 AND p.owner_id=$2""",
-                            pid,
-                            task.owner_id,
-                        )
-                        if pid
-                        else None
-                    )
-                    if proposal:
-                        facts = store.decode(proposal["facts"])
-                        stale |= (
-                            proposal["binding_id"] != attempt.binding_id
-                            or proposal["active_proposal_id"] != pid
-                            or proposal["state"] not in ("prepared", "evaluating")
-                            or facts.get("attempt_id") != attempt.id
-                            or facts.get("writer_generation")
-                            != attempt.writer_generation
-                            or (
-                                projection.pr_number == facts["pr_number"]
-                                and projection.pr_head_sha is not None
-                                and projection.pr_head_sha != facts["head_sha"]
-                            )
-                        )
-            if not stale:
-                result.add(row["id"])
+            # Merge eligibility cannot answer or retire a native input request.
+            # Keep stale retries as attention; the HITL renderer explains staleness.
+            result.add(row["id"])
     return tuple(sorted(result))
 
 

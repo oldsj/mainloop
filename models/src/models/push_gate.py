@@ -48,9 +48,11 @@ class GitEnvironment(PushContract):
 
 
 class GitComposition(PushContract):
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+
     payload_image: str
     provider: str
-    schema: int
+    schema_version: int = Field(alias="schema")
     cli_version: str
 
 

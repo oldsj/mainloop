@@ -119,7 +119,7 @@ class TaskAttentionTests(MergeFixture):
             current = await store.get_task(conn, task.id, TaskPrincipal(self.user))
             return current, await store.projection(conn, task.id)
 
-    async def pause(self, proposal):
+    async def pause(self, proposal, *, call_id="native", tool_id="call"):
         # Observe this exact synthetic leaf. The inventory scheduler has a bounded
         # pass and need not discover every fixture session on its first pass.
         runtime_id = self.binding["kagent_session_id"]
@@ -129,8 +129,8 @@ class TaskAttentionTests(MergeFixture):
                 "type": "tool_approval_request",
                 "tools": [
                     {
-                        "id": "call",
-                        "call_id": "native",
+                        "id": tool_id,
+                        "call_id": call_id,
                         "name": "mcp__mainloop-merge-approval__merge_pull_request_with_approval",
                         "args": {
                             "proposal_id": proposal["proposal_id"],
@@ -148,7 +148,7 @@ class TaskAttentionTests(MergeFixture):
             raw = await conn.fetchval(
                 """SELECT snapshot FROM native_hitl_requests WHERE owner_id=$1
                    AND snapshot->'outer'->>'runtime_session_id'=$2
-                   AND snapshot->'outer'->>'task_id'=$3""",
+                   AND snapshot->'outer'->>'task_id'=$3 AND NOT superseded""",
                 self.user,
                 runtime_id,
                 native_task.id,
