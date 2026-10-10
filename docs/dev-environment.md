@@ -2,7 +2,8 @@
 
 The optional `.devcontainer/devcontainer.json` builds a source-free Linux development
 image from the repository root. Its build context is confined to the repository;
-`Dockerfile.dockerignore` exports only the definition and Trunk configuration.
+`Dockerfile.dockerignore` exports only the definition, Trunk configuration and the
+dependency manifests and lockfiles; no application source enters the image.
 No hooks, Features, mounts, credentials, or native agent runtime are included.
 
 ```bash
@@ -32,12 +33,41 @@ installs frontend dependencies once; warm installs reuse the package caches.
 Trunk supplies its own lint runtimes, so formatting and lint need no project venv.
 The installers still validate the environment on each invocation: a lockfile-only
 stamp would miss deleted packages, changed workspace manifests and lifecycle hooks.
-`uv sync` and `pnpm install` reuse their normal caches; `make check` invokes each
-installer once. It does not cache successful checks or skip checks on a warm tree.
+`uv sync` and `pnpm install` reuse the image's prewarmed caches (below);
+`make check` invokes each installer once. It does not cache successful checks or
+skip checks on a warm tree.
 Standalone frontend targets have a separate 120-second install phase before
 the check, test or build cap. The aggregate cap remains 560 seconds, including
 cold installs; `dev-postgres`
 provides a tighter command budget of 540 seconds minus setup.
+
+## Prewarmed dependency caches
+
+The image build fills a uv cache and a pnpm store from `backend/uv.lock` and
+`pnpm-lock.yaml`, so `make install-backend` and `make install-frontend` copy
+packages locally instead of downloading and extracting them. A separate build
+stage does this with a stub `models` package and without installing either
+project; only the caches reach the final image. The image sets:
+
+| Variable                           | Value                            |
+| ---------------------------------- | -------------------------------- |
+| `UV_CACHE_DIR`                     | `/opt/mainloop-cache/uv`         |
+| `npm_config_store_dir`             | `/opt/mainloop-cache/pnpm-store` |
+| `UV_LINK_MODE`                     | `copy`                           |
+| `npm_config_package_import_method` | `copy`                           |
+
+The caches sit outside `$HOME` and `/data` because workspace runtimes move `HOME`
+and `XDG_CACHE_HOME` onto the durable `/data` volume, which would hide them.
+Installs copy rather than hardlink: linking a file from a read-only image layer
+forces an overlay copy-up per file, and measured 60–80 s for the backend against
+about 1 s for a copy. The directory is writable by 65532 and root, so a lockfile
+newer than the image still installs: uv and pnpm download only the missing
+packages into the container's copy of the cache. Offline, a stale lockfile fails
+as it would without a cache. A workspace whose `node_modules` came from a
+different pnpm store is purged and reinstalled once, without a prompt.
+
+Lockfile and manifest changes rebuild the image through the workflow below.
+Until the new image is selected, workspaces download only the difference.
 
 `make lint` requires a fetched `origin/main`. Dependency sync needs the approved
 package registries. Offline, such as in an agent workspace, Trivy uses its built-in
@@ -101,6 +131,7 @@ into bounded jobs.
 | PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                                |
 | Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry          |
 | Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                            |
+| Dev-image uv cache / pnpm store prewarm                      | 240 s each                | Downloads every locked package once per image build                             |
 | CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                              |
 | CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                              |
 | CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                      |
