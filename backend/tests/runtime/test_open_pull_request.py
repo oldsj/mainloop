@@ -370,8 +370,12 @@ class PRPostgresTests(PostgresTestCase):
         await super().asyncSetUp()
         # Each method owns its task capacity in this class's scratch database.
         # Retained attempts from earlier fixtures must not consume later admission.
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.project = await db.get_or_create_project(
             self.user, parse_github_repo("owner/repo")

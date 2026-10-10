@@ -64,6 +64,8 @@ class CapturingUpstream(GitBackedUpstream):
 
 
 class GitTransportPostgresTests(GitCredentialsCase):
+    reuse_database = True
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         authority = self.authority

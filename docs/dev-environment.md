@@ -143,9 +143,18 @@ The supervisor kills every worker process group on timeout or cancellation, incl
 test subprocesses, then drops this run's class/template databases within the same
 cleanup budget; `dev-postgres` also removes its disposable cluster. Success requires
 every planned ID to execute exactly once, including skips and expected failures.
-Class databases clone one migrated, empty template per worker, with distinct worker
-namespaces; migration tests still
-execute the real migrations and each class retains its own independent database.
+Each worker migrates one empty template in its own database namespace. Schema and
+fixture-isolation tests retain independent class clones. Explicitly qualified
+data-only classes reuse a worker database after all rows and sequences are reset;
+subclasses must opt in themselves. Task fixture cleanup deletes the same foreign-key
+table closure as TRUNCATE CASCADE without rewriting relation/index files. It uses
+replication mode only inside its own cleanup transaction in an owned scratch database;
+normal security and foreign-key triggers are restored before test assertions run,
+including when cleanup fails. Migration tests still execute the real migrations.
+The fixture role needs permission to set `session_replication_role`; the disposable
+server from `dev-postgres` provides this.
+Git transport fixtures copy an immutable worker seed into independent writable
+repositories; actual Git clients, upload/receive-pack and validation remain real.
 Scratch PostgreSQL allows 100 connections, matching CI's default, to accommodate
 six worker pools and their fixture/admin connections.
 
