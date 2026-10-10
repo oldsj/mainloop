@@ -633,21 +633,66 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("policy_rejections", ci)
         self.assertFalse(self.fake.puts)
 
-    async def test_unknown_pr_parameters_must_request_nothing(self):
+    async def test_unknown_pr_parameters_are_refused_whatever_their_value(self):
+        # Synthetic future fields: even false/null/[] may mean a restriction
+        # (an inverse flag, a default policy, an empty allowlist).
         self.fake.errors["/branches/main/protection"] = 404
-        for value in (False, None, []):
-            with self.subTest(value=value):
-                self.fake.rules = default_branch_rules()
-                self.fake.rules[-1]["parameters"]["future_requirement"] = value
-                self.assertTrue((await self.evidence())["ci"]["green"])
-        for value in (True, 1, "on", ["user"], {"id": 1}):
-            with self.subTest(value=value):
-                self.fake.rules = default_branch_rules()
-                self.fake.rules[-1]["parameters"]["future_requirement"] = value
-                with self.assertRaisesRegex(
-                    PolicyError, "unsupported pull_request requirement: future_req"
-                ):
+        for field, value in (
+            ("allow_unreviewed_merge", False),
+            ("approval_policy", None),
+            ("allowed_merge_strategies", []),
+            ("future_requirement", True),
+            ("future_requirement", 0),
+            ("future_requirement", "on"),
+            ("future_requirement", {"id": 1}),
+            ("", True),
+            ("", False),
+        ):
+            with self.subTest(field=field, value=value):
+                self.fake.rules = live_mainloop_rules()
+                self.fake.rules[2]["parameters"][field] = value
+                with self.assertRaises(PolicyError) as refused:
                     await self.evidence()
+                self.assertEqual(
+                    refused.exception.message,
+                    "unsupported pull_request requirement: unknown_pull_request_parameter",
+                )
+        self.assertFalse(self.fake.puts)
+
+    async def test_allowlisted_pr_parameters_only_with_inactive_values(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.runs.append(self.fake.run(11, name="Lint", app={"id": 15368}))
+        for value in (True, False):
+            with self.subTest(value=value):
+                self.fake.rules = live_mainloop_rules()
+                parameters = self.fake.rules[2]["parameters"]
+                parameters["require_extra_approval_for_unattributed_changes"] = value
+                self.assertTrue((await self.evidence())["ci"]["green"])
+        for field, value in (
+            ("required_reviewers", None),
+            ("required_reviewers", [{}]),
+            ("require_extra_approval_for_unattributed_changes", None),
+        ):
+            with self.subTest(field=field, value=value):
+                self.fake.rules = live_mainloop_rules()
+                self.fake.rules[2]["parameters"][field] = value
+                with self.assertRaisesRegex(PolicyError, "unsupported pull_request"):
+                    await self.evidence()
+
+    async def test_unknown_rule_type_is_not_copied_into_reason(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        for rule_type, reason in (
+            ("SYNTHETIC_OPAQUE_MARKER", "unknown_branch_rule"),
+            ("required_signatures", "required_signatures"),
+        ):
+            with self.subTest(rule_type=rule_type):
+                self.fake.rules = [{"type": rule_type}]
+                with self.assertRaises(PolicyError) as refused:
+                    await self.evidence()
+                self.assertEqual(
+                    refused.exception.message,
+                    f"unsupported active branch rule: {reason}",
+                )
 
     async def test_required_reviewers_and_extra_approval_with_nonzero_count(self):
         self.fake.errors["/branches/main/protection"] = 404

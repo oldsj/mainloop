@@ -384,13 +384,21 @@ async def reconcile_failed_deliveries(database):
 
 
 PROJECTION_RECONCILE_LIMIT = 10
+# New refreshes start only within this admission window of a pass...
 PROJECTION_RECONCILE_BUDGET_SECONDS = 2.0
+# ...but an admitted refresh may finish its whole observation chain. A cold
+# GitHub observation makes ~17 sequential calls (5 permission-scoped token
+# mints), each separately bounded at 15s; 60s covers that at ~3.5s per call
+# plus persistence, while one stuck refresh delays the reconciler by at most this.
+PROJECTION_REFRESH_DEADLINE_SECONDS = 60.0
 
 
 async def reconcile_projections(database, installed_ports):
     """Rotate current code tasks through the installed observer, never dispatch merges."""
     if installed_ports.projection is None:
         return
+    loop = asyncio.get_running_loop()
+    started = loop.time()
     try:
         async with asyncio.timeout(PROJECTION_RECONCILE_BUDGET_SECONDS):
             async with database.connection() as conn:
@@ -407,18 +415,34 @@ async def reconcile_projections(database, installed_ports):
                     installed_ports._projection_cursor,
                     PROJECTION_RECONCILE_LIMIT,
                 )
-            for row in rows:
-                # Advance before work: a slow, revoked or failing source cannot
-                # monopolize the next pass. The port revalidates live authority.
-                installed_ports._projection_cursor = row["id"]
-                try:
-                    await installed_ports.projection.refresh(database, row["id"])
-                except (PolicyError, lifecycle.LifecycleDenied):
-                    logger.debug("Task projection source lost authority: %s", row["id"])
-                except Exception:
-                    logger.exception("Task projection refresh failed: %s", row["id"])
     except TimeoutError:
+        logger.warning("Task projection selection timed out")
         return
+    for row in rows:
+        if loop.time() - started >= PROJECTION_RECONCILE_BUDGET_SECONDS:
+            return
+        # Advance before work: a slow, revoked or failing source cannot
+        # monopolize the next pass. The port revalidates live authority.
+        installed_ports._projection_cursor = row["id"]
+        refresh_started = loop.time()
+        deadline = asyncio.timeout(PROJECTION_REFRESH_DEADLINE_SECONDS)
+        try:
+            async with deadline:
+                await installed_ports.projection.refresh(database, row["id"])
+        except TimeoutError:
+            if not deadline.expired():
+                logger.exception("Task projection refresh failed: %s", row["id"])
+                continue
+            logger.warning(
+                "Task projection refresh timed out: task=%s step=%s elapsed=%.1fs",
+                row["id"],
+                getattr(installed_ports.projection, "step", "unknown"),
+                loop.time() - refresh_started,
+            )
+        except (PolicyError, lifecycle.LifecycleDenied):
+            logger.debug("Task projection source lost authority: %s", row["id"])
+        except Exception:
+            logger.exception("Task projection refresh failed: %s", row["id"])
 
 
 class SSETaskEventSink:

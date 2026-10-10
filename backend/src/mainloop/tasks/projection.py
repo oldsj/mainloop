@@ -10,6 +10,8 @@ from mainloop.tasks.principal import TaskPrincipal
 MAX_CI_AGE = timedelta(minutes=5)
 # Merge readiness when GitHub rules on the base would refuse Mainloop's merge.
 POLICY_BLOCKED = "blocked_by_branch_rules"
+# A rule block outranks these proposal states; merge writes and outcomes do not.
+BLOCKABLE_MERGE_STATES = frozenset({"prepared", "evaluating", "blocked", "expired"})
 
 logger = logging.getLogger(__name__)
 
@@ -170,12 +172,23 @@ async def persist(
 class Projection:
     """S0 refresh port, for installation by serialized integration only."""
 
+    phase = "idle"
+    github = None
+
+    @property
+    def step(self):
+        """Sanitized progress of the current refresh, for timeout diagnostics."""
+        if self.phase == "observation" and self.github is not None:
+            return f"observation:{self.github.evidence_step}"
+        return self.phase
+
     async def refresh(self, database, task_id):
         from mainloop.services.github_creation import GitHubError
         from mainloop.services.github_merge import GitHubMergeClient
         from mainloop.tasks import publication
         from pydantic import ValidationError
 
+        self.phase, self.github = "linkage", None
         async with database.connection() as conn:
             row = await conn.fetchrow(
                 """SELECT b.*,s.user_id,t.project_id FROM tasks t
@@ -228,8 +241,10 @@ class Projection:
                     repository, number = project["full_name"], result["pr_number"]
                     linkage = {"repository_id": creation["repo_id"]}
             now = datetime.now(UTC)
+            self.phase = "observation"
             try:
                 async with GitHubMergeClient(repository) as github:
+                    self.github = github
                     pr, ci = await github.observation(repository, number)
                 if any(
                     ref.repo.id != linkage["repository_id"]
@@ -264,6 +279,7 @@ class Projection:
                         "observed_at": now,
                     }
                 )
+            self.phase, self.github = "persist", None
             # No task completion from observations alone: the existing merge service
             # must settle its durable intent, consent and policy first.
             async with database.connection() as conn, conn.transaction():
@@ -326,9 +342,13 @@ async def read(conn, task):
             value.pr_number,
             value.pr_head_sha,
         ):
+            blocked = (
+                value.merge_state == POLICY_BLOCKED
+                and row["state"] in BLOCKABLE_MERGE_STATES
+            )
             return value.model_copy(
                 update={
-                    "merge_state": row["state"],
+                    "merge_state": POLICY_BLOCKED if blocked else row["state"],
                     "merge_proposal_id": (
                         row["id"] if row["active_proposal_id"] == row["id"] else None
                     ),

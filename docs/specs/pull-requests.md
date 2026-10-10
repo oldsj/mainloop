@@ -351,24 +351,37 @@ approvals is supported only with all four required review flags explicitly false
 Missing flags, stale-review dismissal, code-owner review,
 last-push approval, review-thread resolution, nonzero approval counts, non-empty
 `required_reviewers` and merge-method lists excluding squash fail closed with an
-unsupported PR-rule reason naming the parameter. Unknown PR parameters are accepted
-only while `false`, `null` or empty; any other value fails closed until it is understood.
-`require_extra_approval_for_unattributed_changes` is accepted with either value:
+unsupported PR-rule reason naming the parameter. Unknown PR parameters fail closed
+with any value, including `false`, `null` and `[]`, as `unknown_pull_request_parameter`:
+a value's meaning is unknown until the field is allowlisted by name with its inactive
+value. The allowlist is `required_reviewers: []` and
+`require_extra_approval_for_unattributed_changes` with either boolean value:
 GitHub documents it as one approval added to the configured count for Copilot PRs
 not attributed to a person, with no effect when zero approvals are required, and any
 nonzero count is already refused. Ruleset checks require an explicit
 `strict_required_status_checks_policy: false`; true is unsupported because Mainloop
 does not prove the head was tested with the latest base. Classic `strict: true`
-is likewise unsupported. Unknown active rule types also fail closed.
+is likewise unsupported. Unknown active rule types also fail closed; rule types
+outside GitHub's documented set are reported as `unknown_branch_rule`, so upstream
+identifiers are never copied into reasons or logs.
 
 Task projection observation reads the same rules without enforcing them. A rule
 refusal is reported beside PR state and exact-head CI instead of hiding them: an open
 PR's `merge_state` becomes `blocked_by_branch_rules` until a later observation of the
-same head finds no refusal, and merged outcomes are never relabelled. A refused rule
-that may itself require checks (an unknown rule type, unreadable required-check
-parameters or classic protection) keeps observed CI from being reported as passing.
-Refusals and failed observations are logged with their class and policy reason.
-Merge preparation and execution still refuse on every unsupported rule.
+same head finds no refusal, and merged outcomes are never relabelled. The task view
+shows that block over a matching proposal's `prepared`, `evaluating`, `blocked` or
+`expired` state; `merging`, `uncertain`, `merged` and `superseded` keep priority.
+A refused rule that may itself require checks (an unknown rule type, an unknown or
+unreadable PR-rule parameter, unreadable required-check parameters or classic
+protection) keeps observed CI from being reported as passing; understood review
+requirements do not. Refusals and failed observations are logged with their class
+and policy reason. Merge preparation and execution still refuse on every unsupported
+rule.
+
+The task reconciler admits projection refreshes for up to two seconds per pass and
+gives each admitted refresh up to 60 seconds to finish its GitHub observation chain
+and persistence. A refresh past that deadline is cancelled and logged with the task
+ID, observation step and elapsed time.
 
 Classic checks require both `contexts` and `checks`; every check must include
 `app_id`. An explicit null means any app, but an omitted ID is rejected.

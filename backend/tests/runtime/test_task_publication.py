@@ -10,7 +10,12 @@ from mainloop.services.github_merge import GitHubMergeClient, MergePR
 from mainloop.tasks.attention import owns_leaf
 from mainloop.tasks.projection import POLICY_BLOCKED, ci_state, observed
 from tests.runtime.github_app_fake import app_settings, app_transport
-from tests.runtime.test_merge import SHA, GitHub, live_mainloop_rules
+from tests.runtime.test_merge import (
+    SHA,
+    GitHub,
+    default_branch_rules,
+    live_mainloop_rules,
+)
 
 from models.hitl import LeafIdentity
 from models.task import TaskProjection
@@ -176,6 +181,8 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("mainloop.services.github_merge", "INFO") as logs:
             pr, ci = await self.observe()
         self.assertIn("required_reviewers", logs.output[0])
+        # An understood review requirement does not hide any required check.
+        self.assertFalse(ci["required_checks_incomplete"])
         self.assertEqual(
             ci["policy_rejections"],
             ["unsupported pull_request requirement: required_reviewers"],
@@ -209,6 +216,21 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
             [{"type": 7}],
+            [
+                {
+                    "type": "pull_request",
+                    "parameters": {
+                        **default_branch_rules()[-1]["parameters"],
+                        "required_check_contexts": ["review-policy"],
+                    },
+                }
+            ],
+            [
+                {
+                    "type": "pull_request",
+                    "parameters": {"required_status_checks": ["unseen"]},
+                }
+            ],
         ):
             with self.subTest(rules=rules):
                 self.fake.rules = rules
@@ -220,6 +242,22 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((value.pr_state, value.ci_state), ("open", "unknown"))
                 self.assertEqual(value.merge_state, POLICY_BLOCKED)
         self.assertFalse(self.fake.puts)
+
+    async def test_unknown_identifiers_are_not_logged(self):
+        marker = "SYNTHETIC_OPAQUE_MARKER"
+        parameters = {**default_branch_rules()[-1]["parameters"], marker: True}
+        for rules in (
+            [{"type": marker}],
+            [{"type": "pull_request", "parameters": parameters}],
+        ):
+            with self.subTest(rules=rules):
+                self.fake.rules = rules
+                with self.assertLogs("mainloop.services.github_merge", "INFO") as logs:
+                    await self.observe()
+                self.assertNotIn(marker, "\n".join(logs.output))
+                self.assertRegex(
+                    logs.output[0], "unknown_branch_rule|unknown_pull_request_parameter"
+                )
 
     async def test_policy_rejection_still_reports_failing_ci(self):
         self.fake.rules = [{"type": "required_signatures"}]

@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 from urllib.parse import quote
 
 import httpx
@@ -29,6 +30,36 @@ PR_RULE_REQUIREMENTS = (
     "require_last_push_approval",
     "required_review_thread_resolution",
 )
+# GitHub's documented rule types. Others are logged as UNKNOWN_BRANCH_RULE so
+# upstream identifiers are never copied into policy reasons or logs.
+KNOWN_RULE_TYPES = frozenset(
+    {
+        "branch_name_pattern",
+        "code_scanning",
+        "commit_author_email_pattern",
+        "commit_message_pattern",
+        "committer_email_pattern",
+        "copilot_code_review",
+        "creation",
+        "deletion",
+        "file_extension_restriction",
+        "file_path_restriction",
+        "max_file_path_length",
+        "max_file_size",
+        "merge_queue",
+        "non_fast_forward",
+        "pull_request",
+        "required_deployments",
+        "required_linear_history",
+        "required_signatures",
+        "required_status_checks",
+        "tag_name_pattern",
+        "update",
+        "workflows",
+    }
+)
+UNKNOWN_BRANCH_RULE = "unknown_branch_rule"
+UNKNOWN_PR_PARAMETER = "unknown_pull_request_parameter"
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +222,16 @@ class RuleParameters(BaseModel):
     do_not_enforce_on_create: bool = False
 
 
+class PRRuleRefusal(NamedTuple):
+    reason: str
+    # Unknown semantics might hide a check requirement, not only a review.
+    required_incomplete: bool = False
+
+
 class PullRequestParameters(BaseModel):
-    # GitHub adds PR-rule parameters over time. Known fields stay strict; unknown
-    # fields are kept so unsupported() can refuse any that might require something.
+    # Unknown fields are kept only so unsupported() can refuse them: the meaning
+    # of a value (even false, null or []) is unknown until the field is
+    # understood and allowlisted here by name with its inactive value.
     model_config = ConfigDict(strict=True, extra="allow")
     required_approving_review_count: int = Field(ge=0)
     dismiss_stale_reviews_on_push: bool
@@ -201,30 +239,29 @@ class PullRequestParameters(BaseModel):
     require_last_push_approval: bool
     required_review_thread_resolution: bool
     allowed_merge_methods: list[str] | None = None
-    required_reviewers: list | None = None
+    # Inactive only when empty; null or any reviewer is refused.
+    required_reviewers: list = Field(default_factory=list)
     # GitHub adds one approval to the configured count for Copilot PRs not
     # attributed to a person; the setting "has no effect if the ruleset requires
     # zero approvals", and unsupported() refuses any nonzero count.
-    require_extra_approval_for_unattributed_changes: bool | None = None
+    require_extra_approval_for_unattributed_changes: bool = False
 
-    def unsupported(self):
-        """First parameter that could require a human review or block our squash."""
+    def unsupported(self) -> PRRuleRefusal | None:
+        """Refusal for anything that could require review or block our squash."""
+        if self.model_extra:
+            return PRRuleRefusal(UNKNOWN_PR_PARAMETER, required_incomplete=True)
         if self.required_approving_review_count != 0:
-            return "required_approving_review_count"
+            return PRRuleRefusal("required_approving_review_count")
         for field in PR_RULE_REQUIREMENTS:
             if getattr(self, field):
-                return field
-        if self.required_reviewers:
-            return "required_reviewers"
+                return PRRuleRefusal(field)
+        if self.required_reviewers != []:
+            return PRRuleRefusal("required_reviewers")
         if (
             self.allowed_merge_methods is not None
             and "squash" not in self.allowed_merge_methods
         ):
-            return "allowed_merge_methods"
-        for field, value in (self.model_extra or {}).items():
-            # Unknown parameters are understood only while they request nothing.
-            if not (value is False or value is None or value == []):
-                return field[:64]
+            return PRRuleRefusal("allowed_merge_methods")
         return None
 
 
@@ -572,10 +609,17 @@ class GitHubMergeClient(GitHubCreationClient):
                 try:
                     parameters = PullRequestParameters.model_validate(rule.parameters)
                 except ValueError:
-                    refuse("unsupported pull_request parameters")
+                    refuse(
+                        "unsupported pull_request parameters",
+                        required_incomplete=True,
+                    )
                     continue
-                if field := parameters.unsupported():
-                    refuse(f"unsupported pull_request requirement: {field}")
+                refusal = parameters.unsupported()
+                if refusal is not None:
+                    refuse(
+                        f"unsupported pull_request requirement: {refusal.reason}",
+                        required_incomplete=refusal.required_incomplete,
+                    )
                 # Our pinned squash PUT already goes through a PR.
             elif rule.type not in (
                 "deletion",
@@ -583,8 +627,10 @@ class GitHubMergeClient(GitHubCreationClient):
                 "required_linear_history",
             ):
                 # An unknown rule may itself require checks (e.g. workflows).
+                known = rule.type in KNOWN_RULE_TYPES
                 refuse(
-                    f"unsupported active branch rule: {rule.type[:64]}",
+                    "unsupported active branch rule: "
+                    + (rule.type if known else UNKNOWN_BRANCH_RULE),
                     required_incomplete=True,
                 )
         self.evidence_step = "checks_consistency"
@@ -680,6 +726,7 @@ class GitHubMergeClient(GitHubCreationClient):
         movement during collection cannot attribute checks to another head.
         Merge-policy refusals do not hide CI; they are reported alongside it.
         """
+        self.evidence_step = "pull_request"
         pr = await self.pull(name, number)
         try:
             ci = await self.checks(name, pr.head.sha, pr.base.ref, enforce_policy=False)
@@ -701,6 +748,7 @@ class GitHubMergeClient(GitHubCreationClient):
                     number,
                     "; ".join(ci["policy_rejections"]),
                 )
+        self.evidence_step = "pull_request_refresh"
         fresh = await self.pull(name, number)
         if fresh != pr:
             raise GitHubError
