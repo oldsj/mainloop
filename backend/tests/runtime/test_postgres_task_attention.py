@@ -409,6 +409,64 @@ class TaskAttentionTests(MergeFixture):
             await self.execute(p, approved=True)
         self.assertFalse(self.fake.puts)
 
+    async def test_policy_rejected_rule_still_projects_pr_and_exact_ci(self):
+        from mainloop.services import github_merge
+        from mainloop.tasks.projection import POLICY_BLOCKED
+        from tests.runtime.github_app_fake import app_transport
+
+        await self.prepare()
+        self.fake.rules = [
+            {
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": 0,
+                    "dismiss_stale_reviews_on_push": False,
+                    "required_reviewers": [{"reviewer": {"id": 1, "type": "Team"}}],
+                    "require_code_owner_review": False,
+                    "require_last_push_approval": False,
+                    "required_review_thread_resolution": False,
+                },
+            }
+        ]
+        cls = github_merge.GitHubMergeClient
+        with patch.object(
+            github_merge,
+            "GitHubMergeClient",
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
+        ):
+            await Projection().refresh(db, self.task.id)
+        task, value = await self.view()
+        self.assertEqual(
+            (value.pr_state, value.pr_head_sha, value.ci_state, value.ci_head_sha),
+            ("open", SHA, "success", SHA),
+        )
+        self.assertEqual(value.merge_state, POLICY_BLOCKED)
+        self.assertNotEqual(task.status, "completed")
+        self.assertFalse(self.fake.puts)
+
+    async def test_failed_observation_is_logged(self):
+        from mainloop.services import github_merge
+        from tests.runtime.github_app_fake import app_transport
+
+        await self.prepare()
+        self.fake.errors["/pulls/17"] = 503
+        cls = github_merge.GitHubMergeClient
+        with (
+            patch.object(
+                github_merge,
+                "GitHubMergeClient",
+                lambda repository: cls(
+                    repository, transport=app_transport(self.fake.handle)
+                ),
+            ),
+            self.assertLogs("mainloop.tasks.projection", "WARNING") as logs,
+        ):
+            await Projection().refresh(db, self.task.id)
+        self.assertIn("GitHubError", logs.output[0])
+        self.assertEqual((await self.view())[1].pr_state, "unknown")
+
     async def assert_ci_cannot_complete(self, status, conclusion, expected):
         self.fake.runs = (
             [{**self.fake.runs[0], "status": status, "conclusion": conclusion}]

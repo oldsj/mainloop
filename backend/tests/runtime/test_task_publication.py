@@ -8,9 +8,9 @@ from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
 from mainloop.services.github_merge import GitHubMergeClient, MergePR
 from mainloop.tasks.attention import owns_leaf
-from mainloop.tasks.projection import ci_state, observed
+from mainloop.tasks.projection import POLICY_BLOCKED, ci_state, observed
 from tests.runtime.github_app_fake import app_settings, app_transport
-from tests.runtime.test_merge import SHA, GitHub
+from tests.runtime.test_merge import SHA, GitHub, live_mainloop_rules
 
 from models.hitl import LeafIdentity
 from models.task import TaskProjection
@@ -154,6 +154,78 @@ class GitHubObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(ci)
         self.assertEqual(ci_state(ci, pr.head.sha), "unknown")
         self.assertFalse(self.fake.puts)
+
+    def project(self, pr, ci, previous=None):
+        return observed(
+            previous or TaskProjection(),
+            repository="owner/repo",
+            branch="feature",
+            number=17,
+            pr=pr,
+            ci=ci,
+            observed_at=datetime.now(UTC),
+        )
+
+    async def test_policy_rejected_rule_keeps_pr_and_exact_head_ci(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.rules = live_mainloop_rules()
+        self.fake.rules[2]["parameters"]["required_reviewers"] = [
+            {"reviewer": {"id": 1, "type": "Team"}}
+        ]
+        self.fake.runs.append(self.fake.run(11, name="Lint", app={"id": 15368}))
+        with self.assertLogs("mainloop.services.github_merge", "INFO") as logs:
+            pr, ci = await self.observe()
+        self.assertIn("required_reviewers", logs.output[0])
+        self.assertEqual(
+            ci["policy_rejections"],
+            ["unsupported pull_request requirement: required_reviewers"],
+        )
+        value = self.project(pr, ci, TaskProjection(merge_state="prepared"))
+        self.assertEqual(
+            (value.pr_state, value.pr_head_sha, value.ci_state, value.ci_head_sha),
+            ("open", SHA, "success", SHA),
+        )
+        self.assertEqual(value.merge_state, POLICY_BLOCKED)
+        # The owner fixes the ruleset: readiness no longer carries the block.
+        del self.fake.rules[2]["parameters"]["required_reviewers"]
+        pr, ci = await self.observe()
+        self.assertEqual(ci["policy_rejections"], [])
+        self.assertIsNone(self.project(pr, ci, value).merge_state)
+        # Merged outcomes are never relabelled as blocked.
+        merged = TaskProjection(pr_head_sha=SHA, merge_state="merged")
+        self.fake.rules[2]["parameters"]["future_requirement"] = True
+        pr, ci = await self.observe()
+        self.assertEqual(self.project(pr, ci, merged).merge_state, "merged")
+        self.assertFalse(self.fake.puts)
+
+    async def test_refused_required_check_source_never_shows_green(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        for rules in (
+            [{"type": "workflows", "parameters": {"workflows": []}}],
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "x"}]},
+                }
+            ],
+            [{"type": 7}],
+        ):
+            with self.subTest(rules=rules):
+                self.fake.rules = rules
+                pr, ci = await self.observe()
+                self.assertTrue(ci["required_checks_incomplete"])
+                self.assertTrue(ci["policy_rejections"])
+                self.assertFalse(ci["green"])
+                value = self.project(pr, ci)
+                self.assertEqual((value.pr_state, value.ci_state), ("open", "unknown"))
+                self.assertEqual(value.merge_state, POLICY_BLOCKED)
+        self.assertFalse(self.fake.puts)
+
+    async def test_policy_rejection_still_reports_failing_ci(self):
+        self.fake.rules = [{"type": "required_signatures"}]
+        self.fake.runs = [self.fake.run(10, conclusion="failure")]
+        pr, ci = await self.observe()
+        self.assertEqual(self.project(pr, ci).ci_state, "failure")
 
     async def test_head_moving_during_checks_is_rejected(self):
         async def move(request):

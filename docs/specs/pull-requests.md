@@ -349,12 +349,26 @@ evidence. Active `deletion`, `non_fast_forward` and `required_linear_history` ru
 are compatible with the PR squash API. A `pull_request` rule with zero required
 approvals is supported only with all four required review flags explicitly false.
 Missing flags, stale-review dismissal, code-owner review,
-last-push approval, review-thread resolution, nonzero approval counts, unknown PR
-parameters and merge-method lists excluding squash fail closed with an unsupported
-PR-rule reason. Ruleset checks require an explicit
+last-push approval, review-thread resolution, nonzero approval counts, non-empty
+`required_reviewers` and merge-method lists excluding squash fail closed with an
+unsupported PR-rule reason naming the parameter. Unknown PR parameters are accepted
+only while `false`, `null` or empty; any other value fails closed until it is understood.
+`require_extra_approval_for_unattributed_changes` is accepted with either value:
+GitHub documents it as one approval added to the configured count for Copilot PRs
+not attributed to a person, with no effect when zero approvals are required, and any
+nonzero count is already refused. Ruleset checks require an explicit
 `strict_required_status_checks_policy: false`; true is unsupported because Mainloop
 does not prove the head was tested with the latest base. Classic `strict: true`
 is likewise unsupported. Unknown active rule types also fail closed.
+
+Task projection observation reads the same rules without enforcing them. A rule
+refusal is reported beside PR state and exact-head CI instead of hiding them: an open
+PR's `merge_state` becomes `blocked_by_branch_rules` until a later observation of the
+same head finds no refusal, and merged outcomes are never relabelled. A refused rule
+that may itself require checks (an unknown rule type, unreadable required-check
+parameters or classic protection) keeps observed CI from being reported as passing.
+Refusals and failed observations are logged with their class and policy reason.
+Merge preparation and execution still refuse on every unsupported rule.
 
 Classic checks require both `contexts` and `checks`; every check must include
 `app_id`. An explicit null means any app, but an omitted ID is rejected.

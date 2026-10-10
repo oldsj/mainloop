@@ -1,6 +1,7 @@
 """Bounded, fixed-origin merge evidence. No remote writes during preparation."""
 
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -22,6 +23,14 @@ PENDING_CHECK_STATES = frozenset(
     {"queued", "in_progress", "pending", "waiting", "requested"}
 )
 ABANDONED_SUITE_GRACE = timedelta(minutes=10)
+PR_RULE_REQUIREMENTS = (
+    "dismiss_stale_reviews_on_push",
+    "require_code_owner_review",
+    "require_last_push_approval",
+    "required_review_thread_resolution",
+)
+
+logger = logging.getLogger(__name__)
 
 
 class MergeRepo(Repo):
@@ -183,13 +192,40 @@ class RuleParameters(BaseModel):
 
 
 class PullRequestParameters(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+    # GitHub adds PR-rule parameters over time. Known fields stay strict; unknown
+    # fields are kept so unsupported() can refuse any that might require something.
+    model_config = ConfigDict(strict=True, extra="allow")
     required_approving_review_count: int = Field(ge=0)
     dismiss_stale_reviews_on_push: bool
     require_code_owner_review: bool
     require_last_push_approval: bool
     required_review_thread_resolution: bool
     allowed_merge_methods: list[str] | None = None
+    required_reviewers: list | None = None
+    # GitHub adds one approval to the configured count for Copilot PRs not
+    # attributed to a person; the setting "has no effect if the ruleset requires
+    # zero approvals", and unsupported() refuses any nonzero count.
+    require_extra_approval_for_unattributed_changes: bool | None = None
+
+    def unsupported(self):
+        """First parameter that could require a human review or block our squash."""
+        if self.required_approving_review_count != 0:
+            return "required_approving_review_count"
+        for field in PR_RULE_REQUIREMENTS:
+            if getattr(self, field):
+                return field
+        if self.required_reviewers:
+            return "required_reviewers"
+        if (
+            self.allowed_merge_methods is not None
+            and "squash" not in self.allowed_merge_methods
+        ):
+            return "allowed_merge_methods"
+        for field, value in (self.model_extra or {}).items():
+            # Unknown parameters are understood only while they request nothing.
+            if not (value is False or value is None or value == []):
+                return field[:64]
+        return None
 
 
 class Rule(BaseModel):
@@ -393,8 +429,24 @@ class GitHubMergeClient(GitHubCreationClient):
             and pr.mergeable_state in ("clean", "unstable", "has_hooks"),
         }
 
-    async def checks(self, name, sha, base):
+    async def checks(self, name, sha, base, *, enforce_policy=True):
+        """CI evidence for ``sha``. Merge policy refusals raise PolicyError.
+
+        With ``enforce_policy=False`` (observation only, never merge evidence),
+        refusals are listed in ``policy_rejections`` instead. A refused source
+        of required checks marks them incomplete, so CI is never green.
+        """
         self.evidence_step = "checks"
+        rejections = []
+        incomplete = False
+
+        def refuse(reason, *, required_incomplete=False):
+            nonlocal incomplete
+            if enforce_policy:
+                raise PolicyError("rules", reason) from None
+            rejections.append(reason)
+            incomplete |= required_incomplete
+
         # Collection time must not age a pre-grace observation into eligibility.
         captured_at = datetime.now(timezone.utc)
         root = f"/repos/{name}"
@@ -455,35 +507,38 @@ class GitHubMergeClient(GitHubCreationClient):
             protection = {"required_status_checks": None}
         except GitHubNotFound:
             protection = {"required_status_checks": None}
+        required = []
         try:
             protection = Protection.model_validate(protection)
         except ValueError:
-            raise PolicyError(
-                "rules", "unsupported classic branch protection fields"
-            ) from None
-        if (
-            protection.required_pull_request_reviews is not None
-            or protection.restrictions is not None
-        ):
-            raise PolicyError("rules", "unsupported classic branch protection")
-        for field in (
-            "block_creations",
-            "required_conversation_resolution",
-            "required_signatures",
-            "lock_branch",
-        ):
-            flag = getattr(protection, field)
-            if flag is not None and flag.enabled:
-                raise PolicyError("rules", f"unsupported classic protection: {field}")
-        # Squash preserves linear history; no force push, deletion or fork sync
-        # is performed. Admin enforcement applies the same evaluated policy.
-        required = []
-        classic = protection.required_status_checks
-        if classic is not None:
-            if classic.strict:
-                raise PolicyError("rules", "unsupported classic strict status checks")
-            required.extend((c.context, c.app_id) for c in classic.checks)
-            required.extend((c, None) for c in classic.contexts)
+            refuse(
+                "unsupported classic branch protection fields",
+                required_incomplete=True,
+            )
+            protection = None
+        if protection is not None:
+            if (
+                protection.required_pull_request_reviews is not None
+                or protection.restrictions is not None
+            ):
+                refuse("unsupported classic branch protection")
+            for field in (
+                "block_creations",
+                "required_conversation_resolution",
+                "required_signatures",
+                "lock_branch",
+            ):
+                flag = getattr(protection, field)
+                if flag is not None and flag.enabled:
+                    refuse(f"unsupported classic protection: {field}")
+            # Squash preserves linear history; no force push, deletion or fork sync
+            # is performed. Admin enforcement applies the same evaluated policy.
+            classic = protection.required_status_checks
+            if classic is not None:
+                if classic.strict:
+                    refuse("unsupported classic strict status checks")
+                required.extend((c.context, c.app_id) for c in classic.checks)
+                required.extend((c, None) for c in classic.contexts)
         self.evidence_step = "rules"
         try:
             rules = await self.pages(f"{root}/rules/branches/{quote(base, safe='')}")
@@ -491,18 +546,24 @@ class GitHubMergeClient(GitHubCreationClient):
             unavailable.append("rules")
             rules = []
         for raw_rule in rules:
-            rule = Rule.model_validate(raw_rule)
+            try:
+                rule = Rule.model_validate(raw_rule)
+            except ValueError:
+                if enforce_policy:
+                    raise
+                refuse("malformed active branch rule", required_incomplete=True)
+                continue
             if rule.type == "required_status_checks" and rule.parameters is not None:
                 try:
                     parameters = RuleParameters.model_validate(rule.parameters)
                 except ValueError:
-                    raise PolicyError(
-                        "rules", "unsupported required_status_checks parameters"
-                    ) from None
-                if parameters.strict_required_status_checks_policy:
-                    raise PolicyError(
-                        "rules", "unsupported strict_required_status_checks_policy"
+                    refuse(
+                        "unsupported required_status_checks parameters",
+                        required_incomplete=True,
                     )
+                    continue
+                if parameters.strict_required_status_checks_policy:
+                    refuse("unsupported strict_required_status_checks_policy")
                 required.extend(
                     (c.context, c.integration_id)
                     for c in parameters.required_status_checks
@@ -511,30 +572,21 @@ class GitHubMergeClient(GitHubCreationClient):
                 try:
                     parameters = PullRequestParameters.model_validate(rule.parameters)
                 except ValueError:
-                    raise PolicyError(
-                        "rules", "unsupported pull_request parameters"
-                    ) from None
-                if (
-                    parameters.required_approving_review_count != 0
-                    or parameters.dismiss_stale_reviews_on_push
-                    or parameters.require_code_owner_review
-                    or parameters.require_last_push_approval
-                    or parameters.required_review_thread_resolution
-                    or (
-                        parameters.allowed_merge_methods is not None
-                        and "squash" not in parameters.allowed_merge_methods
-                    )
-                ):
-                    raise PolicyError(
-                        "rules", "unsupported pull_request review or merge requirements"
-                    )
+                    refuse("unsupported pull_request parameters")
+                    continue
+                if field := parameters.unsupported():
+                    refuse(f"unsupported pull_request requirement: {field}")
                 # Our pinned squash PUT already goes through a PR.
             elif rule.type not in (
                 "deletion",
                 "non_fast_forward",
                 "required_linear_history",
             ):
-                raise PolicyError("rules", "unsupported active branch rule")
+                # An unknown rule may itself require checks (e.g. workflows).
+                refuse(
+                    f"unsupported active branch rule: {rule.type[:64]}",
+                    required_incomplete=True,
+                )
         self.evidence_step = "checks_consistency"
         for context, app in required:
             if (
@@ -570,6 +622,7 @@ class GitHubMergeClient(GitHubCreationClient):
             for _, r in latest.values()
         )
         green &= all(s.state == "success" for s in statuses.values())
+        green &= not incomplete
         for context, app in required:
             green &= any(
                 n == context
@@ -594,7 +647,7 @@ class GitHubMergeClient(GitHubCreationClient):
             )
             or any(s.state not in ("success", "pending") for s in statuses.values())
         )
-        return {
+        result = {
             "head_sha": sha,
             "captured_at": captured_at.isoformat().replace("+00:00", "Z"),
             "complete": True,
@@ -615,18 +668,39 @@ class GitHubMergeClient(GitHubCreationClient):
             "required": required,
             "github_rules_unavailable_on_plan": unavailable,
         }
+        if not enforce_policy:
+            result["policy_rejections"] = rejections
+            result["required_checks_incomplete"] = incomplete
+        return result
 
     async def observation(self, name, number):
         """Bounded read of any PR state; unavailable checks remain unknown.
 
         A closed PR is not merge execution evidence. Re-read the PR after CI so
         movement during collection cannot attribute checks to another head.
+        Merge-policy refusals do not hide CI; they are reported alongside it.
         """
         pr = await self.pull(name, number)
         try:
-            ci = await self.checks(name, pr.head.sha, pr.base.ref)
-        except (GitHubError, PolicyError, ValueError):
+            ci = await self.checks(name, pr.head.sha, pr.base.ref, enforce_policy=False)
+        except (GitHubError, PolicyError, ValueError) as error:
+            logger.warning(
+                "PR CI observation unavailable for %s#%s at %s: %s%s",
+                name,
+                number,
+                self.evidence_step,
+                type(error).__name__,
+                f" {error.message}" if isinstance(error, PolicyError) else "",
+            )
             ci = None
+        else:
+            if ci["policy_rejections"]:
+                logger.info(
+                    "PR %s#%s is not mergeable by Mainloop policy: %s",
+                    name,
+                    number,
+                    "; ".join(ci["policy_rejections"]),
+                )
         fresh = await self.pull(name, number)
         if fresh != pr:
             raise GitHubError

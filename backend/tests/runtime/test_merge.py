@@ -72,6 +72,38 @@ def default_branch_rules():
     ]
 
 
+def live_mainloop_rules():
+    # gh api repos/oldsj/mainloop/rules/branches/main (2026-10-10), ruleset metadata
+    # dropped. Commits on PRs from the Mainloop App are App/agent-authored.
+    return [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {
+            "type": "pull_request",
+            "parameters": {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews_on_push": False,
+                "required_reviewers": [],
+                "require_code_owner_review": False,
+                "require_last_push_approval": False,
+                "required_review_thread_resolution": False,
+                "require_extra_approval_for_unattributed_changes": True,
+                "allowed_merge_methods": ["squash"],
+            },
+        },
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "strict_required_status_checks_policy": False,
+                "do_not_enforce_on_create": False,
+                "required_status_checks": [
+                    {"context": "Lint", "integration_id": 15368}
+                ],
+            },
+        },
+    ]
+
+
 class GitHub:
     def __init__(self):
         self.repo = {
@@ -589,6 +621,60 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.fake.rules.append({"type": "required_linear_history"})
         self.assertTrue((await self.evidence())["ci"]["green"])
 
+    async def test_live_mainloop_ruleset_is_supported(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        self.fake.rules = live_mainloop_rules()
+        # The ruleset's required check binds to its app, so it must be present.
+        self.assertFalse((await self.evidence())["ci"]["green"])
+        self.fake.runs.append(self.fake.run(11, name="Lint", app={"id": 15368}))
+        ci = (await self.evidence())["ci"]
+        self.assertTrue(ci["green"])
+        self.assertEqual(ci["required"], [("Lint", 15368)])
+        self.assertNotIn("policy_rejections", ci)
+        self.assertFalse(self.fake.puts)
+
+    async def test_unknown_pr_parameters_must_request_nothing(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        for value in (False, None, []):
+            with self.subTest(value=value):
+                self.fake.rules = default_branch_rules()
+                self.fake.rules[-1]["parameters"]["future_requirement"] = value
+                self.assertTrue((await self.evidence())["ci"]["green"])
+        for value in (True, 1, "on", ["user"], {"id": 1}):
+            with self.subTest(value=value):
+                self.fake.rules = default_branch_rules()
+                self.fake.rules[-1]["parameters"]["future_requirement"] = value
+                with self.assertRaisesRegex(
+                    PolicyError, "unsupported pull_request requirement: future_req"
+                ):
+                    await self.evidence()
+
+    async def test_required_reviewers_and_extra_approval_with_nonzero_count(self):
+        self.fake.errors["/branches/main/protection"] = 404
+        reviewer = {
+            "minimum_approvals": 1,
+            "file_patterns": ["*"],
+            "reviewer": {"id": 1, "type": "Team"},
+        }
+        for changes, reason in (
+            ({"required_reviewers": [reviewer]}, "required_reviewers"),
+            (
+                {
+                    "required_approving_review_count": 1,
+                    "require_extra_approval_for_unattributed_changes": True,
+                },
+                "required_approving_review_count",
+            ),
+        ):
+            with self.subTest(reason=reason):
+                self.fake.rules = live_mainloop_rules()
+                self.fake.rules[2]["parameters"].update(changes)
+                with self.assertRaisesRegex(
+                    PolicyError, f"unsupported pull_request requirement: {reason}"
+                ):
+                    await self.evidence()
+        self.assertFalse(self.fake.puts)
+
     async def test_unsupported_pr_requirements_fail_closed(self):
         for field, value in (
             ("required_approving_review_count", 1),
@@ -598,6 +684,9 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             ("require_last_push_approval", True),
             ("required_review_thread_resolution", True),
             ("allowed_merge_methods", ["rebase"]),
+            ("required_reviewers", [{"reviewer": {"id": 1, "type": "Team"}}]),
+            ("required_reviewers", "team"),
+            ("require_extra_approval_for_unattributed_changes", "true"),
             ("future_requirement", True),
         ):
             with self.subTest(field=field, value=value):

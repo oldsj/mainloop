@@ -1,5 +1,6 @@
 """Read observations and transactional task events; no turns or merge dispatch."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from mainloop.db import tasks as store
@@ -7,6 +8,10 @@ from mainloop.runtime.policy import PolicyError
 from mainloop.tasks.principal import TaskPrincipal
 
 MAX_CI_AGE = timedelta(minutes=5)
+# Merge readiness when GitHub rules on the base would refuse Mainloop's merge.
+POLICY_BLOCKED = "blocked_by_branch_rules"
+
+logger = logging.getLogger(__name__)
 
 
 def ci_state(ci, head_sha, *, now=None):
@@ -45,6 +50,16 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
     if state not in ("open", "closed", "merged"):
         state = "unknown"
     changed = previous.pr_head_sha != pr.head.sha
+    merge_state = None if changed else previous.merge_state
+    if ci is not None and ci.get("head_sha") == pr.head.sha:
+        # Observation reports branch-rule refusals instead of hiding PR/CI.
+        if state == "open" and ci.get("policy_rejections"):
+            if merge_state != "merged":
+                merge_state = POLICY_BLOCKED
+        elif merge_state == POLICY_BLOCKED:
+            merge_state = None
+    elif state != "open" and merge_state == POLICY_BLOCKED:
+        merge_state = None
     return previous.model_copy(
         update={
             "repository": repository.lower(),
@@ -56,14 +71,8 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
             "ci_state": ci_state(ci, pr.head.sha, now=observed_at),
             "ci_head_sha": ci.get("head_sha") if ci else None,
             "observed_at": observed_at,
-            **(
-                {
-                    "merge_proposal_id": None,
-                    "merge_state": None,
-                }
-                if changed
-                else {}
-            ),
+            "merge_state": merge_state,
+            **({"merge_proposal_id": None} if changed else {}),
         }
     )
 
@@ -236,7 +245,17 @@ class Projection:
                     ci=ci,
                     observed_at=datetime.now(UTC),
                 )
-            except (GitHubError, ValidationError, PolicyError, TimeoutError):
+            except (GitHubError, ValidationError, PolicyError, TimeoutError) as error:
+                logger.warning(
+                    "Task %s PR observation failed: %s%s",
+                    task.id,
+                    type(error).__name__,
+                    (
+                        f" [{error.code}] {error.message}"
+                        if isinstance(error, PolicyError)
+                        else ""
+                    ),
+                )
                 value = previous.model_copy(
                     update={
                         "ci_state": "unknown",
