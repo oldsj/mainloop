@@ -12,40 +12,49 @@ eight tests added. Repeated PostgreSQL work, durable writes and asyncio debug
 stack collection account for substantial costs. Native per-file fsync was also
 expensive on arm64, before adding sandbox overhead.
 
-**Measured gap:** neither a matched workspace-versus-CI slowdown nor a gVisor
-slowdown ratio is established. Rootless runsc could not start on the x86_64
-benchmark machine. The arm64 workspace-image baseline ran without gVisor;
-**gVisor workspace measurements are pending**. The faster suite has only 1.83×
-headroom under its 540-second cap, so native results do not prove it fits in a
-sandboxed agent turn.
+**Measured:** in the arm64 gVisor workspace, CPU-bound work took about **1.3×**
+native arm64 time. Syscall-heavy flows took **8–38×**: process spawn 38×,
+small-file creation and deletion about 28×, `uv sync` 28×, Python startup 14×,
+and Git operations 8–12×. Fsync-bound flows took about 2× (1.5× for a sequential
+write with one fsync; 2.2× for per-file fsync).
+
+**Measured implication:** these flow measurements indicate that the backend
+suite's workspace cost is dominated by subprocess and file-metadata work,
+including real Git subprocesses and loopback servers, rather than CPU work.
+This is an inference from the measured flows and native suite profile, not a
+full-suite workspace result. Full-suite workspace qualification is in progress;
+a matched workspace-versus-CI slowdown is not established. The faster native
+suite has only 1.83× headroom under its 540-second cap.
 
 ## Recommendations
 
-- **Implemented in [#153](https://github.com/oldsj/mainloop/pull/153):** use `make test-backend` with a disposable PostgreSQL
-  database. The changes combine test-only durability settings, a migrated
-  template cloned per class, shorter asyncio creation stacks with debug checks
-  retained, and less successful-request console logging. The scratch database
-  helper still needs an image rollout before installed workspace helpers change.
-- **Proposed, pending follow-up:** repair runner lifecycle and diagnostics gaps,
-  then raise test, fixture and discovery deadlines from 30 to 60 seconds. Keep
-  the foreground suite cap at 540 seconds plus at most five seconds of cleanup.
-  A 15-minute CI job cap would allow setup time without lengthening the foreground
-  command. If workspace qualification exceeds its cap, optimize further or use
-  deterministic module shards whose combined test-ID inventory preserves coverage.
-- **Proposed; needs measurement:** admit one heavy turn per worker initially and
-  capture CPU throttling, memory current/peak/events and I/O pressure. Reserve
-  resources with explicit requests. For two heavy turns on the measured node
-  class, two workers at 3 CPU / 4 GiB each are a starting proposal, subject to
-  memory qualification and admission controls. Replicas alone do not reserve
-  resources per sandbox in the inspected runtime version.
-- **Proposed; needs measurement:** expose versioned gVisor overlay, directfs,
-  root/bind-mount access and dentry-cache settings through the runtime. Compare
-  them on the actual workspace storage paths, with workload memory recorded.
-  Test bounded tmpfs and durability-off settings only for disposable PGDATA;
-  keep native history and product state durable. Apply deployment changes through GitOps.
-- **Proposed; needs measurement:** establish whether the worker is bare metal
-  before comparing KVM. The production guide recommends KVM on bare metal and
-  systrap inside VMs; capacity and filesystem controls should be matched first.
+1. **Proposed:** cut process spawns and file churn in tests and checks. Reuse Git
+   fixtures and avoid per-test subprocesses where the test is not about them.
+2. **Proposed:** keep dependency caches and virtual environments warm in the
+   workspace image.
+3. **Proposed; kagent change in review:** add a bounded post-turn delay so long
+   checks can finish instead of being frozen between turns.
+4. **Proposed:** pass the sandbox CA to Node/npm with `NODE_EXTRA_CA_CERTS` when
+   tools strip environment variables. The benchmark harness's online warm-up
+   failed certificate validation.
+
+**Proposed decision:** do not pursue gVisor flag tuning or KVM now. KVM is
+unavailable in the current workspace environment, and flag changes require fork
+plumbing for an unproven gain.
+
+**Implemented in [#153](https://github.com/oldsj/mainloop/pull/153):** use
+`make test-backend` with a disposable PostgreSQL database. The changes combine
+test-only durability settings, a migrated template cloned per class, shorter
+asyncio creation stacks with debug checks retained, and less successful-request
+console logging. The scratch database helper still needs an image rollout before
+installed workspace helpers change.
+
+**Proposed, pending follow-up:** repair runner lifecycle and diagnostics gaps,
+then raise test, fixture and discovery deadlines from 30 to 60 seconds. Keep the
+foreground suite cap at 540 seconds plus at most five seconds of cleanup. A
+15-minute CI job cap would allow setup time without lengthening the foreground
+command. If workspace qualification exceeds its cap, optimize further or use
+deterministic module shards whose combined test-ID inventory preserves coverage.
 
 ## Measurements
 
@@ -70,29 +79,42 @@ initialization/start/stop. PostgreSQL rows include imports and 112 ledger tests,
 not the full suite. Lint checked four Python files with one job and results cache
 off. The CPU row is a synthetic eight-assertion recursive Fibonacci(32) unittest.
 
-### Native flows and gVisor workspace measurements: pending
+### Native flows and gVisor workspace measurements
 
-All native columns below are **measured** seconds. Every gVisor cell is pending;
-no slowdown or configuration-memory ratio can yet be calculated.
+**Measured:** native columns and successful gVisor flows are median wall seconds.
+The gVisor run used the arm64 workspace image with 6 CPUs, in sequential chunks
+inside a real Mainloop workspace. The harness labels its in-workspace execution
+"native" because it does not launch another sandbox; the workspace itself runs
+under gVisor. Ratios below compare gVisor against the native arm64 workspace-image
+baseline, using the displayed timings; they are not isolated gVisor overhead
+measurements with every environmental factor controlled.
 
-| Flow                                             | Native x86_64 (s) | Native arm64 workspace image (s) | gVisor workspace (s) |
-| ------------------------------------------------ | ----------------: | -------------------------------: | -------------------- |
-| Shallow checkout                                 |             0.208 |                            0.167 | Pending              |
-| `git status --short`                             |             0.017 |                            0.016 | Pending              |
-| `git log -1000 --stat` (161 available commits)   |             0.288 |                            0.202 | Pending              |
-| Fresh `uv sync --frozen`                         |             0.152 |                            0.145 | Pending              |
-| Python package import (`uv run --no-sync`)       |             0.024 |                            0.026 | Pending              |
-| Fresh `pnpm install --frozen-lockfile`           |             1.440 |                            2.293 | Pending              |
-| Frontend build                                   |             5.108 |                            6.220 | Pending              |
-| Fixed-file Trunk check                           |             4.012 |                            4.265 | Pending              |
-| Pure-Python CPU unittest                         |             1.694 |                            2.313 | Pending              |
-| PostgreSQL ledger, durability defaults           |            20.984 |                           21.091 | Pending              |
-| PostgreSQL ledger, three durability settings off |            15.161 |                           17.789 | Pending              |
-| Create 10,000 files, 128 bytes each              |             0.456 |                            0.203 | Pending              |
-| Create + fsync 10,000 files, one fsync per file  |            63.853 |                           14.740 | Pending              |
-| Delete 10,000 files (creation excluded)          |             0.173 |                            0.132 | Pending              |
-| Sequential 128 MiB write, one final fsync        |             0.126 |                            0.079 | Pending              |
-| Spawn 500 external processes                     |             0.360 |                            0.326 | Pending              |
+| Flow                                             | Native x86_64 (s) | Native arm64 workspace image (s) | gVisor workspace (s) | gVisor / native arm64 |
+| ------------------------------------------------ | ----------------: | -------------------------------: | -------------------: | --------------------: |
+| Shallow checkout                                 |             0.208 |                            0.167 |                2.072 |                 12.4× |
+| `git status --short`                             |             0.017 |                            0.016 |                0.170 |                 10.6× |
+| `git log -1000 --stat` (161 available commits)   |             0.288 |                            0.202 |                1.662 |                  8.2× |
+| Fresh `uv sync --frozen`                         |             0.152 |                            0.145 |                4.066 |                 28.0× |
+| Python package import (`uv run --no-sync`)       |             0.024 |                            0.026 |                0.356 |                 13.7× |
+| Fresh `pnpm install --frozen-lockfile`           |             1.440 |                            2.293 |         Not measured |                     — |
+| Frontend build                                   |             5.108 |                            6.220 |         Not measured |                     — |
+| Fixed-file Trunk check                           |             4.012 |                            4.265 |         Not measured |                     — |
+| Pure-Python CPU unittest                         |             1.694 |                            2.313 |                2.938 |                  1.3× |
+| PostgreSQL ledger, durability defaults           |            20.984 |                           21.091 |         Not measured |                     — |
+| PostgreSQL ledger, three durability settings off |            15.161 |                           17.789 |         Not measured |                     — |
+| Create 10,000 files, 128 bytes each              |             0.456 |                            0.203 |                5.885 |                 29.0× |
+| Create + fsync 10,000 files, one fsync per file  |            63.853 |                           14.740 |               31.988 |                  2.2× |
+| Delete 10,000 files (creation excluded)          |             0.173 |                            0.132 |                3.724 |                 28.2× |
+| Sequential 128 MiB write, one final fsync        |             0.126 |                            0.079 |                0.115 |                  1.5× |
+| Spawn 500 external processes                     |             0.360 |                            0.326 |               12.397 |                 38.0× |
+
+**Measured limitations:** `pnpm install`, frontend build and lint were not
+measured. The harness strips CA and proxy environment variables; its online
+warm-up hit npm's "self-signed certificate in certificate chain" error, and the
+chunk reached its 540-second cap. Neither PostgreSQL flow was measured because
+the harness refuses a root guest. **Implemented:** the repository's
+`dev-postgres` helper handles root by dropping to an unprivileged user; the
+harness failure does not establish a workspace PostgreSQL limitation.
 
 **Measured:** per-file fsync increased file creation time about 140× on x86_64
 and 73× on arm64. Disabling the three PostgreSQL durability settings together
@@ -168,12 +190,11 @@ This is binary flag evidence, not an observation inside the live arm64 sandbox.
 All rootless filesystem variants were blocked at startup by AppArmor user-namespace
 policy, so failed-launch memory is not workload memory.
 
-**Proposed comparison:** retain `root:self` as baseline and compare `root:memory`
-and `none`, directfs on/off, and shared/exclusive root and bind access. Inspect
-where checkout, venvs, node_modules and PGDATA reside: root-only flags do not tune
-scratch-bind writes. Exclusive caching requires that nothing outside the sandbox
-modifies the mount. Include processes, overlays, tmpfs and file cache in the
-shared memory budget.
+**Proposed; deferred:** overlay, directfs, mount-access and dentry-cache
+comparisons would need runtime-fork plumbing and workload memory measurements.
+Their gain is unproven, so they are not current recommendations. KVM is unavailable
+in the current workspace environment. Any future deployment changes must use
+GitOps; test-only durability changes must remain limited to disposable PGDATA.
 
 ### Reading
 
@@ -193,7 +214,8 @@ shared memory budget.
   access modes, including the exclusive-cache ownership requirement.
 
 **Measured evidence provenance:** the tables summarize the native flow benchmark,
-its arm64 native workspace-image baseline, and the backend test-speed result and
+its arm64 native workspace-image baseline, the chunked gVisor workspace run, and
+the backend test-speed result and
 independent review recorded on 2026-10-10. Raw logs remain private task artifacts.
-Pending work is matched gVisor timing and memory, full-suite workspace qualification,
+Pending work is matched gVisor memory measurement, full-suite workspace qualification,
 concurrency/throttling measurements, hosted exact-commit CI and helper-image rollout.
