@@ -263,6 +263,10 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
             self.pool = cls._fixture_pool
             async with self.pool.acquire() as conn:
                 await cls._reset_plan.clear(conn)
+                # A test may change column layout, and asyncpg would keep serving
+                # plans prepared before that change on every pooled connection.
+                # Dropping the caches in memory costs one re-prepare per statement.
+                await conn.reload_schema_state()
         else:
             self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
             self.addAsyncCleanup(self.pool.close)

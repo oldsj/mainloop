@@ -248,7 +248,7 @@ class GitTransportPostgresTests(GitCredentialsCase):
                 from tests.runtime.postgres_fixture import wait_for_lock
 
                 async with self.pool.acquire() as monitor:
-                    blocked = await wait_for_lock(monitor, pid=pid)
+                    blocked = await wait_for_lock(monitor, pid=pid, locktype="advisory")
                 self.assertTrue(blocked)
                 self.assertFalse(fence.done())
                 self.assertEqual((await self.row())["state"], "dispatching")
