@@ -119,8 +119,11 @@ class OrchestrationHealthTests(PostgresTestCase):
         client.get_task.side_effect = lambda _agent, task_id: next(
             task for task in self.tasks if task.id == task_id
         )
-        with patch.object(ns, "get_client", return_value=client), patch.object(
-            ns, "binding_agent_ref", new=AsyncMock(return_value="fixture")
+        with (
+            patch.object(ns, "get_client", return_value=client),
+            patch.object(
+                ns, "binding_agent_ref", new=AsyncMock(return_value="fixture")
+            ),
         ):
             await collector.recover(self.user)
             await collector.recover(self.user)
@@ -172,9 +175,11 @@ class OrchestrationHealthTests(PostgresTestCase):
         )
         self.assertNotIn("PRIVATE", body)
         self.assertNotIn("forged", body)
-        with patch.object(settings, "owner_id", self.user), patch.object(
-            settings, "api_hosts", "localhost"
-        ), patch.object(collector, "recover", new=AsyncMock(return_value=False)):
+        with (
+            patch.object(settings, "owner_id", self.user),
+            patch.object(settings, "api_hosts", "localhost"),
+            patch.object(collector, "recover", new=AsyncMock(return_value=False)),
+        ):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=api.app), base_url="http://localhost"
             ) as client:
@@ -474,10 +479,13 @@ class OrchestrationHealthTests(PostgresTestCase):
 
         client = AsyncMock()
         client.get_task.return_value = self.tasks[0]
-        with patch.object(ns, "get_client", return_value=client), patch.object(
-            ns, "binding_agent_ref", new=AsyncMock(return_value="fixture")
-        ), patch.object(collector, "collect", new=blocked_collect), patch.object(
-            collector, "RECOVERY_SECONDS", 0.2
+        with (
+            patch.object(ns, "get_client", return_value=client),
+            patch.object(
+                ns, "binding_agent_ref", new=AsyncMock(return_value="fixture")
+            ),
+            patch.object(collector, "collect", new=blocked_collect),
+            patch.object(collector, "RECOVERY_SECONDS", 0.2),
         ):
             try:
                 limited = await asyncio.wait_for(
@@ -486,6 +494,77 @@ class OrchestrationHealthTests(PostgresTestCase):
             finally:
                 release.set()
         self.assertTrue(limited, "an unfinished recovery reports a partial view")
+
+    async def test_reconcile_sweep_runs_health_retention_recovery_and_cleanup(self):
+        # The first receipt was imported long ago; the second was lost from the queue.
+        await self.ingest()
+        await self.pool.execute(
+            "UPDATE orchestration_health_events SET occurred_at=now()-interval '40 days' WHERE owner_id=$1",
+            self.user,
+        )
+        order = []
+
+        def step(name):
+            async def run(*args):
+                order.append(name)
+                return []
+
+            return AsyncMock(side_effect=run)
+
+        client = AsyncMock()
+        client.get_task.side_effect = lambda _agent, task_id: next(
+            task for task in self.tasks if task.id == task_id
+        )
+        real_retention, real_recover = collector.retention, collector.recover
+
+        async def retention():
+            order.append("health_retention")
+            await real_retention()
+
+        async def recover(owner):
+            order.append("health_recovery")
+            return await real_recover(owner)
+
+        later = (
+            "credential_cleanup",
+            "git_credential_cleanup",
+            "archived_deletes",
+            "suspend_idle",
+        )
+        with (
+            patch.object(settings, "owner_id", self.user),
+            patch.object(ns, "get_client", return_value=client),
+            patch.object(ns, "binding_agent_ref", new=AsyncMock(return_value="f")),
+            patch.object(collector, "retention", new=retention),
+            patch.object(collector, "recover", new=recover),
+            patch("mainloop.runtime.hitl_observer.observe_hitl_once", step("hitl")),
+            patch(
+                "mainloop.runtime.hitl_continuation.reconcile_hitl_responses",
+                step("hitl_responses"),
+            ),
+            patch("mainloop.runtime.workspaces.retry_creates", step("creates")),
+            patch(
+                "mainloop.runtime.agent_credentials.reconcile_cleanup",
+                step(later[0]),
+            ),
+            patch("mainloop.push_gate.credentials.cleanup_all", step(later[1])),
+            patch.object(ns, "reconcile_archived_deletes", step(later[2])),
+            patch("mainloop.runtime.workspaces.suspend_idle", step(later[3])),
+            patch.object(ns, "_log_step_failure") as failed,
+        ):
+            await ns.reconcile_once(sweep=True)
+        failed.assert_not_called()
+        self.assertEqual(order[-6:], ["health_retention", "health_recovery", *later])
+        counts = dict(
+            await self.pool.fetch(
+                """SELECT a2a_task_id,count(*) FROM orchestration_health_events
+                WHERE owner_id=$1 GROUP BY a2a_task_id""",
+                self.user,
+            )
+        )
+        # Retention trimmed the expired detail; recovery imported the lost receipt.
+        self.assertNotIn(self.tasks[0].id, counts)
+        self.assertGreater(counts.get(self.tasks[1].id, 0), 0)
 
     async def test_old_receipt_gaps_stay_out_of_the_selected_window(self):
         await self.ingest()

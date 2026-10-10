@@ -2466,10 +2466,13 @@ async def reconcile_once(*, sweep: bool) -> None:
     await _reconcile_step("workspace_creates", workspaces.retry_creates)
     if not sweep:
         return
-    from mainloop.health.collector import recover, retention
+    from mainloop.health import collector
 
-    await _reconcile_step("health_retention", retention)
-    await _reconcile_step("health_recovery", lambda: recover(settings.owner_id))
+    # Resolve attributes inside each step so a missing helper fails only that step.
+    await _reconcile_step("health_retention", lambda: collector.retention())
+    await _reconcile_step(
+        "health_recovery", lambda: collector.recover(settings.owner_id)
+    )
     from mainloop.runtime.agent_credentials import reconcile_cleanup
 
     await _reconcile_step("credential_cleanup", reconcile_cleanup)

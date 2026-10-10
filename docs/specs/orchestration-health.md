@@ -79,10 +79,12 @@ and binds attribution through sessions, attempts and delivery receipts. Stream a
 `GetTask` snapshots share the same transactional importer. Delivery handling only queues an
 import; one background worker imports from a bounded queue with time-limited database and lock
 waits, so health work never delays terminal delivery. A full queue or failed import is left to
-recovery. The existing reconciliation sweep and the owner read API recover completed receipts
-too; neither path sends a prompt or changes delivery success. Receipt recovery is bounded to
-100 recent receipts and five seconds per pass, covering every lookup, import and gap write;
-limits are visible, with a session filter available for narrower recovery. Import allows 2,048
+recovery. The queue lives in process memory, so imports still queued when Mainloop exits are
+lost until recovery re-imports them. The existing reconciliation sweep and the owner read API
+recover completed receipts too, and the sweep also applies health retention; neither path sends
+a prompt or changes delivery success. Receipt recovery is bounded to the 100 newest receipts and
+five seconds per pass, covering every lookup, import and gap write, so an older lost receipt
+stays partial; limits are visible, with a session filter available for narrower recovery. Import allows 2,048
 health events per receipt and 8 KiB per payload; overflow and integrity failures mark gaps.
 
 The [health ledger](../../backend/src/mainloop/db/health.py) enforces event/sequence uniqueness,

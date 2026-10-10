@@ -21,6 +21,7 @@ MAX_PENDING = 64
 COLLECT_SECONDS = 5
 LOCK_TIMEOUT = "2s"
 RECOVERY_SECONDS = 5
+RETENTION_SECONDS = 5
 
 _queue: asyncio.Queue | None = None
 _worker: asyncio.Task | None = None
@@ -67,7 +68,8 @@ async def _drain_queue(queue):
 
 
 async def drain():
-    """Wait for scheduled imports on this loop (tests and orderly shutdown)."""
+    """Wait for scheduled imports on this loop. Tests only: shutdown doesn't call it,
+    so imports still queued at exit are lost and left to recovery."""
     if (
         _queue is not None
         and _worker is not None
@@ -75,6 +77,15 @@ async def drain():
         and _worker.get_loop() is asyncio.get_running_loop()
     ):
         await _queue.join()
+
+
+async def retention():
+    """Trim expired health detail for the sweep, with the same lock and time limits
+    as imports so a slow pass cannot hold the sweep."""
+    async with asyncio.timeout(RETENTION_SECONDS):
+        async with db.connection() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
+            await health.retain(conn)
 
 
 async def collect(session_id, message_id, task_id, context_id, artifacts):
