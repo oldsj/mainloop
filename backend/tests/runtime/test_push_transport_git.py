@@ -542,6 +542,60 @@ class RealGitTransportTests(GitFixtureCase):
                 second,
             )
 
+    async def test_shallow_clone_creates_and_fast_forwards_through_gate(self):
+        await command("/usr/bin/git", "checkout", "main", cwd=self.client)
+        await self.commit("main two")
+        await command("/usr/bin/git", "push", str(self.repo), "main", cwd=self.client)
+        async with self.transport() as (read_url, push_url, _):
+            # The workspace is a depth-1 clone made through the read proxy, as in kagent.
+            self.client = self.root / "shallow"
+            await command(
+                "/usr/bin/git",
+                "-c",
+                f"http.extraHeader=Authorization: Bearer {READ}",
+                "clone",
+                "--depth=1",
+                read_url,
+                str(self.client),
+            )
+            boundary = (
+                await command("/usr/bin/git", "rev-parse", "HEAD", cwd=self.client)
+            )[1].strip()
+            self.assertEqual(
+                (self.client / ".git" / "shallow").read_bytes().strip(), boundary
+            )
+            await command("/usr/bin/git", "checkout", "-b", "feature", cwd=self.client)
+            for message in ("one", "two"):
+                head = await self.commit(message)
+                await self.push(push_url)
+                body = b"".join(self.client_bodies)
+                self.client_bodies.clear()
+                # Captured request: the shallow graft precedes the command list.
+                self.assertTrue(
+                    body.startswith(pkt(b"shallow " + boundary + b"\n")), body[:80]
+                )
+                self.assertEqual(self.fake.receives[-1], body)
+                self.assertEqual(
+                    (
+                        await command(
+                            "/usr/bin/git",
+                            "--git-dir=" + str(self.repo),
+                            "rev-parse",
+                            "feature",
+                        )
+                    )[1]
+                    .strip()
+                    .decode(),
+                    head,
+                )
+            self.assertEqual(len(self.fake.receives), 2)
+            # A shallow rewind is still refused before any upstream write.
+            await command("/usr/bin/git", "reset", "--hard", "HEAD~1", cwd=self.client)
+            await self.commit("divergent")
+            code, _, _ = await self.push(push_url, "+feature:feature", success=False)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(len(self.fake.receives), 2)
+
     async def test_read_binding_on_default_is_independent_of_push_grant(self):
         self.authority.grant = GRANT.model_copy(update={"branch": "main"})
         async with self.transport() as (read_url, push_url, _):

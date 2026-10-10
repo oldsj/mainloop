@@ -32,6 +32,25 @@ class TaskContracts(unittest.TestCase):
         for ref in ("a" * 40, "release/next", "v1.2.3"):
             self.assertEqual(TaskCheckout(branch="feature/task", ref=ref).ref, ref)
 
+    def test_writer_checkout_defers_depth_but_keeps_explicit_and_frozen_values(self):
+        self.assertEqual(TaskCheckout(branch="feature/task").depth, 0)
+        self.assertEqual(create().checkout.depth, 0)
+        self.assertEqual(TaskCheckout(branch="feature/task", depth=1).depth, 1)
+        # Stored task snapshots and enrollment plans carry their depth explicitly.
+        stored = TaskCheckout.model_validate_json(
+            '{"branch":"feature/task","ref":"","depth":1}'
+        )
+        self.assertEqual(stored.depth, 1)
+        self.assertIn('"depth":1', stored.model_dump_json())
+        from models.push_gate import GitWorkspace
+
+        self.assertEqual(
+            GitWorkspace.model_validate(
+                {"repo": "https://github.com/o/r", "branch": "b", "depth": 1}
+            ).depth,
+            1,
+        )
+
     def test_no_caller_authority_or_legacy_aliases(self):
         payload = create().model_dump()
         for key in (

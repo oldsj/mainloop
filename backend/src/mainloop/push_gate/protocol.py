@@ -96,6 +96,7 @@ CAPABILITIES = (
     b"report-status side-band-64k ofs-delta object-format=sha1 agent=mainloop"
 )
 _AGENT = re.compile(r"agent=[A-Za-z0-9./_+-]{1,128}")
+_SHALLOW = re.compile(rb"shallow ([0-9a-f]{40})\n?")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,9 @@ class Commands:
     update: RefUpdate
     capabilities: frozenset[str]
     pack_offset: int
+    # A shallow client's grafts, forwarded upstream verbatim inside the body. Validation
+    # never trusts them: the quarantine seeds full upstream history for its checks.
+    shallow: tuple[str, ...] = ()
 
     @property
     def sideband(self) -> bool:
@@ -110,6 +114,8 @@ class Commands:
 
 
 def receive_commands(stream: BinaryIO, limits: Limits) -> Commands:
+    # update-requests = *shallow command-list; push certificates stay unsupported.
+    shallow: list[str] = []
     commands = []
     caps: frozenset[str] = frozenset()
     while True:
@@ -120,6 +126,12 @@ def receive_commands(stream: BinaryIO, limits: Limits) -> Commands:
             break
         if not isinstance(item, bytes):
             raise TransportError("command_framing")
+        if item.startswith(b"shallow "):
+            match = _SHALLOW.fullmatch(item)
+            if commands or not match:
+                raise TransportError("shallow_invalid")
+            shallow.append(match[1].decode())
+            continue
         if not commands:
             if item.count(b"\0") != 1:
                 raise TransportError("capability_placement")
@@ -164,7 +176,9 @@ def receive_commands(stream: BinaryIO, limits: Limits) -> Commands:
         commands.append(update)
     if len(commands) != 1:
         raise TransportError("single_ref_required")
-    return Commands(commands[0], caps, stream.tell())
+    if ZERO_OID in shallow or len(set(shallow)) != len(shallow):
+        raise TransportError("shallow_invalid")
+    return Commands(commands[0], caps, stream.tell(), tuple(shallow))
 
 
 def advertised_refs(data: bytes, service: str) -> dict[str, str]:

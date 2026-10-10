@@ -69,6 +69,37 @@ class PacketTransportTests(unittest.TestCase):
         self.assertTrue(parsed.sideband)
         self.assertEqual(walk_pack(stream, Limits()).objects, 1)
 
+    def test_shallow_lines_precede_commands_and_are_kept_verbatim(self):
+        shallow = pkt(f"shallow {'3' * 40}\n".encode()) + pkt(
+            f"shallow {'4' * 40}".encode()
+        )
+        body = shallow + COMMAND + b"0000" + packed()
+        parsed = receive_commands(io.BytesIO(body), Limits())
+        self.assertEqual(parsed.shallow, ("3" * 40, "4" * 40))
+        self.assertEqual(parsed.update.ref, REF)
+        self.assertEqual(parsed.pack_offset, len(shallow) + len(COMMAND) + 4)
+        self.assertEqual(
+            receive_commands(io.BytesIO(COMMAND + b"0000"), Limits()).shallow, ()
+        )
+        line = pkt(f"shallow {'3' * 40}\n".encode())
+        for data in (
+            COMMAND + line + b"0000",
+            line + line + COMMAND + b"0000",
+            line + b"0000",
+            pkt(f"shallow {'0' * 40}\n".encode()) + COMMAND + b"0000",
+            pkt(f"shallow {'A' * 40}\n".encode()) + COMMAND + b"0000",
+            pkt(f"shallow {'3' * 39}\n".encode()) + COMMAND + b"0000",
+            pkt(f"shallow {'3' * 40} extra\n".encode()) + COMMAND + b"0000",
+            pkt(f"shallow {'3' * 40}\0report-status\n".encode()) + b"0000",
+        ):
+            with self.subTest(data=data[:24]), self.assertRaises(TransportError):
+                receive_commands(io.BytesIO(data), Limits())
+        with self.assertRaises(TransportError):
+            receive_commands(
+                io.BytesIO(line * 10 + COMMAND + b"0000"),
+                replace(Limits(), command_bytes=len(line) * 5),
+            )
+
     def test_packet_and_command_boundaries(self):
         command = f"{OLD} {NEW} {REF}".encode()
         cases = [
