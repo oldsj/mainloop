@@ -13,7 +13,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 
 
 class BackendRunnerTests(unittest.TestCase):
-    def probe(self, source, *, suite_seconds=5):
+    def probe(self, source, *, suite_seconds=5, supervisor_setup=""):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "probe.py").write_text(source)
@@ -26,9 +26,10 @@ class BackendRunnerTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-c",
-                    "import sys; from scripts import test_backend as runner; "
-                    f"runner.SUITE_SECONDS = {suite_seconds!r}; "
-                    "sys.argv = ['test_backend', '--timings', sys.argv[1], 'probe']; "
+                    "import sys\nfrom scripts import test_backend as runner\n"
+                    f"runner.SUITE_SECONDS = {suite_seconds!r}\n"
+                    + supervisor_setup
+                    + "\nsys.argv = ['test_backend', '--timings', sys.argv[1], 'probe']\n"
                     "sys.exit(runner.main())",
                     str(root / "timings.json"),
                 ],
@@ -109,6 +110,150 @@ class BackendRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn("test discovery/imports", result.stderr)
         self.assertIn("suite exceeded 2s", result.stderr)
+        self.assertIn("threading.py", result.stderr)
+        self.assertIn('File "', result.stderr)
+        self.assertIn("in wait", result.stderr)
+
+    def test_load_tests_suites_have_fixture_deadlines(self):
+        fixtures = {
+            "setUpModule": "def setUpModule(): threading.Event().wait()\n",
+            "setUpClass": (
+                "Case.setUpClass = classmethod(lambda cls: threading.Event().wait())\n"
+            ),
+            "tearDownClass/cleanups": (
+                "Case.setUpClass = classmethod(lambda cls: cls.addClassCleanup(threading.Event().wait))\n"
+            ),
+            "tearDownModule/cleanups": (
+                "def setUpModule(): unittest.addModuleCleanup(threading.Event().wait)\n"
+            ),
+        }
+        for phase, fixture in fixtures.items():
+            with self.subTest(phase=phase):
+                result, _ = self.probe(
+                    "import sys, threading, unittest\n"
+                    "sys.modules['__main__'].TEST_SECONDS = 0.1\n"
+                    "class Case(unittest.TestCase):\n"
+                    " def test_ok(self): pass\n"
+                    + fixture
+                    + "def load_tests(loader, tests, pattern):\n"
+                    " return unittest.TestSuite([unittest.TestSuite([Case('test_ok')])])\n",
+                    suite_seconds=2,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"probe.Case {phase}", result.stderr)
+                self.assertIn("Timeout (0:00:00.100000)!", result.stderr)
+
+    def test_load_tests_fixture_timings_include_setup_and_cleanup(self):
+        result, timings = self.probe(
+            "import time, unittest\n"
+            "def setUpModule(): time.sleep(0.02)\n"
+            "class Case(unittest.TestCase):\n"
+            " @classmethod\n"
+            " def setUpClass(cls): cls.addClassCleanup(time.sleep, 0.02)\n"
+            " def test_ok(self): pass\n"
+            "def load_tests(loader, tests, pattern):\n"
+            " return unittest.TestSuite([unittest.TestSuite([Case('test_ok')])])\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(timings["tests_run"], 1)
+        self.assertGreaterEqual(timings["modules"]["probe"], 0.04)
+
+    def test_async_runner_shutdown_has_test_deadline(self):
+        shutdown_cases = {
+            "pending task": (
+                "  async def pending():\n"
+                "   try: await asyncio.Event().wait()\n"
+                "   except asyncio.CancelledError: threading.Event().wait()\n"
+                "  asyncio.create_task(pending())\n"
+            ),
+            "default executor": (
+                "  asyncio.create_task(asyncio.to_thread(threading.Event().wait))\n"
+            ),
+        }
+        for label, source in shutdown_cases.items():
+            with self.subTest(shutdown=label):
+                result, _ = self.probe(
+                    "import asyncio, sys, threading, unittest\n"
+                    "sys.modules['__main__'].TEST_SECONDS = 0.1\n"
+                    "class Case(unittest.IsolatedAsyncioTestCase):\n"
+                    " async def test_ok(self):\n"
+                    + source
+                    + "  await asyncio.sleep(0.02)\n",
+                    suite_seconds=2,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("probe.Case.test_ok", result.stderr)
+                self.assertIn("Timeout (0:00:00.100000)!", result.stderr)
+                self.assertIn("_tearDownAsyncioRunner", result.stderr)
+
+    def test_async_runner_shutdown_is_included_in_test_timing(self):
+        result, timings = self.probe(
+            "import time, unittest\n"
+            "class Case(unittest.IsolatedAsyncioTestCase):\n"
+            " def _tearDownAsyncioRunner(self):\n"
+            "  if not getattr(self, 'closed', False):\n"
+            "   time.sleep(0.05)\n"
+            "   self.closed = True\n"
+            "  super()._tearDownAsyncioRunner()\n"
+            " async def test_ok(self): pass\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(timings["tests"][0]["seconds"], 0.05)
+
+    def test_cancellation_during_launch_cleans_worker_and_descendant(self):
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(
+                signal=signum
+            ), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                worker_path = root / "worker.pid"
+                child_path = root / "child.pid"
+                try:
+                    result, _ = self.probe(
+                        "import subprocess, sys, threading, unittest\n"
+                        "from pathlib import Path\n"
+                        "class Case(unittest.TestCase):\n"
+                        " def test_hung(self):\n"
+                        "  child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                        f"  Path({str(child_path)!r}).write_text(str(child.pid))\n"
+                        "  threading.Event().wait()\n",
+                        supervisor_setup=(
+                            "import signal, time\nfrom pathlib import Path\n"
+                            "native_launch = runner.subprocess.Popen\n"
+                            "def interrupted_launch(*args, **kwargs):\n"
+                            " process = native_launch(*args, **kwargs)\n"
+                            f" Path({str(worker_path)!r}).write_text(str(process.pid))\n"
+                            " expires = time.monotonic() + 5\n"
+                            f" while not Path({str(child_path)!r}).exists():\n"
+                            "  if time.monotonic() >= expires: raise RuntimeError('child did not start')\n"
+                            "  time.sleep(0.01)\n"
+                            f" signal.raise_signal({int(signum)})\n"
+                            " return process\n"
+                            "runner.subprocess.Popen = interrupted_launch\n"
+                        ),
+                    )
+                    self.assertEqual(result.returncode, 128 + signum, result.stderr)
+                    for path in (worker_path, child_path):
+                        status = Path(f"/proc/{int(path.read_text())}/stat")
+                        if status.exists():
+                            self.assertEqual(status.read_text().split()[2], "Z")
+                finally:
+                    if worker_path.exists():
+                        try:
+                            os.killpg(int(worker_path.read_text()), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
+    def test_contributor_commands_identify_pending_workspace_qualification(self):
+        text = " ".join((BACKEND.parent / "CONTRIBUTING.md").read_text().split())
+        self.assertIn(
+            "gVisor/arm64 workspace qualification of `make test-backend` is pending.",
+            text,
+        )
+        self.assertIn("60 seconds/test, 9 minutes/suite", text)
+        self.assertNotIn(
+            "exact commands verified to work in a Mainloop workspace", text
+        )
 
     def test_fatal_deadline_terminates_descendant(self):
         with tempfile.TemporaryDirectory() as directory:

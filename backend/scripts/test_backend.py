@@ -18,8 +18,10 @@ from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 
-TEST_SECONDS = 30
+TEST_SECONDS = 60
 SUITE_SECONDS = 540
+CLEANUP_SECONDS = 5
+STACK_DUMP_SECONDS = 0.5
 BACKEND = Path(__file__).resolve().parents[1]
 _deadlines = []
 
@@ -50,22 +52,48 @@ class TimedResult(unittest.TextTestResult):
         self.modules = defaultdict(float)
         self.timings = []
 
-    def startTest(self, test):
-        self.started = time.monotonic()
-        self.test_deadline = deadline(test.id())
-        self.test_deadline.__enter__()
-        super().startTest(test)
-
-    def stopTest(self, test):
-        seconds = time.monotonic() - self.started
-        self.modules[type(test).__module__] += seconds
-        self.timings.append({"id": test.id(), "seconds": seconds})
-        self.test_deadline.__exit__(None, None, None)
-        super().stopTest(test)
-
 
 class CappedSuite(unittest.TestSuite):
-    """Cover class/module fixtures, which run outside TestResult.startTest."""
+    """Cap fixtures and the complete test call, including async runner close."""
+
+    def run(self, result, debug=False):
+        # Mirror unittest's fixture transitions, but bound the entire leaf call.
+        # IsolatedAsyncioTestCase closes its runner after result.stopTest().
+        top_level = not getattr(result, "_testRunEntered", False)
+        if top_level:
+            result._testRunEntered = True
+        for index, test in enumerate(self):
+            if result.shouldStop:
+                break
+            if unittest.suite._isnotsuite(test):
+                self._tearDownPreviousClass(test, result)
+                self._handleModuleFixture(test, result)
+                self._handleClassSetUp(test, result)
+                result._previousTestClass = type(test)
+                if getattr(type(test), "_classSetupFailed", False) or getattr(
+                    result, "_moduleSetUpFailed", False
+                ):
+                    continue
+                started = time.monotonic()
+                with deadline(test.id()):
+                    if debug:
+                        test.debug()
+                    else:
+                        test(result)
+                seconds = time.monotonic() - started
+                result.modules[type(test).__module__] += seconds
+                result.timings.append({"id": test.id(), "seconds": seconds})
+            elif debug:
+                test.run(result, debug=True)
+            else:
+                test(result)
+            if self._cleanup:
+                self._removeTestAtIndex(index)
+        if top_level:
+            self._tearDownPreviousClass(None, result)
+            self._handleModuleTearDown(result)
+            result._testRunEntered = False
+        return result
 
     @contextmanager
     def fixture(self, result, cls, phase):
@@ -114,6 +142,15 @@ class ConsoleHTTPFilter(logging.Filter):
         return record.name != "httpx" or record.levelno >= logging.WARNING
 
 
+def cap_suite(test):
+    # load_tests hooks can return their own TestSuite, bypassing loader.suiteClass.
+    if isinstance(test, unittest.TestSuite):
+        suite = CappedSuite(cap_suite(child) for child in test)
+        suite._cleanup = test._cleanup
+        return suite
+    return test
+
+
 def run_tests(names, timings):
     os.chdir(BACKEND)
     sys.path.insert(0, str(BACKEND))
@@ -138,6 +175,7 @@ def run_tests(names, timings):
             if names
             else loader.discover("tests", top_level_dir=".")
         )
+        suite = cap_suite(suite)
     # Filter only the existing console handlers. Log capture added by tests
     # must still receive HTTP records, including credential-leak assertions.
     for handler in logging.getLogger().handlers:
@@ -176,27 +214,35 @@ class Interrupted(Exception):
 
 
 def supervise(arguments):
-    def interrupted(signum, _frame):
-        raise Interrupted(signum)
+    process = None
+    pending_signal = None
+    timed_out = False
 
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(signum, interrupted)
-    process = subprocess.Popen(  # nosec B603 - this file, explicit interpreter/argv
-        [sys.executable, str(Path(__file__).resolve()), "--worker", *arguments],
-        start_new_session=True,
-    )
+    def interrupted(signum, _frame):
+        nonlocal pending_signal
+        pending_signal = signum
+        # Popen must return the group leader's identity before cancellation can
+        # unwind. A signal in the launch/assignment window is handled below.
+        if process is not None:
+            raise Interrupted(signum)
+
     try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(signum, interrupted)
+        process = subprocess.Popen(  # nosec B603 - this file, explicit interpreter/argv
+            [sys.executable, str(Path(__file__).resolve()), "--worker", *arguments],
+            start_new_session=True,
+        )
+        if pending_signal is not None:
+            raise Interrupted(pending_signal)
         return process.wait(timeout=SUITE_SECONDS)
     except subprocess.TimeoutExpired:
+        timed_out = True
         print(
             f"Backend suite exceeded {SUITE_SECONDS}s; terminating its process group.",
             file=sys.stderr,
             flush=True,
         )
-        try:
-            os.kill(process.pid, signal.SIGUSR1)
-        except ProcessLookupError:
-            pass
         return 124
     except Interrupted as error:
         return 128 + error.signum
@@ -204,19 +250,29 @@ def supervise(arguments):
         # Also remove subprocesses left behind after a fatal per-test deadline.
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, signal.SIG_IGN)
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        if process is not None:
+            cleanup_expires = time.monotonic() + CLEANUP_SECONDS
+            if timed_out:
+                try:
+                    os.kill(process.pid, signal.SIGUSR1)
+                    # Give faulthandler time to write actual frames before TERM.
+                    # This interval is part of the five-second cleanup budget.
+                    process.wait(timeout=STACK_DUMP_SECONDS)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=max(0, cleanup_expires - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
 
 def main():
