@@ -37,9 +37,9 @@ stamp would miss deleted packages, changed workspace manifests and lifecycle hoo
 `make check` invokes each installer once. It does not cache successful checks or
 skip checks on a warm tree.
 Standalone frontend targets have a separate 120-second install phase before
-the check, test or build cap. The aggregate cap remains 560 seconds, including
-cold installs; `dev-postgres`
-provides a tighter command budget of 540 seconds minus setup.
+the check, test or build cap. The aggregate cap is 515 seconds, including
+cold installs. It fits inside `dev-postgres`'s command budget of 540 seconds
+minus setup, with room for the command's eight-second cleanup.
 
 ## Prewarmed dependency caches
 
@@ -111,13 +111,13 @@ into bounded jobs.
 
 | Command or phase                                             | Cap                       | Coverage                                                                        |
 | ------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------- |
-| `make check`                                                 | 560 s + cleanup           | Locked installs and complete offline check set; at most 590 s including cleanup |
-| `make check-non-backend`                                     | 560 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests       |
+| `make check`                                                 | 515 s + cleanup           | Locked installs and complete offline check set; at most 545 s including cleanup |
+| `make check-non-backend`                                     | 515 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests       |
 | `make install`                                               | 240 s total               | Frontend, backend and shared models                                             |
 | `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                   |
 | pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1`    |
 | `make test-backend`                                          | 550 s                     | Includes backend install; runner: 60 s/test or fixture, 540 s/suite             |
-| `make test-timeouts`                                         | 30 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup        |
+| `make test-timeouts`                                         | 90 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup        |
 | `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions         |
 | `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                     |
 | `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                                 |
@@ -140,6 +140,12 @@ into bounded jobs.
 process group, announces its deadline and elapsed time, and returns 124 with
 "timed out after N s" on expiry. Deadlines bound command execution; cleanup may
 then take up to 30 seconds, including after ordinary exits that leave descendants.
+Each cap exports its absolute deadline as `MAINLOOP_TIMEOUT_DEADLINE_MS`. A nested
+cap, including the backend runner's suite cap, expires up to one second before its
+parent, so the innermost cap reports the timeout; its cleanup runs inside the
+parent's longer grace. The startup line shows when a cap was clamped. A table's cap is therefore
+a maximum: inside `make check`, the backend step, `make test-backend` and the
+runner end before the aggregate deadline.
 It forwards INT/QUIT/TERM unchanged, uses TERM for expiry or ordinary completion,
 then KILL when the cleanup budget expires. Nested owners inherit the remaining
 cleanup budget, reserving up to one second before their parent's escalation;
@@ -194,12 +200,17 @@ Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
 
 `make test-backend` runs the same offline unittest discovery in CI and workspaces.
 It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
-`MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes; set it to `1` for serial execution.
+`MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes,
+further limited to one per 512 MiB of available memory; set it to `1` for serial execution.
+Workers are separate interpreters started with fork and exec, not forked copies
+of the supervisor. If a worker fails or dies from a signal, the runner's last
+lines name the signal, the phase it was in, and its modules.
 Every test, including setup, teardown, cleanups and async runner shutdown, has a
-fatal 60-second deadline; module/class fixtures and discovery also have 60-second
-deadlines, including suites returned by `load_tests` hooks. On a timeout,
+fatal 60-second deadline; module/class fixtures also have 60-second
+deadlines, including suites returned by `load_tests` hooks. Discovery and imports
+have 180 seconds: parallel workers import beside other checks on a shared host. On a timeout,
 the runner prints the active test/fixture and all thread stacks. The whole run has
-a 540-second cap with up to five seconds for stack dumping and process cleanup,
+a 540-second cap (earlier under an enclosing deadline) with up to five seconds for stack dumping and process cleanup,
 leaving headroom under the harness's ten-minute foreground limit. The Make wrapper additionally
 bounds uv startup. CI's job cap is ten minutes.
 The supervisor kills every worker process group on timeout or cancellation, including
@@ -226,7 +237,12 @@ and module fixtures; test totals include setup/teardown and async runner shutdow
 Save machine-readable
 evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`; completed test and fixture
 records are saved incrementally and survive timeouts. Existing module timings at
-that path balance the next run; otherwise modules are assigned round-robin.
+that path balance the next run, longest module first. Modules without a recording
+use the committed weights in `backend/tests/module_weights.json`, so a fresh
+checkout is balanced too. `make check` saves timings to
+`.cache/check/backend-timings.json` (or under `MAINLOOP_CHECK_LOG_DIR`). Refresh the
+committed weights from a complete run with
+`jq -S '.modules | map_values(. * 100 | round / 100 | if . < 0.01 then 0.01 else . end)' TIMINGS > backend/tests/module_weights.json`.
 The runner verifies every worker's inventory against serial discovery. A focused run uses
 `make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
 Successful HTTP request logs are suppressed; warning/error logs and all test

@@ -11,7 +11,7 @@ import unittest
 import uuid
 from pathlib import Path
 from textwrap import indent
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from scripts import test_backend as runner
 
@@ -263,6 +263,65 @@ class BackendRunnerTests(unittest.TestCase):
                 os.environ, {"MAINLOOP_TIMEOUT_GRACE_MS": str(milliseconds)}
             ):
                 self.assertAlmostEqual(runner.cleanup_budget(), expected)
+
+    def test_recorded_timings_override_committed_module_weights(self):
+        with tempfile.TemporaryDirectory() as directory:
+            committed = Path(directory) / "weights.json"
+            committed.write_text(json.dumps({"a": 10, "b": 9}))
+            timings = Path(directory) / "timings.json"
+            with patch.object(runner, "MODULE_WEIGHTS", committed):
+                self.assertEqual(runner.module_weights(None), {"a": 10, "b": 9})
+                self.assertEqual(runner.module_weights(str(timings)), {"a": 10, "b": 9})
+                timings.write_text(json.dumps({"modules": {"b": 1, "c": 2}}))
+                self.assertEqual(
+                    runner.module_weights(str(timings)), {"a": 10, "b": 1, "c": 2}
+                )
+        self.assertIn(
+            "tests.runtime.test_postgres_task_handoff", runner.module_weights(None)
+        )
+
+    def test_worker_crash_names_signal_phase_and_modules(self):
+        result, _ = self.probe(
+            {
+                "probe_crash": "import os, signal\nos.kill(os.getpid(), signal.SIGSEGV)\n",
+                "probe_ok": "import unittest\nclass Case(unittest.TestCase):\n def test_ok(self): pass\n",
+            },
+            workers=2,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(
+            "Backend worker discovery killed by SIGSEGV during test discovery/imports;"
+            " modules: discovery",
+            result.stderr,
+        )
+        self.assertTrue(result.stderr.rstrip().endswith("modules: discovery"))
+
+    def test_default_workers_leave_memory_for_each_worker(self):
+        def meminfo(megabytes):
+            return mock_open(read_data=f"MemAvailable: {megabytes * 1024} kB\n")
+
+        with patch.object(runner.os, "cpu_count", return_value=16):
+            with patch("builtins.open", meminfo(8192)):
+                self.assertEqual(runner.default_workers(), 6)
+            with patch("builtins.open", meminfo(1536)):
+                self.assertEqual(runner.default_workers(), 3)
+            with patch("builtins.open", meminfo(100)):
+                self.assertEqual(runner.default_workers(), 1)
+            with patch("builtins.open", side_effect=OSError):
+                self.assertEqual(runner.default_workers(), 6)
+
+    def test_suite_cap_ends_just_before_an_enclosing_deadline(self):
+        with patch.dict(os.environ):
+            os.environ.pop("MAINLOOP_TIMEOUT_DEADLINE_MS", None)
+            self.assertEqual(runner.suite_seconds(), runner.SUITE_SECONDS)
+            with patch.object(runner.time, "time", return_value=1000.0):
+                os.environ["MAINLOOP_TIMEOUT_GRACE_MS"] = "3000"
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "1100000"
+                self.assertAlmostEqual(runner.suite_seconds(), 99.25)
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "1000500"
+                self.assertEqual(runner.suite_seconds(), 0)
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "9000000"
+                self.assertEqual(runner.suite_seconds(), runner.SUITE_SECONDS)
 
     def test_one_worker_failure_preserves_other_worker_results(self):
         result, timings = self.probe(

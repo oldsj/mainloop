@@ -25,10 +25,17 @@ from itertools import islice
 from pathlib import Path
 
 TEST_SECONDS = 60
+# Imports are CPU-bound; parallel workers beside other checks on a shared host
+# can legitimately exceed a test's hang deadline. The suite cap still applies.
+IMPORT_SECONDS = 180
+# Twice a measured worker's peak RSS (about 250 MB).
+WORKER_MEMORY_BYTES = 512 * 1024 * 1024
 SUITE_SECONDS = 540
 CLEANUP_SECONDS = 5
 STACK_DUMP_SECONDS = 0.5
 BACKEND = Path(__file__).resolve().parents[1]
+# Committed per-module seconds: a fresh checkout still balances longest-first.
+MODULE_WEIGHTS = BACKEND / "tests" / "module_weights.json"
 _deadlines = []
 _events = None
 
@@ -76,12 +83,13 @@ def emit(event, **values):
 
 
 @contextmanager
-def deadline(label):
-    print(f"[deadline {TEST_SECONDS}s] {label}", file=sys.stderr, flush=True)
+def deadline(label, seconds=None):
+    seconds = TEST_SECONDS if seconds is None else seconds
+    print(f"[deadline {seconds}s] {label}", file=sys.stderr, flush=True)
     # A signal/asyncio deadline cannot interrupt a blocked native call reliably.
     # faulthandler prints all thread stacks and exits even in that case.
-    faulthandler.dump_traceback_later(TEST_SECONDS, exit=True)
-    _deadlines.append((label, time.monotonic() + TEST_SECONDS))
+    faulthandler.dump_traceback_later(seconds, exit=True)
+    _deadlines.append((label, time.monotonic() + seconds))
     try:
         yield
     finally:
@@ -318,7 +326,7 @@ def run_tests(names, plan=None, inventory_only=False):
     asyncio.constants.DEBUG_STACK_DEPTH = depth
     loader = unittest.TestLoader()
     loader.suiteClass = CappedSuite
-    with deadline("test discovery/imports"):
+    with deadline("test discovery/imports", IMPORT_SECONDS):
         suite = (
             loader.loadTestsFromNames(names)
             if names
@@ -388,6 +396,59 @@ def cleanup_budget():
         parent_seconds = float(inherited_grace) / 1000
         seconds = min(seconds, max(0, parent_seconds - min(1, parent_seconds / 4)))
     return seconds
+
+
+def suite_seconds():
+    """End just before an enclosing cap, so this cap reports the timeout first.
+
+    Cleanup then runs inside the parent's grace, which exceeds cleanup_budget().
+    """
+    seconds = SUITE_SECONDS
+    deadline = os.environ.get("MAINLOOP_TIMEOUT_DEADLINE_MS")
+    if deadline:
+        grace = float(os.environ.get("MAINLOOP_TIMEOUT_GRACE_MS") or 0) / 1000
+        reserve = min(1, grace / 4)
+        seconds = min(seconds, max(0, float(deadline) / 1000 - reserve - time.time()))
+    return seconds
+
+
+def default_workers():
+    """One per CPU up to six, fewer when available memory cannot hold them."""
+    workers = min(os.cpu_count() or 1, 6)
+    try:
+        with open("/proc/meminfo") as meminfo:
+            for line in meminfo:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    workers = min(workers, max(1, available // WORKER_MEMORY_BYTES))
+    except (OSError, ValueError):
+        pass
+    return workers
+
+
+def describe_exit(worker):
+    """Name a failed worker's signal, last deadline phase, and planned modules."""
+    code = worker.process.returncode
+    status = f"exit {code}"
+    if code is not None and code < 0:
+        try:
+            status = f"killed by {signal.Signals(-code).name}"
+        except ValueError:
+            status = f"killed by signal {-code}"
+    phase = "startup, before any deadline"
+    try:
+        lines = worker.log.read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        if line.startswith("[deadline"):
+            phase = line.split("] ", 1)[-1]
+            break
+    modules = sorted({entry["module"] for entry in worker.plan or []})
+    return (
+        f"Backend worker {worker.name} {status} during {phase}; "
+        f"modules: {', '.join(modules) or 'discovery'}"
+    )
 
 
 def cleanup(processes, timed_out, expires, signum=signal.SIGTERM):
@@ -466,7 +527,8 @@ class Supervisor:
         self.args = args
         self.root = root
         self.started = time.monotonic()
-        self.expires = self.started + SUITE_SECONDS
+        self.seconds = suite_seconds()
+        self.expires = self.started + self.seconds
         self.namespace = uuid.uuid4().hex[:12]
         self.workers = []
         self.selector = selectors.DefaultSelector()
@@ -497,7 +559,7 @@ class Supervisor:
     def remaining(self):
         seconds = self.expires - time.monotonic()
         if seconds <= 0:
-            raise subprocess.TimeoutExpired("backend suite", SUITE_SECONDS)
+            raise subprocess.TimeoutExpired("backend suite", self.seconds)
         return seconds
 
     def launch(self, name, *, plan=None, inventory_only=False):
@@ -667,15 +729,26 @@ class Supervisor:
         )
 
 
-def supervise(args):
-    previous = {}
-    if args.timings and Path(args.timings).exists():
+def module_weights(timings):
+    """Return committed module weights, overridden by this host's recorded timings."""
+    weights = {}
+    sources = [(MODULE_WEIGHTS, lambda data: data)]
+    if timings:
+        sources.append((Path(timings), lambda data: data.get("modules", {})))
+    for path, select in sources:
+        if not path.exists():
+            continue
         try:
-            previous = json.loads(Path(args.timings).read_text()).get("modules", {})
-            if not isinstance(previous, dict):
-                previous = {}
+            recorded = select(json.loads(path.read_text()))
+            if isinstance(recorded, dict):
+                weights.update(recorded)
         except (ValueError, OSError, AttributeError) as error:
-            print(f"Ignoring previous timings: {error}", file=sys.stderr)
+            print(f"Ignoring module weights in {path}: {error}", file=sys.stderr)
+    return weights
+
+
+def supervise(args):
+    previous = module_weights(args.timings)
     cache = Path.home() / ".cache"
     cache.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mainloop-tests-", dir=cache) as directory:
@@ -692,7 +765,7 @@ def supervise(args):
             code = 124
             supervisor.timings["status"] = "timed_out"
             print(
-                f"Backend suite exceeded {SUITE_SECONDS}s; terminating every worker process group.",
+                f"Backend suite exceeded {supervisor.seconds:.0f}s; terminating every worker process group.",
                 file=sys.stderr,
                 flush=True,
             )
@@ -733,6 +806,7 @@ def supervise(args):
                         code = 1
                         supervisor.timings["status"] = "failed"
                 supervisor.selector.close()
+                crashes = []
                 for worker in supervisor.workers:
                     if worker.process.stdout and not worker.process.stdout.closed:
                         worker.process.stdout.close()
@@ -747,8 +821,12 @@ def supervise(args):
                             file=sys.stderr,
                         )
                         print(worker.log.read_text(), file=sys.stderr)
+                        crashes.append(describe_exit(worker))
                 supervisor.save()
                 report(supervisor.timings)
+                # Repeat each failed worker last, after its full log.
+                for crash in crashes:
+                    print(crash, file=sys.stderr)
                 if supervisor.timings["failure_summary"]:
                     print("\nMerged failure summary:", file=sys.stderr)
                     for failure in supervisor.timings["failure_summary"]:
@@ -776,7 +854,7 @@ def main():
     parser.add_argument(
         "--workers",
         type=int,
-        default=os.environ.get("MAINLOOP_TEST_WORKERS", min(os.cpu_count() or 1, 6)),
+        default=os.environ.get("MAINLOOP_TEST_WORKERS") or default_workers(),
     )
     args = parser.parse_args()
     if args.worker:

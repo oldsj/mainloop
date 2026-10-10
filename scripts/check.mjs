@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs';
 import { constants } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
@@ -25,7 +25,7 @@ export function checkPlan(make = 'make', nonBackend = false) {
         ? []
         : [[step('backend', 550, make, ['--no-print-directory', '-j1', 'test-backend'])]]),
       [
-        step('test-timeouts', 30, make, ['--no-print-directory', '-j1', 'test-timeouts']),
+        step('test-timeouts', 90, make, ['--no-print-directory', '-j1', 'test-timeouts']),
         step('install-frontend', 120, make, ['--no-print-directory', '-j1', 'install-frontend']),
         step('check-frontend', 120, 'pnpm', ['check'], ['install-frontend']),
         step('test-frontend', 60, 'pnpm', ['--dir', 'frontend', 'test:unit'], ['install-frontend']),
@@ -192,9 +192,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('Usage: node scripts/check.mjs [--make MAKE] [--non-backend]');
     process.exitCode = 2;
   } else {
+    const directory = process.env.MAINLOOP_CHECK_LOG_DIR || '.cache/check';
     process.exitCode = await runChecks({
       ...checkPlan(make, args[0] === '--non-backend'),
-      directory: process.env.MAINLOOP_CHECK_LOG_DIR || '.cache/check'
+      directory,
+      // Keep backend module timings with the logs; a later run balances on them.
+      env: {
+        MAINLOOP_TEST_TIMINGS: resolve(directory, 'backend-timings.json'),
+        ...process.env
+      }
     });
   }
 }

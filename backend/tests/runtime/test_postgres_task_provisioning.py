@@ -69,6 +69,14 @@ class RejectedCreateCrash(BaseException):
 class TaskProvisioningPostgresTests(KagentFakeCase):
     reuse_database = True
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Subclasses reuse this fixture for their own tests. Rerunning the
+        # inherited tests unchanged doubled their cost in every parallel run.
+        for name in vars(TaskProvisioningPostgresTests):
+            if name.startswith("test") and name not in vars(cls):
+                setattr(cls, name, None)
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         if not type(self)._reuse_pool():

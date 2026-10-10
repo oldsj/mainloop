@@ -109,14 +109,14 @@ _fmt-all:
 	trunk fmt -a
 	trunk check -a -y
 
-check: ## All offline checks in one turn (560s + cleanup; installs dependencies)
-	@$(CAP) 560 'make check' -- $(MAKE) --no-print-directory _check
+check: ## All offline checks in one turn (515s + cleanup; installs dependencies)
+	@$(CAP) 515 'make check' -- $(MAKE) --no-print-directory _check
 
 _check:
 	@node scripts/check.mjs --make '$(MAKE)'
 
-check-non-backend: ## Measure the offline checks outside the backend suite (560s + cleanup)
-	@$(CAP) 560 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
+check-non-backend: ## Measure the offline checks outside the backend suite (515s + cleanup)
+	@$(CAP) 515 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
 
 check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 	@$(CAP) 120 'make check-frontend' -- pnpm check
@@ -127,8 +127,8 @@ test-frontend: install-frontend ## Frontend unit tests (60s cap)
 frontend-build: install-frontend ## Build the frontend application (120s cap)
 	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
 
-test-timeouts: ## Timeout helper regression tests (30s cap)
-	@$(CAP) 30 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
+test-timeouts: ## Timeout helper regression tests (90s cap)
+	@$(CAP) 90 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
 
 test-timeout-integration: ## Opt-in real runner + dev-image PG16 cleanup regressions
 	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs
