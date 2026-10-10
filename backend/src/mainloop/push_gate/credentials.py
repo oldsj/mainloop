@@ -32,6 +32,7 @@ from mainloop.runtime.kagent_client import (
     SessionWorkspace,
     Unreachable,
 )
+from mainloop.services import github_checkout
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks import lifecycle
 
@@ -46,6 +47,8 @@ from models.push_gate import (
 
 logger = logging.getLogger(__name__)
 AUTHORIZATION_FIELD = "authorization"
+# kagent's preparation verifier compares the stored header byte for byte, lowercase.
+GIT_HEADER = "authorization"
 
 
 def no_transaction(conn):
@@ -119,18 +122,89 @@ def plan_digest(plan):
     ).hexdigest()
 
 
-def reference(plan, purpose):
-    prefix = "mainloop-git-read-" if purpose == "git-read" else "mainloop-git-push-"
+def _git_reference(purpose, issuance_id):
     return SessionCredential(
         origin=(
             settings.git_read_origin
             if purpose == "git-read"
             else settings.git_push_origin
         ),
-        header="Authorization",
-        secret_name=prefix + str(plan.issuance_id),
+        header=GIT_HEADER,
+        secret_name=f"mainloop-{purpose}-{issuance_id}",
         secret_key=AUTHORIZATION_FIELD,
     )
+
+
+def reference(plan, purpose):
+    """Return the plan's frozen reference; older plans keep their header spelling."""
+    built = _git_reference(purpose, plan.issuance_id)
+    for frozen in plan.references:
+        if frozen.secret_name == built.secret_name:
+            return SessionCredential(**frozen.model_dump())
+    return built
+
+
+def git_reference_counts(references):
+    """Mainloop's mirror of kagent's preparation check of the original Git references."""
+    counts = {"read": 0, "push": 0}
+    for ref in references:
+        data = ref if isinstance(ref, dict) else ref.model_dump()
+        if data["header"] != GIT_HEADER or data["secret_key"] != AUTHORIZATION_FIELD:
+            continue
+        if data["origin"] == settings.git_read_origin:
+            counts["read"] += 1
+        elif data["origin"] == settings.git_push_origin:
+            counts["push"] += 1
+    return counts
+
+
+async def _note_attempt(conn, attempt_id, evidence):
+    """Append one bounded, secret-free reason to the task attempt (caller's transaction)."""
+    current = await lifecycle.load_attempt(conn, attempt_id, lock=True)
+    if (
+        current is None
+        or evidence in current.evidence_refs
+        or len(current.evidence_refs) >= 64
+    ):
+        return
+    await lifecycle.save_attempt(
+        conn,
+        current.model_copy(
+            update={"evidence_refs": (*current.evidence_refs, evidence)}
+        ),
+    )
+
+
+async def note_binding(conn, binding, evidence):
+    attempt = await ns.attempt_row(binding, conn=conn)
+    if attempt is not None:
+        async with conn.transaction():
+            await _note_attempt(conn, attempt["id"], evidence)
+
+
+async def _hold_create(conn, binding, reason):
+    """Hold the writer before any enrollment exists; the next pass retries."""
+    await note_binding(conn, binding, "git-hold:" + reason)
+    raise ValueError("git_" + reason)
+
+
+async def learn_default_branch(conn, binding):
+    """Persist GitHub's default branch before a writer plan depends on it."""
+    no_transaction(conn)
+    project = await conn.fetchrow(
+        """SELECT p.id,p.full_name,p.default_branch FROM sessions s
+        JOIN projects p ON p.id=s.project_id WHERE s.id=$1""",
+        binding["session_id"],
+    )
+    if project is None or project["default_branch"]:
+        return
+    try:
+        branch = await github_checkout.resolve_default_branch(project["full_name"])
+    except github_checkout.DefaultBranchUnavailable:
+        await _hold_create(conn, binding, "default_branch_unavailable")
+    from mainloop.db.postgres import record_default_branch
+
+    await record_default_branch(conn, project["id"], branch)
 
 
 async def enrollment_row(conn, issuance_id):
@@ -317,6 +391,9 @@ async def plan_for_create(conn, binding_id):
         or binding["kagent_session_id"] is not None
     ):
         raise ValueError("original_create_history_unavailable")
+    if settings.push_gate_enabled:
+        # A cached '' default branch would freeze a writer read-only for good.
+        await learn_default_branch(conn, binding)
     async with locked(conn, binding_id):
         # Serialize original request identity and version reservation.
         existing = await conn.fetchval(
@@ -349,6 +426,8 @@ async def plan_for_create(conn, binding_id):
             )
         )
         policy = None
+        if settings.push_gate_enabled and not row["default_branch"]:
+            await _hold_create(conn, binding, "default_branch_unavailable")
         if row["default_branch"]:
             previous = await conn.fetchval(
                 "SELECT policy FROM push_branch_policies WHERE project_id=$1",
@@ -364,12 +443,13 @@ async def plan_for_create(conn, binding_id):
                     ),
                 )
             policy = await store.load_policy(conn, row["project_id"])
-        push = bool(
-            settings.push_gate_enabled
-            and claim_valid
-            and policy
-            and not protected_reason(row["branch"], policy)
-        )
+        if not settings.push_gate_enabled:
+            absent = "push_gate_disabled"
+        elif not claim_valid:
+            absent = "writer_claim_unavailable"
+        else:
+            absent = protected_reason(row["branch"], policy)
+        push = absent is None
         previous = await conn.fetchval(
             "SELECT grant_data FROM push_grants WHERE id=$1", binding_id
         )
@@ -378,18 +458,7 @@ async def plan_for_create(conn, binding_id):
         refs = [
             asdict(mcp),
             *[
-                asdict(
-                    SessionCredential(
-                        origin=(
-                            settings.git_read_origin
-                            if purpose == "git-read"
-                            else settings.git_push_origin
-                        ),
-                        header="Authorization",
-                        secret_name=f"mainloop-{purpose}-{issuance_id}",
-                        secret_key=AUTHORIZATION_FIELD,
-                    )
-                )
+                asdict(_git_reference(purpose, issuance_id))
                 for purpose in (("git-read", "git-push") if push else ("git-read",))
             ],
         ]
@@ -430,6 +499,8 @@ async def plan_for_create(conn, binding_id):
                 store.token_hash(capability_for(plan, "git-read")),
                 "planned" if push else "absent",
             )
+            if absent and attempt and settings.push_gate_enabled:
+                await _note_attempt(conn, attempt["id"], "git-push-absent:" + absent)
         return plan
 
 
@@ -828,16 +899,29 @@ def preparation_profile_for_binding_role(role):
 
 
 async def _preparation_failed(
-    conn, issuance_id, code="git_prepare_failed", *, receipt=None
+    conn, issuance_id, code="git_prepare_failed", *, receipt=None, grpc_status=None
 ):
+    _, enrollment = await enrollment_row(conn, issuance_id)
+    refs = git_reference_counts(enrollment.plan.references)
+    # Fixed tokens only: no runtime text, configuration or credential material.
+    failure = {"code": code, "grpc_status": grpc_status, "git_refs": refs}
+    evidence = f"git-prepare-failed:{code}" + (
+        f":grpc={grpc_status}" if grpc_status is not None else ""
+    )
+    evidence += f":git-refs read={refs['read']} push={refs['push']}"
+    attempt_id = enrollment.plan.attempt_id
     async with conn.transaction():
         await conn.execute(
-            """UPDATE git_enrollments SET prepare_state='failed',prepare_receipt=CASE
+            """UPDATE git_enrollments SET prepare_state='failed',prepare_receipt=COALESCE(CASE
             WHEN $2::jsonb IS NOT NULL AND prepare_receipt->'original'=$2::jsonb->'original'
-            THEN $2::jsonb ELSE prepare_receipt END WHERE issuance_id=$1""",
+            THEN $2::jsonb ELSE prepare_receipt END,'{}'::jsonb)
+            || jsonb_build_object('failure',$3::jsonb) WHERE issuance_id=$1""",
             str(issuance_id),
             json.dumps(asdict(receipt)) if receipt else None,
+            json.dumps(failure),
         )
+        if attempt_id:
+            await _note_attempt(conn, attempt_id, evidence)
     raise ValueError(code)
 
 
@@ -929,6 +1013,7 @@ async def prepare_for_binding(conn, issuance_id, client):
                     if exc.grpc_status == 6
                     else "git_prepare_failed"
                 ),
+                grpc_status=exc.grpc_status,
             )
         if receipt.historical or receipt.classification == "definite-failure":
             # A Prepare reply has no current lifecycle state. Classify terminal
@@ -961,6 +1046,8 @@ async def prepare_for_binding(conn, issuance_id, client):
         state = "requested"
     else:
         await _preparation_failed(conn, issuance_id, "git_prepare_receipt_invalid")
+    if state == "failed":
+        await _preparation_failed(conn, issuance_id, receipt=receipt)
     async with conn.transaction():
         await conn.execute(
             "UPDATE git_enrollments SET prepare_state=$2,prepare_receipt=$3::jsonb WHERE issuance_id=$1",

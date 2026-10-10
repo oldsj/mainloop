@@ -191,13 +191,30 @@ class PushLifecycleTests(KagentFakeCase):
         await self.pool.execute(
             "UPDATE projects SET default_branch='' WHERE id=$1", self.pid
         )
-        missing = await self.create("missing")
+        # Unknown metadata holds the writer before any Git plan; it never freezes read-only.
+        with patch.object(
+            github_checkout,
+            "resolve_default_branch",
+            AsyncMock(side_effect=github_checkout.DefaultBranchUnavailable("down")),
+        ):
+            with self.assertRaisesRegex(ValueError, "git_default_branch_unavailable"):
+                await self.create("missing")
+        missing = next(
+            w
+            for w in await workspaces.list_for(self.user)
+            if w.manifest.branch == "missing"
+        )
         self.assertEqual(missing.publication_reason, "missing_metadata")
         self.assertIsNone(await self.grant(missing.session_id))
-        values = {w.session_id: w for w in await workspaces.list_for(self.user)}
         self.assertEqual(
-            values[missing.session_id].model_dump(mode="json")["publication_mode"],
-            "read_only",
+            await self.pool.fetchval(
+                "SELECT count(*) FROM git_enrollments WHERE binding_id=$1",
+                missing.session_id,
+            ),
+            0,
+        )
+        self.assertEqual(
+            missing.model_dump(mode="json")["publication_mode"], "read_only"
         )
 
     async def test_runtime_replacement_and_stale_retry(self):

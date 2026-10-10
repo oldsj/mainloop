@@ -1001,51 +1001,10 @@ class Database:
             param_idx += 1
 
         if updates:
-            updates.append(f"metadata_updated_at = ${param_idx}")
-            params.append(datetime.now(timezone.utc))
-            param_idx += 1
-
-            params.append(project_id)
-            from mainloop.config import settings
-            from mainloop.push_gate import store
-
-            from models.push_gate import ProtectedBranchPolicy
-
             async with self.connection() as conn:
-                if settings.push_gate_enabled and default_branch:
-                    async with store.policy_lock(conn, project_id):
-                        async with conn.transaction():
-                            previous = await conn.fetchrow(
-                                "SELECT policy FROM push_branch_policies WHERE project_id=$1",
-                                project_id,
-                            )
-                            await conn.execute(
-                                f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
-                                *params,
-                            )
-                            policy = (
-                                store._decode(previous["policy"], ProtectedBranchPolicy)
-                                if previous
-                                else None
-                            )
-                            if (
-                                policy is None
-                                or policy.default_branch != default_branch
-                            ):
-                                await store.set_policy(
-                                    conn,
-                                    ProtectedBranchPolicy(
-                                        project_id=project_id,
-                                        version=policy.version + 1 if policy else 1,
-                                        default_branch=default_branch,
-                                        patterns=policy.patterns if policy else (),
-                                    ),
-                                )
-                else:
-                    await conn.execute(
-                        f"UPDATE projects SET {', '.join(updates)} WHERE id = ${param_idx}",
-                        *params,
-                    )
+                await write_project_metadata(
+                    conn, project_id, updates, params, default_branch
+                )
 
     async def touch_project(self, project_id: str):
         """Update last_used_at timestamp."""
@@ -2098,3 +2057,49 @@ class Database:
 
 # Global database instance
 db = Database()
+
+
+async def record_default_branch(conn, project_id: str, default_branch: str) -> None:
+    """Store a trusted default branch through the same atomic metadata/policy path."""
+    await write_project_metadata(
+        conn, project_id, ["default_branch = $1"], [default_branch], default_branch
+    )
+
+
+async def write_project_metadata(
+    conn, project_id: str, updates: list, params: list, default_branch: str | None
+) -> None:
+    """Apply cached metadata; a default branch moves the push policy in one transaction."""
+    from mainloop.config import settings
+    from mainloop.push_gate import store
+
+    from models.push_gate import ProtectedBranchPolicy
+
+    updates = [*updates, f"metadata_updated_at = ${len(params) + 1}"]
+    params = [*params, datetime.now(timezone.utc), project_id]
+    query = f"UPDATE projects SET {', '.join(updates)} WHERE id = ${len(params)}"
+    if not (settings.push_gate_enabled and default_branch):
+        await conn.execute(query, *params)
+        return
+    async with store.policy_lock(conn, project_id):
+        async with conn.transaction():
+            previous = await conn.fetchrow(
+                "SELECT policy FROM push_branch_policies WHERE project_id=$1",
+                project_id,
+            )
+            await conn.execute(query, *params)
+            policy = (
+                store._decode(previous["policy"], ProtectedBranchPolicy)
+                if previous
+                else None
+            )
+            if policy is None or policy.default_branch != default_branch:
+                await store.set_policy(
+                    conn,
+                    ProtectedBranchPolicy(
+                        project_id=project_id,
+                        version=policy.version + 1 if policy else 1,
+                        default_branch=default_branch,
+                        patterns=policy.patterns if policy else (),
+                    ),
+                )
