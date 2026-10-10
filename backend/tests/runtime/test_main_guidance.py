@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 from mainloop.mcp_app import TOOLS
 from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.delegation import PgStore, render_for_binding
-from mainloop.runtime.standing import StandingInputs, render_standing
+from mainloop.runtime.native_sessions import _with_standing
+from mainloop.runtime.standing import StandingInputs, delegated_brief, render_standing
 
 
 @asynccontextmanager
@@ -17,6 +18,64 @@ async def context(value=None, *args, **kwargs):
 
 
 class GuidanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delegated_session_does_not_duplicate_brief_with_role_text(self):
+        for role in ("supervisor", "child"):
+            with self.subTest(role=role):
+                brief = delegated_brief(role, "code", "assigned change")
+                with (
+                    patch(
+                        "mainloop.runtime.native_sessions.is_delegated",
+                        AsyncMock(return_value=True),
+                    ),
+                    patch(
+                        "mainloop.runtime.delegation.render_for_binding", AsyncMock()
+                    ) as render,
+                ):
+                    prompt, standing_hash = await _with_standing(
+                        {"role": role, "standing_hash": None}, brief
+                    )
+                self.assertEqual(prompt, brief)
+                self.assertIsNone(standing_hash)
+                render.assert_not_awaited()
+
+    def test_main_recognizes_owner_created_tasks(self):
+        text = render_standing(StandingInputs(role="main"))
+        self.assertIn(
+            "The owner can also create tasks directly (in the app or through the owner API); "
+            "those are owner-authored, so read them with `task_get` and treat them as legitimate.",
+            text,
+        )
+
+    def test_code_workspace_guidance_for_both_delegated_roles(self):
+        for role in ("supervisor", "child"):
+            with self.subTest(role=role):
+                text = delegated_brief(role, "code", "assigned change")
+                self.assertEqual(text.count("## Workspace environment"), 1)
+                self.assertLess(
+                    text.index("## Workspace environment"),
+                    text.index("## Assigned work"),
+                )
+                for instruction in (
+                    "isolated Linux sandbox (gVisor)",
+                    "CPU-bound work is near native speed",
+                    "Prefer fewer, larger commands",
+                    "every process in it stops",
+                    "wait for them to finish before ending your turn",
+                    "Don't leave background jobs",
+                    "`SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS`",
+                    "Only allowlisted hosts are reachable",
+                    "Git through Mainloop",
+                    "The GitHub API isn't reachable",
+                    "OS package manager can't install packages",
+                    "project's own dependency managers",
+                    "AGENTS.md for its check commands and time limits",
+                ):
+                    self.assertIn(instruction, text)
+                self.assertNotIn(
+                    "## Workspace environment",
+                    delegated_brief(role, "coordination", "assigned change"),
+                )
+
     async def test_main_projects_are_owner_scoped_and_selection_is_explicit(self):
         projects = [
             {"id": "p1", "full_name": "owner/one", "environment_selected": True},
@@ -89,6 +148,7 @@ class GuidanceTests(unittest.IsolatedAsyncioTestCase):
                 if mode == "code":
                     for step in (
                         "project's checks",
+                        "## Workspace environment",
                         "`git push`",
                         "`open_pull_request`",
                         "not `gh`",
@@ -98,6 +158,7 @@ class GuidanceTests(unittest.IsolatedAsyncioTestCase):
                     ):
                         self.assertIn(step, brief)
                 else:
+                    self.assertNotIn("## Workspace environment", brief)
                     self.assertNotIn("`git push`", brief)
                     self.assertIn("no repository authority", brief)
 

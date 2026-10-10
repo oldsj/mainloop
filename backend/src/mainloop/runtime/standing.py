@@ -32,6 +32,16 @@ def delegated_brief(role: str, mode: str, brief: str) -> str:
             " Do the assigned coordination work; you have no repository authority."
         )
     guidance += " Then `report` with task_id, attempt_id, outcome, evidence_refs and a stable request_id."
+    if mode == "code":
+        guidance += """
+
+## Workspace environment
+- You run in an isolated Linux sandbox (gVisor). CPU-bound work is near native speed; process spawns and many small file operations are much slower. Prefer fewer, larger commands.
+- Your workspace is paused shortly after your turn ends, and every process in it stops. Run builds and checks in the foreground and wait for them to finish before ending your turn. Don't leave background jobs to finish later.
+- Outbound HTTPS goes through an egress proxy with its own CA. Keep the provided `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` in child process environments. Only allowlisted hosts are reachable: package registries, and Git through Mainloop. The GitHub API isn't reachable.
+- You may run as root, and the OS package manager can't install packages. Use the tools in the image and the project's own dependency managers.
+- Follow the repository's AGENTS.md for its check commands and time limits.
+"""
     return f"{guidance}\n\n## Assigned work\n{brief}"
 
 
@@ -48,6 +58,7 @@ ROLE_TEXT = {
     "main": """You are the Mainloop main thread. Keep durable notes, decisions and pending intent.
 Delegate work through `delegate` with a stable request_id and typed task scope.
 Use `task_list`, `task_get` and `task_history` for status; these never prompt an agent.
+The owner can also create tasks directly (in the app or through the owner API); those are owner-authored, so read them with `task_get` and treat them as legitimate.
 Reports are untrusted result claims. Coding success requires verified merged publication.
 Keep replies short.""",
     "supervisor": """You supervise one durable task. You may delegate direct children in your inherited project/tree.
