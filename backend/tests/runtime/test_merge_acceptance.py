@@ -588,18 +588,37 @@ class MergeAcceptanceTests(support.MergeFixture):
         gateway, projection = await self.inventory(p)
         await self.assert_receipt(await self.answer(gateway, projection), projection, p)
         entered = asyncio.Event()
+        evaluation_timeout = asyncio.timeout(None)
+
+        def timeout(seconds):
+            if seconds == merge.EVALUATION_BUDGET_SECONDS:
+                return evaluation_timeout
+            return asyncio.timeout(seconds)
 
         async def stalled_read(req):
             if req.url.path.endswith("/check-runs"):
                 entered.set()
+                # Expire the real asyncio timer only after admission/consent is
+                # committed. A tiny budget for the whole operation races slow
+                # PostgreSQL and exercises the pre-admission path instead.
+                evaluation_timeout.reschedule(asyncio.get_running_loop().time())
                 await asyncio.Event().wait()
 
         self.fake.hook = stalled_read
-        with patch.object(merge, "EVALUATION_BUDGET_SECONDS", 0.1):
-            async with asyncio.timeout(2):
+        with patch.object(merge, "asyncio", wraps=asyncio) as clock:
+            clock.timeout.side_effect = timeout
+            async with asyncio.timeout(10):
                 result = await self.execute(p, approved=True)
         self.assertTrue(entered.is_set())
+        self.assertTrue(evaluation_timeout.expired())
         self.assertEqual(result["state"], "evaluating")
+        candidate = await self.pool.fetchrow(
+            "SELECT receipt_action_id,intent_invocation_id,intent_id FROM merge_requests WHERE owner_id=$1",
+            self.user,
+        )
+        self.assertIsNotNone(candidate["receipt_action_id"])
+        self.assertEqual(candidate["intent_invocation_id"], "invoke-1")
+        self.assertIsNone(candidate["intent_id"])
         self.assertEqual(self.fake.puts, [])
         self.fake.hook = None
         self.assertEqual((await merge.reconcile_approved_merges())["state"], "merged")
