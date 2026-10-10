@@ -49,6 +49,15 @@ async def record(conn, principal, request: TaskReport) -> dict:
             "report_id": previous["id"],
             "report": store.decode(previous["snapshot"]),
         }
+    # The admission/task locks serialize this durable allowance with report writes.
+    # Check it after request replay so the original result remains readable.
+    if task.status == "completed" and await conn.fetchval(
+        """SELECT EXISTS(SELECT 1 FROM task_reports
+           WHERE task_id=$1 AND attempt_id=$2 AND snapshot->>'outcome'='completed')""",
+        task.id,
+        request.attempt_id,
+    ):
+        raise store.TaskError(409, "completed_report_already_recorded")
     if (
         request.outcome == "completed"
         and task.mode == "coordination"
