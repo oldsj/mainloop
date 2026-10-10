@@ -79,7 +79,10 @@ kagent's lifecycle fencing and is a no-op for a running actor. It refuses a chan
 revoked generation, an active turn or pending idle work. Its reply is not an observation: the
 fresh GetSession must still match the frozen association. An unknown activation outcome is
 reconciled by GetSession and never replayed in the same attempt; while kagent holds the
-operation, nothing is sent.
+operation, nothing is sent. kagent keeps that READY/RESUME operation until a ResumeSession joins
+it, so the next readiness check makes its one activation call before waiting for readiness, and
+then attests a fresh GetSession. A failure in the send guard before turn bytes is recorded as
+`failed` with `not sent:`, not as an uncertain delivery.
 
 Read publication follows confirmation; delegated creating targets receive read only. Push follows
 active/current admission. Native send confirms required publications before external turn bytes.

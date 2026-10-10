@@ -1171,6 +1171,15 @@ async def ready_for_binding(conn, binding_id, session, *, push=True):
             raise ValueError("git_prepare_failed")
         await validate_scope(conn, enrollment, creating=True)
         client = ns.get_client()
+        # An earlier uncertain activation leaves READY/RESUME, which only a joining
+        # ResumeSession reconciles; ensure_ready would wait for NONE until it times out.
+        # Reconcile first, and keep this attempt's single activation call.
+        retained = (
+            session.state == RuntimeState.READY
+            and session.operation == RuntimeOperation.RESUME
+        )
+        if retained:
+            await _activate_runtime(client, session.id)
         current = (
             await client.ensure_ready(
                 session, timeout=settings.kagent_session_ready_timeout_seconds
@@ -1217,7 +1226,8 @@ async def ready_for_binding(conn, binding_id, session, *, push=True):
                 )
         # kagent suspends an idle actor but keeps the Session Ready, so a fresh read has no
         # running association to attest until the same actor is woken.
-        await _activate_runtime(client, session.id)
+        if not retained:
+            await _activate_runtime(client, session.id)
         # Never use Create/Resume/ensure_ready output as the association observation.
         if settings.git_transport_enabled and settings.push_gate_enabled:
             runtime_id = (

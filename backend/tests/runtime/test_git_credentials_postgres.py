@@ -28,6 +28,7 @@ from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.kagent_client import (
     AGENT_SETUP_DIGEST,
     CurrentRuntimeAssociation,
+    KagentClient,
     KagentSession,
     OutcomeUnknown,
     PreparationReceipt,
@@ -2054,22 +2055,71 @@ class GitTaskCredentialTests(GitCredentialsCase):
         self.assertEqual(self.native.activations, [runtime], "never replayed")
         self.assertEqual(len(sends), 1)
 
-        # The original operation finishes; a lost reply alone is reconciled by GetSession.
-        self.native.sessions[runtime] = replace(
-            self.native.sessions[runtime], operation=RuntimeOperation.NONE
+        self.assertEqual(
+            self.native.sessions[runtime].operation,
+            RuntimeOperation.RESUME,
+            "kagent keeps the original operation until a ResumeSession joins it",
         )
 
-        async def completed(runtime_id):
+        async def reconcile(runtime_id):
+            # The joining ResumeSession finishes the original operation on the same
+            # actor; its reply is lost too, so only GetSession can observe the result.
+            self.native.sessions[runtime_id] = replace(
+                self.native.sessions[runtime_id], operation=RuntimeOperation.NONE
+            )
             self.native.quiesced.discard(runtime_id)
             raise OutcomeUnknown("ResumeSession outcome unknown (grpc 14)")
 
         self.native.activations.clear()
-        self.native.activation_outcome = completed
-        follow_up = await ns.submit_message(sid, "Continue again")
-        await ns._deliver(sid, follow_up, "Continue again")
+        self.native.activation_outcome = reconcile
+        # Production readiness polls a READY/RESUME Session until timeout; the next
+        # delivery must reconcile before it, not wait for kagent to clear itself.
+        with (
+            patch.object(
+                self.native,
+                "ensure_ready",
+                partial(KagentClient.ensure_ready, self.native, interval=0),
+            ),
+            patch.object(self.native, "_sleep", asyncio.sleep, create=True),
+            patch.object(settings, "kagent_session_ready_timeout_seconds", 0.05),
+        ):
+            follow_up = await ns.submit_message(sid, "Continue again")
+            await ns._deliver(sid, follow_up, "Continue again")
         self.assertEqual(await ns.ledger.delivery_state(follow_up), "completed")
         self.assertEqual(sends.count(follow_up), 1)
+        self.assertNotIn(message_id, sends, "the failed message is not replayed")
         self.assertEqual(len(sends), 2)
+        # One activation per readiness check: admission joins, the send guard no-ops.
+        self.assertEqual(self.native.activations, [runtime, runtime])
+        self.assertEqual(len(self.native.sessions), 1, "no replacement runtime")
+        woken = await self.native.get_session(runtime)
+        self.assertEqual(
+            credentials.observation((await self.enrolled(sid)).plan, woken),
+            (await self.enrolled(sid)).association,
+        )
+
+    async def test_send_guard_activation_failure_is_recorded_not_sent(self):
+        sid, runtime, message_id, sends = await self.quiesced_follow_up()
+
+        async def pending_at_guard(runtime_id):
+            self.native.sessions[runtime_id] = replace(
+                self.native.sessions[runtime_id], operation=RuntimeOperation.RESUME
+            )
+            raise OutcomeUnknown("ResumeSession outcome unknown (grpc 14)")
+
+        async def first_activation(runtime_id):
+            self.native.quiesced.discard(runtime_id)
+            self.native.activation_outcome = pending_at_guard
+            return self.native.sessions[runtime_id]
+
+        self.native.activation_outcome = first_activation
+        await ns._deliver(sid, message_id, "Continue")
+        # The guard fails before the native send starts: a known non-delivery.
+        await self.assert_not_sent(
+            message_id, sends, "not sent: runtime_activation_pending"
+        )
+        self.assertEqual(self.native.activations, [runtime, runtime])
+        self.assertEqual(len(sends), 1)
 
     async def test_prepare_marker_and_original_are_immutable_and_migration_reentrant(
         self,

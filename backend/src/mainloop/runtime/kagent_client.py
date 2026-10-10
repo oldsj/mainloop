@@ -1347,8 +1347,8 @@ class KagentClient:
     ) -> KagentSession:
         """Return the Session once it can take a turn: resume it if suspended, wait if busy.
 
-        A Session that is Ready is trusted as-is. Waking a Ready-but-quiesced actor is kagent's
-        job when the turn arrives.
+        A settled Ready Session is returned as-is; a pending operation is waited on. Waking a
+        Ready-but-quiesced actor, or joining a retained activation, is `activate_session`'s job.
         """
         deadline = asyncio.get_running_loop().time() + timeout
         contract = (
