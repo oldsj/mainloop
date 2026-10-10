@@ -12,10 +12,17 @@ if [[ ! -f ${helper} ]]; then
 	script_directory=$(dirname "${script_path}")
 	helper=${script_directory}/../scripts/with-timeout.mjs
 fi
-cap() { node "${helper}" "$@" || return $?; }
+cap() { node "${helper}" --grace 8 "$@" || return $?; }
 # Include setup, the supplied command, and cleanup in one foreground bound.
 if [[ ${MAINLOOP_DEV_POSTGRES_WORKER:-0} != 1 ]]; then
-	exec node "${helper}" 590 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
+	exec node "${helper}" --grace 25 570 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
+fi
+# Teardown needs the active phase's eight seconds, the stop phase's 15+1 seconds,
+# and one second of scheduling/removal headroom. Refuse before claiming PGDATA
+# if an enclosing supervisor cannot provide this budget.
+if ! awk -v grace="${MAINLOOP_TIMEOUT_GRACE_MS:-0}" 'BEGIN { exit !(grace >= 25000) }'; then
+	echo 'dev-postgres: enclosing cleanup budget must allow 25 seconds' >&2
+	exit 2
 fi
 root=${DEV_POSTGRES_ROOT:-/data/test-postgres}
 port=${DEV_POSTGRES_PORT:-5432}
@@ -45,7 +52,7 @@ cleanup() {
 	trap '' INT QUIT TERM
 	trap - EXIT
 	if ${started}; then
-		if node "${helper}" 15 'dev-postgres stop' -- "${as_pg[@]}" "${pg[0]}/pg_ctl" -D "${root}" -m immediate -w -t 10 stop; then
+		if node "${helper}" --grace 1 15 'dev-postgres stop' -- "${as_pg[@]}" "${pg[0]}/pg_ctl" -D "${root}" -m immediate -w -t 10 stop; then
 			:
 		else
 			stop_status=$?
@@ -117,15 +124,15 @@ cap --leave-running 35 'dev-postgres startup' -- "${as_pg[@]}" env TMPDIR="${tmp
 cap 5 'dev-postgres readiness' -- "${pg[0]}/pg_isready" -h 127.0.0.1 -p "${port}" -U mainloop -d postgres -t 3
 export MAINLOOP_TEST_DATABASE_URL="postgresql://mainloop@127.0.0.1:${port}/postgres"
 echo "MAINLOOP_TEST_DATABASE_URL=${MAINLOOP_TEST_DATABASE_URL}"
-# Setup consumes the same budget; leave 25 seconds for command and PG cleanup.
-command_seconds=$((565 - SECONDS))
+# Setup consumes the same budget; leave 30 seconds for command and PG cleanup.
+command_seconds=$((540 - SECONDS))
 if ((command_seconds <= 0)); then
-	echo 'dev-postgres setup: timed out after 565 s' >&2
+	echo 'dev-postgres setup: timed out after 540 s' >&2
 	exit 124
 fi
 # Bash background jobs inherit ignored INT/QUIT; restore them before exec.
 launching=true
-setsid env --default-signal=INT,QUIT node "${helper}" "${command_seconds}" 'dev-postgres command' -- "$@" &
+setsid env --default-signal=INT,QUIT node "${helper}" --grace 8 "${command_seconds}" 'dev-postgres command' -- "$@" &
 command_pid=$!
 launching=false
 if ((${#pending_signal[@]})); then on_signal "${pending_signal[@]}"; fi

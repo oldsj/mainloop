@@ -45,12 +45,13 @@ harness's ten-minute foreground limit. CI splits these checks into bounded jobs.
 
 | Command or phase                                             | Cap                       | Coverage                                                                     |
 | ------------------------------------------------------------ | ------------------------- | ---------------------------------------------------------------------------- |
-| `make check`                                                 | 570 s total               | Complete offline check set; dependencies already synced                      |
+| `make check`                                                 | 560 s + cleanup           | Complete offline check set; at most 590 s including cleanup                  |
 | `make install`                                               | 240 s total               | Frontend, backend and shared models                                          |
 | `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                |
 | pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1` |
 | `make test-backend`                                          | 550 s                     | Runner: 60 s/test or fixture, 540 s/suite                                    |
 | `make test-timeouts`                                         | 30 s                      | Shared command-supervisor regressions                                        |
+| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions      |
 | `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                  |
 | `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                              |
 | `make frontend-build`, root/frontend `pnpm build`            | 120 s                     | Vite application build                                                       |
@@ -59,7 +60,7 @@ harness's ten-minute foreground limit. CI splits these checks into bounded jobs.
 | `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                       |
 | `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                    |
 | `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                              |
-| `dev-postgres run` / supplied command                        | 590 s / 565 s minus setup | Setup, command and teardown; reserves 25 s for cleanup                       |
+| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup     |
 | PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                             |
 | Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry       |
 | Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                         |
@@ -69,13 +70,25 @@ harness's ten-minute foreground limit. CI splits these checks into bounded jobs.
 
 `scripts/with-timeout.mjs` requires the installed Node runtime, starts an isolated
 process group, announces its deadline and elapsed time, and returns 124 with
-"timed out after N s" on expiry. It sends TERM then KILL with up to five seconds
-of cleanup; nested supervisors get shorter cleanup grace so descendants are
-removed before their parent exits. Normal exit codes pass through. Make itself
+"timed out after N s" on expiry. Deadlines bound command execution; cleanup may
+then take up to 30 seconds, including after ordinary exits that leave descendants.
+It forwards INT/QUIT/TERM unchanged, uses TERM for expiry or ordinary completion,
+then KILL when the cleanup budget expires. Nested owners inherit the remaining
+cleanup budget, reserving up to one second before their parent's escalation;
+the backend supervisor observes this contract while keeping its own five-second
+maximum. `--grace SECONDS` can assign a smaller cleanup window. Normal exit codes pass through. Make itself
 returns 2 for a failed recipe and prints the helper's 124. PostgreSQL startup
 explicitly retains its server on success; `dev-postgres` owns its shutdown.
 If shutdown cannot confirm the server has stopped, it retains PGDATA and reports
-the path instead of deleting live data.
+the path instead of deleting live data. PostgreSQL admits work only with a
+25-second cancellation budget: eight seconds for active-phase cleanup, 15 seconds
+for stop plus one second of escalation, and one second for removal. Its supplied
+command's deadline includes setup and can be tighter than a standalone Make cap.
+
+For the explicit real-process regressions, set `MAINLOOP_TIMEOUT_TEST_IMAGE` to
+an existing local development image and run `make test-timeout-integration`.
+The regression never pulls an image; it runs isolated, network-disabled PG16
+containers, injects a seven-second stop delay, and removes its containers.
 
 Use the install targets rather than bare `uv sync` or `pnpm install` in agent
 turns: request timeouts alone do not bound many downloads or install hooks.
