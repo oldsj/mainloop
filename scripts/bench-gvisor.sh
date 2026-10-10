@@ -351,7 +351,7 @@ try:
             legs += [("gvisor", name) for name in (profiles if flow in IO_FLOWS else ["defaults"])]
         for leg, profile in legs:
             for run in range(1, args.runs + 1):
-                load = subprocess.check_output(["uptime"], text=True).strip()
+                load = subprocess.check_output(["uptime"], text=True).strip() if shutil.which("uptime") else "loadavg " + Path("/proc/loadavg").read_text().strip()
                 row = {"flow": flow, "leg": leg, "profile": profile, "run": run, "uptime": load,
                        "utc": datetime.datetime.now(datetime.UTC).isoformat()}
                 if leg == "gvisor" and not availability.get(profile, {}).get("available"):
