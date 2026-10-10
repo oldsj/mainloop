@@ -217,6 +217,14 @@ def supervise(arguments):
     process = None
     pending_signal = None
     timed_out = False
+    cleanup_seconds = CLEANUP_SECONDS
+    inherited_grace = os.environ.get("MAINLOOP_TIMEOUT_GRACE_MS")
+    if inherited_grace is not None:
+        parent_seconds = float(inherited_grace) / 1000
+        cleanup_seconds = min(
+            CLEANUP_SECONDS,
+            max(0, parent_seconds - min(1, parent_seconds / 4)),
+        )
 
     def interrupted(signum, _frame):
         nonlocal pending_signal
@@ -227,7 +235,7 @@ def supervise(arguments):
             raise Interrupted(signum)
 
     try:
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        for signum in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
             signal.signal(signum, interrupted)
         process = subprocess.Popen(  # nosec B603 - this file, explicit interpreter/argv
             [sys.executable, str(Path(__file__).resolve()), "--worker", *arguments],
@@ -248,20 +256,20 @@ def supervise(arguments):
         return 128 + error.signum
     finally:
         # Also remove subprocesses left behind after a fatal per-test deadline.
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        for signum in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
             signal.signal(signum, signal.SIG_IGN)
         if process is not None:
-            cleanup_expires = time.monotonic() + CLEANUP_SECONDS
+            cleanup_expires = time.monotonic() + cleanup_seconds
             if timed_out:
                 try:
                     os.kill(process.pid, signal.SIGUSR1)
                     # Give faulthandler time to write actual frames before TERM.
                     # This interval is part of the five-second cleanup budget.
-                    process.wait(timeout=STACK_DUMP_SECONDS)
+                    process.wait(timeout=min(STACK_DUMP_SECONDS, cleanup_seconds))
                 except (ProcessLookupError, subprocess.TimeoutExpired):
                     pass
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                os.killpg(process.pid, pending_signal or signal.SIGTERM)
             except ProcessLookupError:
                 pass
             try:

@@ -5,6 +5,8 @@ ENV HOME=/home/nonroot \
     XDG_CACHE_HOME=/home/nonroot/.cache \
     TRUNK_CACHE=/home/nonroot/.cache/trunk \
     UV_PYTHON_DOWNLOADS=never \
+    UV_HTTP_TIMEOUT=30 \
+    UV_HTTP_RETRIES=1 \
     PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY .devcontainer/install-tools /usr/local/lib/mainloop/install-tools
@@ -23,9 +25,10 @@ RUN groupadd --gid 65532 nonroot \
 COPY .trunk/trunk.yaml /opt/mainloop-lint/.trunk/trunk.yaml
 COPY .trunk/configs/ /opt/mainloop-lint/.trunk/configs/
 COPY .devcontainer/dev-postgres /usr/local/bin/dev-postgres
+COPY scripts/with-timeout.mjs /usr/local/lib/mainloop/with-timeout.mjs
 WORKDIR /opt/mainloop-lint
 RUN git init \
-    && trunk install --ci --no-progress \
+    && node /usr/local/lib/mainloop/with-timeout.mjs 300 'trunk install' -- trunk install --ci --no-progress \
     && find /home/nonroot/.cache/trunk/tools -type f -exec sha256sum {} + > /opt/mainloop-lint/tool-checksums.txt \
     && chown -R 65532:65532 /home/nonroot /opt/mainloop-lint
 

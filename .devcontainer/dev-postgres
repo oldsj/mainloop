@@ -6,6 +6,24 @@ if [[ ${1-} != run || $# -lt 2 ]]; then
 	exit 2
 fi
 shift
+helper=/usr/local/lib/mainloop/with-timeout.mjs
+if [[ ! -f ${helper} ]]; then
+	script_path=$(realpath "$0")
+	script_directory=$(dirname "${script_path}")
+	helper=${script_directory}/../scripts/with-timeout.mjs
+fi
+cap() { node "${helper}" --grace 8 "$@" || return $?; }
+# Include setup, the supplied command, and cleanup in one foreground bound.
+if [[ ${MAINLOOP_DEV_POSTGRES_WORKER:-0} != 1 ]]; then
+	exec node "${helper}" --grace 25 570 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
+fi
+# Teardown needs the active phase's eight seconds, the stop phase's 15+1 seconds,
+# and one second of scheduling/removal headroom. Refuse before claiming PGDATA
+# if an enclosing supervisor cannot provide this budget.
+if ! awk -v grace="${MAINLOOP_TIMEOUT_GRACE_MS:-0}" 'BEGIN { exit !(grace >= 25000) }'; then
+	echo 'dev-postgres: enclosing cleanup budget must allow 25 seconds' >&2
+	exit 2
+fi
 root=${DEV_POSTGRES_ROOT:-/data/test-postgres}
 port=${DEV_POSTGRES_PORT:-5432}
 if [[ ${root} != /* || ${root} == / || ${root} == *"'"* || ${root} == *$'\n'* || ! ${port} =~ ^[0-9]+$ ]] || ((port < 1024 || port > 65535)); then
@@ -34,7 +52,20 @@ cleanup() {
 	trap '' INT QUIT TERM
 	trap - EXIT
 	if ${started}; then
-		"${as_pg[@]}" "${pg[0]}/pg_ctl" -D "${root}" -m immediate -w stop || status=1
+		if node "${helper}" --grace 1 15 'dev-postgres stop' -- "${as_pg[@]}" "${pg[0]}/pg_ctl" -D "${root}" -m immediate -w -t 10 stop; then
+			:
+		else
+			stop_status=$?
+			if ((status == 0)); then status=${stop_status}; fi
+		fi
+		# Refuse to remove live PGDATA when even immediate shutdown did not complete.
+		if [[ -f ${root}/postmaster.pid ]]; then
+			server_pid=$(head -1 "${root}/postmaster.pid")
+			if kill -0 "${server_pid}" 2>/dev/null; then
+				echo "dev-postgres: server still alive; retaining ${root} for cleanup" >&2
+				exit "${status}"
+			fi
+		fi
 	fi
 	rm -rf -- "${root}"
 	if ${owned_socket}; then rm -rf -- "${socket}"; fi
@@ -53,15 +84,11 @@ on_signal() {
 	fi
 	trap '' INT QUIT TERM
 	if [[ -n ${command_pid} ]]; then
-		kill -"$1" -- "-${command_pid}" 2>/dev/null || kill -"$1" "${command_pid}" 2>/dev/null || true
-		# Allow a short grace period, then terminate even uncooperative commands.
-		for phase in TERM KILL; do
-			for ((attempt = 0; attempt < 10; attempt++)); do
-				if ! kill -0 -- "-${command_pid}" 2>/dev/null; then break; fi
-				sleep 0.1
-			done
-			kill -"${phase}" -- "-${command_pid}" 2>/dev/null || kill -"${phase}" "${command_pid}" 2>/dev/null || true
-		done
+		# The shared supervisor owns its command's separate group. Let it finish
+		# escalation before stopping PostgreSQL; killing this supervisor early
+		# would leave descendants that ignore TERM running in another group.
+		kill -"$1" "${command_pid}" 2>/dev/null || true
+		wait "${command_pid}" || true
 	fi
 	exit "$2"
 }
@@ -75,7 +102,7 @@ owned_tmp=true
 if [[ ${uid} == 0 ]]; then
 	chown "${pg_user}":65532 "${root}" "${socket}" "${tmp}"
 fi
-"${as_pg[@]}" "${pg[0]}/initdb" -D "${root}" -U mainloop --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 --no-sync >"${tmp}/initdb.log"
+cap 30 'dev-postgres initdb' -- "${as_pg[@]}" "${pg[0]}/initdb" -D "${root}" -U mainloop --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 --no-sync >"${tmp}/initdb.log"
 cat >>"${root}/postgresql.conf" <<CONFIG
 listen_addresses = '127.0.0.1'
 port = ${port}
@@ -93,13 +120,19 @@ temp_tablespaces = ''
 CONFIG
 # pg_ctl waits for startup; cleanup also covers partial startup failure.
 started=true
-"${as_pg[@]}" env TMPDIR="${tmp}" "${pg[0]}/pg_ctl" -D "${root}" -l "${root}/server.log" -w -t 30 start
-"${pg[0]}/pg_isready" -h 127.0.0.1 -p "${port}" -U mainloop -d postgres
+cap --leave-running 35 'dev-postgres startup' -- "${as_pg[@]}" env TMPDIR="${tmp}" "${pg[0]}/pg_ctl" -D "${root}" -l "${root}/server.log" -w -t 30 start
+cap 5 'dev-postgres readiness' -- "${pg[0]}/pg_isready" -h 127.0.0.1 -p "${port}" -U mainloop -d postgres -t 3
 export MAINLOOP_TEST_DATABASE_URL="postgresql://mainloop@127.0.0.1:${port}/postgres"
 echo "MAINLOOP_TEST_DATABASE_URL=${MAINLOOP_TEST_DATABASE_URL}"
+# Setup consumes the same budget; leave 30 seconds for command and PG cleanup.
+command_seconds=$((540 - SECONDS))
+if ((command_seconds <= 0)); then
+	echo 'dev-postgres setup: timed out after 540 s' >&2
+	exit 124
+fi
 # Bash background jobs inherit ignored INT/QUIT; restore them before exec.
 launching=true
-setsid env --default-signal=INT,QUIT "$@" &
+setsid env --default-signal=INT,QUIT node "${helper}" --grace 8 "${command_seconds}" 'dev-postgres command' -- "$@" &
 command_pid=$!
 launching=false
 if ((${#pending_signal[@]})); then on_signal "${pending_signal[@]}"; fi

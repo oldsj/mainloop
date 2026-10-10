@@ -5,16 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "node ../scripts/with-timeout.mjs 120 'frontend build' -- vite build",
     "preview": "vite preview",
-    "prepare": "svelte-kit sync || echo ''",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "lint": "prettier --check . && eslint .",
+    "prepare": "if [ -f node_modules/@sveltejs/kit/svelte-kit.js ]; then node ../scripts/with-timeout.mjs 30 'svelte-kit sync' -- svelte-kit sync; fi",
+    "check": "node ../scripts/with-timeout.mjs 120 'frontend check' -- sh -c 'svelte-kit sync && svelte-check --tsconfig ./tsconfig.json'",
+    "lint": "node ../scripts/with-timeout.mjs 120 'frontend lint' -- sh -c 'prettier --check . && eslint .'",
     "test": "../scripts/e2e-guard.sh && playwright test",
     "test:ui": "../scripts/e2e-guard.sh && playwright test --ui",
     "test:debug": "../scripts/e2e-guard.sh && playwright test --debug",
     "test:report": "playwright show-report",
-    "test:unit": "node --test src/lib/*.test.ts"
+    "test:unit": "node ../scripts/with-timeout.mjs 60 'frontend unit tests' -- sh -c 'node --test src/lib/*.test.ts'"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
