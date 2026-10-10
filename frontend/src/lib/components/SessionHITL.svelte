@@ -36,7 +36,7 @@
 
 {#if ids.length || error}
   <div
-    class="border-term-border max-h-[50vh] shrink-0 overflow-y-auto border-b"
+    class="border-term-border max-h-[50%] shrink-0 overflow-y-auto border-b"
     aria-label="Session requests"
   >
     {#if error}<p class="text-term-fg-muted p-4 text-sm" role="status">

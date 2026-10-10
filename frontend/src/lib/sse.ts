@@ -56,7 +56,7 @@ export class SSEClient {
    * Connect to the SSE endpoint.
    */
   connect(): void {
-    if (this.eventSource) {
+    if (typeof EventSource === 'undefined' || this.eventSource) {
       return; // Already connected
     }
 
@@ -139,7 +139,7 @@ export class SSEClient {
    * Check if connected.
    */
   isConnected(): boolean {
-    return this.eventSource?.readyState === EventSource.OPEN;
+    return typeof EventSource !== 'undefined' && this.eventSource?.readyState === EventSource.OPEN;
   }
 
   /**

@@ -55,6 +55,12 @@ function createInboxStore() {
       }
     },
 
+    async dismissDiagnostic(itemId: string) {
+      await api.dismissQueueDiagnostic(itemId);
+      await this.fetchItems();
+      await this.fetchUnreadCount();
+    },
+
     async markRead(itemId: string) {
       try {
         await api.markQueueItemRead(itemId);

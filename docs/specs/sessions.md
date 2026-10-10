@@ -4,7 +4,9 @@ Sessions are native Claude Code or Codex work started from the home thread or th
 
 ## Session list
 
-Desktop shows sessions in a sidebar. Mobile shows sessions in a tab.
+At widths of 1024px and above, sessions appear in a sidebar beside the conversation.
+Narrower windows use Chat, Sessions and Inbox tabs so the panels do not obscure the task or
+session view. Task detail scrolls within the available pane; workspace controls wrap when needed.
 
 The list includes standalone sessions created on `/agents` and delegated child sessions, excluding the native main thread and archived sessions. Starting an agent adds it to the list immediately. When no sessions exist, the list points to **+ agent** or delegating work from the home thread. Each session shows its title, native runtime kind (Claude or Codex), and status. Workspace health and controls appear separately from session status.
 

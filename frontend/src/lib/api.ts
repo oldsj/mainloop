@@ -896,6 +896,11 @@ export const api = {
     if (!response.ok) throw new Error('Failed to mark queue item read');
   },
 
+  async dismissQueueDiagnostic(itemId: string): Promise<void> {
+    const response = await apiFetch(`${API_URL}/queue/${itemId}/dismiss`, { method: 'POST' });
+    if (!response.ok) throw new Error('Could not dismiss the unavailable input notice');
+  },
+
   async markAllQueueItemsRead(): Promise<void> {
     const response = await apiFetch(`${API_URL}/queue/read-all`, {
       method: 'POST'

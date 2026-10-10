@@ -20,6 +20,23 @@ An accepted response is marked responded and leaves the pending inbox on refresh
 current read-only receipts until superseded by newer input. Decision delivery never implies task
 completion. Supported provider reason behavior is documented in [chat](chat.md#native-structured-input).
 
+Inbox list and unread-count reads retire pending HITL cards whose verified leaves all belong
+to completed, failed or cancelled tasks, including unavailable input and uncertain decisions.
+Unavailable projections without leaves use the observer's verified session binding. Mixed
+active/terminal sources and unknown bindings remain visible. Retired cards have queue status
+`expired` and remain available through `/queue?status=expired` and the individual item route;
+request snapshots, aliases, decisions and delivery state are unchanged. This is presentation
+cleanup, with no native response or delivery retry.
+
+Expiry serializes with observer request/card writes and checks current sources after locking.
+Observer refresh and pending list/count use the same terminal-source rule: unchanged terminal
+sources cannot restore pending presentation; a verified source that becomes active can reopen
+the card on observer refresh. Accepted decisions remain responded.
+
+An input notice without a structured request reference offers **Dismiss notice**. The owner
+can expire that notice through `POST /queue/{id}/dismiss`; structured requests cannot use this
+route. Dismissal retains the notice for audit and records no approval or rejection.
+
 Polling pauses when the document is hidden and refreshes on return. Inbox/chat mounts share
 one poll per request ID; delivered receipts stop automatic polling. Pending and uncertain
 requests continue reconciling. UI polls share one in-flight read and start at most four reads
@@ -38,8 +55,11 @@ response route and cannot grant merge consent.
 
 The observer refreshes task links after committing its HITL observation, releasing receipt
 locks before taking task-tree locks. Leaf/root projection updates then commit together.
-Already-recorded leaf receipts, superseded input and stale merge proposals are excluded from
-pending task attention. Changed-head observation clears the old proposal/approval links.
+Already-recorded leaf receipts and superseded input are excluded from pending task attention.
+An unanswered native merge retry remains task attention even when its proposal is stale,
+expired or blocked: the task stays Waiting for approval and the shared HITL card explains its
+staleness. Changed-head observation clears the old merge proposal but preserves native input
+links. Terminal merge evaluation recovers unanswered native links dropped by an older cache.
 Response submission refreshes each unique canonical leaf binding after the durable receipt
 commits and leaf/merge decision locks are released. Same-action replay refreshes those links
 without recording another decision or sending another native response. Attention failure or

@@ -368,7 +368,7 @@ def state_result(state, pid, deadline=None, *, approved=False):
 
 async def project_state(conn, pid, state):
     """Project stored evaluation state only onto its exact current task attempt."""
-    from mainloop.tasks import lifecycle
+    from mainloop.tasks import attention, lifecycle
     from mainloop.tasks.principal import TaskPrincipal
     from mainloop.tasks.projection import persist
 
@@ -392,6 +392,20 @@ async def project_state(conn, pid, state):
     if previous.merge_proposal_id != pid:
         return
     ids = previous.pending_approval_ids
+    if state in ("blocked", "expired") and attempt.state == "active":
+        runtime = await conn.fetchval(
+            "SELECT kagent_session_id FROM native_bindings WHERE session_id=$1",
+            attempt.binding_id,
+        )
+        if runtime:
+            # Recover links that an earlier projection dropped for stale merge
+            # eligibility. Unanswered native retries still require attention.
+            ids = tuple(
+                sorted(
+                    set(ids)
+                    | set(await attention.pending(conn, task, attempt, runtime))
+                )
+            )
     if state in ("blocked", "expired") and ids:
         # Remove only canonical views tied to this merge's recorded response,
         # and only if all their leaves were answered. Preserve other questions,

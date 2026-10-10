@@ -69,13 +69,19 @@
       console.error('Failed to load session:', e);
       if (id !== sessionId) return;
       // An HTTP error is distinct from a failed connection, even if a health probe failed too.
-      unreachable = !(e instanceof ApiError) &&
+      unreachable =
+        !(e instanceof ApiError) &&
         (e instanceof TypeError || get(connection).status === 'offline');
-      error = e instanceof ApiError
-        ? e.status >= 500
-          ? 'Mainloop returned a server error. Reload to try again.'
-          : e.status === 404 ? 'Session not found' : 'Session could not be loaded.'
-        : unreachable ? "Can't reach the Mainloop backend." : 'Session could not be loaded.';
+      error =
+        e instanceof ApiError
+          ? e.status >= 500
+            ? 'Mainloop returned a server error. Reload to try again.'
+            : e.status === 404
+              ? 'Session not found'
+              : 'Session could not be loaded.'
+          : unreachable
+            ? "Can't reach the Mainloop backend."
+            : 'Session could not be loaded.';
     }
   }
 
@@ -84,7 +90,9 @@
   let actionNotice = $state<{ kind: 'error' | 'warning'; text: string } | null>(null);
 
   const finished = $derived(
-    session?.status === 'completed' || session?.status === 'failed' || session?.status === 'cancelled'
+    session?.status === 'completed' ||
+      session?.status === 'failed' ||
+      session?.status === 'cancelled'
   );
 
   async function handleStopTurn() {
@@ -99,7 +107,10 @@
       if (id === sessionId) {
         actionNotice = {
           kind: 'error',
-          text: e instanceof Error ? e.message : 'Could not confirm the turn stopped. Refresh before retrying.'
+          text:
+            e instanceof Error
+              ? e.message
+              : 'Could not confirm the turn stopped. Refresh before retrying.'
         };
       }
     } finally {
@@ -140,46 +151,58 @@
 </svelte:head>
 
 {#if error}
-  <div class="flex h-full items-center justify-center text-term-red">
+  <div class="text-term-red flex h-full items-center justify-center">
     <div class="text-center">
       <p class="text-lg">{error}</p>
       {#if unreachable}
-        <p class="mt-2 text-sm text-term-fg-muted">Retrying automatically…</p>
+        <p class="text-term-fg-muted mt-2 text-sm">Retrying automatically…</p>
       {/if}
-      <a href="/" class="mt-4 inline-block text-term-accent hover:underline">Back to home</a>
+      <a href="/" class="text-term-accent mt-4 inline-block hover:underline">Back to home</a>
     </div>
   </div>
 {:else if !session}
-  <div class="flex h-full items-center justify-center text-term-fg-muted">
+  <div class="text-term-fg-muted flex h-full items-center justify-center">
     <span>Loading session...</span>
   </div>
 {:else}
-  <div class="flex h-full flex-col bg-term-bg">
+  <div class="bg-term-bg flex h-full flex-col">
     <!-- Header -->
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-term-border p-4">
-      <div class="min-w-0 flex-1">
+    <div class="border-term-border flex flex-wrap items-center justify-between gap-3 border-b p-4">
+      <div class="w-full min-w-0 sm:w-auto sm:flex-1">
         <div class="flex items-center gap-3">
           <a href="/" class="text-term-fg-muted hover:text-term-accent" aria-label="Back">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
+                clip-rule="evenodd"
+              />
             </svg>
           </a>
           <div class="min-w-0">
-            <h1 class="truncate text-lg font-medium text-term-fg">{session.title}</h1>
-            <p class="truncate text-sm text-term-fg-muted">{session.description}</p>
+            <h1 class="text-term-fg truncate text-lg font-medium">{session.title}</h1>
+            <p class="text-term-fg-muted truncate text-sm">{session.description}</p>
           </div>
         </div>
       </div>
       <div class="flex shrink-0 items-center gap-2">
-        <span class="text-xs {session.status === 'active'
-          ? 'text-term-cyan'
-          : session.status === 'waiting_on_user'
-            ? 'text-term-magenta'
-            : session.status === 'completed'
-              ? 'text-term-green'
-              : session.status === 'failed'
-                ? 'text-term-red'
-                : 'text-term-yellow'}" data-testid="session-status">
+        <span
+          class="text-xs {session.status === 'active'
+            ? 'text-term-cyan'
+            : session.status === 'waiting_on_user'
+              ? 'text-term-magenta'
+              : session.status === 'completed'
+                ? 'text-term-green'
+                : session.status === 'failed'
+                  ? 'text-term-red'
+                  : 'text-term-yellow'}"
+          data-testid="session-status"
+        >
           [{statusLabel(session.status)}]
         </span>
         {#if !session.archived_at && session.status !== 'failed' && session.status !== 'cancelled'}
@@ -187,7 +210,7 @@
             type="button"
             onclick={handleStopTurn}
             disabled={stoppingId === session.id || $connection.status === 'offline'}
-            class="min-h-11 border border-term-border px-3 py-1 text-sm text-term-fg hover:border-term-red hover:text-term-red disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-term-accent"
+            class="border-term-border text-term-fg hover:border-term-red hover:text-term-red focus-visible:outline-term-accent min-h-11 border px-3 py-1 text-sm focus-visible:outline focus-visible:outline-2 disabled:opacity-50"
             data-testid="session-stop-turn"
             title="Stop the current turn and keep this session available"
           >
@@ -198,7 +221,7 @@
           <button
             type="button"
             onclick={handleCancel}
-            class="border border-term-border px-3 py-1 text-sm text-term-fg-muted hover:border-term-red hover:text-term-red"
+            class="border-term-border text-term-fg-muted hover:border-term-red hover:text-term-red border px-3 py-1 text-sm"
           >
             Cancel
           </button>
@@ -206,7 +229,7 @@
           <button
             type="button"
             onclick={handleArchive}
-            class="border border-term-border px-3 py-1 text-sm text-term-fg-muted hover:border-term-accent hover:text-term-accent"
+            class="border-term-border text-term-fg-muted hover:border-term-accent hover:text-term-accent border px-3 py-1 text-sm"
             data-testid="archive-session"
             title="Clear this session from the list (kept for audit)"
           >
@@ -232,13 +255,13 @@
 
     {#if owningTask}
       <div
-        class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-term-border px-4 py-2 text-sm"
+        class="border-term-border flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm"
         data-testid="session-task-link"
       >
         <span class="text-term-fg-muted">Task</span>
         <a
           href="/tasks/{owningTask.view.task.id}"
-          class="text-term-accent underline underline-offset-4 hover:text-term-fg"
+          class="text-term-accent hover:text-term-fg underline underline-offset-4"
         >
           {owningTask.view.task.title}
         </a>
@@ -251,12 +274,12 @@
     {/if}
 
     {#if workspace}
-      <div class="flex items-center gap-3 border-b border-term-border px-4 py-2 text-sm">
+      <div class="border-term-border flex flex-wrap items-center gap-3 border-b px-4 py-2 text-sm">
         <span class="text-term-fg-muted">Workspace</span>
         <WorkspaceLifecycleBadge {workspace} />
         <a
           href={`/workspaces/${workspace.workspace_id}`}
-          class="ml-auto text-term-accent underline underline-offset-4 hover:text-term-fg"
+          class="text-term-accent hover:text-term-fg ml-auto underline underline-offset-4"
         >
           Manage workspace
         </a>
@@ -269,17 +292,17 @@
 
     <!-- Summary (if completed) -->
     {#if session.status === 'completed' && session.summary}
-      <div class="border-t border-term-border p-4">
-        <h3 class="text-sm font-medium text-term-green">Summary</h3>
-        <p class="mt-2 text-sm text-term-fg">{session.summary}</p>
+      <div class="border-term-border border-t p-4">
+        <h3 class="text-term-green text-sm font-medium">Summary</h3>
+        <p class="text-term-fg mt-2 text-sm">{session.summary}</p>
       </div>
     {/if}
 
     <!-- Error (if failed) -->
     {#if session.status === 'failed' && session.error}
-      <div class="border-t border-term-border p-4">
-        <h3 class="text-sm font-medium text-term-red">Error</h3>
-        <p class="mt-2 text-sm text-term-fg-muted">{session.error}</p>
+      <div class="border-term-border border-t p-4">
+        <h3 class="text-term-red text-sm font-medium">Error</h3>
+        <p class="text-term-fg-muted mt-2 text-sm">{session.error}</p>
       </div>
     {/if}
   </div>

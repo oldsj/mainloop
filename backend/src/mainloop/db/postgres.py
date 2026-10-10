@@ -1163,6 +1163,10 @@ class Database:
 
         # Build query dynamically based on filters
         conditions = ["user_id = $1", "status = $2"]
+        if status == "pending":
+            from mainloop.tasks.inbox import PENDING_CARD_VISIBLE
+
+            conditions.append(PENDING_CARD_VISIBLE)
         params: list[Any] = [user_id, status]
         param_idx = 3
 
@@ -1177,7 +1181,7 @@ class Database:
         params.append(limit)
 
         query = f"""
-            SELECT * FROM queue_items
+            SELECT * FROM queue_items q
             WHERE {" AND ".join(conditions)}
             ORDER BY
                 CASE priority
@@ -1240,11 +1244,14 @@ class Database:
         """Count unread queue items for a user."""
         if not self._pool:
             return 0
+        from mainloop.tasks.inbox import PENDING_CARD_VISIBLE
+
         async with self.connection() as conn:
             row = await conn.fetchrow(
-                """
-                SELECT COUNT(*) as count FROM queue_items
+                f"""
+                SELECT COUNT(*) as count FROM queue_items q
                 WHERE user_id = $1 AND read_at IS NULL AND status = 'pending'
+                  AND {PENDING_CARD_VISIBLE}
                 """,
                 user_id,
             )
