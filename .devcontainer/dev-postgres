@@ -75,7 +75,7 @@ owned_tmp=true
 if [[ ${uid} == 0 ]]; then
 	chown "${pg_user}":65532 "${root}" "${socket}" "${tmp}"
 fi
-"${as_pg[@]}" "${pg[0]}/initdb" -D "${root}" -U mainloop --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 >"${tmp}/initdb.log"
+"${as_pg[@]}" "${pg[0]}/initdb" -D "${root}" -U mainloop --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 --no-sync >"${tmp}/initdb.log"
 cat >>"${root}/postgresql.conf" <<CONFIG
 listen_addresses = '127.0.0.1'
 port = ${port}
@@ -84,6 +84,10 @@ max_connections = 30
 shared_buffers = '64MB'
 work_mem = '4MB'
 max_wal_size = '256MB'
+# Disposable tests only: crash recovery/durability is not part of this fixture.
+fsync = off
+synchronous_commit = off
+full_page_writes = off
 log_temp_files = 0
 temp_tablespaces = ''
 CONFIG

@@ -122,6 +122,9 @@ These are the exact commands verified to work in a Mainloop workspace for this p
 # Backend dependency sync
 (cd backend && uv sync --frozen --python 3.13)
 
+# Offline backend and disposable PostgreSQL (30 seconds/test, 9 minutes/suite)
+dev-postgres run make test-backend
+
 # Frontend dependency install
 pnpm --version
 pnpm install --frozen-lockfile

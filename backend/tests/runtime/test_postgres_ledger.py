@@ -14,6 +14,8 @@ runs for real. Kubernetes credential deletion is faked.
 from __future__ import annotations
 
 import asyncio
+import atexit
+import io
 import json
 import os
 import unittest
@@ -60,6 +62,7 @@ from models import (
 )
 
 TEST_URL = os.environ.get("MAINLOOP_TEST_DATABASE_URL")
+_template_database = None
 
 
 def _with_database(url: str, database: str) -> str:
@@ -83,6 +86,26 @@ async def _init_schema(url: str) -> None:
         await conn.execute(MIGRATION_SQL)
     finally:
         await conn.close()
+
+
+def _drop_database(database: str) -> None:
+    asyncio.run(_admin(TEST_URL, f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)'))
+
+
+def _schema_template() -> str:
+    """Migrate one empty database per process; every class gets its own clone."""
+    global _template_database
+    if _template_database is None:
+        database = f"mainloop_template_{uuid.uuid4().hex[:12]}"
+        asyncio.run(_admin(TEST_URL, f'CREATE DATABASE "{database}"'))
+        try:
+            asyncio.run(_init_schema(_with_database(TEST_URL, database)))
+        except BaseException:
+            _drop_database(database)
+            raise
+        _template_database = database
+        atexit.register(_drop_database, database)
+    return _template_database
 
 
 async def _column_count(url: str, table: str, column: str) -> int:
@@ -113,14 +136,15 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
             raise unittest.SkipTest("MAINLOOP_TEST_DATABASE_URL is not set")
         cls.database = f"mainloop_test_{uuid.uuid4().hex[:12]}"
         cls.url = _with_database(TEST_URL, cls.database)
-        asyncio.run(_admin(TEST_URL, f'CREATE DATABASE "{cls.database}"'))
-        asyncio.run(_init_schema(cls.url))
-
-    @classmethod
-    def tearDownClass(cls):
+        template = _schema_template()
         asyncio.run(
-            _admin(TEST_URL, f'DROP DATABASE IF EXISTS "{cls.database}" WITH (FORCE)')
+            _admin(
+                TEST_URL,
+                f'CREATE DATABASE "{cls.database}" TEMPLATE "{template}" STRATEGY WAL_LOG',
+            )
         )
+        # Clean up even when a subclass's setUpClass fails after creating its DB.
+        cls.addClassCleanup(_drop_database, cls.database)
 
     async def asyncSetUp(self):
         self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
@@ -205,6 +229,64 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
         return await self.pool.fetchval(
             "SELECT state FROM native_deliveries WHERE message_id=$1", message_id
         )
+
+
+class FixtureIsolationTests(PostgresTestCase):
+    async def test_failed_class_setup_removes_its_database(self):
+        class FailedSetup(PostgresTestCase):
+            @classmethod
+            def setUpClass(cls):
+                super().setUpClass()
+                raise RuntimeError("injected failure after clone")
+
+            def test_never_runs(self):
+                raise AssertionError("class setup should have failed")
+
+        def run():
+            return unittest.TextTestRunner(stream=io.StringIO()).run(
+                unittest.TestLoader().loadTestsFromTestCase(FailedSetup)
+            )
+
+        result = await asyncio.to_thread(run)
+        self.assertEqual(result.testsRun, 0)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("injected failure after clone", result.errors[0][1])
+        conn = await asyncpg.connect(TEST_URL)
+        try:
+            self.assertFalse(
+                await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)",
+                    FailedSetup.database,
+                )
+            )
+        finally:
+            await conn.close()
+
+    async def test_class_clones_preserve_schema_without_copying_mutations_or_rows(self):
+        await self.thread()
+        await self.pool.execute("ALTER TABLE main_threads ADD COLUMN fixture_only TEXT")
+        database = f"mainloop_test_{uuid.uuid4().hex[:12]}"
+        await _admin(
+            TEST_URL,
+            f'CREATE DATABASE "{database}" TEMPLATE "{_template_database}" STRATEGY WAL_LOG',
+        )
+        try:
+            url = _with_database(TEST_URL, database)
+            self.assertEqual(
+                await _column_count(url, "main_threads", "fixture_only"), 0
+            )
+            self.assertEqual(
+                await _column_count(url, "native_bindings", "kagent_deleted_at"), 1
+            )
+            conn = await asyncpg.connect(url)
+            try:
+                self.assertEqual(
+                    await conn.fetchval("SELECT count(*) FROM main_threads"), 0
+                )
+            finally:
+                await conn.close()
+        finally:
+            await _admin(TEST_URL, f'DROP DATABASE "{database}" WITH (FORCE)')
 
 
 class SchemaTests(PostgresTestCase):

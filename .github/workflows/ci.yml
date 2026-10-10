@@ -18,7 +18,7 @@ jobs:
   backend-tests:
     name: Backend unit and PostgreSQL tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -26,9 +26,11 @@ jobs:
           POSTGRES_USER: mainloop
           POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --no-sync
         ports:
           - 5432:5432
         options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=512m
           --health-cmd "pg_isready -U mainloop -d postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
@@ -48,9 +50,18 @@ jobs:
       - name: Install locked backend dependencies
         working-directory: backend
         run: uv sync --frozen --python 3.13
+      - name: Disable durability on the disposable PostgreSQL service
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" psql -U mainloop -d postgres -v ON_ERROR_STOP=1 \
+            -c 'ALTER SYSTEM SET fsync = off' \
+            -c 'ALTER SYSTEM SET synchronous_commit = off' \
+            -c 'ALTER SYSTEM SET full_page_writes = off' \
+            -c "ALTER SYSTEM SET max_wal_size = '128MB'" \
+            -c 'SELECT pg_reload_conf()'
       - name: Run offline fixtures and scratch PostgreSQL tests
-        working-directory: backend
-        run: uv run --no-sync python -m unittest discover -s tests -t . -v
+        run: make test-backend
 
   frontend-unit:
     name: Frontend unit tests
