@@ -32,6 +32,17 @@ A completed native turn or fallback reply creates no report and completes no tas
 
 Coordination completion requires an explicit completed result and no live child reservations. The reconciler waits for outstanding native deliveries, drains the attempt, revokes its credential, confirms runtime deletion, then settles completion and releases capacity. Unknown deletion keeps the attempt draining and the result pending. A pending cancellation takes precedence over completion.
 
+The same cleanup runs for coding tasks after verified merged settlement. Product completion
+remains visible while runtime deletion is pending; it does not free capacity by itself. The
+reconciler discovers older completed tasks with held active/draining attempts without a new
+operation or manual database repair. Failed/cancelled coding outcomes with held attempts are
+also recovered; ordinary cancellation and provisioning failure already use confirmed settlement.
+An authoritative failed first/sole brief already draining is disposed through this path, retaining
+the task's blocked/reconciliation diagnostic. Active failed/blocked reports, publication holds,
+and handoffs remain reservations pending their existing resolution paths. Live children,
+outstanding or uncertain deliveries, unresolved publication and pending operations prevent
+automatic release.
+
 Standing context renders bounded stored task projections and recent report claims without additional model calls. Native history, compaction and structured owner input retain their provider identity. The delegated runtime receives the persisted initial brief, including role guidance for MCP creates; the richer standing projection is not injected into that brief.
 
 ## Qualification boundary

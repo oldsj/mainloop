@@ -2317,7 +2317,7 @@ async def cancel(session_id: str) -> str:
 
 
 async def delete_kagent_session(session_id: str) -> bool:
-    """Delete the kagent Session of an archived (or deleted) session. True once kagent confirmed.
+    """Delete an archived/deleted session or drained task runtime. True once confirmed.
 
     Not confirmed (kagent unreachable, outcome unknown) leaves ``kagent_deleted_at`` unset, and
     ``reconcile_archived_deletes`` retries; DeleteSession is idempotent. A Session kagent no
@@ -2332,6 +2332,9 @@ async def delete_kagent_session(session_id: str) -> bool:
             return True
         if not await lifecycle.permitted(session_id, "runtime_delete"):
             return False
+        if binding["kagent_deleted_at"]:
+            # Resume after confirmed deletion without another external call.
+            return True
         if await ledger.active_count(session_id):
             logger.info("kagent delete of %s waits for its open turn", session_id)
             return False

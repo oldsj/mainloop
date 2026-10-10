@@ -389,6 +389,15 @@ ancestry checks and root-tree authority lock as parent draining and credential r
 Siblings serialize conservatively on that root key. Lock order is project policy → tree
 authority → publication → runtime → task admission → rows, on the caller connection.
 
+Verified merged coding tasks use the shared result cleanup sequence: wait for outstanding native
+deliveries and children, drain, revoke credentials, confirm exact-identity Session deletion, then
+release capacity and the pinned branch claim. A delete reply with another identity, a pending
+delete operation or an unknown outcome retains the reservation for retry. Persisted confirmed
+deletion resumes settlement after restart without another delete call. The workspace/session
+rows and attempt audit remain available; task merge results remain owner-readable after agent
+status access ends at credential revocation. Failed/cancelled held coding attempts and drained
+authoritative failed first briefs are recovered too; active blocked work is not disposed.
+
 Delegated PR/merge scope requires the active current attempt, exact generation, owner/project,
 role/depth and ancestry. A sibling's or parent's branch confers no authority. Coordination attempts
 have no checkout, writer claim or repository authority. A native turn finishing does not complete

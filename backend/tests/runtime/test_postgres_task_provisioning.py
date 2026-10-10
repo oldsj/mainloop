@@ -621,7 +621,10 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
         # terminal delivery evidence, without replaying a brief or creating a runtime.
         calls = len(self.fake.requests)
         spawned = self.spawn.call_count
-        await reconcile_once(db, installed_ports=TaskPorts(provisioning=self.worker))
+        with patch.object(ns, "delete_kagent_session", AsyncMock(return_value=False)):
+            await reconcile_once(
+                db, installed_ports=TaskPorts(provisioning=self.worker)
+            )
         async with self.pool.acquire() as conn:
             view = await read(conn, self.owner, task.id)
             failed_attempt = await lifecycle.load_attempt(conn, attempt.id)
@@ -648,7 +651,10 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
             (len(self.fake.requests), self.spawn.call_count), (calls, spawned)
         )
         version = view.task.version
-        await reconcile_once(db, installed_ports=TaskPorts(provisioning=self.worker))
+        with patch.object(ns, "delete_kagent_session", AsyncMock(return_value=False)):
+            await reconcile_once(
+                db, installed_ports=TaskPorts(provisioning=self.worker)
+            )
         async with self.pool.acquire() as conn:
             self.assertEqual(
                 (await lifecycle.load_task(conn, task.id)).version, version
@@ -661,7 +667,7 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
             ),
             1,
         )
-        # Owner cancellation is still the existing route to confirmed disposal and release.
+        # Owner cancellation still takes precedence while automatic disposal is unknown.
         async with self.pool.acquire() as conn, conn.transaction():
             cancel = await mutate(
                 conn,

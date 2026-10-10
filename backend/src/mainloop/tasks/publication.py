@@ -296,10 +296,10 @@ async def attach_proposal(conn, binding, proposal):
 
 
 async def settle_merge(conn, candidate, result):
-    """Settle product state/event with the merge outcome; retain runtime capacity.
+    """Settle product state/event with the merge outcome, making runtime cleanup eligible.
 
-    Runtime fencing/deletion remains S1/S3's job. A verified merge never implies
-    that the native runtime is gone or that a branch claim can be released.
+    The task reconciler drains and confirms deletion before releasing capacity.
+    A verified merge alone never proves that the native runtime is gone.
     """
     from mainloop.tasks.projection import ci_state, persist
 

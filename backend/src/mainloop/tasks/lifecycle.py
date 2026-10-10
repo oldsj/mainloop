@@ -16,6 +16,7 @@ second one inside a lock.
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -25,6 +26,7 @@ from models.task import Task, TaskAttempt
 
 LIVE = ("creating", "active")
 FINAL = ("superseded", "failed", "cancelled", "completed")
+logger = logging.getLogger(__name__)
 
 # What each guarded action needs the attempt to be.
 ACTIONS: dict[str, tuple[str, ...]] = {
@@ -497,7 +499,12 @@ async def transition(
 
 
 async def settle(
-    conn, attempt_id: str, final: str, *, evidence: str
+    conn,
+    attempt_id: str,
+    final: str,
+    *,
+    evidence: str,
+    preserve_task_state: bool = False,
 ) -> TaskAttempt | None:
     """Fence a drained attempt, release its claim and finish it. One transaction.
 
@@ -507,6 +514,8 @@ async def settle(
     released only by compare-and-swap on the generation the attempt was admitted with, so a
     stale caller cannot free a branch that was transferred meanwhile. Returns None when the
     attempt was not draining or fenced (another pass already settled it).
+    ``preserve_task_state`` retains an already-settled coding product outcome or
+    blocked failure diagnostic while clearing its current runtime attempt.
     """
     if final not in FINAL:
         raise ValueError("settlement needs a final state")
@@ -563,8 +572,12 @@ async def settle(
     if task.current_attempt_id == attempt.id:
         updated = task.model_copy(
             update={
-                "status": final if final != "superseded" else task.status,
-                "reason": None,
+                "status": (
+                    task.status
+                    if preserve_task_state or final == "superseded"
+                    else final
+                ),
+                "reason": task.reason if preserve_task_state else None,
                 "current_attempt_id": None,
                 "version": task.version + 1,
                 "updated_at": datetime.now(UTC),
@@ -574,6 +587,138 @@ async def settle(
             conn, updated, task.version, f"attempt:{attempt.id}:{final}"
         )
     return attempt
+
+
+async def _result_state(conn, task: Task, attempt: TaskAttempt) -> str | None:
+    """Separate a settled product result from a report or recoverable blocked task."""
+    if task.current_attempt_id != attempt.id or attempt.state not in (
+        "active",
+        "draining",
+    ):
+        return None
+    if task.mode == "code":
+        if task.status in ("completed", "failed", "cancelled"):
+            return task.status
+        # Only the authoritative failed first/sole brief has already ended authority.
+        # Reports and blocked publication/handoff states can still continue work.
+        if (
+            task.status == "blocked"
+            and attempt.state == "draining"
+            and any(
+                ref.startswith("native-delivery-failed:")
+                for ref in attempt.evidence_refs
+            )
+        ):
+            return "failed"
+        return None
+    if task.status == "waiting" and task.reason == "reconciliation":
+        outcome = await conn.fetchval(
+            "SELECT snapshot->>'outcome' FROM task_reports WHERE ('report:' || id)=$1 AND attempt_id=$2",
+            attempt.result_ref,
+            attempt.id,
+        )
+        if outcome == "completed":
+            return "completed"
+    return None
+
+
+async def _result_ready(conn, task: Task, attempt: TaskAttempt) -> str | None:
+    from mainloop.runtime import native_sessions as ns
+    from mainloop.tasks.publication import unresolved_intents
+
+    final = await _result_state(conn, task, attempt)
+    if final is None:
+        return None
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM task_operations WHERE task_id=$1 AND state NOT IN ('completed','blocked'))",
+        task.id,
+    ):
+        return None  # A committed cancel or handoff owns settlement.
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM tasks t JOIN task_attempts a ON a.task_id=t.id WHERE t.parent_task_id=$1 AND a.capacity_held)",
+        task.id,
+    ):
+        return None
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))",
+        attempt.binding_id,
+        [*ns.OPEN_STATES, "queued", "uncertain"],
+    ):
+        return None
+    if await unresolved_intents(conn, task, attempt):
+        return None
+    return final
+
+
+async def reconcile_results(database):
+    """Recover result cleanup from persisted task/attempt state, including older merges.
+
+    Wait for deliveries and children, drain and revoke, confirm exact runtime deletion,
+    then settle. Unknown deletion retains capacity; no operation or prompt is invented.
+    Coding product outcomes/projections survive runtime cleanup unchanged.
+    """
+    from mainloop.push_gate import lifecycle as push_lifecycle
+    from mainloop.runtime import native_sessions as ns
+    from mainloop.runtime.agent_credentials import revoke, revoke_deferred
+
+    async with database.connection() as conn:
+        rows = await conn.fetch(
+            """SELECT a.id,a.binding_id FROM tasks t JOIN task_attempts a ON a.id=t.current_attempt_id
+               WHERE a.capacity_held AND a.state IN ('active','draining') AND (
+                 (t.mode='code' AND t.status IN ('completed','failed','cancelled','blocked')) OR
+                 (t.mode='coordination' AND t.status='waiting' AND t.snapshot->>'reason'='reconciliation'))
+               ORDER BY a.id"""
+        )
+    for row in rows:
+        sid = row["binding_id"]
+        try:
+            async with database.connection() as conn:
+                async with push_lifecycle.locked(conn, sid), locked(
+                    conn, sid
+                ), conn.transaction():
+                    await store.admission_lock(conn)
+                    attempt = await load_attempt(conn, row["id"])
+                    task = await load_task(conn, attempt.task_id, lock=True)
+                    if await _result_ready(conn, task, attempt) is None:
+                        continue
+                    await transition(
+                        conn, attempt.id, "draining", from_states=("active", "draining")
+                    )
+                    await revoke_deferred(conn, sid)
+            await revoke(sid)
+            if not await ns.delete_kagent_session(sid):
+                continue
+            async with database.connection() as conn:
+                async with push_lifecycle.locked(conn, sid), locked(
+                    conn, sid
+                ), conn.transaction():
+                    await store.admission_lock(conn)
+                    attempt = await load_attempt(conn, row["id"])
+                    task = await load_task(conn, attempt.task_id, lock=True)
+                    final = await _result_ready(conn, task, attempt)
+                    binding = await ns.get_binding(sid, conn=conn)
+                    if (
+                        final is None
+                        or not binding
+                        or not binding["kagent_session_id"]
+                        or not binding["kagent_deleted_at"]
+                    ):
+                        continue
+                    settled = await settle(
+                        conn,
+                        attempt.id,
+                        final,
+                        evidence=f"kagent-deleted:{binding['kagent_session_id']}",
+                        preserve_task_state=task.mode == "code",
+                    )
+                    if settled is not None:
+                        await conn.execute(
+                            "UPDATE sessions SET status=$2,completed_at=NOW() WHERE id=$1",
+                            sid,
+                            final,
+                        )
+        except Exception:
+            logger.exception("Task result cleanup failed: %s", row["id"])
 
 
 async def drain_handoff(conn, attempt: TaskAttempt):
