@@ -295,6 +295,10 @@ profiles:
       - op: add
         path: pipelines
         value:
+          # build is overridden too: DevSpace's default build pipeline writes its cache
+          # object to the target namespace even with no images.
+          build: |-
+            require_live_target
           dev: |-
             require_live_target
             create_deployments mainloop

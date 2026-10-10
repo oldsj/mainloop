@@ -254,9 +254,12 @@ make dev-harness       # build arm64 harness images from ../kagent, apply them t
 make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
 ```
 
-All targets use kube context `admin@internal-01` (override with
-`DEV_LIVE_CONTEXT`) through DevSpace profile `live` in `devspace.yaml`. `make dev`
-and the Kind setup are unchanged.
+All targets use kube context `admin@internal-01` through DevSpace profile `live` in
+`devspace.yaml`, whose pipelines (`build`, `dev`, `deploy`, `deploy-agents`, `purge`)
+refuse any other context or namespace. Use these targets or `scripts/dev-live.sh`:
+raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are not
+guarded and act on whatever `--kube-context` and `-n` say. `make dev` and the Kind
+setup are unchanged.
 
 What syncs:
 
