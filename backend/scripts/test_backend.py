@@ -309,8 +309,10 @@ def run_tests(names, plan=None, inventory_only=False):
     # IsolatedAsyncioTestCase keeps debug checks enabled, but capturing ten
     # creation frames for every IO callback/future is costly in a sandbox.
     # This only shortens diagnostic provenance; exception tracebacks stay full.
-    # call_soon removes two internal frames; three retains a creation site.
-    depth = int(os.environ.get("MAINLOOP_TEST_DEBUG_STACK_DEPTH", "3"))
+    # asyncio drops its own frames from each retained stack: two for call_soon,
+    # three for call_later and asyncio.sleep timers. Five keeps the caller of
+    # call_later and the coroutine that awaits asyncio.sleep.
+    depth = int(os.environ.get("MAINLOOP_TEST_DEBUG_STACK_DEPTH", "5"))
     if depth < 1:
         raise ValueError("MAINLOOP_TEST_DEBUG_STACK_DEPTH must be positive")
     asyncio.constants.DEBUG_STACK_DEPTH = depth

@@ -623,12 +623,33 @@ class BackendRunnerTests(unittest.TestCase):
             "   task = asyncio.create_task(asyncio.sleep(0))\n"
             "   for value in (handle, future, task):\n"
             "    self.assertGreaterEqual(len(value._source_traceback), 1)\n"
-            "    self.assertLessEqual(len(value._source_traceback), 3)\n"
+            "    self.assertLessEqual(len(value._source_traceback), asyncio.constants.DEBUG_STACK_DEPTH)\n"
             "   future.cancel()\n"
             "   await task\n"
             "  self.assertIn('create_future', ''.join(future._source_traceback.format()))\n"
             "  self.assertGreater(len(traceback.extract_stack()), 1)\n"
             "  self.assertEqual(len(traceback.extract_stack(limit=2)), 2)\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_timer_creation_keeps_caller_and_sleeping_coroutine_frames(self):
+        result, _ = self.probe(
+            "import asyncio, unittest\n"
+            "class Case(unittest.IsolatedAsyncioTestCase):\n"
+            " async def test_timers(self):\n"
+            "  loop = asyncio.get_running_loop()\n"
+            "  later = loop.call_later(1000, lambda: None)\n"
+            "  async def sleeper():\n"
+            "   await asyncio.sleep(1000)\n"
+            "  task = asyncio.create_task(sleeper())\n"
+            "  await asyncio.sleep(0)\n"
+            "  sleep_timer = next(handle for handle in loop._scheduled\n"
+            "   if handle._callback.__name__ == '_set_result_unless_cancelled')\n"
+            "  self.assertEqual(later._source_traceback[-1].name, 'test_timers')\n"
+            "  self.assertIn('sleeper', [frame.name for frame in sleep_timer._source_traceback])\n"
+            "  task.cancel()\n"
+            "  await asyncio.gather(task, return_exceptions=True)\n"
+            "  later.cancel()\n"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
