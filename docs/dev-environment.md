@@ -30,6 +30,10 @@ Make targets for backend tests and frontend checks, tests, builds and developmen
 servers install their locked dependencies first. A multi-target Make invocation
 installs frontend dependencies once; warm installs reuse the package caches.
 Trunk supplies its own lint runtimes, so formatting and lint need no project venv.
+The installers still validate the environment on each invocation: a lockfile-only
+stamp would miss deleted packages, changed workspace manifests and lifecycle hooks.
+`uv sync` and `pnpm install` reuse their normal caches; `make check` invokes each
+installer once. It does not cache successful checks or skip checks on a warm tree.
 Standalone frontend targets have a separate 120-second install phase before
 the check, test or build cap. The aggregate cap remains 560 seconds, including
 cold installs; `dev-postgres`
@@ -44,18 +48,46 @@ Guarded browser, live-agent, and cluster suites are separate opt-in checks.
 ## Foreground deadlines
 
 Run `dev-postgres run make check` for locked dependency installation and the complete offline
-check set: helper tests, backend tests, frontend diagnostics, unit tests and build,
-then formatting and lint. Its aggregate deadline leaves room under the native
-harness's ten-minute foreground limit. CI splits these checks into bounded jobs.
+check set. Formatting completes first, so checks cannot read source while it is
+being rewritten. Then two lanes run concurrently:
+
+- Backend installation and tests, with the configured backend worker count unchanged.
+- Supervisor regressions, one frontend install, frontend diagnostics, unit tests,
+  application build and one complete changed-file Trunk lint pass.
+
+Frontend diagnostics and build run sequentially because they both generate
+`.svelte-kit` files. The build also validates bundling and adapter output beyond
+type diagnostics. Svelte-check retains all configured source, test and generated
+route-type coverage; generated build output is already outside its tsconfig's
+include patterns. Its one-shot CLI does not offer a persistent incremental cache.
+The lint pass does not apply fixes while tests are reading source. Use `make fmt`
+to apply lint fixes as well as formatting before checking again.
+
+Every step has a deadline and a `[step]` output prefix. Failures are recorded while
+independent checks continue; a failed frontend install blocks its three consumers.
+The final table lists step seconds, status and total wall time, including cleanup.
+Logs and machine-readable `timings.json` go to `.cache/check/`; set
+`MAINLOOP_CHECK_LOG_DIR` to retain a run elsewhere. Each step log retains up to
+8 MiB plus a truncation marker, while console output continues. Repeated runs
+overwrite these files. `make check-non-backend` uses the same runner and caps for
+measuring the non-backend lane while backend work is in progress.
+
+The aggregate deadline still leaves room under the native harness's ten-minute
+foreground limit. Each step uses `scripts/with-timeout.mjs`; cancellation forwards
+INT/QUIT/TERM to active supervisors and waits for their process-group cleanup
+before printing the table. When the aggregate deadline sends TERM, the inner table
+records cancellation and the outer cap reports timeout 124. CI splits these checks
+into bounded jobs.
 
 | Command or phase                                             | Cap                       | Coverage                                                                        |
 | ------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------- |
 | `make check`                                                 | 560 s + cleanup           | Locked installs and complete offline check set; at most 590 s including cleanup |
+| `make check-non-backend`                                     | 560 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests       |
 | `make install`                                               | 240 s total               | Frontend, backend and shared models                                             |
 | `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                   |
 | pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1`    |
 | `make test-backend`                                          | 550 s                     | Includes backend install; runner: 60 s/test or fixture, 540 s/suite             |
-| `make test-timeouts`                                         | 30 s                      | Shared command-supervisor regressions                                           |
+| `make test-timeouts`                                         | 30 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup        |
 | `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions         |
 | `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                     |
 | `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                                 |
