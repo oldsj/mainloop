@@ -139,13 +139,16 @@ async def authority_locked(conn, session_id: str):
     Order: project policy, tree authority, publication, runtime, admission, rows.
     Ordinary bindings use their own identity as the authority key.
     """
-    root = await conn.fetchval(
-        """SELECT t.root_task_id FROM task_attempts a JOIN tasks t ON t.id=a.task_id
-           WHERE a.binding_id=$1""",
+    row = await conn.fetchrow(
+        """WITH route AS MATERIALIZED (
+             SELECT 'mainloop:task-authority:' || COALESCE(
+               NULLIF((SELECT t.root_task_id FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+                       WHERE a.binding_id=$1), ''), $1) AS key
+           )
+           SELECT key,pg_advisory_lock(hashtextextended(key,0)) FROM route""",
         session_id,
     )
-    key = f"mainloop:task-authority:{root or session_id}"
-    await conn.execute("SELECT pg_advisory_lock(hashtextextended($1,0))", key)
+    key = row["key"]
     try:
         yield
     finally:
@@ -431,18 +434,14 @@ async def load_attempt(
     conn, attempt_id: str, *, lock: bool = False
 ) -> TaskAttempt | None:
     row = await conn.fetchrow(
-        "SELECT task_id FROM task_attempts WHERE id=$1", attempt_id
+        (
+            "SELECT * FROM task_attempts WHERE id=$1 FOR UPDATE"
+            if lock
+            else "SELECT * FROM task_attempts WHERE id=$1"
+        ),
+        attempt_id,
     )
-    if row is None:
-        return None
-    if lock:
-        await conn.fetchrow(
-            "SELECT id FROM task_attempts WHERE id=$1 FOR UPDATE", attempt_id
-        )
-    return next(
-        (a for a in await store.attempts(conn, row["task_id"]) if a.id == attempt_id),
-        None,
-    )
+    return store.attempt_from_row(row) if row is not None else None
 
 
 async def load_task(conn, task_id: str, *, lock: bool = False) -> Task:

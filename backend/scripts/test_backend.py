@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import faulthandler
 import json
 import logging
@@ -22,6 +21,7 @@ import uuid
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
 TEST_SECONDS = 60
@@ -31,6 +31,43 @@ STACK_DUMP_SECONDS = 0.5
 BACKEND = Path(__file__).resolve().parents[1]
 _deadlines = []
 _events = None
+
+
+def debug_stack(f=None, limit=None):
+    """Capture creation provenance without reading or stat'ing source files.
+
+    Python 3.13's StackSummary.extract checks linecache even with
+    lookup_lines=False. FrameSummary's public lazy lookup avoids that work
+    entirely until a diagnostic actually renders the captured stack.
+    """
+    if f is None:
+        f = sys._getframe().f_back
+    if limit is None:
+        limit = asyncio.constants.DEBUG_STACK_DEPTH
+    frames = traceback.walk_stack(f)
+    frames = islice(frames, limit) if limit >= 0 else list(frames)[limit:]
+    stack = traceback.StackSummary(
+        traceback.FrameSummary(
+            frame.f_code.co_filename, lineno, frame.f_code.co_name, lookup_line=False
+        )
+        for frame, lineno in frames
+    )
+    stack.reverse()
+    return stack
+
+
+# The accelerated Future/Task caches traceback.extract_stack when _asyncio is
+# first imported. Bootstrap it with our creation-stack helper in standalone
+# workers, then restore the general traceback API (including its full depth).
+# Importing this runner into an existing asyncio process still installs the
+# Handle helper; it cannot change the accelerator's already cached function.
+_extract_stack = traceback.extract_stack
+traceback.extract_stack = debug_stack
+try:
+    import asyncio
+finally:
+    traceback.extract_stack = _extract_stack
+asyncio.format_helpers.extract_stack = debug_stack
 
 
 def emit(event, **values):
@@ -272,14 +309,11 @@ def run_tests(names, plan=None, inventory_only=False):
     # IsolatedAsyncioTestCase keeps debug checks enabled, but capturing ten
     # creation frames for every IO callback/future is costly in a sandbox.
     # This only shortens diagnostic provenance; exception tracebacks stay full.
-    depth = int(os.environ.get("MAINLOOP_TEST_DEBUG_STACK_DEPTH", "1"))
+    # call_soon removes two internal frames; three retains a creation site.
+    depth = int(os.environ.get("MAINLOOP_TEST_DEBUG_STACK_DEPTH", "3"))
     if depth < 1:
         raise ValueError("MAINLOOP_TEST_DEBUG_STACK_DEPTH must be positive")
     asyncio.constants.DEBUG_STACK_DEPTH = depth
-    # CPython's accelerated Future/Task caches extract_stack itself. Adjust its
-    # default rather than replacing the function, so those stacks are bounded
-    # too. Explicit limits and exception/timeout traceback formatting are intact.
-    traceback.extract_stack.__defaults__ = (None, depth)
     loader = unittest.TestLoader()
     loader.suiteClass = CappedSuite
     with deadline("test discovery/imports"):

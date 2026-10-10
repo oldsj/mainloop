@@ -71,9 +71,10 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.clear_tables(
-            "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
-        )
+        if not type(self)._reuse_pool():
+            await self.clear_tables(
+                "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
+            )
         self.fake.next_session_ids = [str(uuid.uuid4()) for _ in range(12)]
         self.project = "p-" + self.user
         await self.pool.execute(
