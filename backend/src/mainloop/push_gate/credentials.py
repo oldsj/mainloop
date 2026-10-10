@@ -130,7 +130,7 @@ def _git_reference(purpose, issuance_id):
             else settings.git_push_origin
         ),
         header=GIT_HEADER,
-        secret_name=f"mainloop-{purpose}-{issuance_id}",
+        secret_name=f"{settings.credential_secret_prefix}-{purpose}-{issuance_id}",
         secret_key=AUTHORIZATION_FIELD,
     )
 
