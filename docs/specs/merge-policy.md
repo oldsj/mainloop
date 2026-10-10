@@ -325,6 +325,10 @@ Execution authority stays closed. Replaced, revoked, archived or deleted binding
 children with revoked ancestors cannot use this access. No native
 turn or unsolicited message is sent by merge settlement.
 
+This completed-binding exception lasts only until runtime cleanup begins draining and revokes
+the credential. After release, agents cannot authenticate to read status. Owner/task reads retain
+the stored merged outcome, PR URL and publication projection independently of the native binding.
+
 Tests feed real observer/owner-API results from isolated PostgreSQL and a fake gateway into the
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
@@ -359,11 +363,16 @@ Successful task completion additionally requires verified merge outcome and fres
 CI for the exact proposal head. Preparation and reporting do not imply completion. A lost
 merge response keeps the existing intent uncertain until read-only reconciliation establishes
 the outcome and exact-head CI; it cannot authorize another write. Task projection/event and
-owner outcome notification settlement share the existing merge transaction. Native-runtime
-termination and capacity release remain separate, confirmed lifecycle steps.
+owner outcome notification settlement share the existing merge transaction. The existing task
+reconciler then waits for outstanding native deliveries and held children, drains and revokes
+authority, confirms exact-identity runtime deletion, and releases the pinned writer generation
+and capacity. Unknown deletion or unresolved publication retains capacity and retries; pending
+cancellation takes precedence. Existing completed tasks with held active/draining attempts are
+eligible automatically, including merges settled before this cleanup was integrated. Product
+completion and owner-readable publication outcomes survive runtime release.
 
 Authoritative DB-only task reads, projection-port startup/reconciliation and committed-receipt
-attention recovery are integrated. Task runtime cleanup, uncertain-publication handoff holds,
-atomic PR-claim/attempt association and any native parent publication notification remain
+attention recovery and confirmed task runtime cleanup are integrated. Uncertain-publication
+handoff holds, atomic PR-claim/attempt association and any native parent publication notification remain
 serialized integration dependencies. Local PostgreSQL/fake-upstream regressions qualify these
 application seams; no new production activation or live-provider qualification follows.

@@ -202,6 +202,17 @@ Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `fa
 `cancelled`, `completed`. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
 
+Verified merged coding tasks enter automatic runtime cleanup through the existing task
+reconciler. It waits for all outstanding native deliveries and held child attempts, drains and
+revokes MCP/push authority, confirms deletion of the exact persisted kagent Session, then fences
+and releases the writer generation and capacity. Unknown, mismatched or unsettled deletion
+keeps capacity held and is retried. Confirmed deletion is reusable after a restart; missing
+runtime identity is insufficient. Pending cancellation/handoff and unresolved PR, merge or Git
+publication hold release. Older completed rows with held attempts recover on reconciliation
+without manual SQL. Failed/cancelled held coding attempts follow the same recovery path.
+Cleanup preserves stored product outcome and publication projection for owner reads and ends
+the completed binding's agent status access when authority is revoked during draining.
+
 A confirmed kagent `TASK_STATE_FAILED` for the current active attempt's first brief moves the
 task to `blocked` / `reconciliation` and the attempt to `draining` on the existing dispatcher's
 next pass, only when that brief remains the session's sole delivery. The native ledger records
@@ -226,8 +237,10 @@ detail is available through the linked native session or owner REST attempt hist
 attempt/task state and the `task:updated` event commit together, and repeat passes are idempotent.
 
 Turn failure does not prove runtime termination or a clean no-start. The writer claim and
-capacity stay held, and no prompt is replayed or replacement writer started. Owner cancellation
-uses the existing API/MCP drain/fence/settlement path to confirm disposal before releasing them;
+capacity stay held until the reconciler confirms native deletion and settles the failed attempt;
+the task retains its blocked/reconciliation diagnostic. Unknown deletion retries with capacity
+held, and no prompt is replayed or replacement writer started. Owner cancellation uses the
+existing API/MCP drain/fence/settlement path and takes precedence while disposal is pending;
 the task page's existing cancel eligibility remains unavailable.
 
 ## Admission and integration ports
