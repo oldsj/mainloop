@@ -168,10 +168,26 @@ The runner verifies every worker's inventory against serial discovery. A focused
 `make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
 Successful HTTP request logs are suppressed; warning/error logs and all test
 assertions remain enabled.
-Asyncio debug checks remain enabled. The runner limits callback/future/task
-creation stacks to one frame to reduce diagnostic overhead on SQL-heavy tests;
-ordinary exception and timeout tracebacks remain complete. Set
+Asyncio debug checks and slow-callback warnings remain enabled. Standalone workers
+capture at most three callback/future/task creation frames without consulting
+linecache; source lines load only when a diagnostic renders them. Asyncio removes
+some internal frames, so the retained creation stack can be shorter. Ordinary
+stack extraction, exception and timeout tracebacks remain complete. Set
 `MAINLOOP_TEST_DEBUG_STACK_DEPTH=10` when diagnosing resource creation sites.
+Python 3.13's accelerated Future/Task caches the stack helper at import time;
+the standalone worker installs it before importing asyncio. Importing the runner
+into a process that already loaded asyncio only updates Handle capture.
+
+PostgreSQL classes explicitly marked `reuse_database = True` or `reuse_pool = True`
+keep one debug loop and pool per class. Each test still has its own context and
+clears all fixture rows and sequences before setup; leftover tasks are cancelled
+and asynchronous generators closed after cleanup, including failed setup.
+These flags are not inherited. `reuse_pool` retains a separate class database;
+`reuse_database` also allows a shared worker database. Qualified classes must keep
+the table/sequence catalog stable. Schema-changing classes otherwise retain fresh
+loops and per-test pools. Cached resets reject existing transactions, check the
+exact owned database, and use a single implicit transaction; FK/security triggers
+are restored on failure.
 
 Changes to `dev-postgres` require publishing a new development image through the
 workflow below, then pinning/selecting its immutable digest for workspaces.

@@ -26,6 +26,7 @@ from tests.runtime import test_postgres_task_attention as fixtures
 from tests.runtime import test_postgres_task_handoff as s3
 from tests.runtime import test_postgres_task_provisioning as s1
 from tests.runtime.github_app_fake import app_transport
+from tests.runtime.postgres_fixture import wait_for_lock
 from tests.runtime.test_merge import MergeFixture
 
 from models.hitl import (
@@ -51,13 +52,6 @@ class TaskApplicationIntegrationTests(MergeFixture):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.clear_tables(
-            "tasks",
-            "task_attempts",
-            "workspace_writer_claims",
-            "task_events",
-            "task_operations",
-        )
         self.task, self.attempt = await self.enroll(self.sid, "feature")
         self.binding = await PgStore().get_binding(self.sid)
 
@@ -1138,14 +1132,9 @@ class TaskApplicationIntegrationTests(MergeFixture):
                 )
                 expiry = asyncio.create_task(retire_terminal_cards(db, self.user))
                 async with self.pool.acquire() as monitor:
-                    for _ in range(150):
-                        blocked = await monitor.fetchval(
-                            """SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
-                               AND wait_event_type='Lock' AND query LIKE '%SELECT id FROM native_hitl_requests%' """
-                        )
-                        if blocked:
-                            break
-                        await asyncio.sleep(0.01)
+                    blocked = await wait_for_lock(
+                        monitor, query="%SELECT id FROM native_hitl_requests%"
+                    )
                     self.assertTrue(
                         blocked,
                         "expiry never reached the observer request-lock barrier",
@@ -1455,6 +1444,8 @@ class TaskApplicationIntegrationTests(MergeFixture):
 
 
 class NativeContinuationApplicationTests(s1.TaskProvisioningPostgresTests):
+    reuse_pool = True
+
     # Reuse the accepted real-Pg/fake-native enrollment and its retained checks.
     coordinator = s3.CoordinatorPostgresTests.coordinator
 

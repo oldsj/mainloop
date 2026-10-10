@@ -7,6 +7,8 @@ from tests.runtime.test_postgres_ledger import PostgresTestCase
 
 
 class HandoffArtifactPostgresTests(PostgresTestCase):
+    reuse_pool = True
+
     async def test_restart_replay_and_conflicting_checkpoint(self):
         principal = TaskPrincipal(self.user)
         async with self.pool.acquire() as conn, conn.transaction():
@@ -91,6 +93,8 @@ class HandoffArtifactPostgresTests(PostgresTestCase):
 
 
 class RetentionArtifactPostgresTests(PostgresTestCase):
+    reuse_pool = True
+
     async def test_fresh_schema_full_typed_receipts_replay_and_immutable_uniqueness(
         self,
     ):
@@ -245,6 +249,8 @@ class RetentionUpgradePostgresTests(PostgresTestCase):
 
 
 class CoordinatorPostgresTests(s1.TaskProvisioningPostgresTests):
+    reuse_pool = True
+
     async def test_successor_keeps_checkpoint_sha_without_resolution_under_both_gates(
         self,
     ):
@@ -1527,6 +1533,8 @@ class CoordinatorPostgresTests(s1.TaskProvisioningPostgresTests):
 
 
 class ManifestPostgresTests(PostgresTestCase):
+    reuse_pool = True
+
     async def test_bounded_manifest_and_unverified_note_cannot_overflow_or_mutate(self):
         import uuid
 

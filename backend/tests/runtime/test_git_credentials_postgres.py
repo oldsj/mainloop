@@ -555,6 +555,8 @@ class OwnerWorkspaceApiCheckoutTests(GitCredentialsCase):
 
 
 class GitCredentialTests(GitCredentialsCase):
+    reuse_pool = True
+
     async def test_owner_freezes_default_branch_tag_and_sha_before_rows(self):
         from functools import partial
 
@@ -1087,11 +1089,10 @@ class GitTaskCredentialTests(GitCredentialsCase):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        # The scratch database is shared across this class; old held attempts
-        # must not consume the next test's global admission capacity.
-        await self.clear_tables(
-            "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
-        )
+        if not type(self)._reuse_pool():
+            await self.clear_tables(
+                "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
+            )
         from functools import partial
 
         from mainloop.db import environments

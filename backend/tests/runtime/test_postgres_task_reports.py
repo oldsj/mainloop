@@ -37,14 +37,16 @@ class TaskReportsPostgresTests(KagentFakeCase):
     # Reuse qualification setup, not its inherited test cases.
     async def asyncSetUp(self):
         await KagentFakeCase.asyncSetUp(self)
-        await self.clear_tables(
-            "tasks",
-            "task_attempts",
-            "workspace_writer_claims",
-            "task_operations",
-            "native_deliveries",
-            "messages",
-        )
+        # Unqualified classes also borrow this setup directly as a method alias.
+        if not type(self)._reuse_pool():
+            await self.clear_tables(
+                "tasks",
+                "task_attempts",
+                "workspace_writer_claims",
+                "task_operations",
+                "native_deliveries",
+                "messages",
+            )
         self.fake.next_session_ids = [str(uuid.uuid4()) for _ in range(12)]
         self.project = "p-" + self.user
         await self.pool.execute(

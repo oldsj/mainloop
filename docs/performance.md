@@ -28,6 +28,17 @@ suite has only 1.83× headroom under its 540-second cap.
 
 ## Recommendations
 
+**Implemented:** standalone backend workers retain asyncio debug checks while
+capturing lazy creation frames, avoiding Python 3.13's per-callback linecache
+validation. Qualified PostgreSQL fixtures reuse class pools and loops with row,
+sequence and pending-task cleanup between tests. Session/delivery fixture inserts
+are batched, and lock tests observe bounded server-side readiness rather than
+repeated client polling. Production task-attempt reads now select only the requested
+row, with the same SQL-authoritative routing fields and optional row lock; tree
+authority lookup and advisory-lock acquisition share one query. These changes
+reduce round trips without removing authority checks. Further gVisor qualification
+is required before claiming the workspace suite fits its budget.
+
 1. **Proposed:** cut process spawns and file churn in tests and checks. Reuse Git
    fixtures and avoid per-test subprocesses where the test is not about them.
 2. **Proposed:** keep dependency caches and virtual environments warm in the

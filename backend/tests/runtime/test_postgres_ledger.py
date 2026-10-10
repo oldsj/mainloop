@@ -54,7 +54,11 @@ from mainloop.runtime.kagent_client import (
 from mainloop.services.github_pr import RepoMetadata
 from mainloop.services.github_repo import GithubRepo, parse_github_repo
 from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
-from tests.runtime.postgres_fixture import clear_rows
+from tests.runtime.postgres_fixture import (
+    clear_rows,
+    row_reset_plan,
+    wait_for_lock,
+)
 
 from models import (
     SessionStatus,
@@ -144,11 +148,20 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
     Explicitly qualified data-only classes may share a worker database after
     all rows and sequences are reset. Schema/isolation tests keep fresh clones.
     Sharing is deliberately not inherited by unqualified subclasses.
+    Qualified classes also keep a debug loop and pool, cancelling leftover
+    tasks and clearing all rows/sequences before the next test. reuse_pool
+    can opt into those savings while retaining a separate class database.
     """
+
+    @classmethod
+    def _reuse_pool(cls):
+        return cls.__dict__.get("reuse_pool", cls.__dict__.get("reuse_database", False))
 
     @classmethod
     def setUpClass(cls):
         global _shared_database
+        cls._fixture_runner = None
+        cls._fixture_pool = None
         if not TEST_URL:
             raise unittest.SkipTest("MAINLOOP_TEST_DATABASE_URL is not set")
         if cls.__dict__.get("reuse_database", False) and _shared_database is not None:
@@ -172,6 +185,56 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
             # Also clean up when a subclass's setUpClass fails after its clone.
             cls.addClassCleanup(_drop_database, cls.database)
 
+    def _setupAsyncioRunner(self):
+        if not type(self)._reuse_pool():
+            return super()._setupAsyncioRunner()
+        cls = type(self)
+        if cls._fixture_runner is None:
+            cls._fixture_runner = asyncio.Runner(debug=True)
+            cls.addClassCleanup(cls._close_fixture)
+        self._asyncioRunner = cls._fixture_runner
+
+    @classmethod
+    def _close_fixture(cls):
+        try:
+            if cls._fixture_pool is not None:
+                cls._fixture_runner.run(cls._fixture_pool.close())
+        finally:
+            cls._fixture_runner.close()
+            cls._fixture_pool = cls._fixture_runner = None
+
+    def _tearDownAsyncioRunner(self):
+        if not type(self)._reuse_pool():
+            return super()._tearDownAsyncioRunner()
+        if self._asyncioRunner is None:
+            return
+        try:
+            self._asyncioRunner.run(self._finish_test())
+        finally:
+            self._asyncioRunner = None
+
+    async def _finish_test(self):
+        loop = asyncio.get_running_loop()
+        pending = asyncio.all_tasks(loop) - {asyncio.current_task()}
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for task in pending:
+            if not task.cancelled() and task.exception() is not None:
+                loop.call_exception_handler(
+                    {
+                        "message": "unhandled exception during test cleanup",
+                        "exception": task.exception(),
+                        "task": task,
+                    }
+                )
+        await loop.shutdown_asyncgens()
+        loop.set_exception_handler(None)
+        loop.set_task_factory(None)
+        loop.set_debug(True)
+        loop.slow_callback_duration = 0.1
+
     @classmethod
     async def _reset_shared_rows(cls):
         conn = await asyncpg.connect(cls.url)
@@ -185,9 +248,27 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
             await clear_rows(conn, tables)
 
     async def asyncSetUp(self):
-        self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
+        cls = type(self)
+        if cls._reuse_pool():
+            if cls._fixture_pool is None:
+                pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
+                try:
+                    async with pool.acquire() as conn:
+                        reset = await row_reset_plan(conn)
+                except BaseException:
+                    await pool.close()
+                    raise
+                cls._fixture_pool = pool
+                cls._reset_plan = reset
+            self.pool = cls._fixture_pool
+            async with self.pool.acquire() as conn:
+                await cls._reset_plan.clear(conn)
+        else:
+            self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
+            self.addAsyncCleanup(self.pool.close)
         self._saved_pool = db._pool
         db._pool = self.pool
+        self.addCleanup(setattr, db, "_pool", self._saved_pool)
         self.user = f"user-{uuid.uuid4().hex[:8]}"
         patcher = patch.object(settings, "agent_token_key", "integration-test-key")
         patcher.start()
@@ -200,7 +281,8 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         db._pool = self._saved_pool
-        await self.pool.close()
+        if not type(self)._reuse_pool():
+            await self.pool.close()
 
     # -- seeding ------------------------------------------------------------------------------
 
@@ -218,22 +300,23 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> tuple[str, str]:
         """Insert a conversation and a session; return ``(session_id, conversation_id)``."""
         user = user or self.user
-        thread_id = await self.thread()
+        thread_id = f"mt-{self.user}"
         sid, cid = str(uuid.uuid4()), str(uuid.uuid4())
         await self.pool.execute(
-            "INSERT INTO conversations (id, user_id, title) VALUES ($1,$2,'t')",
-            cid,
-            user,
-        )
-        await self.pool.execute(
-            """INSERT INTO sessions (id,user_id,main_thread_id,title,description,prompt,
+            """WITH thread AS (
+                 INSERT INTO main_threads(id,user_id) VALUES($3,$6) ON CONFLICT DO NOTHING
+               ), conversation AS (
+                 INSERT INTO conversations(id,user_id,title) VALUES($4,$2,'t') RETURNING id
+               )
+               INSERT INTO sessions (id,user_id,main_thread_id,title,description,prompt,
                                      conversation_id,status)
-               VALUES ($1,$2,$3,'title','d','p',$4,$5)""",
+               SELECT $1,$2,$3,'title','d','p',id,$5 FROM conversation""",
             sid,
             user,
             thread_id,
             cid,
             status,
+            self.user,
         )
         return sid, cid
 
@@ -249,14 +332,15 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> str:
         message_id = str(uuid.uuid4())
         await self.pool.execute(
-            "INSERT INTO messages (id, conversation_id, role, content) VALUES ($1,$2,'user',$3)",
+            """WITH message AS (
+                 INSERT INTO messages (id,conversation_id,role,content) VALUES($1,$2,'user',$3)
+                 RETURNING id
+               )
+               INSERT INTO native_deliveries(message_id,session_id,state,source)
+               SELECT id,$4,$5,$6 FROM message""",
             message_id,
             cid,
             text,
-        )
-        await self.pool.execute(
-            "INSERT INTO native_deliveries (message_id, session_id, state, source) VALUES ($1,$2,$3,$4)",
-            message_id,
             sid,
             state,
             source,
@@ -614,7 +698,12 @@ class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
         async with self.pool.acquire() as other, other.transaction():
             await ns.Ledger._lock_deliveries(other, sid)
             pending = asyncio.ensure_future(self.submit(sid, cid, "user"))
-            await asyncio.sleep(0.3)
+            async with self.pool.acquire() as monitor:
+                self.assertTrue(
+                    await wait_for_lock(
+                        monitor, pid=None, query="%pg_advisory_xact_lock%"
+                    )
+                )
             self.assertFalse(pending.done(), "the submission did not wait for the lock")
             # Another process opens a turn while holding the lock; the submission sees it.
             await other.execute(

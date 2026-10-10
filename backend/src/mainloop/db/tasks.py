@@ -148,34 +148,35 @@ async def attempts(conn, task_id):
     rows = await conn.fetch(
         "SELECT * FROM task_attempts WHERE task_id=$1 ORDER BY number", task_id
     )
+    return [attempt_from_row(row) for row in rows]
+
+
+def attempt_from_row(row):
     # SQL routing is authoritative even when another slice updates an observation snapshot.
-    return [
-        TaskAttempt.model_validate(
-            {
-                **decode(r["snapshot"]),
-                **{
-                    key: r[key]
-                    for key in (
-                        "id",
-                        "task_id",
-                        "number",
-                        "profile_id",
-                        "native_provider",
-                        "configuration_revision",
-                        "role",
-                        "depth",
-                        "state",
-                        "session_id",
-                        "binding_id",
-                        "workspace_id",
-                        "writer_generation",
-                    )
-                },
-                "agent_ref": decode(r["agent_ref"]),
-            }
-        )
-        for r in rows
-    ]
+    return TaskAttempt.model_validate(
+        {
+            **decode(row["snapshot"]),
+            **{
+                key: row[key]
+                for key in (
+                    "id",
+                    "task_id",
+                    "number",
+                    "profile_id",
+                    "native_provider",
+                    "configuration_revision",
+                    "role",
+                    "depth",
+                    "state",
+                    "session_id",
+                    "binding_id",
+                    "workspace_id",
+                    "writer_generation",
+                )
+            },
+            "agent_ref": decode(row["agent_ref"]),
+        }
+    )
 
 
 async def projection(conn, task_id):

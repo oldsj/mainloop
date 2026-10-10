@@ -245,14 +245,10 @@ class GitTransportPostgresTests(GitCredentialsCase):
             fence = asyncio.create_task(agent_credentials.revoke(self.sid, conn=peer))
             try:
                 blocked = False
-                for _ in range(200):
-                    blocked = await self.pool.fetchval(
-                        "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND NOT granted)",
-                        pid,
-                    )
-                    if blocked:
-                        break
-                    await asyncio.sleep(0.01)
+                from tests.runtime.postgres_fixture import wait_for_lock
+
+                async with self.pool.acquire() as monitor:
+                    blocked = await wait_for_lock(monitor, pid=pid)
                 self.assertTrue(blocked)
                 self.assertFalse(fence.done())
                 self.assertEqual((await self.row())["state"], "dispatching")
