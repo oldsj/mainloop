@@ -10,6 +10,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, type Message, type Session } from '$lib/api';
 import { sessions } from './sessions';
+import { isCurrent } from '$lib/sessionStatus';
 
 interface AllSessionMessagesState {
   // Map of sessionId -> messages
@@ -62,9 +63,7 @@ function createAllSessionMessagesStore() {
      */
     async refreshAll() {
       const sessionsState = get(sessions);
-      const activeSessionIds = sessionsState.sessions
-        .filter((s) => !['completed', 'failed', 'cancelled'].includes(s.status))
-        .map((s) => s.id);
+      const activeSessionIds = sessionsState.sessions.filter(isCurrent).map((s) => s.id);
 
       // Load each session's messages
       await Promise.all(activeSessionIds.map((id) => this.loadSession(id)));

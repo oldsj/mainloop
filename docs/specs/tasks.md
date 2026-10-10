@@ -1,5 +1,17 @@
 # Durable tasks
 
+Blocked reports may include `owner_action`, a specific question or decision required from the
+owner. This field is accepted only with outcome `blocked` and sets reason `owner_decision`.
+The attention projection includes it only for the current active, unarchived attempt while
+the task remains blocked. A generic blocked/reconciliation report does not by itself request
+owner input. A progress report from that current attempt acknowledges resumed work and clears
+its owner-decision blocker. Task pages retain the report and the existing task actions and session links.
+
+Routine `progress` and `completed` reports remain durable and appear in Activity. They do not
+enqueue a main-agent chat turn. Parent-task notifications retain their existing delivery;
+blocked and failed reports still notify the main agent. The main agent reads routine results
+through `task_get`, `task_list`, and standing task context on its next turn.
+
 Implemented through S2: task/attempt/operation persistence, owner reads, project provider
 preferences, transactional admission, S1 native provisioning/cancellation and durable task
 notifications. MCP `delegate`, `report`, `task_get`, `task_list`, `task_history` and `task_cancel`

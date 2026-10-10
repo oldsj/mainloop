@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { Session, Message } from '$lib/api';
   import { agentLabel } from '$lib/agentLabel';
+  import { statusLabel } from '$lib/sessionStatus';
   import { api } from '$lib/api';
   import { navigationContext } from '$lib/stores/navigationContext';
   import { sessions } from '$lib/stores/sessions';
@@ -98,36 +99,33 @@
     cancelled: 'text-term-fg-muted'
   };
 
-  const statusLabels: Record<string, string> = {
-    waiting_on_user: 'NEEDS INPUT',
-    active: 'ACTIVE',
-    implementing: 'IMPLEMENTING',
-    pending: 'PENDING',
-    completed: 'DONE',
-    failed: 'FAILED',
-    cancelled: 'CANCELLED'
-  };
-
-  const needsAttention = $derived(session?.status === 'waiting_on_user');
+  const needsAttention = $derived(session?.needs_owner === true);
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="flex h-full flex-col bg-term-bg">
+<div class="bg-term-bg flex h-full flex-col">
   <!-- Header -->
   <div
-    class="flex items-center justify-between border-b border-term-border px-4 py-3"
+    class="border-term-border flex items-center justify-between border-b px-4 py-3"
     style="border-left: 4px solid {session?.color};"
   >
     <div class="flex min-w-0 flex-1 items-center gap-3">
       <!-- Back button -->
       <button
         type="button"
-        class="shrink-0 text-term-fg-muted hover:text-term-accent"
+        class="text-term-fg-muted hover:text-term-accent shrink-0"
         onclick={handleExit}
         aria-label="Exit zoom mode"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          class="h-5 w-5"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+        >
           <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
         </svg>
       </button>
@@ -136,18 +134,16 @@
       {#if session}
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
-            <span
-              class="h-2 w-2 shrink-0 rounded-full"
-              style="background-color: {session.color};"
+            <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {session.color};"
             ></span>
-            <h1 class="truncate text-lg font-medium text-term-fg">
+            <h1 class="text-term-fg truncate text-lg font-medium">
               {session.title}
             </h1>
             <span class="shrink-0 text-xs {statusColors[session.status] || 'text-term-fg-muted'}">
-              [{statusLabels[session.status] || session.status.toUpperCase()}]
+              [{statusLabel(session.status, session.needs_owner)}]
             </span>
           </div>
-          <p class="truncate text-xs text-term-fg-muted">
+          <p class="text-term-fg-muted truncate text-xs">
             {session.description}
           </p>
         </div>
@@ -159,7 +155,7 @@
     <!-- Exit button -->
     <button
       type="button"
-      class="shrink-0 border border-term-border px-3 py-1 text-xs text-term-fg hover:border-term-accent hover:text-term-accent"
+      class="border-term-border text-term-fg hover:border-term-accent hover:text-term-accent shrink-0 border px-3 py-1 text-xs"
       onclick={handleExit}
     >
       ESC to exit
@@ -167,23 +163,20 @@
   </div>
 
   <!-- Messages -->
-  <div
-    bind:this={messagesContainer}
-    class="flex-1 space-y-2 overflow-y-auto p-4"
-  >
+  <div bind:this={messagesContainer} class="flex-1 space-y-2 overflow-y-auto p-4">
     {#if error}
-      <div class="text-center text-term-red">
+      <div class="text-term-red text-center">
         <p>Error: {error}</p>
         <button
           type="button"
-          class="mt-2 text-sm text-term-accent hover:underline"
+          class="text-term-accent mt-2 text-sm hover:underline"
           onclick={() => loadSessionData(sessionId)}
         >
           Retry
         </button>
       </div>
     {:else if messages.length === 0}
-      <div class="flex h-full flex-col items-center justify-center text-term-fg-muted">
+      <div class="text-term-fg-muted flex h-full flex-col items-center justify-center">
         <p class="text-term-accent">$ session --view {session?.title || sessionId}</p>
         <p class="mt-2">
           {#if session?.status === 'pending'}
@@ -195,20 +188,24 @@
       </div>
     {:else}
       {#each messages as message (message.id)}
-        <MessageBubble {message} context={session?.title ?? 'session'} agentKind={session?.agent_kind} />
+        <MessageBubble
+          {message}
+          context={session?.title ?? 'session'}
+          agentKind={session?.agent_kind}
+        />
       {/each}
     {/if}
 
     {#if isLoading}
       {@const modelName = agentLabel(session?.agent_kind)}
       <div
-        class="flex w-full flex-col gap-1 border-l-2 border-term-accent bg-term-bg-secondary px-3 py-2 md:px-4"
+        class="border-term-accent bg-term-bg-secondary flex w-full flex-col gap-1 border-l-2 px-3 py-2 md:px-4"
       >
-        <span class="text-xs text-term-accent md:text-sm">
+        <span class="text-term-accent text-xs md:text-sm">
           {modelName}@{session?.title || 'session'}$
         </span>
         <div class="flex items-center gap-2">
-          <span class="text-sm text-term-fg-muted">processing</span>
+          <span class="text-term-fg-muted text-sm">processing</span>
           <span class="animate-cursor text-term-accent">_</span>
         </div>
       </div>
@@ -217,17 +214,16 @@
 
   <!-- Attention indicator -->
   {#if needsAttention}
-    <div class="flex items-center justify-center gap-2 border-t border-term-border bg-term-magenta/10 py-2 text-term-magenta">
+    <div
+      class="border-term-border bg-term-magenta/10 text-term-magenta flex items-center justify-center gap-2 border-t py-2"
+    >
       <span class="animate-pulse">*</span>
       <span class="text-sm">This session is waiting for your input</span>
     </div>
   {/if}
 
   <!-- Input -->
-  <div
-    class="border-t border-term-border p-4"
-    style="border-left: 4px solid {session?.color};"
-  >
+  <div class="border-term-border border-t p-4" style="border-left: 4px solid {session?.color};">
     <InputBar
       onsend={handleSendMessage}
       disabled={isLoading || !session}

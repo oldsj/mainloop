@@ -78,7 +78,9 @@ TOOLS = {
     ),
     "report": (
         TaskReportInput,
-        "Record progress or an explicit result claim with durable parent notification.",
+        "Record progress or an explicit result claim with durable parent notification. "
+        "For a blocker requiring an owner decision, use outcome=blocked and owner_action "
+        "to state the specific question or choice. Routine results are stored for task reads and Activity.",
     ),
     "task_get": (
         TaskGet,

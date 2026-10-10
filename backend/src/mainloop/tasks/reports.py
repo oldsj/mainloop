@@ -41,7 +41,7 @@ async def record(conn, principal, request: TaskReport) -> dict:
         if previous["request_digest"] != payload_digest:
             raise store.TaskError(409, "report_request_conflict")
         return {
-            "text": "report already recorded; notification is durable",
+            "text": "report already recorded; available through task reads and Activity",
             "report_id": previous["id"],
             "report": store.decode(previous["snapshot"]),
         }
@@ -72,7 +72,13 @@ async def record(conn, principal, request: TaskReport) -> dict:
             "publication" if task.mode == "code" else "reconciliation"
         )
     elif request.outcome in ("blocked", "failed"):
-        status, reason = "blocked", "reconciliation"
+        status, reason = "blocked", (
+            "owner_decision" if request.owner_action else "reconciliation"
+        )
+    elif request.outcome == "progress" and reason == "owner_decision":
+        # The current attempt acknowledges work has resumed; its old question is no
+        # longer pending. This activity claim grants no publication or merge authority.
+        status, reason = "running", None
     updated = task.model_copy(
         update={
             "status": status,
@@ -89,7 +95,9 @@ async def record(conn, principal, request: TaskReport) -> dict:
         await lifecycle.save_attempt(
             conn, attempt.model_copy(update={"result_ref": key})
         )
-    recipients = ["main"]
+    # Routine claims remain available to the main agent through task_get/task_list and
+    # standing context. Only an explicit blocker/failure warrants a new main-thread turn.
+    recipients = ["main"] if request.outcome in ("blocked", "failed") else []
     if task.parent_task_id:
         recipients.insert(0, f"parent-task:{task.parent_task_id}")
     for recipient in recipients:
@@ -99,7 +107,7 @@ async def record(conn, principal, request: TaskReport) -> dict:
             recipient,
         )
     return {
-        "text": "report recorded; parent notification is pending (result is a claim)",
+        "text": "report recorded; available through task reads and Activity (result is a claim)",
         "report_id": report_id,
         "event_id": event_id,
         "report": request.model_dump(mode="json"),

@@ -150,7 +150,33 @@ export type QueueItemType =
 
 export type QueueItemPriority = 'low' | 'normal' | 'high' | 'urgent';
 
+export interface AttentionItem {
+  id: string;
+  kind: 'approval' | 'question' | 'owner_decision';
+  title: string;
+  needed: string;
+  href: string;
+  session_ids: string[];
+  task_id: string | null;
+  queue_item: QueueItem | null;
+}
+
+export interface AttentionSnapshot {
+  items: AttentionItem[];
+  count: number;
+  sessions: Session[];
+}
+
+export interface ActivityItem {
+  id: string;
+  title: string;
+  content: string;
+  href: string | null;
+  created_at: string;
+}
+
 export interface QueueItem {
+  hitl_request_id?: string | null;
   id: string;
   main_thread_id: string;
   task_id: string | null;
@@ -216,6 +242,8 @@ export interface ProjectDetail {
 export type SessionStatus =
   | 'pending'
   | 'active'
+  | 'idle'
+  | 'superseded'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -235,6 +263,7 @@ export interface Session {
   parent_session_id?: string | null; // native child: the delegating session
   topic?: string | null;
   status: SessionStatus;
+  needs_owner?: boolean;
   worker_pod_name: string | null;
   created_at: string;
   started_at: string | null;
@@ -407,6 +436,7 @@ export type TaskStatus =
   | 'cancelled';
 
 export type TaskReason =
+  | 'owner_decision'
   | 'awaiting_child'
   | 'approval'
   | 'ci'
@@ -558,6 +588,7 @@ export interface TaskArtifact {
 }
 
 export interface TaskReportRecord {
+  owner_action?: string | null;
   task_id: string;
   attempt_id: string;
   request_id: string;
@@ -857,6 +888,17 @@ export const api = {
   },
 
   // Inbox/Queue endpoints
+  async getAttention(signal?: AbortSignal): Promise<AttentionSnapshot> {
+    const response = await apiFetch(`${API_URL}/attention`, { signal });
+    if (!response.ok) throw new Error('Failed to load what needs you');
+    return response.json();
+  },
+
+  async listActivity(signal?: AbortSignal): Promise<ActivityItem[]> {
+    const response = await apiFetch(`${API_URL}/activity`, { signal });
+    if (!response.ok) throw new Error('Failed to load activity');
+    return response.json();
+  },
   async getUnreadCount(): Promise<number> {
     const response = await apiFetch(`${API_URL}/queue/unread/count`);
     if (!response.ok) throw new Error('Failed to get unread count');
@@ -1025,11 +1067,11 @@ export const api = {
     return result.ports;
   },
 
-  async listSessions(options?: { status?: string }): Promise<Session[]> {
+  async listSessions(options?: { status?: string }, signal?: AbortSignal): Promise<Session[]> {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);
     const url = params.toString() ? `${API_URL}/sessions?${params}` : `${API_URL}/sessions`;
-    const response = await apiFetch(url);
+    const response = await apiFetch(url, { signal });
     if (!response.ok) throw new Error('Failed to list sessions');
     return response.json();
   },

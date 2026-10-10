@@ -1,7 +1,12 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
   import { agentLabel } from '$lib/agentLabel';
-  import { navigationContext, sessionsByUrgency, getUrgencyScore } from '$lib/stores/navigationContext';
+  import { statusLabel } from '$lib/sessionStatus';
+  import {
+    navigationContext,
+    sessionsByUrgency,
+    getUrgencyScore
+  } from '$lib/stores/navigationContext';
   import { workspaces } from '$lib/stores/workspaces';
   import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
 
@@ -28,16 +33,6 @@
     completed: 'text-term-green',
     failed: 'text-term-red',
     cancelled: 'text-term-fg-muted'
-  };
-
-  const statusLabels: Record<string, string> = {
-    waiting_on_user: 'NEEDS INPUT',
-    active: 'ACTIVE',
-    implementing: 'IMPLEMENTING',
-    pending: 'PENDING',
-    completed: 'DONE',
-    failed: 'FAILED',
-    cancelled: 'CANCELLED'
   };
 
   function selectSession(session: Session) {
@@ -111,12 +106,14 @@
 
 <!-- Picker menu -->
 <div
-  class="fixed left-1/2 top-1/4 z-50 w-full max-w-md -translate-x-1/2 border border-term-border bg-term-bg shadow-lg"
+  class="border-term-border bg-term-bg fixed top-1/4 left-1/2 z-50 w-full max-w-md -translate-x-1/2 border shadow-lg"
   role="listbox"
   aria-label="Session picker"
 >
-  <div class="border-b border-term-border px-3 py-2">
-    <span class="text-xs text-term-fg-muted">Quick Switch (↑↓ to navigate, Enter to select, Esc to close)</span>
+  <div class="border-term-border border-b px-3 py-2">
+    <span class="text-term-fg-muted text-xs"
+      >Quick Switch (↑↓ to navigate, Enter to select, Esc to close)</span
+    >
   </div>
 
   <div bind:this={listElement} class="max-h-64 overflow-y-auto">
@@ -131,21 +128,21 @@
       role="option"
       aria-selected={selectedIndex === 0}
     >
-      <span class="h-2 w-2 rounded-full bg-term-fg"></span>
-      <span class="flex-1 text-sm font-medium text-term-fg">Main Thread</span>
-      <span class="text-xs text-term-fg-muted">[Shift+Tab]</span>
+      <span class="bg-term-fg h-2 w-2 rounded-full"></span>
+      <span class="text-term-fg flex-1 text-sm font-medium">Main Thread</span>
+      <span class="text-term-fg-muted text-xs">[Shift+Tab]</span>
     </button>
 
     <!-- Divider -->
     {#if sortedSessions.length > 0}
-      <div class="border-t border-term-border"></div>
+      <div class="border-term-border border-t"></div>
     {/if}
 
     <!-- Session list -->
     {#each sortedSessions as session, i (session.id)}
       {@const itemIndex = i + 1}
       {@const isSelected = selectedIndex === itemIndex}
-      {@const needsAttention = session.status === 'waiting_on_user'}
+      {@const needsAttention = session.needs_owner === true}
       {@const workspace = $workspaces.workspaces.find((item) => item.session_id === session.id)}
       <button
         type="button"
@@ -157,18 +154,16 @@
         role="option"
         aria-selected={isSelected}
       >
-        <span
-          class="h-2 w-2 shrink-0 rounded-full"
-          style="background-color: {session.color};"
+        <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {session.color};"
         ></span>
-        <span class="min-w-0 flex-1 truncate text-sm text-term-fg">
+        <span class="text-term-fg min-w-0 flex-1 truncate text-sm">
           {session.title}
         </span>
-        <span class="shrink-0 text-xs text-term-fg-muted" data-testid="session-kind">
+        <span class="text-term-fg-muted shrink-0 text-xs" data-testid="session-kind">
           {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
         </span>
         <span
-          class="shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+          class="shrink-0 px-2 py-0.5 text-xs font-medium whitespace-nowrap {needsAttention
             ? 'bg-term-magenta/20 text-term-magenta'
             : session.status === 'completed'
               ? 'bg-term-green/20 text-term-green'
@@ -179,24 +174,25 @@
                   : 'bg-term-fg-muted/20 text-term-fg-muted'}"
           style="border-radius: 9999px;"
         >
-        {statusLabels[session.status] || session.status.toUpperCase()}
+          {statusLabel(session.status, session.needs_owner)}
         </span>
         {#if workspace}
           <WorkspaceLifecycleBadge {workspace} />
         {/if}
         {#if needsAttention}
-          <span class="animate-pulse text-term-magenta">*</span>
+          <span class="text-term-magenta animate-pulse">*</span>
         {/if}
       </button>
     {/each}
 
     <!-- Divider -->
-    <div class="border-t border-term-border"></div>
+    <div class="border-term-border border-t"></div>
 
     <!-- New session option -->
     <button
       type="button"
-      class="flex w-full items-center gap-2 px-3 py-2 text-left {selectedIndex === sortedSessions.length + 1
+      class="flex w-full items-center gap-2 px-3 py-2 text-left {selectedIndex ===
+      sortedSessions.length + 1
         ? 'bg-term-accent/20'
         : 'hover:bg-term-bg-secondary'}"
       data-selected={selectedIndex === sortedSessions.length + 1}
@@ -205,7 +201,7 @@
       aria-selected={selectedIndex === sortedSessions.length + 1}
     >
       <span class="text-term-accent">+</span>
-      <span class="text-sm text-term-fg-muted">New session</span>
+      <span class="text-term-fg-muted text-sm">New session</span>
     </button>
   </div>
 </div>

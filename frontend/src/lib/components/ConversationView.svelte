@@ -6,6 +6,7 @@
   import { navigationContext, currentSession } from '$lib/stores/navigationContext';
   import { allSessionMessagesFlat } from '$lib/stores/sessionMessages';
   import { agentLabel } from '$lib/agentLabel';
+  import { isCurrent } from '$lib/sessionStatus';
   import { messageTime } from '$lib/time';
   import MessageBubble from './MessageBubble.svelte';
   import InputBar from './InputBar.svelte';
@@ -53,6 +54,7 @@
 
     const map = new Map<string, Session[]>();
     for (const session of $sessions.sessions) {
+      if (!isCurrent(session)) continue;
       if (session.anchor_message_id) {
         const existing = map.get(session.anchor_message_id) || [];
         existing.push(session);
@@ -65,7 +67,7 @@
   // Sessions without anchors (show at bottom of conversation)
   const unanchoredSessions = $derived(() => {
     if (!showInlineSessions) return [];
-    return $sessions.sessions.filter((s) => !s.anchor_message_id);
+    return $sessions.sessions.filter((s) => isCurrent(s) && !s.anchor_message_id);
   });
 
   // Unified timeline: merge main messages with session messages (when focused)

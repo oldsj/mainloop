@@ -8,18 +8,36 @@ At widths of 1024px and above, sessions appear in a sidebar beside the conversat
 Narrower windows use Chat, Sessions and Inbox tabs so the panels do not obscure the task or
 session view. Task detail scrolls within the available pane; workspace controls wrap when needed.
 
-The list includes standalone sessions created on `/agents` and delegated child sessions, excluding the native main thread and archived sessions. Starting an agent adds it to the list immediately. When no sessions exist, the list points to **+ agent** or delegating work from the home thread. Each session shows its title, native runtime kind (Claude or Codex), and status. Workspace health and controls appear separately from session status.
+The list defaults to active/pending work and sessions with server-projected owner attention,
+including standalone sessions created on `/agents` and delegated child sessions. The native
+main thread and archived sessions are excluded. **Show finished (N)** reveals completed,
+cancelled, failed and superseded sessions on desktop and mobile; **Hide finished (N)** hides
+them again. **Show idle (N)** exposes available idle sessions. These filters retain history and
+do not archive sessions. The ambiguous bulk **clear** action is removed. With no current work,
+the list says **No active sessions** and points to **+ agent** or delegation.
 
-| Status          | Meaning                                           |
-| --------------- | ------------------------------------------------- |
-| pending         | Created but not yet active                        |
-| active          | A native turn is in flight                        |
-| waiting_on_user | The agent is idle and can receive another message |
-| completed       | Finished successfully                             |
-| failed          | An error occurred                                 |
-| cancelled       | Stopped by the user                               |
+Each session shows its title, native runtime kind, and status. The server derives owner
+attention from the same durable snapshot as the inbox. Task finality and attempt ownership
+override stale session flags: a terminal task shows its outcome, and an old attempt shows
+**SUPERSEDED**. Neither can show **NEEDS INPUT**. Workspace health appears separately.
 
-Cancelled and failed are final. Agent activity does not change those statuses. A child that has reported is completed; if the user sends another message, it becomes active until that turn finishes.
+| Status          | Meaning                                              |
+| --------------- | ---------------------------------------------------- |
+| pending         | Created but not yet active                           |
+| active          | A native turn is in flight                           |
+| idle            | Available for another message; no owner input needed |
+| waiting_on_user | A current live native request genuinely needs input  |
+| superseded      | An earlier or retired attempt, available as history  |
+| completed       | Finished successfully                                |
+| failed          | An error occurred                                    |
+| cancelled       | Stopped by the user                                  |
+
+Cancelled and failed are final. Agent activity does not change those statuses. A delegated
+report remains an unverified claim until the task's own completion rules are satisfied.
+
+Explicit owner-decision blockers also set `needs_owner`, independently of activity; these
+sessions display **NEEDS YOU**. Idleness alone never sets it. Session reads and list filters
+use the server projection; SSE prompts a fresh read instead of copying raw activity flags.
 
 ## Creating and messaging sessions
 
@@ -46,8 +64,10 @@ Cancelled and failed are final. Agent activity does not change those statuses. A
   - Stopping with no open turn changes nothing (`no_open_turn`). If the turn completed or failed first, that outcome is recorded and the response is `finished`.
   - A kagent error returns `502` and leaves the delivery as it was; a send with no visible task yet, or a task that is still running after the cancel, returns `409`. Neither is retried automatically.
   - A task observed as cancelled from any other source (a stream, a sync) also ends the delivery as `cancelled`, with the same partial text, note and queue hold.
-- Clear archives finished sessions for audit. Live sessions must be cancelled first.
-- The main thread can cancel or clear its child sessions through the `mainloop` tools.
+- The archive API retains finished sessions for audit. Live sessions must be cancelled first.
+  The list's history toggle does not archive or delete sessions.
+- Task cancellation uses the durable task controls; native session cancellation remains available
+  where the current attempt's authority permits it.
 
 ## Session detail
 
