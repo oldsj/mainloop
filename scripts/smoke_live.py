@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import math
 import re
+import signal
 import socket
 import subprocess  # nosec B404 - operator CLI uses argv, never a shell
 import time
@@ -11,21 +13,48 @@ import uuid
 from contextlib import contextmanager
 
 
-def completed(view, facts, pr, app_login):
-    """Require independent publication and merger evidence, never agent claims."""
+@contextmanager
+def wall_deadline(seconds):
+    """Bound complete operations, including a slowly streaming response body."""
+    if seconds <= 0:
+        raise RuntimeError("operation deadline")
+
+    def expired(signum, frame):
+        raise RuntimeError("operation deadline")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def completed(view, facts, pr, app_login, repo):
+    """Bind independent merger evidence to this repository, branch and head."""
+    projection = view["projection"]
+    head = pr.get("head") or {}
     return (
         view["task"]["status"] == "completed"
-        and view["projection"].get("merge_state") == "merged"
+        and projection.get("merge_state") == "merged"
         and pr.get("merged") is True
         and (pr.get("merged_by") or {}).get("login") == app_login
-        and any(p["state"] == "confirmed" for p in facts["pushes"])
+        and facts["push_confirmed"]
+        and (pr.get("base", {}).get("repo") or {}).get("full_name", "").lower()
+        == repo.lower()
+        and (head.get("repo") or {}).get("full_name", "").lower() == repo.lower()
+        and head.get("ref") == view["task"]["checkout"]["branch"]
+        and bool(projection.get("pr_head_sha"))
+        and head.get("sha") == projection.get("pr_head_sha")
+        and projection.get("ci_head_sha") == head.get("sha")
     )
 
 
 def stage(view, facts, pr):
     if view is None:
         return "delegation"
-    if not any(p["state"] == "confirmed" for p in facts["pushes"]):
+    if not facts["push_confirmed"]:
         return "push"
     projection = view["projection"]
     if not projection.get("pr_number"):
@@ -95,10 +124,20 @@ def forward(args):
 def run(args, base):
     end = time.monotonic() + args.deadline
 
+    operation_end = end
+
+    def remaining():
+        value = min(end, operation_end) - time.monotonic()
+        if value <= 0:
+            raise RuntimeError("operation deadline")
+        return min(15, value)
+
+    def github(path):
+        with wall_deadline(remaining()):
+            return gh(args.repo, path, remaining())
+
     def api(path, data=None):
-        remaining = end - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError("overall deadline")
+        budget = remaining()
         request = urllib.request.Request(
             base + path,
             data=None if data is None else json.dumps(data).encode(),
@@ -108,10 +147,11 @@ def run(args, base):
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(
-            request, timeout=min(15, remaining)
-        ) as response:  # nosec B310 - loopback HTTP base
-            return json.load(response)
+        with wall_deadline(budget):
+            with urllib.request.urlopen(
+                request, timeout=budget
+            ) as response:  # nosec B310
+                return json.load(response)
 
     api("/health")
     project = api(f"/projects/{args.project_id}")
@@ -119,7 +159,7 @@ def run(args, base):
         raise RuntimeError("preflight: project repository differs")
     observation_path = f"/projects/{args.project_id}/smoke-observations"
     facts = api(observation_path)
-    if facts["deliveries"]:
+    if facts["deliveries_busy"]:
         raise RuntimeError(
             "preflight: deliveries in flight " + json.dumps(facts["deliveries"])
         )
@@ -140,12 +180,15 @@ def run(args, base):
         "wait for exact-head CI using foreground waits, merge_pull_request, then report completed. "
         "Never bypass policy or answer approval cards. Do not delegate additional tasks."
     )
-    # Exactly one submission; uncertain responses are never retried.
-    receipt = api("/chat", {"message": prompt})
-    print("delivery_message_id=" + str(receipt.get("delivery_message_id")), flush=True)
-    view, pr, ci = None, {}, {}
+    view, pr = None, {}
     current, since, last, failure = "delegation", time.monotonic(), None, None
     try:
+        operation_end = min(end, since + args.step_deadline)
+        # Exactly one submission, including uncertain accepted-but-timeout outcomes.
+        receipt = api("/chat", {"message": prompt})
+        print(
+            "delivery_message_id=" + str(receipt.get("delivery_message_id")), flush=True
+        )
         while time.monotonic() < end:
             views = api("/tasks?project_id=" + args.project_id)
             matches = [
@@ -159,16 +202,8 @@ def run(args, base):
             facts = api(observation_path + "?branch=" + branch)
             if view and view["projection"].get("pr_number"):
                 number = view["projection"]["pr_number"]
-                pr = gh(
-                    args.repo,
-                    f"pulls/{number}",
-                    min(15, max(0.1, end - time.monotonic())),
-                )
-                ci = gh(
-                    args.repo,
-                    f"commits/{pr['head']['sha']}/check-runs",
-                    min(15, max(0.1, end - time.monotonic())),
-                )
+                pr = github(f"pulls/{number}")
+                github(f"commits/{pr['head']['sha']}/check-runs")
             observed = (
                 None
                 if view is None
@@ -183,53 +218,68 @@ def run(args, base):
             if observed != last:
                 print(json.dumps(observed), flush=True)
                 last = observed
-            if view and completed(view, facts, pr, args.app_login):
+            if view and completed(view, facts, pr, args.app_login, args.repo):
                 print("PASS", flush=True)
                 return 0
             next_stage = stage(view, facts, pr)
             if next_stage != current:
                 current, since = next_stage, time.monotonic()
+                operation_end = min(end, since + args.step_deadline)
             if view and view["task"]["status"] in ("failed", "cancelled", "blocked"):
                 raise RuntimeError(current + ": task " + view["task"]["status"])
             if view and view["projection"].get("ci_state") == "failure":
                 raise RuntimeError("ci: failed")
             if time.monotonic() - since >= args.step_deadline:
                 raise RuntimeError(current + ": step deadline")
-            time.sleep(min(args.poll_interval, max(0, end - time.monotonic())))
+            time.sleep(
+                min(
+                    args.poll_interval,
+                    max(0, min(end, operation_end) - time.monotonic()),
+                )
+            )
         failure = current + ": overall deadline"
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         failure = (
-            str(exc)
+            current + ": " + str(exc)
             if isinstance(exc, RuntimeError)
             else current + ": " + type(exc).__name__
         )
-    # Independent, bounded reads continue after failure, even after overall expiry.
-    end = time.monotonic() + 45
+    # Fresh, read-only reconciliation after any submission or polling failure.
+    end = operation_end = time.monotonic() + 45
+    discoveries = []
     for label, read in (
         ("task", lambda: api("/tasks?project_id=" + args.project_id)),
         ("pushes", lambda: api(observation_path + "?branch=" + branch)),
         (
             "pr",
-            lambda: gh(
-                args.repo,
-                "pulls?state=all&head=" + args.repo.split("/")[0] + ":" + branch,
-                10,
+            lambda: github(
+                "pulls?state=all&head=" + args.repo.split("/")[0] + ":" + branch
             ),
         ),
     ):
         try:
             value = read()
             if label == "task":
+                matches = [
+                    v
+                    for v in value
+                    if (v["task"].get("checkout") or {}).get("branch") == branch
+                ]
+                discoveries.extend(
+                    v["projection"]["pr_number"]
+                    for v in matches
+                    if v["projection"].get("pr_number")
+                )
                 value = [
                     {
                         "task_id": v["task"]["id"],
                         "status": v["task"]["status"],
                         "projection": v["projection"],
                     }
-                    for v in value
-                    if (v["task"].get("checkout") or {}).get("branch") == branch
+                    for v in matches
                 ]
             elif label == "pr":
+                discoveries.extend(p["number"] for p in value)
                 value = [
                     {
                         "number": p["number"],
@@ -241,36 +291,40 @@ def run(args, base):
             print(json.dumps({label: value}), flush=True)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             print(f"{label}: unavailable ({type(exc).__name__})", flush=True)
-    try:
-        if view and view["projection"].get("pr_number"):
-            pr = gh(args.repo, f"pulls/{view['projection']['pr_number']}", 10)
-            ci = gh(args.repo, f"commits/{pr['head']['sha']}/check-runs", 10)
-            print(
-                json.dumps(
-                    {
-                        "pr_merge": {
-                            "merged": pr.get("merged"),
-                            "merged_by": (pr.get("merged_by") or {}).get("login"),
-                        }
-                    }
+    for number in sorted(set(discoveries)):
+        for label in ("pr_merge", "ci"):
+            try:
+                value = github(
+                    f"pulls/{number}"
+                    if label == "pr_merge"
+                    else f"commits/{pr['head']['sha']}/check-runs"
                 )
-            )
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        print("ci/merge: unavailable (" + type(exc).__name__ + ")")
-    print(
-        json.dumps(
-            {
-                "ci": [
-                    {
-                        "name": c["name"],
-                        "status": c["status"],
-                        "conclusion": c["conclusion"],
+                if label == "pr_merge":
+                    pr = value
+                    value = {
+                        "number": number,
+                        "merged": pr.get("merged"),
+                        "merged_by": (pr.get("merged_by") or {}).get("login"),
                     }
-                    for c in ci.get("check_runs", [])
-                ]
-            }
-        )
-    )
+                else:
+                    value = [
+                        {
+                            "name": c["name"],
+                            "status": c["status"],
+                            "conclusion": c["conclusion"],
+                        }
+                        for c in value.get("check_runs", [])
+                    ]
+                print(json.dumps({label: value}), flush=True)
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                subprocess.SubprocessError,
+            ) as exc:
+                print(f"{label}: unavailable ({type(exc).__name__})")
+                if label == "pr_merge":
+                    break
     print(f"FAIL {failure}; last_state={json.dumps(last)}", flush=True)
     return 1
 
@@ -286,11 +340,16 @@ def main():
     )
     parser.add_argument("--poll-interval", type=float, default=5)
     args = parser.parse_args()
+    if not args.context.strip():
+        parser.error("context must be nonblank")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repo) or not re.fullmatch(
         r"[\w-]+", args.project_id
     ):
         parser.error("invalid repository or project id")
-    if min(args.deadline, args.step_deadline, args.poll_interval) <= 0:
+    if any(
+        not math.isfinite(v) or v <= 0
+        for v in (args.deadline, args.step_deadline, args.poll_interval)
+    ):
         parser.error("deadlines and poll interval must be positive")
     try:
         with forward(args) as base:

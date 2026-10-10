@@ -12,11 +12,11 @@ uv run scripts/smoke_live.py --context <explicit-context> --namespace <namespace
   --app-login '<github-app-slug>[bot]' --deadline 1800 --step-deadline 600
 ```
 
-Requires `uv`, `kubectl`, and authenticated `gh`. GitHub calls are read-only. The
+Requires Linux (the wall-clock timer uses POSIX signals), `uv`, `kubectl`, and authenticated `gh`. Blank or whitespace-only contexts are rejected before any commands run. GitHub calls are read-only. The
 script owns a loopback backend port-forward and closes it on exit. The backend
 must include the owner-scoped `/projects/{project_id}/smoke-observations` endpoint.
 It exposes only capacity holder IDs, delivery IDs/states and publication
-IDs/states/branches, never grants or credentials. Preflight checks repository
+IDs/states/branches, never grants or credentials. Delivery and push details are capped at 100 records with explicit truncation flags; independent busy and confirmed indicators remain authoritative. Uncertain deliveries hold preflight. Preflight checks repository
 identity, owner-main/project deliveries, owner-main parent capacity (including
 uncertain attempts), and global capacity. Preflight is a snapshot; admission
 remains authoritative if another task starts concurrently.
@@ -30,7 +30,8 @@ for inspection, and prints sanitized observations after the first failure.
 
 Success requires a completed task, merged projection, confirmed push ledger
 record for the unique branch, and a GitHub PR merged by the explicitly named
-Mainloop App bot. CI state changes are reported from the projection, with GitHub
+Mainloop App bot, with repository, head branch and SHA matching the task and its
+CI projection. CI state changes are reported from the projection, with GitHub
 check-run details included on failure. An agent report alone cannot pass.
 
 Offline decision fixtures:

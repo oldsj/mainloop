@@ -128,15 +128,15 @@ async def smoke_observations(
             JOIN sessions s ON s.id=d.session_id
             JOIN native_bindings b ON b.session_id=s.id
             WHERE s.user_id=$1 AND (s.project_id=$2 OR b.role='main')
-            AND d.state=ANY($3)""",
+            AND d.state=ANY($3) ORDER BY d.message_id LIMIT 101""",
             owner,
             project_id,
-            [*OPEN_STATES, "queued"],
+            [*OPEN_STATES, "queued", "uncertain"],
         )
         pushes = await conn.fetch(
             """SELECT p.request_id,p.state,p.branch FROM push_publications p
             JOIN push_grants g ON g.id=p.grant_id
-            WHERE g.owner_id=$1 AND g.project_id=$2 AND p.branch=$3""",
+            WHERE g.owner_id=$1 AND g.project_id=$2 AND p.branch=$3 ORDER BY p.updated_at DESC,p.request_id LIMIT 101""",
             owner,
             project_id,
             branch,
@@ -148,6 +148,18 @@ async def smoke_observations(
                 "SELECT count(*) FROM task_attempts WHERE capacity_held"
             )
             < settings.task_max_children_global,
-            "deliveries": [dict(row) for row in deliveries],
-            "pushes": [dict(row) for row in pushes],
+            "deliveries_busy": bool(deliveries),
+            "deliveries_truncated": len(deliveries) > 100,
+            "deliveries": [dict(row) for row in deliveries[:100]],
+            "push_confirmed": await conn.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM push_publications p
+                JOIN push_grants g ON g.id=p.grant_id
+                WHERE g.owner_id=$1 AND g.project_id=$2 AND p.branch=$3
+                AND p.state='confirmed')""",
+                owner,
+                project_id,
+                branch,
+            ),
+            "pushes_truncated": len(pushes) > 100,
+            "pushes": [dict(row) for row in pushes[:100]],
         }
