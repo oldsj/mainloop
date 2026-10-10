@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from textwrap import indent
 from unittest.mock import patch
 
 from scripts import test_backend as runner
@@ -22,12 +23,34 @@ class BackendRunnerTests(unittest.TestCase):
         self,
         source,
         *,
-        suite_seconds=5,
+        suite_seconds=30,
         supervisor_setup="",
+        ready_when=None,
+        on_ready="",
+        ready_timeout=None,
         workers=1,
         database_url="postgresql://fixture-unused/postgres",
         previous=None,
     ):
+        if ready_when is not None:
+            # Keep startup bounded, but arm fault injection only once its
+            # prerequisites exist. Run this in the supervisor's own thread.
+            supervisor_setup += (
+                "\nimport time\n"
+                "native_remaining = runner.Supervisor.remaining\n"
+                "def remaining_after_ready(self):\n"
+                f" if not getattr(self, '_probe_ready', False) and ({ready_when}):\n"
+                "  self._probe_ready = True\n"
+                + indent(on_ready, "  ")
+                + "\n"
+                + (
+                    f"  self.expires = time.monotonic() + {ready_timeout!r}\n"
+                    if ready_timeout is not None
+                    else ""
+                )
+                + " return native_remaining(self)\n"
+                "runner.Supervisor.remaining = remaining_after_ready\n"
+            )
         if database_url == "postgresql://fixture-unused/postgres":
             # These process probes have no database fixtures. Real namespace
             # cleanup is exercised separately against the owned scratch server.
@@ -64,7 +87,7 @@ class BackendRunnerTests(unittest.TestCase):
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=40,
             )
             timings = (
                 json.loads((root / "timings.json").read_text())
@@ -283,8 +306,12 @@ class BackendRunnerTests(unittest.TestCase):
                 "probe_fast": "import unittest\nclass Case(unittest.TestCase):\n def test_done(self): pass\n",
                 "probe_slow": "import threading, unittest\nclass Case(unittest.TestCase):\n def test_hung(self): threading.Event().wait()\n",
             },
-            suite_seconds=2,
             workers=2,
+            ready_when=(
+                "any(entry['id'] == 'probe_fast.Case.test_done' for entry in self.timings['tests']) "
+                "and any('probe_slow.Case.test_hung' in names for names in self.timings['worker_executions'].values())"
+            ),
+            ready_timeout=1,
         )
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertEqual(timings["status"], "timed_out")
@@ -301,33 +328,36 @@ class BackendRunnerTests(unittest.TestCase):
                 root = Path(directory)
                 sources = {}
                 for name in ("probe_a", "probe_b"):
+                    child_source = (
+                        "import signal, threading\nfrom pathlib import Path\n"
+                        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                        f"Path({str(root / (name + '.child-ready'))!r}).touch()\n"
+                        "threading.Event().wait()\n"
+                    )
                     sources[name] = (
                         "import os, signal, subprocess, sys, threading, unittest\n"
                         "from pathlib import Path\n"
                         "class Case(unittest.TestCase):\n"
                         " def test_hung(self):\n"
-                        "  child = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
-                        f"  Path({str(root / (name + '.pid'))!r}).write_text(str(os.getpid()) + ' ' + str(child.pid))\n"
+                        f"  child = subprocess.Popen([sys.executable, '-c', {child_source!r}])\n"
+                        f"  marker = Path({str(root / (name + '.pid'))!r})\n"
+                        "  temporary = marker.with_suffix('.tmp')\n"
+                        "  temporary.write_text(str(os.getpid()) + ' ' + str(child.pid))\n"
+                        "  temporary.replace(marker)\n"
                         "  threading.Event().wait()\n"
-                    )
-                setup = ""
-                if signum is not None:
-                    setup = (
-                        "import os, signal, threading, time\nfrom pathlib import Path\n"
-                        "def cancel():\n"
-                        " expires = time.monotonic() + 5\n"
-                        f" while not all(path.exists() for path in Path({str(root)!r}).glob('*.pid')) or len(list(Path({str(root)!r}).glob('*.pid'))) != 2:\n"
-                        "  if time.monotonic() >= expires: return\n"
-                        "  time.sleep(0.01)\n"
-                        f" os.kill(os.getpid(), {int(signum)})\n"
-                        "threading.Thread(target=cancel, daemon=True).start()\n"
                     )
                 try:
                     result, _ = self.probe(
                         sources,
                         workers=2,
-                        suite_seconds=2 if signum is None else 6,
-                        supervisor_setup=setup,
+                        supervisor_setup="import signal\nfrom pathlib import Path\n",
+                        ready_when=f"all((Path({str(root)!r}) / (name + suffix)).exists() for name in {list(sources)!r} for suffix in ('.pid', '.child-ready'))",
+                        on_ready=(
+                            f"signal.raise_signal({int(signum)})\n"
+                            if signum is not None
+                            else ""
+                        ),
+                        ready_timeout=1 if signum is None else None,
                     )
                     self.assertEqual(
                         result.returncode,
@@ -384,14 +414,28 @@ class BackendRunnerTests(unittest.TestCase):
                     for name in ("probe_a", "probe_b"):
                         sources[name] = (
                             "import asyncio, json, os, sys\nfrom pathlib import Path\n"
-                            "from tests.runtime import test_postgres_ledger as ledger\n"
+                            # Reproduce startup slower than the old 4 s cap.
+                            + (
+                                "import time\n"
+                                "if os.environ['MAINLOOP_TEST_NAMESPACE'].endswith('_w1'): time.sleep(5)\n"
+                                if mode == "timeout"
+                                else ""
+                            )
+                            + "from tests.runtime import test_postgres_ledger as ledger\n"
                             "class Case(ledger.PostgresTestCase):\n"
                             " async def test_hung(self):\n"
                             "  namespace = os.environ['MAINLOOP_TEST_NAMESPACE']\n"
                             # Sharing the namespace text is insufficient ownership.
                             "  foreign = 'mainloop_test_' + namespace + '_foreign'\n"
                             "  await ledger._admin(ledger.TEST_URL, f'CREATE DATABASE \"{foreign}\"')\n"
-                            f"  (Path({str(root)!r}) / (__name__ + '.json')).write_text(json.dumps({{'pid': os.getpid(), 'databases': [self.database, ledger._template_database], 'foreign': foreign}}))\n"
+                            f"  root = Path({str(root)!r})\n"
+                            "  marker = root / (__name__ + '.json')\n"
+                            "  temporary = marker.with_suffix('.tmp')\n"
+                            "  temporary.write_text(json.dumps({'pid': os.getpid(), 'databases': [self.database, ledger._template_database], 'foreign': foreign}))\n"
+                            "  temporary.replace(marker)\n"
+                            # Hold every worker's databases until the supervisor
+                            # has captured their existence and releases the probes.
+                            "  while not (root / 'release').exists(): await asyncio.sleep(0.01)\n"
                             + (
                                 "  ledger.atexit.unregister(ledger._drop_database)\n"
                                 "  type(self)._class_cleanups.clear()\n"
@@ -404,24 +448,31 @@ class BackendRunnerTests(unittest.TestCase):
                                 )
                             )
                         )
-                    setup = ""
-                    if mode in ("INT", "QUIT", "TERM"):
-                        setup = (
-                            "import os, signal, threading, time\nfrom pathlib import Path\n"
-                            "def cancel():\n"
-                            " expires = time.monotonic() + 5\n"
-                            f" while len(list(Path({str(root)!r}).glob('*.json'))) < 2:\n"
-                            "  if time.monotonic() >= expires: return\n"
-                            "  time.sleep(0.01)\n"
-                            f" os.kill(os.getpid(), signal.SIG{mode})\n"
-                            "threading.Thread(target=cancel, daemon=True).start()\n"
-                        )
+                    setup = (
+                        "import asyncio, asyncpg, json, signal\nfrom pathlib import Path\n"  # nosec B608 - constant catalog SQL in synthetic probe source
+                        "async def snapshot_databases():\n"
+                        f" connection = await asyncpg.connect({url!r})\n"
+                        " try:\n"
+                        "  names = await connection.fetchval('SELECT array_agg(datname) FROM pg_database')\n"
+                        f"  Path({str(root / 'before.json')!r}).write_text(json.dumps(names))\n"
+                        " finally: await connection.close()\n"
+                    )
                     try:
                         result, timings = self.probe(
                             sources,
                             workers=2,
-                            suite_seconds=4 if mode == "timeout" else 8,
                             supervisor_setup=setup,
+                            ready_when=f"all((Path({str(root)!r}) / (name + '.json')).exists() for name in {list(sources)!r})",
+                            on_ready=(
+                                "asyncio.run(snapshot_databases())\n"
+                                f"Path({str(root / 'release')!r}).touch()\n"
+                                + (
+                                    f"signal.raise_signal(signal.SIG{mode})\n"
+                                    if mode in ("INT", "QUIT", "TERM")
+                                    else ""
+                                )
+                            ),
+                            ready_timeout=1 if mode == "timeout" else None,
                             database_url=url,
                         )
                         expected = {
@@ -439,12 +490,17 @@ class BackendRunnerTests(unittest.TestCase):
                         )
                         self.assertEqual(timings["status"], expected[mode][1])
                         states = [
-                            json.loads(path.read_text()) for path in root.glob("*.json")
+                            json.loads(path.read_text())
+                            for path in root.glob("probe_*.json")
                         ]
                         self.assertEqual(len(states), 2, result.stderr)
+                        before = set(json.loads((root / "before.json").read_text()))
                         remaining = asyncio.run(admin())
                         self.assertIn(other, remaining)
                         for state in states:
+                            self.assertTrue(
+                                set(state["databases"]) <= before, result.stderr
+                            )
                             self.assertFalse(
                                 set(state["databases"]) & remaining, result.stderr
                             )
@@ -454,7 +510,7 @@ class BackendRunnerTests(unittest.TestCase):
                                 self.assertEqual(status.read_text().split()[2], "Z")
                     finally:
                         # Keep the owned server clean even if this regression fails.
-                        for path in root.glob("*.json"):
+                        for path in root.glob("probe_*.json"):
                             state = json.loads(path.read_text())
                             try:
                                 os.killpg(state["pid"], signal.SIGKILL)
@@ -494,14 +550,13 @@ class BackendRunnerTests(unittest.TestCase):
                     "  await self.pool.execute('INSERT INTO worker_probe VALUES ($1)', namespace)\n"
                     "  root = Path(os.environ['PROBE_ROOT'])\n"
                     "  (root / __name__).write_text(self.database + '\\n' + ledger._template_database)\n"
-                    "  async with asyncio.timeout(5):\n"
+                    "  async with asyncio.timeout(20):\n"
                     "   while len(list(root.iterdir())) < 2: await asyncio.sleep(0.01)\n"
                     "  self.assertEqual(await self.pool.fetchval('SELECT value FROM worker_probe'), namespace)\n"
                 )
             result, timings = self.probe(
                 sources,
                 workers=2,
-                suite_seconds=10,
                 database_url=os.environ["MAINLOOP_TEST_DATABASE_URL"],
                 supervisor_setup=f"import os\nos.environ['PROBE_ROOT'] = {str(root)!r}\n",
             )
@@ -569,12 +624,19 @@ class BackendRunnerTests(unittest.TestCase):
         self.assertIn("Timeout (0:00:00.100000)!", result.stderr)
 
     def test_whole_suite_cap_covers_discovery(self):
-        result, _ = self.probe(
-            "import threading; threading.Event().wait()\n", suite_seconds=2
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "import-ready"
+            result, _ = self.probe(
+                "import threading\nfrom pathlib import Path\n"
+                f"Path({str(marker)!r}).touch()\n"
+                "threading.Event().wait()\n",
+                supervisor_setup="from pathlib import Path\n",
+                ready_when=f"Path({str(marker)!r}).exists()",
+                ready_timeout=1,
+            )
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn("test discovery/imports", result.stderr)
-        self.assertIn("suite exceeded 2s", result.stderr)
+        self.assertIn("suite exceeded", result.stderr)
         self.assertIn("threading.py", result.stderr)
         self.assertIn('File "', result.stderr)
         self.assertIn("in wait", result.stderr)
@@ -602,7 +664,6 @@ class BackendRunnerTests(unittest.TestCase):
                     + fixture
                     + "def load_tests(loader, tests, pattern):\n"
                     " return unittest.TestSuite([unittest.TestSuite([Case('test_ok')])])\n",
-                    suite_seconds=2,
                 )
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(f"probe.Case {phase}", result.stderr)
@@ -644,7 +705,6 @@ class BackendRunnerTests(unittest.TestCase):
                     " async def test_ok(self):\n"
                     + source
                     + "  await asyncio.sleep(0.02)\n",
-                    suite_seconds=2,
                 )
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn("probe.Case.test_ok", result.stderr)
@@ -688,7 +748,7 @@ class BackendRunnerTests(unittest.TestCase):
                             "def interrupted_launch(*args, **kwargs):\n"
                             " process = native_launch(*args, **kwargs)\n"
                             f" Path({str(worker_path)!r}).write_text(str(process.pid))\n"
-                            " expires = time.monotonic() + 5\n"
+                            " expires = time.monotonic() + 30\n"
                             f" while not Path({str(child_path)!r}).exists():\n"
                             "  if time.monotonic() >= expires: raise RuntimeError('child did not start')\n"
                             "  time.sleep(0.01)\n"
@@ -726,12 +786,12 @@ class BackendRunnerTests(unittest.TestCase):
             result, _ = self.probe(
                 "import subprocess, sys, threading, unittest\n"
                 "from pathlib import Path\n"
-                "sys.modules['__main__'].TEST_SECONDS = 0.2\n"
                 "class Case(unittest.TestCase):\n"
                 " def test_hung(self):\n"
                 "  child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
                 f"  Path({str(pid_path)!r}).write_text(str(child.pid))\n"
-                "  threading.Event().wait()\n"
+                "  sys.modules['__main__'].TEST_SECONDS = 0.2\n"
+                "  with sys.modules['__main__'].deadline('probe.Case.test_hung'): threading.Event().wait()\n"
             )
             self.assertEqual(result.returncode, 1, result.stderr)
             pid = int(pid_path.read_text())
