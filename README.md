@@ -150,6 +150,7 @@ You stay in main thread, checking in on agents and spawning new ones as needed.
 
 **Guides**:
 
+- [Performance](docs/performance.md) - Measured development timings, workspace limits, and proposed tuning
 - [Architecture](docs/architecture.md) - Workspaces, delivery, previews, and agent tools
 - [Contributing](CONTRIBUTING.md) - Local setup, development commands, and contribution guidance
 
