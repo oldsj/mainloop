@@ -7,6 +7,13 @@ on:
       - .devcontainer/**
       - .trunk/**
       - scripts/with-timeout.mjs
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - models/pyproject.toml
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .npmrc
       - .github/workflows/dev-image.yml
   push:
     branches: [main]
@@ -14,6 +21,13 @@ on:
       - .devcontainer/**
       - .trunk/**
       - scripts/with-timeout.mjs
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - models/pyproject.toml
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .npmrc
       - .github/workflows/dev-image.yml
 
 permissions:
