@@ -114,6 +114,28 @@ When modifying DBOS workflows:
 - DBOS replays workflows from checkpoints - changing step order/logic breaks running workflows
 - Current version tracked in workflow config
 
+## Running the CI checks in a workspace
+
+These are the exact commands verified to work in a Mainloop workspace for this project:
+
+```bash
+# Backend dependency sync
+(cd backend && uv sync --frozen --python 3.13)
+
+# Frontend dependency install
+pnpm --version
+pnpm install --frozen-lockfile
+
+# Frontend type/diagnostic check
+pnpm check
+
+# Frontend unit tests (lib)
+(cd frontend && node --test src/lib/*.test.ts)
+
+# Lint
+make lint
+```
+
 ## Pull Request Guidelines
 
 1. **Keep PRs focused**: One feature or fix per PR
