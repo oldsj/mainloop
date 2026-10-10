@@ -362,3 +362,29 @@ target task order. The target is authorized before any operation FK is inserted;
 foreign-owner targets return the same scoped 404 `task_not_found`. An identical authorized
 request returns its existing operation before checking task version, preserving lost-response
 replay after a version change. A changed payload still returns 409.
+
+## Operator smoke observations
+
+`GET /projects/{project_id}/smoke-observations?branch={branch}` is an owner-only,
+read-only ledger snapshot. Missing and foreign projects return 404 before any
+ledger reads. It does not sync native sessions, dispatch work, reconcile state,
+or expose grants, credentials, messages or raw session data.
+
+The response contains:
+
+- `parent_capacity` and `capacity_holders`: configured owner-main admission limit
+  and owner root task IDs whose attempts still hold capacity, across projects.
+- `global_capacity_available`: a boolean only; other owners' identities are hidden.
+- `deliveries_busy`: true when the owner's project or main session has any
+  recorded, sending, delivered, queued or uncertain delivery. Uncertain delivery
+  is a hold until separately reconciled; this route does not change owner rules.
+- `deliveries`: at most 100 objects with `message_id` and `state`, ordered by ID.
+  `deliveries_truncated` indicates omitted rows. Busy remains true if truncated.
+- `pushes`: at most 100 objects with `request_id`, `state` and `branch`, for the
+  exact supplied branch and owner/project, ordered by newest update then ID.
+  `pushes_truncated` indicates omitted rows. Without a branch this list is empty.
+- `push_confirmed`: an independent existence check for a confirmed publication
+  on that branch; omitted detail rows cannot hide confirmed evidence.
+
+Detail reads fetch at most 101 rows to detect truncation. This snapshot confers
+no execution authority; task admission and publication policy remain authoritative.
