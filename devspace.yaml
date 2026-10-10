@@ -6,6 +6,13 @@ vars:
   GITHUB_TOKEN:
     source: env
     default: ''
+  # Live profile: the dev harness image, else the production pin from the manifest.
+  DEV_CLAUDE_HARNESS_IMAGE:
+    command: scripts/dev-live-harness.sh
+    args: [image, claude]
+  DEV_CODEX_HARNESS_IMAGE:
+    command: scripts/dev-live-harness.sh
+    args: [image, codex]
 
 # Images - build locally, load into Kind
 images:
@@ -260,3 +267,104 @@ profiles:
           - k8s/apps/mainloop/overlays/test
       - op: remove
         path: dev
+
+  # Shared live instance on internal-01 (`make dev-live`). No local builds: images
+  # come from ghcr (CI publishes the --target=dev images on pushes to main).
+  # DevSpace owns namespace mainloop-dev and the *-dev kagent agents directly.
+  - name: live
+    patches:
+      - op: remove
+        path: images
+      - op: remove
+        path: hooks
+      - op: remove
+        path: commands
+      # v2beta1 has no kube-context key, so every live pipeline starts with this pin:
+      # it refuses any context or namespace other than admin@internal-01/mainloop-dev
+      # (pass --kube-context admin@internal-01 -n mainloop-dev, as scripts/dev-live.sh does).
+      - op: add
+        path: functions
+        value:
+          require_live_target: |-
+            if [ "${DEVSPACE_CONTEXT}" != "admin@internal-01" ] || [ "${DEVSPACE_NAMESPACE}" != "mainloop-dev" ]; then
+              echo "profile live runs only against context admin@internal-01, namespace mainloop-dev (got ${DEVSPACE_CONTEXT}/${DEVSPACE_NAMESPACE})" >&2
+              exit 1
+            fi
+      # dev and deploy touch only mainloop-dev; the shared kagent namespace changes
+      # only through the explicit deploy-agents pipeline (`make dev-agents`).
+      - op: add
+        path: pipelines
+        value:
+          # build is overridden too: DevSpace's default build pipeline writes its cache
+          # object to the target namespace even with no images.
+          build: |-
+            require_live_target
+          dev: |-
+            require_live_target
+            create_deployments mainloop
+            start_dev --all
+          deploy: |-
+            require_live_target
+            create_deployments mainloop
+          deploy-agents: |-
+            require_live_target
+            create_deployments dev-agents
+          purge: |-
+            require_live_target
+            stop_dev --all
+            purge_deployments --all
+      - op: replace
+        path: deployments
+        value:
+          mainloop:
+            namespace: mainloop-dev
+            kubectl:
+              kustomize: true
+              manifests:
+                - k8s/apps/mainloop/overlays/dev-live
+          dev-agents:
+            namespace: kagent
+            kubectl:
+              kustomize: true
+              manifests:
+                - k8s/apps/mainloop/overlays/dev-live/kagent
+              # `make dev-harness` records dev images under .devspace/dev-harness/.
+              patches:
+                - target:
+                    apiVersion: api.kagent.dev/v1alpha3
+                    kind: Harness
+                    name: claude-workspace-dev-harness
+                  op: replace
+                  path: spec.workload.image
+                  value: ${DEV_CLAUDE_HARNESS_IMAGE}
+                - target:
+                    apiVersion: api.kagent.dev/v1alpha3
+                    kind: Harness
+                    name: codex-workspace-dev-harness
+                  op: replace
+                  path: spec.workload.image
+                  value: ${DEV_CODEX_HARNESS_IMAGE}
+      - op: replace
+        path: dev.backend.namespace
+        value: mainloop-dev
+      - op: replace
+        path: dev.mcp.namespace
+        value: mainloop-dev
+      - op: replace
+        path: dev.frontend.namespace
+        value: mainloop-dev
+      - op: remove
+        path: dev.backend.devImage
+      - op: remove
+        path: dev.mcp.devImage
+      - op: remove
+        path: dev.frontend.devImage
+      - op: replace
+        path: dev.frontend.env
+        value:
+          - name: VITE_API_URL
+            value: /api
+          - name: MAINLOOP_API_PROXY
+            value: http://mainloop-backend:8000
+          - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+            value: mainloop-dev.olds.network

@@ -62,6 +62,8 @@ scripts/dev-ui.sh up     # this worktree's frontend (Vite, hot reload) against t
 
 `scripts/dev-ui.sh` is safe with several worktrees running at once: each gets its own Vite port and they share one backend port-forward. The Kind backend itself is shared, so a backend image loaded from one worktree serves all of them.
 
+For the shared live instance on the cluster (`make dev-live`, namespace `mainloop-dev`), see [docs/dev-environment.md](docs/dev-environment.md#live-dev-instance).
+
 The local Kubernetes workflow requires DevSpace and Kind. Python packages are managed by `uv`; JavaScript packages are managed by `pnpm`.
 
 DevSpace synchronizes source into the containers. If a Svelte store change appears stale after hot reload, force recompilation of the importing component or clear the Vite cache; a browser refresh alone may retain a stale module reference.

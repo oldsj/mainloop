@@ -1,0 +1,22 @@
+# Small CloudNativePG cluster. CNPG generates the application credentials in
+# Secret mainloop-pg-app. local-path storage is deleted with the namespace.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mainloop-pg
+spec:
+  instances: 1
+  storage:
+    size: 2Gi
+    storageClass: local-path
+  bootstrap:
+    initdb:
+      database: mainloop
+      owner: mainloop
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
