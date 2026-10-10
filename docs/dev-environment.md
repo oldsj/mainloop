@@ -66,10 +66,12 @@ Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
 
 `make test-backend` runs the same offline unittest discovery in CI and workspaces.
 It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
-Every test, including setup, teardown and cleanups, has a fatal 30-second deadline;
-module/class fixtures and discovery also have 30-second deadlines. On a timeout,
+Every test, including setup, teardown, cleanups and async runner shutdown, has a
+fatal 60-second deadline; module/class fixtures and discovery also have 60-second
+deadlines, including suites returned by `load_tests` hooks. On a timeout,
 the runner prints the active test/fixture and all thread stacks. The whole run has
-a 540-second cap with up to five seconds for process cleanup, leaving headroom
+a 540-second cap with up to five seconds for stack dumping and process cleanup,
+leaving headroom
 under the harness's ten-minute foreground limit. CI's job cap is ten minutes.
 The supervisor kills the test process group on timeout or cancellation, including
 test subprocesses; `dev-postgres` then removes its disposable cluster.
@@ -77,7 +79,8 @@ Class databases clone one migrated, empty template per run; migration tests stil
 execute the real migrations and each class retains its own independent database.
 
 The runner reports the slowest 15 modules and tests. Module totals include class
-and module fixtures; test totals include setup/teardown. Save machine-readable
+and module fixtures; test totals include setup/teardown and async runner shutdown.
+Save machine-readable
 evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`. A focused run uses
 `make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
 Successful HTTP request logs are suppressed; warning/error logs and all test

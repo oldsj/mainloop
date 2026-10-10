@@ -73,7 +73,7 @@ Run the smallest checks that establish confidence for the changed area, then exp
 Common commands:
 
 ```bash
-make test-backend        # offline backend + scratch PostgreSQL; 30s/test, 9m/suite
+make test-backend        # offline backend + scratch PostgreSQL; 60s/test, 9m/suite
 make fmt                 # format and check files changed from main
 make lint                # lint files changed from main
 pnpm check               # workspace frontend/type checks

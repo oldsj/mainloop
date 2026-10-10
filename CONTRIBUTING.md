@@ -116,13 +116,15 @@ When modifying DBOS workflows:
 
 ## Running the CI checks in a workspace
 
-These are the exact commands verified to work in a Mainloop workspace for this project:
+Use these commands for the project's CI checks. The capped backend command has
+passed on a Linux amd64 development host; gVisor/arm64 workspace qualification of
+`make test-backend` is pending.
 
 ```bash
 # Backend dependency sync
 (cd backend && uv sync --frozen --python 3.13)
 
-# Offline backend and disposable PostgreSQL (30 seconds/test, 9 minutes/suite)
+# Offline backend and disposable PostgreSQL (60 seconds/test, 9 minutes/suite)
 dev-postgres run make test-backend
 
 # Frontend dependency install

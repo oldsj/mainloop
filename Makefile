@@ -169,7 +169,7 @@ test-loop: ## Watch for changes and auto-redeploy to Kind
 TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
 
-test-backend: ## Offline backend + scratch PostgreSQL; 30s/test, 9m/suite
+test-backend: ## Offline backend + scratch PostgreSQL; 60s/test, 9m/suite
 	@cd backend && uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
 
 test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
