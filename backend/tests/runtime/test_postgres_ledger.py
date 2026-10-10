@@ -18,6 +18,7 @@ import atexit
 import io
 import json
 import os
+import re
 import unittest
 import uuid
 from datetime import UTC, datetime
@@ -65,6 +66,13 @@ TEST_URL = os.environ.get("MAINLOOP_TEST_DATABASE_URL")
 _template_database = None
 
 
+def _database_name(kind: str) -> str:
+    namespace = os.environ.get("MAINLOOP_TEST_NAMESPACE", f"p{os.getpid()}")
+    if not re.fullmatch(r"[a-z0-9_]{1,24}", namespace):
+        raise ValueError("invalid test database namespace")
+    return f"mainloop_{kind}_{namespace}_{uuid.uuid4().hex[:12]}"
+
+
 def _with_database(url: str, database: str) -> str:
     parts = urlsplit(url)
     return urlunsplit(parts._replace(path=f"/{database}"))
@@ -96,7 +104,7 @@ def _schema_template() -> str:
     """Migrate one empty database per process; every class gets its own clone."""
     global _template_database
     if _template_database is None:
-        database = f"mainloop_template_{uuid.uuid4().hex[:12]}"
+        database = _database_name("template")
         asyncio.run(_admin(TEST_URL, f'CREATE DATABASE "{database}"'))
         try:
             asyncio.run(_init_schema(_with_database(TEST_URL, database)))
@@ -134,7 +142,7 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         if not TEST_URL:
             raise unittest.SkipTest("MAINLOOP_TEST_DATABASE_URL is not set")
-        cls.database = f"mainloop_test_{uuid.uuid4().hex[:12]}"
+        cls.database = _database_name("test")
         cls.url = _with_database(TEST_URL, cls.database)
         template = _schema_template()
         asyncio.run(
@@ -265,7 +273,7 @@ class FixtureIsolationTests(PostgresTestCase):
     async def test_class_clones_preserve_schema_without_copying_mutations_or_rows(self):
         await self.thread()
         await self.pool.execute("ALTER TABLE main_threads ADD COLUMN fixture_only TEXT")
-        database = f"mainloop_test_{uuid.uuid4().hex[:12]}"
+        database = _database_name("test")
         await _admin(
             TEST_URL,
             f'CREATE DATABASE "{database}" TEMPLATE "{_template_database}" STRATEGY WAL_LOG',

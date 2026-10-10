@@ -107,7 +107,8 @@ cat >>"${root}/postgresql.conf" <<CONFIG
 listen_addresses = '127.0.0.1'
 port = ${port}
 unix_socket_directories = '${socket}'
-max_connections = 30
+# Six workers can each open a six-connection pool, plus fixture/admin sessions.
+max_connections = 100
 shared_buffers = '64MB'
 work_mem = '4MB'
 max_wal_size = '256MB'
