@@ -25,7 +25,7 @@ from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks.projection import ci_state
 from tests.runtime.github_app_fake import app_settings, app_transport
 from tests.runtime.test_context_model import KINDS, FakeStore
-from tests.runtime.test_hitl_observer import Gateway
+from tests.runtime.test_hitl_observer import FIXTURE_AGENTS, Gateway
 from tests.runtime.test_postgres_ledger import PostgresTestCase, _init_schema
 
 from models.hitl import (
@@ -1652,6 +1652,7 @@ class MergeFixture(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         patcher = patch.object(
             merge_authorization, "observer", return_value=self.hitl_service
@@ -1732,6 +1733,7 @@ class MergeFixture(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         config = {
             "template_name": "merge-template",

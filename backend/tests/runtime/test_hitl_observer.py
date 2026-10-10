@@ -1,6 +1,7 @@
 """Real observer/owner API + isolated PostgreSQL; fake gateway, no native agents."""
 
 import asyncio
+import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -70,6 +71,10 @@ def pending(session, task_id="task", payload=None):
             ),
         ),
     )
+
+
+# The fake gateway's Sessions run on this Agent; observers own it.
+FIXTURE_AGENTS = frozenset({("team", "agent")})
 
 
 class Gateway:
@@ -163,6 +168,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
 
     async def projections(self):
@@ -274,6 +280,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         await self.cycle(2)
         projections = await self.projections()
@@ -352,6 +359,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         await self.cycle(2)
         self.assertEqual(self.gateway.pages, ["", "1"])
@@ -405,6 +413,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=self.service.gateway,
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         await self.cycle()
         self.assertEqual(
@@ -872,6 +881,9 @@ class HITLObserverTests(PostgresTestCase):
             ("missing-creator", {"creator": ""}),
             ("missing-agent", {"agent": None}),
             ("bad-endpoint", {"agent": AgentRef("team", "../evil")}),
+            # Another instance sharing the kagent principal (production and mainloop-dev).
+            ("other-instance-agent", {"agent": AgentRef("team", "agent-dev")}),
+            ("other-namespace-agent", {"agent": AgentRef("other", "agent")}),
             ("bad-authority", {"a2a_authority": "https://attacker.example"}),
             (
                 "other-session-authority",
@@ -1095,6 +1107,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=self.service.gateway,
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         recovered = []
 
@@ -1192,6 +1205,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=self.service.gateway,
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         # Temporary failure must not restore historical aliases or cards.
         self.gateway.failure = Unreachable("temporary")
@@ -1308,6 +1322,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=self.service.gateway,
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         await self.cycle()
         with patch.object(continuation, "observer", return_value=self.service):
@@ -1363,6 +1378,7 @@ class HITLObserverTests(PostgresTestCase):
             gateway=self.service.gateway,
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
         await self.cycle()
         with patch.object(continuation, "observer", return_value=self.service):
@@ -1380,3 +1396,19 @@ class HITLObserverTests(PostgresTestCase):
             ),
         )
         self.assertEqual(len(self.gateway.sent), 1)
+
+
+class InstanceAgentTests(unittest.TestCase):
+    def test_default_observer_owns_only_this_instances_agents(self):
+        from mainloop.runtime.hitl_observer import observer
+        from mainloop.runtime.orphan_sessions import instance_agents
+
+        with patch(
+            "mainloop.runtime.native_sessions.get_client", return_value=object()
+        ):
+            service = observer()
+        self.assertEqual(service.agents, instance_agents())
+        self.assertIn(
+            ("kagent", settings.kagent_workspace_claude_agent), service.agents
+        )
+        self.assertNotIn(("kagent", "claude-workspace-dev"), service.agents)

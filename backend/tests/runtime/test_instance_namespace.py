@@ -4,12 +4,13 @@ import os
 import unittest
 import uuid
 from contextlib import contextmanager
+from dataclasses import asdict
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from mainloop.config import Settings, settings
 from mainloop.mcp_app import create_app
-from mainloop.push_gate.credentials import _git_reference
+from mainloop.push_gate.credentials import _git_reference, git_reference_counts
 from mainloop.push_gate.transport import GitApplication
 from mainloop.runtime.agent_credentials import credential_reference
 from mainloop.runtime.agent_tools import AgentService
@@ -132,6 +133,30 @@ class DevNamespaceTests(unittest.TestCase):
             self.assertEqual(mcp_status(f"{PROD_MCP_HOST}:80"), 421)
 
 
+class GitReferenceCountTests(unittest.TestCase):
+    def test_only_this_namespaces_git_origins_count(self):
+        for namespace, other in (
+            ("mainloop", "mainloop-dev"),
+            ("mainloop-dev", "mainloop"),
+        ):
+            with self.subTest(namespace=namespace), instance(namespace):
+                ours = [
+                    asdict(_git_reference(f"git-{p}", ISSUANCE))
+                    for p in ("read", "push")
+                ]
+                theirs = [
+                    {
+                        **ref,
+                        "origin": ref["origin"].replace(
+                            f".{namespace}.svc", f".{other}.svc"
+                        ),
+                    }
+                    for ref in ours
+                ]
+                self.assertEqual(git_reference_counts(ours), {"read": 1, "push": 1})
+                self.assertEqual(git_reference_counts(theirs), {"read": 0, "push": 0})
+
+
 class ValidatorTests(unittest.TestCase):
     def test_git_origins_outside_the_configured_namespace_are_rejected(self):
         for namespace, origin in (
@@ -166,6 +191,9 @@ class ValidatorTests(unittest.TestCase):
             "x" * 64,
             "mainloop-mcp",
             "mainloop-git-read",
+            # A third instance must not shadow mainloop-dev's names either.
+            "mainloop-dev-mcp",
+            "mainloop-dev-git-read",
         ):
             with self.subTest(namespace=namespace):
                 with self.assertRaises(ValidationError):

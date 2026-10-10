@@ -53,13 +53,21 @@ def agent_for(session: ObservedSession) -> AgentRef:
 
 
 class HITLObserver:
-    def __init__(self, client, *, gateway: str, owner: str, creator: str):
+    def __init__(self, client, *, gateway: str, owner: str, creator: str, agents=None):
         self.client, self.gateway, self.owner, self.creator = (
             client,
             gateway,
             owner,
             creator,
         )
+        # (namespace, name) of the kagent Agents this instance owns. Production and the live
+        # dev instance share one kagent principal, so the creator alone can't tell their
+        # Sessions apart; their Agents are disjoint.
+        if agents is None:
+            from mainloop.runtime.orphan_sessions import instance_agents
+
+            agents = instance_agents()
+        self.agents = frozenset(agents)
 
     async def read_task(self, agent, task_id):
         remaining = getattr(self, "snapshot_budget", None)
@@ -80,6 +88,8 @@ class HITLObserver:
             re.fullmatch(label, v) for v in (agent.namespace, agent.name)
         ):
             raise Unavailable("Gateway agent identity is missing or invalid")
+        if (agent.namespace, agent.name) not in self.agents:
+            raise Unavailable("Gateway agent belongs to another instance")
         if not live.prepared_revision or not live.context_id:
             raise Unavailable("Gateway revision/context is missing")
         # This is a logical private actor identity, NEVER a URL to fetch. kagent names
