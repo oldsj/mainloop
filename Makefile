@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-backend test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy dev-live dev-live-status dev-live-purge dev-harness dev-agents install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-backend test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -46,6 +46,25 @@ dev-shell: ## Open shell in backend pod
 
 dev-legacy: ## Start with docker compose (no hot reload)
 	docker compose up --build --watch
+
+# =============================================================================
+# Shared live instance (DevSpace profile `live`, namespace mainloop-dev on internal-01)
+# =============================================================================
+
+dev-live: ## Deploy mainloop-dev and live-sync backend, models and frontend into it
+	./scripts/dev-live.sh dev
+
+dev-live-status: ## Show mainloop-dev pods and the dev kagent agents
+	./scripts/dev-live.sh status
+
+dev-live-purge: ## Delete namespace mainloop-dev and the *-dev kagent agents
+	./scripts/dev-live.sh purge
+
+dev-agents: ## Apply the *-dev kagent agents (shared kagent namespace)
+	./scripts/dev-live.sh agents
+
+dev-harness: ## Build arm64 harness images from ~/dev/kagent and point the dev agents at them
+	./scripts/dev-live-harness.sh build
 
 # =============================================================================
 # Dependencies

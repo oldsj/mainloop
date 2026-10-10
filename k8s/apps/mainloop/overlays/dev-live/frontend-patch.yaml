@@ -1,0 +1,37 @@
+# Vite dev server with HMR. The browser calls /api on the same host and Vite
+# forwards it to the backend Service (frontend/vite.config.ts).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainloop-frontend
+  namespace: mainloop
+spec:
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: frontend
+          imagePullPolicy: Always
+          command: [pnpm, dev, --host, 0.0.0.0, --port, '3000']
+          env:
+            - $patch: replace
+            - name: VITE_API_URL
+              value: /api
+            - name: MAINLOOP_API_PROXY
+              value: http://mainloop-backend:8000
+            # Vite rejects unknown Host headers; allow the gateway host.
+            - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+              value: mainloop-dev.olds.network
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+          livenessProbe:
+            initialDelaySeconds: 90
+          readinessProbe:
+            initialDelaySeconds: 20
+            failureThreshold: 12

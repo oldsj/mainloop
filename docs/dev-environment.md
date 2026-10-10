@@ -238,3 +238,70 @@ Once environment registration is available, register the published immutable
 `ghcr.io/oldsj/mainloop-dev@sha256:…` digest, or register this definition at an
 exact source commit, then select the accepted version for the project. This
 document does not claim that registration or runtime composition is implemented.
+
+## Live dev instance
+
+`mainloop-dev` is a shared, prototype instance for fast iteration. It runs in
+namespace `mainloop-dev` on the production cluster, next to production
+`mainloop`, but DevSpace deploys and owns it directly; it is not Argo-managed.
+Production still changes only through pull requests, CI and GitOps.
+
+```bash
+make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C stops sync)
+make dev-live-status   # pods, database, route and dev agents
+make dev-agents        # apply the *-dev kagent agents (shared kagent namespace)
+make dev-harness       # build arm64 harness images from ../kagent, apply them to the dev agents
+make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents
+```
+
+All targets use kube context `admin@internal-01` (override with
+`DEV_LIVE_CONTEXT`) through DevSpace profile `live` in `devspace.yaml`. `make dev`
+and the Kind setup are unchanged.
+
+What syncs:
+
+- `backend/src` and `models` sync into the backend and MCP containers, and
+  uvicorn reloads. `backend/pyproject.toml` and `backend/uv.lock` run `uv sync`
+  in the pod.
+- `frontend/src`, `packages` and `frontend/vite.config.ts` sync into the Vite dev
+  server, which hot-reloads. `package.json` and `pnpm-lock.yaml` run
+  `pnpm install` in the pod.
+
+The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same
+Envoy gateway as production). The browser calls `/api` on that host, and Vite
+forwards it to the backend Service, so the backend needs no route of its own.
+
+Images: the **Publish live dev images** workflow builds the `--target=dev`
+backend and frontend images for arm64 on each push to `main` and pushes
+`ghcr.io/oldsj/mainloop-{backend,frontend}-dev` with `<short SHA>` and `latest`
+tags. Nothing is built locally on each run; the pods pull `latest` and the sync
+overlays the working tree. The node needs pull access to those packages: either
+the packages are public or a `ghcr-secret` exists in `mainloop-dev`.
+
+Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates
+the database credentials. Purging deletes the data.
+
+Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
+owner writes, Git transport and the push gate are off; every kagent role uses
+`claude-workspace-dev` or `codex-workspace-dev`. Dev work targets
+`oldsj/testrepo` only, through a GitHub App installed only on that repository.
+
+Secrets are not in this repository. Each reference is optional, so the instance
+starts without them, and the features that need them stay unavailable:
+
+| Secret in `mainloop-dev` | Keys | Without it |
+|---|---|---|
+| `mainloop-secrets` | `github-app-id`, `github-app-private-key`, `agent-token-key` | No GitHub access; the agent token key falls back to the database password |
+| `ghcr-secret` | `.dockerconfigjson` | Pods cannot pull private dev images |
+| `kagent-control-token` | `current` | No kagent sessions; also enable the `control-auth` component in the overlay |
+| `kagent-control-ca` | `ca.crt` (cert-manager) | As above |
+
+Agent sessions also need code changes before they can work here. The MCP host
+allowlist, the agent credential MCP origin and the Git proxy origins are fixed to
+the production namespace (`mainloop-*.mainloop.svc.cluster.local`), and per-binding
+credential Secrets share production's `mainloop-mcp-*` names in the `kagent`
+namespace. Until those are parameterised per namespace, the dev agents can be
+created and their harness images swapped, but they cannot call Mainloop tools.
+
+Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
+the namespace, the database and the dev agents.

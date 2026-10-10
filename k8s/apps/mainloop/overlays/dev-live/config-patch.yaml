@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mainloop-config
+  namespace: mainloop
+data:
+  DB_HOST: mainloop-pg-rw.mainloop-dev.svc.cluster.local
+  DB_PORT: '5432'
+  DB_NAME: mainloop
+  FRONTEND_DOMAIN: mainloop-dev.olds.network
+  FRONTEND_SCHEME: https
+  MAINLOOP_API_HOSTS: mainloop-backend,mainloop-backend.mainloop-dev,mainloop-backend.mainloop-dev.svc,mainloop-backend.mainloop-dev.svc.cluster.local
+  MAINLOOP_OWNER_ID: dev-owner
+  # Falls back to the database password for AGENT_TOKEN_KEY until mainloop-secrets exists.
+  DEV_MODE: 'true'
+  IS_TEST_ENV: 'false'
+  NATIVE_CHILD_KINDS: claude,codex
+  # The Git and MCP origins are fixed to the production namespace in code, so the
+  # agent paths stay off here (see docs/dev-environment.md#live-dev-instance).
+  GIT_TRANSPORT_ENABLED: 'false'
+  PUSH_GATE_ENABLED: 'false'
+  MAINLOOP_MERGE_TOOLS_ENABLED: 'false'
+  MAINLOOP_OWNER_HITL_WRITES_ENABLED: 'false'
+  # Dev-only kagent agents; production agents are never used from here.
+  KAGENT_NAMESPACE: kagent
+  KAGENT_ACTOR_ATESPACE: kagent
+  KAGENT_MAIN_AGENT: claude-workspace-dev
+  KAGENT_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_CODEX_AGENT: codex-workspace-dev
+  KAGENT_WORKSPACE_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_WORKSPACE_CODEX_AGENT: codex-workspace-dev
+  KAGENT_SUPERVISOR_CLAUDE_AGENT: claude-workspace-dev
+  KAGENT_SUPERVISOR_CODEX_AGENT: codex-workspace-dev

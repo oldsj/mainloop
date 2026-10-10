@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Shared live-sync instance (`make dev-live`). DevSpace deploys and owns this
+# namespace directly; it is not Argo-managed. Secrets are supplied separately
+# (see docs/dev-environment.md#live-dev-instance); every Secret reference here is
+# optional so the instance starts without them, with GitHub and kagent unavailable.
+
+namespace: mainloop-dev
+
+resources:
+  - ../../base
+  - database.yaml
+  - httproute.yaml
+
+patches:
+  - path: config-patch.yaml
+  - path: backend-patch.yaml
+  - path: frontend-patch.yaml
+
+# Enable once kagent-control-token and kagent-control-ca exist in mainloop-dev.
+# components:
+#   - control-auth
+
+images:
+  - name: ghcr.io/oldsj/mainloop-backend
+    newName: ghcr.io/oldsj/mainloop-backend-dev
+    newTag: latest
+  - name: ghcr.io/oldsj/mainloop-frontend
+    newName: ghcr.io/oldsj/mainloop-frontend-dev
+    newTag: latest

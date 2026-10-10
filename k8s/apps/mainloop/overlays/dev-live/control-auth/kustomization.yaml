@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Mirrors production's control-auth patch (it lives on the Argo Application).
+# Requires Secrets kagent-control-token (key current) and kagent-control-ca
+# (key ca.crt) in mainloop-dev, and mainloop-dev in kagent's control ingress policy.
+patches:
+  - path: backend-patch.yaml

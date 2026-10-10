@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Dev-only kagent agents for mainloop-dev. kagent itself is shared and
+# Argo-managed; these objects are not, and only mainloop-dev refers to them.
+# DevSpace applies them (deployment dev-agents) and `make dev-harness` swaps
+# their harness images without touching the production agents.
+
+namespace: kagent
+
+resources:
+  - remotemcpserver.yaml
+  - claude.yaml
+  - codex.yaml
