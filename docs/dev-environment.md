@@ -126,6 +126,7 @@ Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
 
 `make test-backend` runs the same offline unittest discovery in CI and workspaces.
 It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
+`MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes; set it to `1` for serial execution.
 Every test, including setup, teardown, cleanups and async runner shutdown, has a
 fatal 60-second deadline; module/class fixtures and discovery also have 60-second
 deadlines, including suites returned by `load_tests` hooks. On a timeout,
@@ -133,15 +134,21 @@ the runner prints the active test/fixture and all thread stacks. The whole run h
 a 540-second cap with up to five seconds for stack dumping and process cleanup,
 leaving headroom under the harness's ten-minute foreground limit. The Make wrapper additionally
 bounds uv startup. CI's job cap is ten minutes.
-The supervisor kills the test process group on timeout or cancellation, including
+The supervisor kills every worker process group on timeout or cancellation, including
 test subprocesses; `dev-postgres` then removes its disposable cluster.
-Class databases clone one migrated, empty template per run; migration tests still
+Class databases clone one migrated, empty template per worker, with distinct worker
+namespaces; migration tests still
 execute the real migrations and each class retains its own independent database.
+Scratch PostgreSQL allows 100 connections, matching CI's default, to accommodate
+six worker pools and their fixture/admin connections.
 
 The runner reports the slowest 15 modules and tests. Module totals include class
 and module fixtures; test totals include setup/teardown and async runner shutdown.
 Save machine-readable
-evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`. A focused run uses
+evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`; completed test and fixture
+records are saved incrementally and survive timeouts. Existing module timings at
+that path balance the next run; otherwise modules are assigned round-robin.
+The runner verifies every worker's inventory against serial discovery. A focused run uses
 `make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
 Successful HTTP request logs are suppressed; warning/error logs and all test
 assertions remain enabled.
