@@ -331,6 +331,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ("GET", "/commits/abc/check-suites", {"checks": "read"}),
             ("GET", "/commits/abc/check-runs", {"checks": "read"}),
             ("GET", "/commits/abc/statuses", {"statuses": "read"}),
+            ("GET", "/compare/abc...def", {"contents": "read"}),
             ("PUT", "/pulls/17/merge", {"contents": "write"}),
             ("GET", "/issues/17/comments", {"pull_requests": "read"}),
             ("POST", "/pulls/comments/17/reactions", {"pull_requests": "write"}),

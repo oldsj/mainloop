@@ -38,6 +38,10 @@ from models.hitl import (
 SHA = "a" * 40
 BASE = "b" * 40
 MERGED = "c" * 40
+# Current default-branch head once main has moved past the PR's recorded base.
+MOVED = "f" * 40
+# GitHub's test merge commit for the PR (refs/pull/N/merge).
+TEST_MERGE = "9" * 40
 CAPTURED_AT = datetime(2026, 10, 9, 2, tzinfo=timezone.utc)
 
 
@@ -124,6 +128,7 @@ class GitHub:
             "mergeable": True,
             "mergeable_state": "clean",
             "merged": False,
+            "merge_commit_sha": TEST_MERGE,
             "head": {"ref": "feature", "sha": SHA, "repo": self.repo},
             "base": {"ref": "main", "sha": BASE, "repo": self.repo},
         }
@@ -153,6 +158,14 @@ class GitHub:
         self.lose = False
         self.fail_before_put = False
         self.hook = None
+        # GitHub keeps pr.base.sha at the base of the last synchronization.
+        self.main = BASE
+        # Test-merge inventory against main and its parents; None mirrors the
+        # PR files and [main, head].
+        self.merge_files = None
+        self.merge_parents = None
+        # Field overrides for the base...test-merge comparison response.
+        self.compare = {}
 
     def run(self, id, **changes):
         return {
@@ -197,12 +210,46 @@ class GitHub:
             "/pulls/17/files": self.files,
             "/branches/main": {
                 "name": "main",
-                "commit": {"sha": self.pr["base"]["sha"]},
+                "commit": {"sha": self.main},
             },
             "/branches/main/protection": self.protection,
             "/rules/branches/main": self.rules,
             f"/commits/{SHA}/statuses": self.statuses,
         }
+        merge_sha = self.pr.get("merge_commit_sha")
+        parents = self.merge_parents or [self.main, self.pr["head"]["sha"]]
+        if merge_sha and path == f"/commits/{merge_sha}":
+            return httpx.Response(
+                200,
+                json={
+                    "sha": merge_sha,
+                    "parents": [{"sha": parent} for parent in parents],
+                },
+            )
+        if (
+            merge_sha
+            and path.startswith("/compare/")
+            and path.endswith(f"...{merge_sha}")
+        ):
+            base = path.removeprefix("/compare/").split("...")[0]
+            files = self.files if self.merge_files is None else self.merge_files
+            first_parent = base == parents[0]
+            # Compare lists files only on page 1, up to 300 in total.
+            page = int(req.url.params.get("page", 1))
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ahead" if first_parent else "diverged",
+                    "ahead_by": 2,
+                    "behind_by": 0 if first_parent else 1,
+                    "total_commits": 2,
+                    "base_commit": {"sha": base},
+                    "merge_base_commit": {"sha": base if first_parent else "0" * 40},
+                    "commits": [],
+                    "files": copy.deepcopy(files[:300]) if page == 1 else [],
+                    **self.compare,
+                },
+            )
         for endpoint, key, items in [
             ("check-runs", "check_runs", self.runs),
             ("check-suites", "check_suites", self.suites),
@@ -535,6 +582,170 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
                 self.fake.runs = []
                 self.assertFalse((await self.evidence())["ci"]["green"])
         self.assertFalse(self.fake.puts)
+
+    async def observe(self):
+        async with github_merge.GitHubMergeClient(
+            "owner/repo", transport=app_transport(self.fake.handle)
+        ) as client:
+            return await client.observation("owner/repo", 17)
+
+    async def test_base_behind_main_is_evaluated_against_current_main(self):
+        self.fake.main = MOVED
+        self.fake.rules = live_mainloop_rules()
+        self.fake.runs = [self.fake.run(10, name="Lint", app={"id": 15368})]
+        facts = await self.evidence()
+        self.assertEqual(facts["base_sha"], MOVED)
+        self.assertTrue(facts["ci"]["green"])
+        self.assertTrue(facts["mergeable"])
+
+    async def test_protected_paths_unchanged_when_base_behind_main(self):
+        self.fake.main = MOVED
+        self.fake.files[0]["filename"] = "k8s/deploy.yaml"
+        self.assertEqual(
+            (await self.evidence())["protected_matches"], ["k8s/deploy.yaml"]
+        )
+
+    async def test_main_moving_during_evidence_is_stale(self):
+        reads = 0
+
+        async def hook(req):
+            nonlocal reads
+            if req.url.path.endswith("/pulls/17"):
+                reads += 1
+                if reads == 2:
+                    self.fake.main = MOVED
+
+        self.fake.hook = hook
+        with self.assertRaisesRegex(PolicyError, "default branch moved"):
+            await self.evidence()
+
+    async def test_conflicting_pr_is_refused_with_next_step(self):
+        for mergeable, state in ((False, "dirty"), (None, "dirty"), (False, "unknown")):
+            with self.subTest(mergeable=mergeable, state=state):
+                self.fake.pr.update(mergeable=mergeable, mergeable_state=state)
+                with self.assertRaisesRegex(
+                    PolicyError, "merge conflicts with main; merge or rebase main"
+                ) as raised:
+                    await self.evidence()
+                self.assertEqual(raised.exception.code, "merge_conflict")
+
+    async def test_strict_policy_behind_reports_out_of_date_branch(self):
+        self.fake.main = MOVED
+        self.fake.pr["mergeable_state"] = "behind"
+        strict = live_mainloop_rules()
+        strict[-1]["parameters"]["strict_required_status_checks_policy"] = True
+        classic = {
+            "required_status_checks": {"strict": True, "checks": [], "contexts": []}
+        }
+        for rules, protection in (
+            (strict, {"required_status_checks": None}),
+            ([], classic),
+            ([], {"required_status_checks": None}),
+        ):
+            with self.subTest(rules=bool(rules), protection=protection):
+                self.fake.rules, self.fake.protection = rules, protection
+                with self.assertRaisesRegex(PolicyError, "out of date") as raised:
+                    await self.evidence()
+                self.assertEqual(raised.exception.code, "rules")
+        self.fake.rules = strict
+        self.fake.protection = {"required_status_checks": None}
+        _, ci = await self.observe()
+        self.assertEqual(ci["policy_rejections"], [github_merge.OUT_OF_DATE])
+        # Up to date under strict checks remains unsupported, as before.
+        self.fake.pr["mergeable_state"] = "clean"
+        with self.assertRaisesRegex(
+            PolicyError, "unsupported strict_required_status_checks_policy"
+        ):
+            await self.evidence()
+
+    async def test_base_side_rename_into_protected_path_is_matched(self):
+        # Real git (review): main renames src/build.yml to
+        # .github/workflows/build.yml; the feature edits src/build.yml. The
+        # three-dot PR list shows only src/build.yml, the squash changes the
+        # workflow.
+        self.fake.main = MOVED
+        self.fake.pr.update(additions=1, deletions=1)
+        self.fake.files = [
+            dict(filename="src/build.yml", status="modified", additions=1, deletions=1)
+        ]
+        self.fake.merge_files = [
+            dict(
+                filename=".github/workflows/build.yml",
+                status="modified",
+                additions=1,
+                deletions=1,
+            )
+        ]
+        facts = await self.evidence()
+        self.assertEqual(facts["protected_matches"], [".github/workflows/build.yml"])
+        self.assertEqual(
+            [item["filename"] for item in facts["merge_files"]],
+            [".github/workflows/build.yml"],
+        )
+        self.assertEqual(facts["merge_commit_sha"], TEST_MERGE)
+
+    async def test_merge_result_rename_keeps_both_sides(self):
+        self.fake.merge_files = [
+            dict(
+                filename="src/app.py",
+                status="renamed",
+                previous_filename="k8s/app.py",
+                additions=3,
+                deletions=1,
+            )
+        ]
+        self.assertEqual((await self.evidence())["protected_matches"], ["k8s/app.py"])
+        self.fake.merge_files[0].pop("previous_filename")
+        with self.assertRaises(ValueError):
+            await self.evidence()
+
+    async def test_unverifiable_merge_result_never_falls_back_to_pr_files(self):
+        self.fake.main = MOVED
+        for parents in ([BASE, SHA], [MOVED, "e" * 40], [SHA, MOVED], [MOVED]):
+            with self.subTest(parents=parents):
+                self.fake.merge_parents = parents
+                with self.assertRaises(github_merge.MergeResultPending):
+                    await self.evidence()
+        self.fake.merge_parents = None
+        self.fake.pr["merge_commit_sha"] = None
+        with self.assertRaises(github_merge.MergeResultPending):
+            await self.evidence()
+        self.fake.pr["merge_commit_sha"] = TEST_MERGE
+        self.fake.merge_files = [
+            dict(filename=f"f{i}", status="modified", additions=0, deletions=0)
+            for i in range(300)
+        ]
+        with self.assertRaisesRegex(PolicyError, "too many") as raised:
+            await self.evidence()
+        self.assertEqual(raised.exception.code, "merge_result")
+        self.fake.merge_files = [
+            dict(filename="src/app.py", status="modified", additions=9, deletions=1)
+        ]
+        self.fake.merge_files += [dict(self.fake.merge_files[0])]
+        with self.assertRaises(GitHubError):
+            await self.evidence()
+        self.fake.merge_files = None
+        for changes in (
+            {"status": "diverged"},
+            {"status": "identical", "ahead_by": 0},
+            {"behind_by": 1},
+            {"merge_base_commit": {"sha": BASE}},
+            {"base_commit": {"sha": BASE}},
+        ):
+            with self.subTest(compare=changes):
+                self.fake.compare = changes
+                with self.assertRaises(GitHubError):
+                    await self.evidence()
+
+    async def test_merge_result_uses_documented_compare_against_pinned_base(self):
+        self.fake.main = MOVED
+        await self.evidence()
+        compares = [r for r in self.fake.calls if "/compare/" in r.url.path]
+        self.assertEqual(
+            [r.url.path for r in compares],
+            [f"/repos/owner/repo/compare/{MOVED}...{TEST_MERGE}"],
+        )
+        self.assertEqual(compares[0].url.params.get("page"), "1")
 
     async def test_default_head_refusal_is_precise(self):
         self.fake.pr["head"]["ref"] = "main"
@@ -946,7 +1157,8 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.fake.runs.clear()
         self.assertFalse((await self.evidence())["ci"]["green"])
         self.fake.pr["mergeable"] = None
-        self.assertFalse((await self.evidence())["mergeable"])
+        with self.assertRaises(github_merge.MergeResultPending):
+            await self.evidence()
 
     async def test_complete_files_protected_renames_and_deletions(self):
         self.fake.files = [
@@ -1733,10 +1945,10 @@ class MergeTests(MergeFixture):
     async def test_stale_base_policy_and_replacement_refuse_approval(self):
         p = await self.prepare()
         observer, projection, _ = await self.pause(p)
-        self.fake.pr["base"]["sha"] = "d" * 40
+        self.fake.main = "d" * 40
         with self.assertRaises(ValueError):
             await self.decide(observer, projection)
-        self.fake.pr["base"]["sha"] = BASE
+        self.fake.main = BASE
         replacement = await self.prepare(request_id="replacement")
         self.assertNotEqual(p["proposal_id"], replacement["proposal_id"])
         with self.assertRaises(ValueError):
@@ -1748,6 +1960,80 @@ class MergeTests(MergeFixture):
             ),
             0,
         )
+
+    async def test_base_behind_main_prepares_and_merges_against_current_main(self):
+        self.fake.main = MOVED
+        p = await self.prepare()
+        self.assertEqual(p["base_sha"], MOVED)
+        self.assertEqual((await self.execute(p))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_main_moving_after_prepare_refuses_then_reprepare_merges(self):
+        p = await self.prepare()
+        self.fake.main = MOVED
+        result = await self.execute(p)
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("default branch moved since preparation", result["text"])
+        self.assertEqual(len(self.fake.puts), 0)
+        newer = await self.prepare(request_id="after-main-moved")
+        self.assertEqual(newer["base_sha"], MOVED)
+        self.assertEqual(
+            (await self.execute(newer, request="invoke-2"))["state"], "merged"
+        )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_base_side_rename_routes_to_approval(self):
+        self.fake.main = MOVED
+        self.fake.pr.update(additions=1, deletions=1)
+        self.fake.files = [
+            dict(filename="src/build.yml", status="modified", additions=1, deletions=1)
+        ]
+        self.fake.merge_files = [
+            dict(
+                filename=".github/workflows/build.yml",
+                status="modified",
+                additions=1,
+                deletions=1,
+            )
+        ]
+        p = await self.prepare()
+        self.assertEqual(p["route"], "approval")
+        self.assertEqual(p["protected_matches"], [".github/workflows/build.yml"])
+        with self.assertRaisesRegex(PolicyError, "protected merge tool"):
+            await self.execute(p)
+        auto = await merge.auto_merge(self.binding, {**self.args, "request_id": "auto"})
+        self.assertEqual(auto["state"], "approval_required")
+        self.assertEqual(len(self.fake.puts), 0)
+
+    async def test_missing_or_mismatched_test_merge_never_auto_merges(self):
+        self.fake.main = MOVED
+        self.fake.merge_parents = [BASE, SHA]
+        with self.assertRaisesRegex(PolicyError, "does not match"):
+            await self.prepare()
+        self.fake.merge_parents = None
+        p = await self.prepare(request_id="ready")
+        # GitHub recomputes the test merge: execution waits, sends nothing.
+        self.fake.merge_parents = [BASE, SHA]
+        self.assertEqual((await self.execute(p))["state"], "evaluating")
+        self.fake.merge_parents = None
+        self.fake.pr["merge_commit_sha"] = None
+        self.assertEqual((await self.execute(p))["state"], "evaluating")
+        self.assertEqual(len(self.fake.puts), 0)
+        # A recreated test merge commit with the same parents and inventory
+        # does not invalidate the proposal.
+        self.fake.pr["merge_commit_sha"] = "8" * 40
+        self.assertEqual((await self.execute(p))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_conflict_refuses_prepare_and_blocks_execution(self):
+        p = await self.prepare()
+        self.fake.pr.update(mergeable=False, mergeable_state="dirty")
+        result = await self.execute(p)
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("merge conflicts with main", result["text"])
+        with self.assertRaisesRegex(PolicyError, "merge conflicts with main"):
+            await self.prepare(request_id="conflicting")
+        self.assertEqual(len(self.fake.puts), 0)
 
     async def test_policy_change_before_claim_refuses_auto(self):
         p = await self.prepare()

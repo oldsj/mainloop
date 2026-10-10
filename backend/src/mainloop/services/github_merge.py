@@ -60,6 +60,17 @@ KNOWN_RULE_TYPES = frozenset(
 )
 UNKNOWN_BRANCH_RULE = "unknown_branch_rule"
 UNKNOWN_PR_PARAMETER = "unknown_pull_request_parameter"
+# GitHub reports mergeable_state "behind" only when a branch rule requires the
+# head to contain the latest base; Mainloop performs no update-branch write.
+OUT_OF_DATE = (
+    "branch is out of date with the default branch and GitHub requires it to be "
+    "up to date; merge or rebase the default branch into the head, push, then "
+    "prepare again"
+)
+MERGE_RESULT_PENDING = "merge_result_pending"
+# GitHub's compare API lists at most 300 changed files for a comparison; a list
+# at the cap cannot prove the inventory is complete.
+MERGE_FILES_LIMIT = 300
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +99,67 @@ class ChangedFile(BaseModel):
     previous_filename: str | None = Field(default=None, min_length=1, max_length=4096)
     additions: int = Field(ge=0)
     deletions: int = Field(ge=0)
+
+
+def changed_file(item):
+    if not isinstance(item, dict):
+        raise GitHubError
+    return ChangedFile.model_validate(
+        {
+            key: item[key]
+            for key in (
+                "filename",
+                "status",
+                "previous_filename",
+                "additions",
+                "deletions",
+            )
+            if key in item
+        }
+    )
+
+
+def changed_path(item):
+    return ChangedPath.model_validate(
+        item.model_dump(include={"filename", "status", "previous_filename"})
+    )
+
+
+def inventory(files):
+    rows = [
+        item.model_dump(mode="json")
+        for item in sorted(files, key=lambda file: file.filename)
+    ]
+    return rows, canonical_digest(rows)
+
+
+class MergeResultPending(PolicyError):
+    """GitHub's test merge for the pinned base and head is not ready yet.
+
+    Execution keeps evaluating unless the CI collected first already failed.
+    """
+
+    def __init__(self, message, ci=None):
+        super().__init__(MERGE_RESULT_PENDING, message)
+        self.ci = ci
+
+
+class Parent(BaseModel):
+    sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+
+class MergeCommit(BaseModel):
+    sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    parents: list[Parent]
+
+
+class Comparison(BaseModel):
+    status: str = Field(max_length=32)
+    ahead_by: int = Field(ge=0)
+    behind_by: int = Field(ge=0)
+    base_commit: Parent
+    merge_base_commit: Parent
+    files: list = Field(max_length=MERGE_FILES_LIMIT)
 
 
 class App(BaseModel):
@@ -382,34 +454,23 @@ class GitHubMergeClient(GitHubCreationClient):
             )
         if pr.head.ref == repo.default_branch:
             raise PolicyError("branch", "default branch is not allowed")
+        if pr.mergeable is False or pr.mergeable_state == "dirty":
+            raise PolicyError(
+                "merge_conflict",
+                f"PR has merge conflicts with {repo.default_branch}; merge or rebase "
+                f"{repo.default_branch} into {pr.head.ref}, push, then prepare again",
+            )
+        # GitHub updates pr.base.sha only when the PR is synchronized, so it is
+        # not the base a squash would land on. Evaluate and pin the current
+        # default-branch head instead; execution refuses if it moves.
         self.evidence_step = "branch"
         base = await self.branch(name, repo.default_branch)
-        if base.name != pr.base.ref or base.commit.sha != pr.base.sha:
-            raise PolicyError("base", "default branch moved; prepare again")
+        if base.name != repo.default_branch:
+            raise GitHubError
         self.evidence_step = "files"
         raw = await self.pages(f"/repos/{name}/pulls/{number}/files", limit=3000)
-        files = [
-            ChangedFile.model_validate(
-                {
-                    key: item[key]
-                    for key in (
-                        "filename",
-                        "status",
-                        "previous_filename",
-                        "additions",
-                        "deletions",
-                    )
-                    if key in item
-                }
-            )
-            for item in raw
-        ]
-        paths = [
-            ChangedPath.model_validate(
-                item.model_dump(include={"filename", "status", "previous_filename"})
-            )
-            for item in files
-        ]
+        files = [changed_file(item) for item in raw]
+        paths = [changed_path(item) for item in files]
         if (
             len(paths) != pr.changed_files
             or len({p.filename for p in paths}) != len(paths)
@@ -417,8 +478,21 @@ class GitHubMergeClient(GitHubCreationClient):
             or sum(item.deletions for item in files) != pr.deletions
         ):
             raise GitHubError
-        matches = protected_matches(paths, complete=True)
-        ci = await self.checks(name, sha, repo.default_branch)
+        behind = pr.mergeable_state == "behind"
+        ci = await self.checks(name, sha, repo.default_branch, behind=behind)
+        if behind:
+            raise PolicyError("rules", OUT_OF_DATE)
+        try:
+            merge_files = await self.merge_result(name, pr, base.commit.sha, sha)
+        except MergeResultPending as pending:
+            pending.ci = ci
+            raise
+        # The PR's three-dot file list can miss paths the squash changes: a
+        # base-side rename redirects a head edit to the new path. Policy sees
+        # both the PR inventory and the merge result against the pinned base.
+        matches = protected_matches(
+            paths + [changed_path(item) for item in merge_files], complete=True
+        )
         self.evidence_step = "description"
         description_source = (pr.body or "").encode("utf-8")
         description = description_source[: 16 * 1024].decode("utf-8", errors="ignore")
@@ -433,6 +507,11 @@ class GitHubMergeClient(GitHubCreationClient):
             raise PolicyError(
                 "stale", "PR or repository changed while reading evidence"
             )
+        self.evidence_step = "branch_refresh"
+        if await self.branch(name, repo.default_branch) != base:
+            raise PolicyError(
+                "stale", "default branch moved while reading evidence; prepare again"
+            )
         self.evidence_step = "summary"
         return {
             "repository_id": repo.id,
@@ -441,7 +520,7 @@ class GitHubMergeClient(GitHubCreationClient):
             "head_sha": sha,
             "head": pr.head.ref,
             "base": pr.base.ref,
-            "base_sha": pr.base.sha,
+            "base_sha": base.commit.sha,
             "title": pr.title,
             "description": description,
             "description_truncated": len(description_source) > 16 * 1024,
@@ -450,24 +529,76 @@ class GitHubMergeClient(GitHubCreationClient):
             "changed_files_count": pr.changed_files,
             "additions": pr.additions,
             "deletions": pr.deletions,
-            "files": [
-                item.model_dump(mode="json")
-                for item in sorted(files, key=lambda file: file.filename)
-            ],
-            "files_digest": canonical_digest(
-                [
-                    item.model_dump(mode="json")
-                    for item in sorted(files, key=lambda file: file.filename)
-                ]
-            ),
+            "files": inventory(files)[0],
+            "files_digest": inventory(files)[1],
+            # GitHub recreates test merge commits, so the SHA is recorded but
+            # not pinned; the inventory and its parents (base_sha, head_sha) are.
+            "merge_commit_sha": pr.merge_commit_sha,
+            "merge_files": inventory(merge_files)[0],
+            "merge_files_digest": inventory(merge_files)[1],
             "protected_matches": list(matches),
             "ci": ci,
             "mergeable": pr.mergeable is True
             and pr.mergeable_state in ("clean", "unstable", "has_hooks"),
         }
 
-    async def checks(self, name, sha, base, *, enforce_policy=True):
+    async def merge_result(self, name, pr, base_sha, head_sha):
+        """Files GitHub's test merge changes relative to the pinned base.
+
+        Its parents must be exactly the pinned base and expected head. The
+        documented compare of ``base_sha...merge`` then equals the first-parent
+        diff, because the merge base is ``base_sha`` itself. A test merge that is
+        missing, not yet recomputed for this base, or larger than compare can
+        list completely never falls back to the PR inventory.
+        """
+        self.evidence_step = "merge_result"
+        if pr.mergeable is not True or pr.merge_commit_sha is None:
+            raise MergeResultPending(
+                "GitHub has not computed this PR's merge result yet; try again shortly"
+            )
+        commit = MergeCommit.model_validate(
+            await self._request("GET", f"/repos/{name}/commits/{pr.merge_commit_sha}")
+        )
+        if commit.sha != pr.merge_commit_sha:
+            raise GitHubError
+        if [parent.sha for parent in commit.parents] != [base_sha, head_sha]:
+            raise MergeResultPending(
+                "GitHub's merge result does not match the current default branch "
+                "and PR head yet; try again shortly"
+            )
+        # Compare lists changed files only on the first page, up to 300 for
+        # the whole comparison; per_page=1 keeps the commit list small.
+        comparison = Comparison.model_validate(
+            await self._request(
+                "GET",
+                f"/repos/{name}/compare/{base_sha}...{pr.merge_commit_sha}",
+                params={"per_page": 1, "page": 1},
+            )
+        )
+        if (
+            comparison.status != "ahead"
+            or comparison.behind_by != 0
+            or comparison.ahead_by < 1
+            or comparison.base_commit.sha != base_sha
+            or comparison.merge_base_commit.sha != base_sha
+        ):
+            raise GitHubError
+        if len(comparison.files) >= MERGE_FILES_LIMIT:
+            raise PolicyError(
+                "merge_result",
+                f"merge result changes {MERGE_FILES_LIMIT} or more files, too many "
+                "to evaluate completely; split the PR or update the branch",
+            )
+        files = [changed_file(item) for item in comparison.files]
+        if len({item.filename for item in files}) != len(files):
+            raise GitHubError
+        return files
+
+    async def checks(self, name, sha, base, *, enforce_policy=True, behind=False):
         """CI evidence for ``sha``. Merge policy refusals raise PolicyError.
+
+        ``behind`` (GitHub's mergeable_state) turns a strict-checks refusal into
+        the actionable out-of-date reason.
 
         With ``enforce_policy=False`` (observation only, never merge evidence),
         refusals are listed in ``policy_rejections`` instead. A refused source
@@ -573,7 +704,11 @@ class GitHubMergeClient(GitHubCreationClient):
             classic = protection.required_status_checks
             if classic is not None:
                 if classic.strict:
-                    refuse("unsupported classic strict status checks")
+                    refuse(
+                        OUT_OF_DATE
+                        if behind
+                        else "unsupported classic strict status checks"
+                    )
                 required.extend((c.context, c.app_id) for c in classic.checks)
                 required.extend((c, None) for c in classic.contexts)
         self.evidence_step = "rules"
@@ -600,7 +735,11 @@ class GitHubMergeClient(GitHubCreationClient):
                     )
                     continue
                 if parameters.strict_required_status_checks_policy:
-                    refuse("unsupported strict_required_status_checks_policy")
+                    refuse(
+                        OUT_OF_DATE
+                        if behind
+                        else "unsupported strict_required_status_checks_policy"
+                    )
                 required.extend(
                     (c.context, c.integration_id)
                     for c in parameters.required_status_checks
@@ -729,7 +868,13 @@ class GitHubMergeClient(GitHubCreationClient):
         self.evidence_step = "pull_request"
         pr = await self.pull(name, number)
         try:
-            ci = await self.checks(name, pr.head.sha, pr.base.ref, enforce_policy=False)
+            ci = await self.checks(
+                name,
+                pr.head.sha,
+                pr.base.ref,
+                enforce_policy=False,
+                behind=pr.mergeable_state == "behind",
+            )
         except (GitHubError, PolicyError, ValueError) as error:
             logger.warning(
                 "PR CI observation unavailable for %s#%s at %s: %s%s",

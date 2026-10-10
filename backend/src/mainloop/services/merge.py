@@ -13,7 +13,7 @@ from mainloop.db import tasks as task_store
 from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
-from mainloop.services.github_merge import GitHubMergeClient
+from mainloop.services.github_merge import GitHubMergeClient, MergeResultPending
 from mainloop.services.merge_summary import build_summary
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
@@ -52,7 +52,7 @@ def pinned(facts):
     return {
         k: v
         for k, v in facts.items()
-        if k not in ("ci", "mergeable", "mapping_evidence")
+        if k not in ("ci", "mergeable", "mapping_evidence", "merge_commit_sha")
     }
 
 
@@ -345,8 +345,10 @@ def merged_result(p, sha, source):
     }
 
 
-def state_result(state, pid, deadline=None, *, approved=False):
+def state_result(state, pid, deadline=None, *, approved=False, reason=None):
     text = f"Merge {state}; proposal {pid}."
+    if reason:
+        text += f" Reason: {reason}."
     if state == "evaluating" and approved:
         text += (
             f" Mainloop will complete this exact merge under the original consent if CI "
@@ -734,7 +736,15 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
                 request_id=body.request_id,
             ),
         )
-    except PolicyError:
+    except PolicyError as error:
+        reason = error.message
+        if isinstance(error, MergeResultPending):
+            if ci_state(error.ci, facts["head_sha"]) != "failure":
+                # Like unknown mergeability: wait for GitHub's test merge.
+                return state_result(
+                    "evaluating", p["id"], candidate["deadline"], approved=approved
+                )
+            reason = "CI failed for the PR head"
         async with db.connection() as conn, conn.transaction():
             await task_store.admission_lock(conn)
             await lock_candidate(
@@ -751,7 +761,9 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
             )
             if closed:
                 return await remember_result(
-                    conn, p["id"], state_result("blocked", p["id"])
+                    conn,
+                    p["id"],
+                    state_result("blocked", p["id"], reason=reason),
                 )
         raise
     async with db.connection() as conn, conn.transaction():
@@ -783,14 +795,20 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
                 if candidate["state"] in ("blocked", "expired"):
                     return await remember_result(conn, p["id"], result)
                 return result
-            state = None
+            state = reason = None
             if candidate["deadline"] <= datetime.now(timezone.utc):
                 state = "expired"
+            elif fresh["base_sha"] != facts["base_sha"]:
+                # The squash would land on a default branch this proposal never
+                # evaluated. A fresh preparation pins the new head.
+                state = "blocked"
+                reason = "default branch moved since preparation; prepare again"
             elif (
                 pinned(facts) != pinned(fresh)
                 or current["merge_policy_version"] != facts["policy_version"]
             ):
                 state = "blocked"
+                reason = "PR, diff or policy changed since preparation; prepare again"
             elif ci_state(fresh["ci"], facts["head_sha"]) == "failure":
                 state = "blocked"
             elif (
@@ -813,7 +831,7 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
                     state,
                 )
                 return await remember_result(
-                    conn, p["id"], state_result(state, p["id"])
+                    conn, p["id"], state_result(state, p["id"], reason=reason)
                 )
             if approved and not await lookup_merge_receipt(conn, key, digest):
                 raise PolicyError("consent", "exact consent unavailable at claim")
