@@ -49,9 +49,10 @@ asyncio creation stacks with debug checks retained, and less successful-request
 console logging. The scratch database helper still needs an image rollout before
 installed workspace helpers change.
 
-**Proposed, pending follow-up:** repair runner lifecycle and diagnostics gaps,
-then raise test, fixture and discovery deadlines from 30 to 60 seconds. Keep the
-foreground suite cap at 540 seconds plus at most five seconds of cleanup. A
+**Implemented in [#156](https://github.com/oldsj/mainloop/pull/156):** runner
+lifecycle and diagnostics gaps are closed, and test, fixture and discovery
+deadlines rose from 30 to 60 seconds. The foreground suite cap stays at 540
+seconds plus at most five seconds of cleanup. A
 15-minute CI job cap would allow setup time without lengthening the foreground
 command. If workspace qualification exceeds its cap, optimize further or use
 deterministic module shards whose combined test-ID inventory preserves coverage.
@@ -155,23 +156,25 @@ accepted test took 6.202 seconds.
 
 ## Details and references
 
-### Runner bounds and pending repairs
+### Runner bounds
 
 **Implemented in [#153](https://github.com/oldsj/mainloop/pull/153):** the runner requires a scratch
 `MAINLOOP_TEST_DATABASE_URL` rather than silently skipping PostgreSQL coverage.
-Its configured deadlines are 30 seconds per test/fixture/discovery and 540 seconds
+Its configured deadlines are now 60 seconds per test/fixture/discovery (raised
+from 30 in [#156](https://github.com/oldsj/mainloop/pull/156)) and 540 seconds
 for the suite; suite timeout exits 124, fatal phase timeout exits 1, and missing
 database URL exits 2. `TEST_ARGS` selects unittest names;
 `MAINLOOP_TEST_TIMINGS` saves timing JSON. Sync dependencies first with
 `uv sync --frozen --python 3.13`.
 
-**Measured review findings; repairs proposed:** ordinary suites returned by
-`load_tests` can bypass fixture deadlines; async runner shutdown occurs after the
-test timer is cancelled; suite termination can race and truncate the stack dump;
-and cancellation during process launch can escape process-group cleanup. The
-30-second bounds therefore do not cover every lifecycle path. The pending
-60-second proposal provides 9.67× headroom over the slowest native test, versus
-4.84× at 30 seconds. Neither value is qualified on gVisor arm64.
+**Implemented in [#156](https://github.com/oldsj/mainloop/pull/156):** review of
+#153 found four lifecycle gaps: suites returned by `load_tests` bypassed fixture
+deadlines, async runner shutdown ran after the test timer was cancelled, suite
+termination could truncate the stack dump, and cancellation during launch could
+escape process-group cleanup. All four are fixed with regression tests; the
+measured native run passed 1,463 tests in 295.192 seconds. The 60-second bound
+gives 9.67× headroom over the slowest native test, versus 4.84× at 30 seconds.
+It is not yet qualified on gVisor arm64.
 
 ### Runtime capacity and filesystem controls
 
