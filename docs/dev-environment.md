@@ -135,7 +135,9 @@ a 540-second cap with up to five seconds for stack dumping and process cleanup,
 leaving headroom under the harness's ten-minute foreground limit. The Make wrapper additionally
 bounds uv startup. CI's job cap is ten minutes.
 The supervisor kills every worker process group on timeout or cancellation, including
-test subprocesses; `dev-postgres` then removes its disposable cluster.
+test subprocesses, then drops this run's class/template databases within the same
+cleanup budget; `dev-postgres` also removes its disposable cluster. Success requires
+every planned ID to execute exactly once, including skips and expected failures.
 Class databases clone one migrated, empty template per worker, with distinct worker
 namespaces; migration tests still
 execute the real migrations and each class retains its own independent database.

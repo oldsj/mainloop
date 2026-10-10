@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import re
 import selectors
 import signal
 import subprocess  # nosec B404 - runs this runner with the current interpreter
@@ -63,6 +64,13 @@ class TimedResult(unittest.TextTestResult):
         self.modules = defaultdict(float)
         self.timings = []
 
+    def record_execution(self, test):
+        emit("execution", id=test.id())
+
+    def startTest(self, test):
+        super().startTest(test)
+        self.record_execution(test)
+
 
 class CappedSuite(unittest.TestSuite):
     """Cap fixtures and the complete test call, including async runner close."""
@@ -84,6 +92,17 @@ class CappedSuite(unittest.TestSuite):
                 if getattr(type(test), "_classSetupFailed", False) or getattr(
                     result, "_moduleSetUpFailed", False
                 ):
+                    # unittest reports a fixture skip using an ErrorHolder,
+                    # without calling startTest for any affected leaf.
+                    skipped_fixtures = {
+                        f"setUpClass ({unittest.util.strclass(type(test))})",
+                        f"setUpModule ({type(test).__module__})",
+                    }
+                    if any(
+                        holder.id() in skipped_fixtures
+                        for holder, _reason in result.skipped
+                    ):
+                        result.record_execution(test)
                     continue
                 started = time.monotonic()
                 with deadline(test.id()):
@@ -188,12 +207,12 @@ def inventory(suite):
     ]
 
 
-def verify_inventory(expected, actual):
+def verify_inventory(expected, actual, kind="inventory"):
     expected_ids = Counter(entry["id"] for entry in expected)
     actual_ids = Counter(entry["id"] for entry in actual)
     if expected_ids != actual_ids or any(count != 1 for count in actual_ids.values()):
         raise ValueError(
-            "Test inventory mismatch: "
+            f"Test {kind} mismatch: "
             f"missing={list((expected_ids - actual_ids).elements())}, "
             f"extra={list((actual_ids - expected_ids).elements())}, "
             f"duplicates={[name for name, count in actual_ids.items() if count > 1]}"
@@ -331,15 +350,12 @@ def cleanup_budget():
     inherited_grace = os.environ.get("MAINLOOP_TIMEOUT_GRACE_MS")
     if inherited_grace is not None:
         parent_seconds = float(inherited_grace) / 1000
-        seconds = min(
-            seconds, max(0, parent_seconds - min(1, parent_seconds / 4))
-        )
+        seconds = min(seconds, max(0, parent_seconds - min(1, parent_seconds / 4)))
     return seconds
 
 
-def cleanup(processes, timed_out, signum=signal.SIGTERM):
+def cleanup(processes, timed_out, expires, signum=signal.SIGTERM):
     """One cleanup budget for all groups, including descendants of exited workers."""
-    expires = time.monotonic() + cleanup_budget()
     if timed_out:
         for process in processes:
             if process.poll() is None:
@@ -351,15 +367,48 @@ def cleanup(processes, timed_out, signum=signal.SIGTERM):
         time.sleep(min(STACK_DUMP_SECONDS, max(0, expires - time.monotonic())))
     for process in processes:
         kill_group(process, signum)
+    # Leave time in the same budget to reclaim databases after killing groups.
+    graceful_expires = time.monotonic() + min(1, max(0, expires - time.monotonic()) / 2)
     for process in processes:
         try:
-            process.wait(timeout=max(0, expires - time.monotonic()))
+            process.wait(timeout=max(0, graceful_expires - time.monotonic()))
         except subprocess.TimeoutExpired:
             pass
     for process in processes:
         kill_group(process, signal.SIGKILL)
     for process in processes:
-        process.wait()
+        process.wait(timeout=max(0, expires - time.monotonic()))
+
+
+async def cleanup_databases(namespaces, expires):
+    """Drop only this run's class/template names, inside its shared budget."""
+    if not namespaces:
+        return
+    import asyncpg
+
+    pattern = (
+        r"^mainloop_(test|template)_("
+        + "|".join(re.escape(namespace) for namespace in namespaces)
+        + r")_[a-f0-9]{12}$"
+    )
+    connection = None
+    async with asyncio.timeout(max(0, expires - time.monotonic())):
+        try:
+            connection = await asyncpg.connect(
+                os.environ["MAINLOOP_TEST_DATABASE_URL"],
+                timeout=max(0.001, expires - time.monotonic()),
+            )
+            databases = await connection.fetch(
+                "SELECT datname FROM pg_database WHERE datname ~ $1", pattern
+            )
+            for row in databases:
+                # Names passed the exact fixture grammar, including UUID suffix.
+                await connection.execute(
+                    f'DROP DATABASE IF EXISTS "{row["datname"]}" WITH (FORCE)'
+                )
+        finally:
+            if connection is not None:
+                connection.terminate()
 
 
 @dataclass
@@ -369,6 +418,8 @@ class Worker:
     log: Path
     buffer: bytes = b""
     inventory: list = field(default_factory=list)
+    plan: list | None = None
+    executed: list = field(default_factory=list)
     counts: dict = field(default_factory=dict)
     result: dict | None = None
     group_cleaned: bool = False
@@ -397,6 +448,7 @@ class Supervisor:
             "skipped": 0,
             "inventory": [],
             "worker_inventories": {},
+            "worker_executions": {},
             "failure_summary": [],
         }
 
@@ -436,7 +488,7 @@ class Supervisor:
                         "MAINLOOP_TEST_NAMESPACE": f"{self.namespace}_w{name}",
                     },
                 )
-                worker = Worker(name, process, log)
+                worker = Worker(name, process, log, plan=plan)
                 self.workers.append(worker)
                 self.selector.register(process.stdout, selectors.EVENT_READ, worker)
             finally:
@@ -467,6 +519,11 @@ class Supervisor:
                 ]
             if self.args.workers == 1:
                 self.timings["inventory"] = [entry["id"] for entry in worker.inventory]
+        elif kind == "execution":
+            worker.executed.append({"id": event["id"]})
+            self.timings["worker_executions"][worker.name] = [
+                entry["id"] for entry in worker.executed
+            ]
         elif kind in ("test", "fixture"):
             module = event["module"]
             self.timings["modules"][module] = (
@@ -527,14 +584,16 @@ class Supervisor:
     def run(self, previous):
         self.save()
         if self.args.workers == 1:
-            self.launch("0")
+            worker = self.launch("0")
             self.collect()
+            expected = worker.inventory
         else:
             discovery = self.launch("discovery", inventory_only=True)
             self.collect()
             if discovery.process.returncode != 0:
                 return 1
             plans = distribute(discovery.inventory, self.args.workers, previous)
+            expected = discovery.inventory
             self.timings["inventory"] = [entry["id"] for entry in discovery.inventory]
             self.timings["workers"] = len(plans)
             print(
@@ -549,6 +608,20 @@ class Supervisor:
                 discovery.inventory,
                 [entry for worker in self.workers[1:] for entry in worker.inventory],
             )
+        execution_workers = [
+            worker for worker in self.workers if worker.name != "discovery"
+        ]
+        for worker in execution_workers:
+            verify_inventory(
+                worker.plan if worker.plan is not None else worker.inventory,
+                worker.executed,
+                kind=f"execution (worker {worker.name})",
+            )
+        verify_inventory(
+            expected,
+            [entry for worker in execution_workers for entry in worker.executed],
+            kind="execution (combined)",
+        )
         return int(
             any(
                 worker.process.returncode != 0
@@ -597,15 +670,32 @@ def supervise(args):
             for signum in handlers:
                 signal.signal(signum, signal.SIG_IGN)
             try:
-                cleanup(
-                    [
-                        worker.process
-                        for worker in supervisor.workers
-                        if not worker.group_cleaned
-                    ],
-                    code == 124,
-                    supervisor.pending_signal or signal.SIGTERM,
-                )
+                cleanup_expires = time.monotonic() + cleanup_budget()
+                try:
+                    cleanup(
+                        [
+                            worker.process
+                            for worker in supervisor.workers
+                            if not worker.group_cleaned
+                        ],
+                        code == 124,
+                        cleanup_expires,
+                        supervisor.pending_signal or signal.SIGTERM,
+                    )
+                    asyncio.run(
+                        cleanup_databases(
+                            [
+                                f"{supervisor.namespace}_w{worker.name}"
+                                for worker in supervisor.workers
+                            ],
+                            cleanup_expires,
+                        )
+                    )
+                except Exception as error:
+                    print(f"Backend cleanup failed: {error}", file=sys.stderr)
+                    if code == 0:
+                        code = 1
+                        supervisor.timings["status"] = "failed"
                 supervisor.selector.close()
                 for worker in supervisor.workers:
                     if worker.process.stdout and not worker.process.stdout.closed:
