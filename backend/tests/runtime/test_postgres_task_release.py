@@ -4,10 +4,11 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi import HTTPException
 from mainloop.db import db
 from mainloop.db import tasks as store
-from mainloop.mcp_app import invoke
+from mainloop.mcp_app import create_app, invoke
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.agent_identity import token_for
 from mainloop.runtime.agent_tools import AgentService
@@ -19,6 +20,7 @@ from mainloop.runtime.kagent_client import (
     RuntimeState,
     SessionError,
 )
+from mainloop.runtime.policy import PolicyError, surface_tools
 from mainloop.services import merge
 from mainloop.tasks import lifecycle, provisioning, publication, service
 from mainloop.tasks.principal import TaskPrincipal
@@ -40,8 +42,12 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.task, self.attempt = await self.enroll(self.sid, "feature")
         self.binding = await PgStore().get_binding(self.sid)
@@ -80,6 +86,278 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
         self.assertEqual(result["state"], "merged")
         self.assertTrue(await self.held())
         return result
+
+    async def mcp(self, method, params=None, *, sid=None, path="/mcp"):
+        app = create_app(AgentService(PgStore()))
+        async with app.app.router.lifespan_context(app.app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+            ) as client:
+                return await client.post(
+                    path,
+                    headers={
+                        "Authorization": f"Bearer {token_for(sid or self.sid)}",
+                        "Accept": "application/json, text/event-stream",
+                    },
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": method,
+                        "params": params or {},
+                    },
+                )
+
+    async def mcp_call(self, name, arguments):
+        response = await self.mcp("tools/call", {"name": name, "arguments": arguments})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["result"]
+
+    def final_report(self, **changes):
+        return {
+            "task_id": self.task.id,
+            "attempt_id": self.attempt.id,
+            "request_id": "final-report",
+            "summary": "Fixture merge verified; final report",
+            "outcome": "completed",
+            "evidence_refs": ["fixture:merged"],
+            **changes,
+        }
+
+    async def assert_completed_mcp(self, result, invocation):
+        agent = AgentService(PgStore())
+        ctx = await agent.authenticate(token_for(self.sid))
+        self.assertTrue(ctx.actor.merge_status_only)
+        allowed = {"whoami", "task_get", "report", "get_pull_request_merge_status"}
+        self.assertEqual(surface_tools(ctx.actor), allowed)
+        discovery = await self.mcp("tools/list")
+        self.assertEqual(discovery.status_code, 200)
+        self.assertEqual(
+            {t["name"] for t in discovery.json()["result"]["tools"]}, allowed
+        )
+        protected = await self.mcp("tools/list", path="/mcp/merge-approval")
+        self.assertEqual(protected.json()["result"]["tools"], [])
+        before_task, before_projection = await self.view()
+        before_result_ref = await self.pool.fetchval(
+            "SELECT snapshot->>'result_ref' FROM task_attempts WHERE id=$1",
+            self.attempt.id,
+        )
+        for tool, arguments in (
+            ("whoami", {}),
+            ("task_get", {"task_id": self.task.id}),
+            (
+                "get_pull_request_merge_status",
+                {"proposal_id": result["proposal_id"], "request_id": invocation},
+            ),
+        ):
+            called = await self.mcp_call(tool, arguments)
+            self.assertFalse(called.get("isError"), called)
+            content = called["structuredContent"]
+            if tool == "whoami":
+                self.assertEqual(content["task_id"], self.task.id)
+                self.assertEqual(content["attempt_id"], self.attempt.id)
+            elif tool == "task_get":
+                self.assertEqual(content["task"]["status"], "completed")
+            else:
+                self.assertEqual(content["state"], "merged")
+        recorded = await self.mcp_call("report", self.final_report())
+        self.assertFalse(recorded.get("isError"), recorded)
+        replay = await self.mcp_call("report", self.final_report())
+        self.assertFalse(replay.get("isError"), replay)
+        self.assertEqual(
+            recorded["structuredContent"]["report_id"],
+            replay["structuredContent"]["report_id"],
+        )
+        conflict = await self.mcp_call(
+            "report", self.final_report(summary="Changed fixture")
+        )
+        self.assertTrue(conflict["isError"])
+        self.assertIn("report_request_conflict", conflict["content"][0]["text"])
+        task, projection = await self.view()
+        self.assertEqual(
+            (task.status, task.reason), (before_task.status, before_task.reason)
+        )
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(task.version, before_task.version + 1)
+        self.assertEqual(projection, before_projection)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT snapshot->>'result_ref' FROM task_attempts WHERE id=$1",
+                self.attempt.id,
+            ),
+            before_result_ref,
+        )
+        self.assertTrue(await self.held())
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_reports WHERE attempt_id=$1", self.attempt.id
+            ),
+            1,
+        )
+        event_id = recorded["structuredContent"]["event_id"]
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_event_deliveries WHERE event_id=$1", event_id
+            ),
+            1 if self.task.parent_task_id is None else 2,
+        )
+        for tool in (
+            "delegate",
+            "task_list",
+            "task_history",
+            "open_pull_request",
+            "merge_pull_request",
+            "merge_pull_request_with_approval",
+            "task_cancel",
+            "note",
+        ):
+            denied = await invoke(agent, ctx, tool, {})
+            self.assertTrue(denied.isError, tool)
+        for outcome in ("progress", "failed", "blocked"):
+            denied = await self.mcp_call(
+                "report",
+                self.final_report(request_id=f"invalid-{outcome}", outcome=outcome),
+            )
+            self.assertTrue(denied["isError"], outcome)
+            self.assertIn("completed_report_outcome", denied["content"][0]["text"])
+        for arguments in (
+            {"task_id": "unrelated"},
+            {"attempt_id": "unrelated"},
+        ):
+            denied = await self.mcp_call("report", self.final_report(**arguments))
+            self.assertTrue(denied["isError"])
+            self.assertIn("report_attempt_scope", denied["content"][0]["text"])
+        denied = await self.mcp_call("task_get", {"task_id": "unrelated"})
+        self.assertTrue(denied["isError"])
+        self.assertIn("completed_task_scope", denied["content"][0]["text"])
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_auto_completed_mcp_final_report_then_turn_cleanup_releases_capacity(
+        self,
+    ):
+        cid = (await db.get_session(self.sid)).conversation_id
+        message = await self.delivery(self.sid, cid, "delivered", source="brief")
+        result = await self.merged()
+        await self.assert_completed_mcp(result, self.args["request_id"])
+        await self.reconcile()
+        self.assertTrue(await self.held())
+        self.client.delete_session.assert_not_awaited()
+        await self.pool.execute(
+            "UPDATE native_deliveries SET state='completed' WHERE message_id=$1",
+            message,
+        )
+        await self.reconcile()
+        await self.assert_released()
+        self.assertEqual((await self.mcp("tools/list")).status_code, 401)
+
+    async def test_approval_completed_mcp_keeps_exact_receipt_required(self):
+        await self.pool.execute(
+            "UPDATE projects SET merge_policy='approval' WHERE id=$1", self.project.id
+        )
+        proposal = await self.prepare()
+        observer, projection, _ = await self.pause(proposal)
+        await self.decide(observer, projection)
+        result = await self.execute(proposal, approved=True)
+        self.assertEqual(result["state"], "merged")
+        await self.assert_completed_mcp(result, "invoke-1")
+        agent = AgentService(PgStore())
+        ctx = await agent.authenticate(token_for(self.sid))
+        # This fixture has no receipt for the candidate's replacement invocation.
+        # The unrelated original owner decision remains immutable.
+        await self.pool.execute(
+            "UPDATE merge_requests SET intent_invocation_id='no-receipt' WHERE owner_id=$1",
+            self.user,
+        )
+        for path in ("/mcp", "/mcp/merge-approval"):
+            response = await self.mcp("tools/list", path=path)
+            self.assertIn(response.status_code, (401, 403))
+            self.assertEqual(response.content, b"")
+        for tool, args in (
+            ("whoami", {}),
+            ("task_get", {"task_id": self.task.id}),
+            ("report", self.final_report()),
+        ):
+            denied = await invoke(agent, ctx, tool, args)
+            self.assertTrue(denied.isError, tool)
+        with self.assertRaises(PolicyError):
+            await merge.completed_replay(
+                self.binding,
+                {"proposal_id": result["proposal_id"], "request_id": "no-receipt"},
+                approved=False,
+            )
+        self.assertTrue(await self.held())
+
+    async def test_protected_auto_policy_completion_still_requires_receipt(self):
+        self.fake.files[0]["filename"] = "k8s/deployment.yaml"
+        proposal = await self.prepare()
+        self.assertEqual(proposal["route"], "approval")
+        observer, projection, _ = await self.pause(proposal)
+        await self.decide(observer, projection)
+        result = await self.execute(proposal, approved=True)
+        self.assertEqual(result["state"], "merged")
+        self.assertTrue(
+            (
+                await AgentService(PgStore()).authenticate(token_for(self.sid))
+            ).actor.merge_status_only
+        )
+        await self.pool.execute(
+            "UPDATE merge_requests SET intent_invocation_id='no-receipt' WHERE owner_id=$1",
+            self.user,
+        )
+        self.assertIn((await self.mcp("tools/list")).status_code, (401, 403))
+
+    async def test_completed_mcp_denies_unrelated_and_other_owner_bindings(self):
+        await self.merged()
+        unrelated, _ = await self.bound_session(
+            role="supervisor", mcp_grant_kind="workspace"
+        )
+        self.assertIn(
+            (await self.mcp("tools/list", sid=unrelated)).status_code, (401, 403)
+        )
+        self.assertIsNone(
+            await merge.completed_status_binding(
+                {**self.binding, "user_id": "other-owner"}
+            )
+        )
+        await self.pool.execute(
+            "UPDATE sessions SET user_id='other-owner' WHERE id=$1", self.sid
+        )
+        self.assertIn((await self.mcp("tools/list")).status_code, (401, 403))
+
+    async def test_completed_mcp_revalidates_claim_after_authentication(
+        self,
+    ):
+        await self.merged()
+        agent = AgentService(PgStore())
+        ctx = await agent.authenticate(token_for(self.sid))
+        await self.pool.execute(
+            "UPDATE workspace_writer_claims SET held=FALSE WHERE attempt_id=$1",
+            self.attempt.id,
+        )
+        for tool, args in (
+            ("whoami", {}),
+            ("task_get", {"task_id": self.task.id}),
+            ("report", self.final_report()),
+        ):
+            denied = await invoke(agent, ctx, tool, args)
+            self.assertTrue(denied.isError, tool)
+        self.assertIn((await self.mcp("tools/list")).status_code, (401, 403))
+
+    async def test_completed_child_mcp_requires_live_parent_ancestry(self):
+        parent, parent_sid = await attention_fixtures.TaskAttentionTests.child(self)
+        result = await self.merged()
+        await self.assert_completed_mcp(result, self.args["request_id"])
+        agent = AgentService(PgStore())
+        ctx = await agent.authenticate(token_for(self.sid))
+        denied = await invoke(agent, ctx, "task_get", {"task_id": parent.id})
+        self.assertTrue(denied.isError)
+        await self.pool.execute(
+            "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1", parent_sid
+        )
+        self.assertIn((await self.mcp("tools/list")).status_code, (401, 403))
+        denied = await invoke(
+            agent, ctx, "report", self.final_report(request_id="after-revocation")
+        )
+        self.assertTrue(denied.isError)
 
     async def assert_released(self, final="completed", product=None):
         self.assertFalse(await self.held())

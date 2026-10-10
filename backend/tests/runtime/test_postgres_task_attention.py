@@ -29,8 +29,12 @@ from models.task import Task, TaskCheckout, TaskReport
 class TaskAttentionTests(MergeFixture):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.task, self.attempt = await self.enroll(self.sid, "feature")
         self.binding = await PgStore().get_binding(self.sid)

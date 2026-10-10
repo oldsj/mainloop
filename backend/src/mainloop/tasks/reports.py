@@ -31,6 +31,10 @@ async def record(conn, principal, request: TaskReport) -> dict:
     ) != (principal.task_id, principal.attempt_id):
         raise store.TaskError(403, "report_attempt_scope")
     task = await store.get_task(conn, request.task_id, principal, lock=True)
+    if task.status == "completed" and (
+        task.mode != "code" or request.outcome != "completed"
+    ):
+        raise store.TaskError(403, "completed_report_outcome")
     payload_digest = store.digest(request.model_dump(mode="json"))
     previous = await conn.fetchrow(
         "SELECT * FROM task_reports WHERE attempt_id=$1 AND request_id=$2",
@@ -76,7 +80,7 @@ async def record(conn, principal, request: TaskReport) -> dict:
         )
     elif request.outcome in ("progress", "completed"):
         owner_decision = None
-    if request.outcome == "completed":
+    if request.outcome == "completed" and task.status != "completed":
         status, reason = "waiting", (
             "publication" if task.mode == "code" else "reconciliation"
         )
@@ -100,7 +104,7 @@ async def record(conn, principal, request: TaskReport) -> dict:
     key = f"report:{report_id}"
     await store.save_task(conn, updated, task.version, key)
     event_id = await reserve_event(conn, updated, key)
-    if request.outcome != "progress":
+    if request.outcome != "progress" and task.status != "completed":
         attempt = await lifecycle.load_attempt(conn, principal.attempt_id)
         await lifecycle.save_attempt(
             conn, attempt.model_copy(update={"result_ref": key})

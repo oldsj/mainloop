@@ -394,6 +394,8 @@ class GitCredentialsCase(PostgresTestCase):
 class OwnerWorkspaceApiCheckoutTests(GitCredentialsCase):
     """Public owner routes with real admission/DB and offline GitHub/native effects."""
 
+    reuse_database = True
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         self.server = CheckoutServer()
@@ -1081,12 +1083,14 @@ class GitCredentialTests(GitCredentialsCase):
 
 
 class GitTaskCredentialTests(GitCredentialsCase):
+    reuse_database = True
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         # The scratch database is shared across this class; old held attempts
         # must not consume the next test's global admission capacity.
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
         )
         from functools import partial
 

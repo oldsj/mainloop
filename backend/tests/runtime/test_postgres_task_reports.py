@@ -32,13 +32,19 @@ from models.task import TaskReport
 
 
 class TaskReportsPostgresTests(KagentFakeCase):
+    reuse_database = True
+
     # Reuse qualification setup, not its inherited test cases.
     async def asyncSetUp(self):
         await KagentFakeCase.asyncSetUp(self)
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_operations",
+            "native_deliveries",
+            "messages",
         )
-        await self.pool.execute("TRUNCATE native_deliveries,messages CASCADE")
         self.fake.next_session_ids = [str(uuid.uuid4()) for _ in range(12)]
         self.project = "p-" + self.user
         await self.pool.execute(

@@ -1,7 +1,9 @@
 """Owned loopback Git client/server evidence, with dummy capabilities and no provider."""
 
 import asyncio
+import atexit
 import os
+import shutil
 import signal
 import socket
 import tempfile
@@ -33,6 +35,8 @@ ASSOCIATION = RuntimeAssociation(
     actor_uid="uid",
     revision="1",
 )
+_seed_directory = None
+_seed_base = None
 GRANT = PushGrant(
     id="grant",
     owner_id="owner",
@@ -96,6 +100,52 @@ async def command(*args, cwd=None, data=None, env=None, success=True):
             f"fixture command failed ({process.returncode}): {args!r}\n{err.decode(errors='replace')}"
         )
     return process.returncode, out, err
+
+
+async def fixture_seed():
+    """Build one immutable Git seed per worker; test copies own every file."""
+    global _seed_directory, _seed_base
+    if _seed_directory is not None:
+        return Path(_seed_directory.name), _seed_base
+    directory = tempfile.TemporaryDirectory(dir=fixture_root(), prefix="seed-")
+    root = Path(directory.name)
+    repo, client = root / "upstream.git", root / "client"
+    try:
+        # Sample hooks are irrelevant to the transport fixtures and add many
+        # small files to every copy. Real upload/receive/validation still run Git.
+        await command(
+            "/usr/bin/git",
+            "-c",
+            "init.templateDir=",
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            str(repo),
+        )
+        await command(
+            "/usr/bin/git",
+            "-c",
+            "init.templateDir=",
+            "init",
+            "--initial-branch=main",
+            str(client),
+        )
+        (client / "file").write_text("base\n" * 1000)
+        await command("/usr/bin/git", "add", ".", cwd=client)
+        await command("/usr/bin/git", "commit", "-m", "base", cwd=client)
+        await command("/usr/bin/git", "push", str(repo), "main", cwd=client)
+        base = (
+            (await command("/usr/bin/git", "rev-parse", "HEAD", cwd=client))[1]
+            .strip()
+            .decode()
+        )
+        await command("/usr/bin/git", "checkout", "-b", "feature", cwd=client)
+    except BaseException:
+        directory.cleanup()
+        raise
+    _seed_directory, _seed_base = directory, base
+    atexit.register(directory.cleanup)
+    return root, base
 
 
 class FixtureAuthority:
@@ -330,20 +380,9 @@ class GitFixtureCase(unittest.IsolatedAsyncioTestCase):
             expanded_bytes=16 * 1024 * 1024,
             free_bytes=1024 * 1024,
         )
-        await command(
-            "/usr/bin/git", "init", "--bare", "--initial-branch=main", str(self.repo)
-        )
-        await command("/usr/bin/git", "init", "--initial-branch=main", str(self.client))
-        (self.client / "file").write_text("base\n" * 1000)
-        await command("/usr/bin/git", "add", ".", cwd=self.client)
-        await command("/usr/bin/git", "commit", "-m", "base", cwd=self.client)
-        await command("/usr/bin/git", "push", str(self.repo), "main", cwd=self.client)
-        self.base = (
-            (await command("/usr/bin/git", "rev-parse", "HEAD", cwd=self.client))[1]
-            .strip()
-            .decode()
-        )
-        await command("/usr/bin/git", "checkout", "-b", "feature", cwd=self.client)
+        seed, self.base = await fixture_seed()
+        shutil.copytree(seed / "upstream.git", self.repo)
+        shutil.copytree(seed / "client", self.client)
         self.authority = FixtureAuthority()
         self.fake = GitBackedUpstream(self.repo, self.authority)
         self.gate_responses = []

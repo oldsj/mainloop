@@ -110,11 +110,16 @@ class AgentService:
                 if principal is None:
                     raise ValueError("task principal required")
                 depth = principal.depth
-            except (lifecycle.LifecycleDenied, ValueError) as exc:
+            except (lifecycle.LifecycleDenied, policy.PolicyError, ValueError) as exc:
                 from mainloop.services.merge import completed_status_binding, enabled
 
                 if enabled() and grant_kind == "workspace":
-                    depth = await completed_status_binding(binding)
+                    try:
+                        depth = await completed_status_binding(binding)
+                    except (lifecycle.LifecycleDenied, policy.PolicyError) as denied:
+                        raise HTTPException(
+                            401, detail="unknown agent token"
+                        ) from denied
                     if depth is not None:
                         return Ctx(
                             binding,

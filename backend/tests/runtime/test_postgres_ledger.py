@@ -1,7 +1,8 @@
 """The slice's raw SQL against a real PostgreSQL (asyncpg).
 
 Opt-in: skipped unless ``MAINLOOP_TEST_DATABASE_URL`` is set. The URL needs a role that can
-``CREATE DATABASE``; the module creates a scratch database from it, applies the schema, and drops
+``CREATE DATABASE`` and permission to set ``session_replication_role`` (as provided by
+dev-postgres); the module creates a scratch database, applies the schema, and drops
 the database afterwards, so nothing in the target server's existing databases is touched.
 
     MAINLOOP_TEST_DATABASE_URL=postgresql://user:pass@host:5432/postgres \
@@ -53,6 +54,7 @@ from mainloop.runtime.kagent_client import (
 from mainloop.services.github_pr import RepoMetadata
 from mainloop.services.github_repo import GithubRepo, parse_github_repo
 from tests.runtime.kagent_fake import CONTEXT_ID, FakeKagent
+from tests.runtime.postgres_fixture import clear_rows
 
 from models import (
     SessionStatus,
@@ -64,6 +66,7 @@ from models import (
 
 TEST_URL = os.environ.get("MAINLOOP_TEST_DATABASE_URL")
 _template_database = None
+_shared_database = None
 
 
 def _database_name(kind: str) -> str:
@@ -101,7 +104,7 @@ def _drop_database(database: str) -> None:
 
 
 def _schema_template() -> str:
-    """Migrate one empty database per process; every class gets its own clone."""
+    """Migrate one empty database per process for independent or shared clones."""
     global _template_database
     if _template_database is None:
         database = _database_name("template")
@@ -136,12 +139,23 @@ async def _expect_column_missing(url: str) -> None:
 
 @unittest.skipUnless(TEST_URL, "set MAINLOOP_TEST_DATABASE_URL to run Postgres tests")
 class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
-    """A scratch database per test class and a pool wired into the global ``db`` per test."""
+    """An isolated class fixture and a pool wired into the global db per test.
+
+    Explicitly qualified data-only classes may share a worker database after
+    all rows and sequences are reset. Schema/isolation tests keep fresh clones.
+    Sharing is deliberately not inherited by unqualified subclasses.
+    """
 
     @classmethod
     def setUpClass(cls):
+        global _shared_database
         if not TEST_URL:
             raise unittest.SkipTest("MAINLOOP_TEST_DATABASE_URL is not set")
+        if cls.__dict__.get("reuse_database", False) and _shared_database is not None:
+            cls.database = _shared_database
+            cls.url = _with_database(TEST_URL, cls.database)
+            asyncio.run(cls._reset_shared_rows())
+            return
         cls.database = _database_name("test")
         cls.url = _with_database(TEST_URL, cls.database)
         template = _schema_template()
@@ -151,8 +165,24 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
                 f'CREATE DATABASE "{cls.database}" TEMPLATE "{template}" STRATEGY WAL_LOG',
             )
         )
-        # Clean up even when a subclass's setUpClass fails after creating its DB.
-        cls.addClassCleanup(_drop_database, cls.database)
+        if cls.__dict__.get("reuse_database", False):
+            _shared_database = cls.database
+            atexit.register(_drop_database, cls.database)
+        else:
+            # Also clean up when a subclass's setUpClass fails after its clone.
+            cls.addClassCleanup(_drop_database, cls.database)
+
+    @classmethod
+    async def _reset_shared_rows(cls):
+        conn = await asyncpg.connect(cls.url)
+        try:
+            await clear_rows(conn, restart_sequences=True)
+        finally:
+            await conn.close()
+
+    async def clear_tables(self, *tables):
+        async with self.pool.acquire() as conn:
+            await clear_rows(conn, tables)
 
     async def asyncSetUp(self):
         self.pool = await asyncpg.create_pool(self.url, min_size=1, max_size=6)
@@ -407,6 +437,8 @@ class SchemaTests(PostgresTestCase):
 
 
 class BindingTests(PostgresTestCase):
+    reuse_database = True
+
     async def test_create_lookup_and_update(self):
         sid, _ = await self.session()
         topic = await PgStore().topic(self.user, "alpha", create=True)
@@ -522,6 +554,8 @@ class BindingTests(PostgresTestCase):
 
 class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
     """The REST and MCP containers both write the ledger: the database must hold the rule."""
+
+    reuse_database = True
 
     async def submit(self, sid, cid, source, text="x"):
         return await ns.ledger.record_submission(
@@ -646,6 +680,8 @@ class OneOpenTurnAcrossProcessesTests(PostgresTestCase):
 
 
 class LedgerTests(PostgresTestCase):
+    reuse_database = True
+
     async def test_record_submission_writes_message_and_delivery(self):
         sid, cid = await self.bound_session()
         message_id, state = await ns.ledger.record_submission(
@@ -1129,6 +1165,8 @@ async def _create_workspace(
 
 
 class DelegationTests(PostgresTestCase):
+    reuse_database = True
+
     def setUp(self):
         spawn = patch.object(ns, "_spawn", side_effect=lambda coro: coro.close())
         self.spawned = spawn.start()
@@ -1438,6 +1476,8 @@ class KagentFakeCase(PostgresTestCase):
 
 
 class WorkspaceTests(KagentFakeCase):
+    reuse_database = True
+
     async def _workspace_with_lost_create_reply(self, branch: str) -> str:
         project_id = f"proj-{uuid.uuid4().hex[:8]}"
         repo_url = f"https://github.com/example/{project_id}"
@@ -2388,6 +2428,8 @@ class DatabaseFromBeforeTheKagentWorkspacesTests(KagentFakeCase):
 class StopTurnTests(PostgresTestCase):
     """``stop_turn`` over the real ledger SQL and a fake kagent."""
 
+    reuse_database = True
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         self.fake = FakeKagent()
@@ -2484,6 +2526,8 @@ class StopTurnTests(PostgresTestCase):
 
 class DeliveryFailureReasonTests(PostgresTestCase):
     """The reason a delivery failed is stored with it and reaches the owner through the API."""
+
+    reuse_database = True
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -2701,6 +2745,8 @@ class DeliveryFailureReasonTests(PostgresTestCase):
 
 
 class ReconcileTests(PostgresTestCase):
+    reuse_database = True
+
     async def test_reconcile_loop_syncs_sessions_with_open_work_and_checks_idle(self):
         busy, busy_cid = await self.bound_session()
         quiet, quiet_cid = await self.bound_session()
@@ -2760,6 +2806,8 @@ class ReconcileTests(PostgresTestCase):
 
 
 class ApiQueryTests(PostgresTestCase):
+    reuse_database = True
+
     async def test_project_detail_returns_only_the_projects_visible_owner_sessions(
         self,
     ):
@@ -2869,6 +2917,8 @@ class ApiQueryTests(PostgresTestCase):
 
 class ProjectFromRepoTests(KagentFakeCase):
     """Find-or-create of a project for a GitHub repository, and the API path that uses it."""
+
+    reuse_database = True
 
     REPO = GithubRepo("oldsj", "mainloop")
 

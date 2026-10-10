@@ -41,6 +41,8 @@ from models.task import TaskAction, TaskReassign, TaskReport
 
 
 class TaskApplicationIntegrationTests(MergeFixture):
+    reuse_database = True
+
     # Reuse the accepted fixture helpers without inheriting its test methods.
     enroll = fixtures.TaskAttentionTests.enroll
     child = fixtures.TaskAttentionTests.child
@@ -49,8 +51,12 @@ class TaskApplicationIntegrationTests(MergeFixture):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.task, self.attempt = await self.enroll(self.sid, "feature")
         self.binding = await PgStore().get_binding(self.sid)
@@ -673,8 +679,25 @@ class TaskApplicationIntegrationTests(MergeFixture):
         token = token_for(self.sid)
         context = await agent.authenticate(token)
         self.assertEqual(
-            surface_tools(context.actor), {"get_pull_request_merge_status"}
+            surface_tools(context.actor),
+            {"get_pull_request_merge_status", "whoami", "task_get", "report"},
         )
+        final_report = {
+            "task_id": self.task.id,
+            "attempt_id": self.attempt.id,
+            "request_id": "final-report",
+            "summary": "Fixture completed publication",
+            "outcome": "completed",
+            "evidence_refs": ["fixture:merged"],
+        }
+        completed_calls = (
+            ("whoami", {}),
+            ("task_get", {"task_id": self.task.id}),
+            ("report", final_report),
+        )
+        for name, payload in completed_calls:
+            allowed = await invoke(agent, context, name, payload)
+            self.assertFalse(allowed.isError, allowed.content)
         other = await invoke(
             agent,
             context,
@@ -683,9 +706,6 @@ class TaskApplicationIntegrationTests(MergeFixture):
         )
         self.assertTrue(other.isError)
         for name in (
-            "whoami",
-            "task_get",
-            "report",
             "open_pull_request",
             "prepare_pull_request_merge",
             "merge_pull_request",
@@ -707,6 +727,9 @@ class TaskApplicationIntegrationTests(MergeFixture):
                             )
                         ).isError
                     )
+                    for name, payload in completed_calls:
+                        denied = await invoke(agent, context, name, payload)
+                        self.assertTrue(denied.isError, (label, name))
                 finally:
                     if restore:
                         await self.pool.execute(
@@ -1353,7 +1376,12 @@ class TaskApplicationIntegrationTests(MergeFixture):
                     tools = await rpc("/mcp", "tools/list", {})
                     self.assertEqual(
                         {tool["name"] for tool in tools["tools"]},
-                        {"get_pull_request_merge_status"},
+                        {
+                            "get_pull_request_merge_status",
+                            "whoami",
+                            "task_get",
+                            "report",
+                        },
                     )
                     refused = await rpc(
                         "/mcp",
