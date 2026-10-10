@@ -8,7 +8,7 @@ export
 CAP := node "$(CURDIR)/scripts/with-timeout.mjs"
 UV_HTTP_TIMEOUT := 30
 UV_HTTP_RETRIES := 1
-.PHONY: install-backend install-models install-frontend check check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all
+.PHONY: install-backend install-models install-frontend check check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
 
 # Configuration
 # Set GHCR_USER in .env file (see .env.example)
@@ -90,19 +90,19 @@ _fmt-all:
 	trunk fmt -a
 	trunk check -a -y
 
-check: ## All offline checks in one turn (560s + cleanup; sync dependencies first)
+check: ## All offline checks in one turn (560s + cleanup; installs dependencies)
 	@$(CAP) 560 'make check' -- $(MAKE) --no-print-directory _check
 
 _check:
 	@$(MAKE) --no-print-directory test-timeouts test-backend check-frontend test-frontend frontend-build fmt lint
 
-check-frontend: ## Frontend diagnostics (120s cap)
+check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 	@$(CAP) 120 'make check-frontend' -- pnpm check
 
-test-frontend: ## Frontend unit tests (60s cap)
+test-frontend: install-frontend ## Frontend unit tests (60s cap)
 	@$(CAP) 60 'make test-frontend' -- pnpm --dir frontend test:unit
 
-frontend-build: ## Build the frontend application (120s cap)
+frontend-build: install-frontend ## Build the frontend application (120s cap)
 	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
 
 test-timeouts: ## Timeout helper regression tests (30s cap)
@@ -112,11 +112,11 @@ test-timeout-integration: ## Opt-in real runner + dev-image PG16 cleanup regress
 	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs
 
 # Backend commands
-backend-dev: ## Run backend in development mode
+backend-dev: install-backend ## Run backend in development mode
 	cd backend && uv run uvicorn mainloop.api:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend commands
-frontend-dev: ## Run frontend in development mode
+frontend-dev: install-frontend ## Run frontend in development mode
 	cd frontend && pnpm dev
 
 # Docker image commands
@@ -208,8 +208,11 @@ test-loop: ## Watch for changes and auto-redeploy to Kind
 TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
 
-test-backend: ## Offline backend + scratch PostgreSQL; 60s/test, 9m/suite
-	@cd backend && $(CAP) 550 'make test-backend' -- uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
+test-backend: ## Install dependencies and run offline backend tests (550s total cap)
+	@$(CAP) 550 'make test-backend' -- $(MAKE) --no-print-directory _test-backend
+
+_test-backend: install-backend
+	@cd backend && uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
 
 test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
 	@./scripts/e2e-guard.sh

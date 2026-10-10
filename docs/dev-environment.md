@@ -20,15 +20,20 @@ is `/opt/mainloop-lint/tool-checksums.txt`; its shared cache is under
 `/home/nonroot/.cache`, readable and writable by 65532 and root.
 Changing `.trunk/trunk.yaml` requires rebuilding the image to update this closure.
 
-Copy or clone a checkout into `/workspace` and sync its locked dependencies:
+Copy or clone a checkout into `/workspace` and run all offline checks:
 
 ```bash
-make install-backend install-frontend
-dev-postgres run make test-backend
-pnpm check
-make test-frontend
-make lint
+dev-postgres run make check
 ```
+
+Make targets for backend tests and frontend checks, tests, builds and development
+servers install their locked dependencies first. A multi-target Make invocation
+installs frontend dependencies once; warm installs reuse the package caches.
+Trunk supplies its own lint runtimes, so formatting and lint need no project venv.
+Standalone frontend targets have a separate 120-second install phase before
+the check, test or build cap. The aggregate cap remains 560 seconds, including
+cold installs; `dev-postgres`
+provides a tighter command budget of 540 seconds minus setup.
 
 `make lint` requires a fetched `origin/main`. Dependency sync needs the approved
 package registries. Offline, such as in an agent workspace, Trivy uses its built-in
@@ -38,35 +43,35 @@ Guarded browser, live-agent, and cluster suites are separate opt-in checks.
 
 ## Foreground deadlines
 
-Run `dev-postgres run make check` after dependency sync for the complete offline
+Run `dev-postgres run make check` for locked dependency installation and the complete offline
 check set: helper tests, backend tests, frontend diagnostics, unit tests and build,
 then formatting and lint. Its aggregate deadline leaves room under the native
 harness's ten-minute foreground limit. CI splits these checks into bounded jobs.
 
-| Command or phase                                             | Cap                       | Coverage                                                                     |
-| ------------------------------------------------------------ | ------------------------- | ---------------------------------------------------------------------------- |
-| `make check`                                                 | 560 s + cleanup           | Complete offline check set; at most 590 s including cleanup                  |
-| `make install`                                               | 240 s total               | Frontend, backend and shared models                                          |
-| `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                |
-| pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1` |
-| `make test-backend`                                          | 550 s                     | Runner: 60 s/test or fixture, 540 s/suite                                    |
-| `make test-timeouts`                                         | 30 s                      | Shared command-supervisor regressions                                        |
-| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions      |
-| `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                  |
-| `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                              |
-| `make frontend-build`, root/frontend `pnpm build`            | 120 s                     | Vite application build                                                       |
-| `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                        |
-| `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                              |
-| `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                       |
-| `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                    |
-| `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                              |
-| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup     |
-| PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                             |
-| Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry       |
-| Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                         |
-| CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                           |
-| CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                           |
-| CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                   |
+| Command or phase                                             | Cap                       | Coverage                                                                        |
+| ------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------- |
+| `make check`                                                 | 560 s + cleanup           | Locked installs and complete offline check set; at most 590 s including cleanup |
+| `make install`                                               | 240 s total               | Frontend, backend and shared models                                             |
+| `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                   |
+| pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1`    |
+| `make test-backend`                                          | 550 s                     | Includes backend install; runner: 60 s/test or fixture, 540 s/suite             |
+| `make test-timeouts`                                         | 30 s                      | Shared command-supervisor regressions                                           |
+| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions         |
+| `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                     |
+| `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                                 |
+| `make frontend-build`, root/frontend `pnpm build`            | 120 s                     | Vite application build                                                          |
+| `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                           |
+| `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                                 |
+| `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                          |
+| `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                       |
+| `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                                 |
+| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup        |
+| PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                                |
+| Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry          |
+| Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                            |
+| CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                              |
+| CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                              |
+| CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                      |
 
 `scripts/with-timeout.mjs` requires the installed Node runtime, starts an isolated
 process group, announces its deadline and elapsed time, and returns 124 with
