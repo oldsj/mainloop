@@ -1,5 +1,6 @@
 """Dedicated, stateless Mainloop MCP listener; it exposes no REST routes."""
 
+import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
@@ -134,6 +135,8 @@ async def invoke(
         error = f"[403] {exc.code}"
     except TaskError as exc:
         error = f"[{exc.status}] {exc.code}"
+        if exc.details:
+            error += " " + json.dumps(exc.details)
     except PolicyError as exc:
         error = f"[{exc.code}] {exc.message}"
     except ValidationError:

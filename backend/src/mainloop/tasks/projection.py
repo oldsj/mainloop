@@ -52,7 +52,9 @@ def observed(previous, *, repository, branch, number, pr, ci, observed_at):
     if state not in ("open", "closed", "merged"):
         state = "unknown"
     changed = previous.pr_head_sha != pr.head.sha
-    merge_state = None if changed else previous.merge_state
+    # Publication observations belong to the task's PR, independently of who
+    # merged it. They do not settle task completion, consent or runtime capacity.
+    merge_state = "merged" if pr.merged else None if changed else previous.merge_state
     if ci is not None and ci.get("head_sha") == pr.head.sha:
         # Observation reports branch-rule refusals instead of hiding PR/CI.
         if state == "open" and ci.get("policy_rejections"):
@@ -348,7 +350,11 @@ async def read(conn, task):
             )
             return value.model_copy(
                 update={
-                    "merge_state": POLICY_BLOCKED if blocked else row["state"],
+                    "merge_state": (
+                        "merged"
+                        if value.merge_state == "merged"
+                        else POLICY_BLOCKED if blocked else row["state"]
+                    ),
                     "merge_proposal_id": (
                         row["id"] if row["active_proposal_id"] == row["id"] else None
                     ),
