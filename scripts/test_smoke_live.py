@@ -192,6 +192,85 @@ class SmokeDecisions(unittest.TestCase):
         self.assertEqual(sum(url.endswith("/chat") for url in calls), 1)
         self.assertIn("commits/abc/check-runs", gh_calls)
 
+    def test_failed_discovery_keeps_known_pr_and_ci(self):
+        import json
+        from io import BytesIO
+
+        calls, gh_calls = [], []
+        args = SimpleNamespace(
+            deadline=1,
+            step_deadline=1,
+            poll_interval=0.01,
+            project_id="fixture",
+            repo="fixture/repo",
+            provider="codex",
+            app_login="app[bot]",
+        )
+        facts = {
+            "deliveries_busy": False,
+            "deliveries": [],
+            "capacity_holders": [],
+            "parent_capacity": 3,
+            "global_capacity_available": True,
+            "push_confirmed": True,
+        }
+
+        def urlopen(request, timeout):
+            calls.append(request)
+            if request.full_url.endswith("/projects/fixture"):
+                value = {"full_name": "fixture/repo"}
+            elif "/tasks?" in request.full_url:
+                if sum("/tasks?" in call.full_url for call in calls) > 1:
+                    raise OSError("diagnostic discovery failed")
+                value = [
+                    {
+                        **self.view,
+                        "task": {
+                            **self.view["task"],
+                            "id": "known",
+                            "checkout": {"branch": "smoke/codex-fixed"},
+                        },
+                    }
+                ]
+            else:
+                value = facts
+            return BytesIO(json.dumps(value).encode())
+
+        def github(repo, path, timeout):
+            gh_calls.append(path)
+            if path.startswith("pulls?") or gh_calls == ["pulls/2"]:
+                raise OSError("GitHub read failed")
+            if path == "pulls/2":
+                return self.pr
+            return {"check_runs": []}
+
+        output = StringIO()
+        with patch.object(
+            smoke_live.uuid, "uuid4", return_value=SimpleNamespace(hex="fixed")
+        ), patch.object(
+            smoke_live.urllib.request, "urlopen", side_effect=urlopen
+        ), patch.object(
+            smoke_live, "gh", side_effect=github
+        ), redirect_stdout(
+            output
+        ):
+            self.assertEqual(smoke_live.run(args, "http://127.0.0.1:1"), 1)
+
+        self.assertEqual(sum(call.data is not None for call in calls), 1)
+        self.assertEqual(
+            gh_calls,
+            [
+                "pulls/2",
+                "pulls?state=all&head=fixture:smoke/codex-fixed",
+                "pulls/2",
+                "commits/abc/check-runs",
+            ],
+        )
+        self.assertIn("task: unavailable", output.getvalue())
+        self.assertIn("pr: unavailable", output.getvalue())
+        self.assertIn('"pr_merge":', output.getvalue())
+        self.assertIn('"ci":', output.getvalue())
+
     def test_streaming_body_cannot_outlast_deadline(self):
         import json
         import threading

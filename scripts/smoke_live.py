@@ -246,7 +246,11 @@ def run(args, base):
         )
     # Fresh, read-only reconciliation after any submission or polling failure.
     end = operation_end = time.monotonic() + 45
-    discoveries = []
+    discoveries = (
+        [view["projection"]["pr_number"]]
+        if view and view["projection"].get("pr_number")
+        else []
+    )
     for label, read in (
         ("task", lambda: api("/tasks?project_id=" + args.project_id)),
         ("pushes", lambda: api(observation_path + "?branch=" + branch)),
