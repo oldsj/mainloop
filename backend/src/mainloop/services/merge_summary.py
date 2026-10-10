@@ -151,6 +151,23 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         and sum(item["deletions"] for item in files) == deletions
         and len({item["filename"] for item in files}) == len(files)
     )
+    # Paths the squash onto the pinned base changes (absent on older proposals).
+    has_merge_files = "merge_files" in facts
+    merge_rows = facts.get("merge_files")
+    merge_complete = not has_merge_files or (
+        isinstance(merge_rows, list)
+        and len(merge_rows) <= 3000
+        and isinstance(facts.get("merge_files_digest"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", facts["merge_files_digest"]) is not None
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("filename"), str)
+            and bool(item.get("filename"))
+            and isinstance(item.get("status"), str)
+            for item in merge_rows
+        )
+        and len({item["filename"] for item in merge_rows}) == len(merge_rows)
+    )
     ci, _ = _ci_summary(facts.get("ci"))
     missing = []
     if not isinstance(title, str) or not title.strip():
@@ -159,18 +176,36 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         missing.append("GitHub PR description is unavailable")
     if not files_complete:
         missing.append("Complete changed-file details are unavailable")
+    if not merge_complete:
+        missing.append("Complete merge-result file details are unavailable")
     if ci is None or not ci["complete"]:
         missing.append("Complete recorded CI evidence is unavailable")
     if mapping_required and not mapping_valid:
         missing.append("Reviewed template mapping evidence is unavailable")
 
     file_rows = files if isinstance(files, list) else []
+    file_rows = [item for item in file_rows if isinstance(item, dict)]
+    merge_rows = [
+        item
+        for item in (merge_rows if isinstance(merge_rows, list) else [])
+        if isinstance(item, dict)
+    ]
+    pr_paths = {
+        path
+        for item in file_rows
+        for path in (item.get("filename"), item.get("previous_filename"))
+    }
+    # Rows naming a path the PR file list does not, e.g. after the default
+    # branch moved; shown first and labelled so a preview cannot hide them.
+    merge_only = [
+        item
+        for item in merge_rows
+        if {item.get("filename"), item.get("previous_filename")} - {None} - pr_paths
+    ]
     protected_paths = facts.get("protected_matches")
     protected_paths = protected_paths if isinstance(protected_paths, list) else []
     protected_reasons = []
-    for item in file_rows:
-        if not isinstance(item, dict):
-            continue
+    for item in file_rows + merge_rows:
         for path in (item.get("filename"), item.get("previous_filename")):
             if not isinstance(path, str) or path not in protected_paths:
                 continue
@@ -189,11 +224,13 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
     reasons.extend({"type": "protected_path", **item} for item in protected_reasons)
 
     path_preview = []
-    for item in file_rows:
+    for item in merge_only + file_rows:
         if not isinstance(item, dict) or not isinstance(item.get("filename"), str):
             continue
         old_path = item.get("previous_filename")
         display = f"{old_path} → {item['filename']}" if old_path else item["filename"]
+        if item in merge_only:
+            display += " (merge result only)"
         path_preview.append(display)
         if len(path_preview) == SUMMARY_PATH_LIMIT:
             break
@@ -221,7 +258,7 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         "paths_digest": facts.get("files_digest"),
         "paths_preview": path_preview,
         "paths_preview_truncated": files_complete
-        and len(file_rows) > len(path_preview),
+        and len(file_rows) + len(merge_only) > len(path_preview),
         "protected_matches": sorted(set(protected_paths)),
         "approval_reasons": reasons,
         "policy": facts.get("policy"),
@@ -236,6 +273,11 @@ def build_summary(facts: dict, proposal_id: str) -> tuple[dict, str]:
         "availability": "unavailable" if missing else "ready",
         "unavailable_reasons": missing,
     }
+    if has_merge_files:
+        # Added only when present so older proposals keep their digests.
+        snapshot["merge_file_count"] = len(merge_rows)
+        snapshot["merge_only_file_count"] = len(merge_only)
+        snapshot["merge_paths_digest"] = facts.get("merge_files_digest")
     return snapshot, canonical_digest(snapshot)
 
 

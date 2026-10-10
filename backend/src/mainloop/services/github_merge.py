@@ -67,10 +67,17 @@ OUT_OF_DATE = (
     "up to date; merge or rebase the default branch into the head, push, then "
     "prepare again"
 )
-MERGE_RESULT_PENDING = "merge_result_pending"
+MERGEABILITY_PENDING = "mergeability_pending"
 # GitHub's compare API lists at most 300 changed files for a comparison; a list
 # at the cap cannot prove the inventory is complete.
 MERGE_FILES_LIMIT = 300
+COMPARE_COMMITS_PER_PAGE = 100
+# Commits main may be ahead of the merge base before the PR must be updated.
+BASE_COMMITS_LIMIT = 1000
+UPDATE_BRANCH = (
+    "update the branch (merge or rebase the default branch into the head), push, "
+    "then prepare again"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,33 +140,82 @@ def inventory(files):
     return rows, canonical_digest(rows)
 
 
-class MergeResultPending(PolicyError):
-    """GitHub's test merge for the pinned base and head is not ready yet.
+class MergeabilityPending(PolicyError):
+    """GitHub has not computed whether the PR conflicts yet.
 
     Execution keeps evaluating unless the CI collected first already failed.
     """
 
     def __init__(self, message, ci=None):
-        super().__init__(MERGE_RESULT_PENDING, message)
+        super().__init__(MERGEABILITY_PENDING, message)
         self.ci = ci
 
 
-class Parent(BaseModel):
+class Commit(BaseModel):
     sha: str = Field(pattern=r"^[0-9a-f]{40}$")
 
 
-class MergeCommit(BaseModel):
-    sha: str = Field(pattern=r"^[0-9a-f]{40}$")
-    parents: list[Parent]
+class ComparedCommit(Commit):
+    parents: list[Commit]
 
 
 class Comparison(BaseModel):
     status: str = Field(max_length=32)
     ahead_by: int = Field(ge=0)
     behind_by: int = Field(ge=0)
-    base_commit: Parent
-    merge_base_commit: Parent
-    files: list = Field(max_length=MERGE_FILES_LIMIT)
+    base_commit: Commit
+    merge_base_commit: Commit
+    commits: list[ComparedCommit] = Field(max_length=COMPARE_COMMITS_PER_PAGE)
+    # GitHub omits files after the first page; compared_files() requires them
+    # on the first.
+    files: list | None = Field(default=None, max_length=MERGE_FILES_LIMIT)
+
+
+def parents(path):
+    """Non-root ancestor directories of a repository path, nearest first."""
+    parts = path.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(len(parts), 0, -1)]
+
+
+def redirected_paths(renaming, other, *, exact):
+    """Paths a three-way merge may move because ``renaming`` moved them.
+
+    Sources are paths ``renaming`` removed or renamed away, since GitHub's
+    compare and Git's merge can disagree on rename pairing. With ``exact``, an
+    ``other`` path that is a source can be carried to a path neither inventory
+    names. A path ``other`` adds can follow a directory rename into another
+    directory; Git renames only a directory that no longer exists on the
+    renaming side, so a directory still proven to hold a file there is safe.
+    The root directory always exists.
+    """
+    sources = {
+        item.previous_filename if item.status == "renamed" else item.filename
+        for item in renaming
+        if item.status in ("renamed", "removed")
+    }
+    if not sources:
+        return []
+    remaining = {item.filename for item in renaming if item.status != "removed"}
+    for item in other:
+        existed = (
+            item.previous_filename
+            if item.status in ("renamed", "copied")
+            else None if item.status == "added" else item.filename
+        )
+        if existed and existed not in sources:
+            remaining.add(existed)
+    source_dirs = {d for path in sources for d in parents(path)}
+    remaining_dirs = {d for path in remaining for d in parents(path)}
+    found = set()
+    for item in other:
+        names = (item.filename, item.previous_filename)
+        if exact:
+            found.update(n for n in names if n in sources)
+        if item.status in ("added", "renamed", "copied") and any(
+            d in source_dirs and d not in remaining_dirs for d in parents(item.filename)
+        ):
+            found.add(item.filename)
+    return sorted(found)
 
 
 class App(BaseModel):
@@ -482,14 +538,15 @@ class GitHubMergeClient(GitHubCreationClient):
         ci = await self.checks(name, sha, repo.default_branch, behind=behind)
         if behind:
             raise PolicyError("rules", OUT_OF_DATE)
-        try:
-            merge_files = await self.merge_result(name, pr, base.commit.sha, sha)
-        except MergeResultPending as pending:
-            pending.ci = ci
-            raise
-        # The PR's three-dot file list can miss paths the squash changes: a
-        # base-side rename redirects a head edit to the new path. Policy sees
-        # both the PR inventory and the merge result against the pinned base.
+        if pr.mergeable is not True:
+            raise MergeabilityPending(
+                "GitHub has not computed whether this PR conflicts yet; try again "
+                "shortly",
+                ci=ci,
+            )
+        merge_base, merge_files = await self.merge_inventory(name, base.commit.sha, sha)
+        # Policy sees the PR inventory and every path the squash onto the pinned
+        # base can change (docs/specs/pull-requests.md, "Merge inventory").
         matches = protected_matches(
             paths + [changed_path(item) for item in merge_files], complete=True
         )
@@ -531,8 +588,9 @@ class GitHubMergeClient(GitHubCreationClient):
             "deletions": pr.deletions,
             "files": inventory(files)[0],
             "files_digest": inventory(files)[1],
-            # GitHub recreates test merge commits, so the SHA is recorded but
-            # not pinned; the inventory and its parents (base_sha, head_sha) are.
+            "merge_base_sha": merge_base,
+            # GitHub's test merge stays on the PR's recorded base, so it is
+            # recorded for diagnosis only and neither pinned nor trusted.
             "merge_commit_sha": pr.merge_commit_sha,
             "merge_files": inventory(merge_files)[0],
             "merge_files_digest": inventory(merge_files)[1],
@@ -542,57 +600,120 @@ class GitHubMergeClient(GitHubCreationClient):
             and pr.mergeable_state in ("clean", "unstable", "has_hooks"),
         }
 
-    async def merge_result(self, name, pr, base_sha, head_sha):
-        """Files GitHub's test merge changes relative to the pinned base.
-
-        Its parents must be exactly the pinned base and expected head. The
-        documented compare of ``base_sha...merge`` then equals the first-parent
-        diff, because the merge base is ``base_sha`` itself. A test merge that is
-        missing, not yet recomputed for this base, or larger than compare can
-        list completely never falls back to the PR inventory.
-        """
-        self.evidence_step = "merge_result"
-        if pr.mergeable is not True or pr.merge_commit_sha is None:
-            raise MergeResultPending(
-                "GitHub has not computed this PR's merge result yet; try again shortly"
-            )
-        commit = MergeCommit.model_validate(
-            await self._request("GET", f"/repos/{name}/commits/{pr.merge_commit_sha}")
-        )
-        if commit.sha != pr.merge_commit_sha:
-            raise GitHubError
-        if [parent.sha for parent in commit.parents] != [base_sha, head_sha]:
-            raise MergeResultPending(
-                "GitHub's merge result does not match the current default branch "
-                "and PR head yet; try again shortly"
-            )
-        # Compare lists changed files only on the first page, up to 300 for
-        # the whole comparison; per_page=1 keeps the commit list small.
-        comparison = Comparison.model_validate(
+    async def compare(self, name, base, head, *, per_page, page=1):
+        return Comparison.model_validate(
             await self._request(
                 "GET",
-                f"/repos/{name}/compare/{base_sha}...{pr.merge_commit_sha}",
-                params={"per_page": 1, "page": 1},
+                f"/repos/{name}/compare/{base}...{head}",
+                params={"per_page": per_page, "page": page},
             )
         )
-        if (
-            comparison.status != "ahead"
-            or comparison.behind_by != 0
-            or comparison.ahead_by < 1
-            or comparison.base_commit.sha != base_sha
-            or comparison.merge_base_commit.sha != base_sha
-        ):
+
+    def compared_files(self, comparison, side):
+        # Compare lists changed files only on its first page, up to 300 for the
+        # whole comparison, so a list at the cap may be incomplete.
+        if comparison.files is None:
             raise GitHubError
         if len(comparison.files) >= MERGE_FILES_LIMIT:
             raise PolicyError(
-                "merge_result",
-                f"merge result changes {MERGE_FILES_LIMIT} or more files, too many "
-                "to evaluate completely; split the PR or update the branch",
+                "merge_inventory",
+                f"{side} changes {MERGE_FILES_LIMIT} or more files, too many to "
+                f"evaluate completely; split the PR or {UPDATE_BRANCH}",
             )
         files = [changed_file(item) for item in comparison.files]
+        # Validates path syntax and rename sources; policy matches come later.
+        protected_matches([changed_path(item) for item in files], complete=True)
         if len({item.filename for item in files}) != len(files):
             raise GitHubError
         return files
+
+    async def merge_inventory(self, name, base_sha, head_sha):
+        """Merge base and the paths a squash of the head onto ``base_sha`` changes.
+
+        Both inventories come from documented three-dot compares: the head's
+        changes since the merge base, and the default branch's. A rename or
+        removal that could carry a change outside the head inventory, a
+        non-linear default branch (possibly several merge bases) or a list
+        compare cannot return completely is refused, never approximated.
+        """
+        self.evidence_step = "merge_inventory"
+        head_side = await self.compare(name, base_sha, head_sha, per_page=1)
+        merge_base = head_side.merge_base_commit.sha
+        current = merge_base == base_sha
+        if (
+            head_side.base_commit.sha != base_sha
+            or head_side.ahead_by < 1
+            or head_side.status != ("ahead" if current else "diverged")
+            or (head_side.behind_by == 0) != current
+        ):
+            raise GitHubError
+        head_files = self.compared_files(head_side, "PR")
+        if current:
+            return merge_base, head_files
+        if head_side.behind_by > BASE_COMMITS_LIMIT:
+            raise PolicyError(
+                "merge_inventory",
+                f"default branch is more than {BASE_COMMITS_LIMIT} commits ahead "
+                f"of this PR; {UPDATE_BRANCH}",
+            )
+        commits, base_files = {}, None
+        for page in range(1, BASE_COMMITS_LIMIT // COMPARE_COMMITS_PER_PAGE + 1):
+            base_side = await self.compare(
+                name,
+                merge_base,
+                base_sha,
+                per_page=COMPARE_COMMITS_PER_PAGE,
+                page=page,
+            )
+            if (
+                base_side.status != "ahead"
+                or base_side.behind_by != 0
+                or base_side.ahead_by != head_side.behind_by
+                or base_side.base_commit.sha != merge_base
+                or base_side.merge_base_commit.sha != merge_base
+            ):
+                raise GitHubError
+            if base_files is None:
+                base_files = self.compared_files(base_side, "default branch")
+            for commit in base_side.commits:
+                if commit.sha in commits:
+                    raise GitHubError
+                commits[commit.sha] = commit
+            # Stop once every commit is listed; a full page then needs no
+            # empty follow-up read.
+            if (
+                len(commits) >= base_side.ahead_by
+                or len(base_side.commits) < COMPARE_COMMITS_PER_PAGE
+            ):
+                break
+        if len(commits) != base_side.ahead_by or base_sha not in commits:
+            raise GitHubError
+        # One merge base is what makes the three-way argument exact. A linear
+        # range from it to base_sha leaves no other common ancestor.
+        if any(
+            [parent.sha for parent in commit.parents] != [merge_base]
+            and (len(commit.parents) != 1 or commit.parents[0].sha not in commits)
+            for commit in commits.values()
+        ):
+            raise PolicyError(
+                "merge_inventory",
+                "default branch has merge commits since this PR's merge base; "
+                + UPDATE_BRANCH,
+            )
+        moved = sorted(
+            set(redirected_paths(base_files, head_files, exact=True))
+            | set(redirected_paths(head_files, base_files, exact=False))
+        )
+        if moved:
+            raise PolicyError(
+                "merge_inventory",
+                "the default branch renamed or removed files this PR touches, or a "
+                "directory rename could move files between them ("
+                + ", ".join(moved[:5])
+                + (", ..." if len(moved) > 5 else "")
+                + f"); {UPDATE_BRANCH}",
+            )
+        return merge_base, head_files
 
     async def checks(self, name, sha, base, *, enforce_policy=True, behind=False):
         """CI evidence for ``sha``. Merge policy refusals raise PolicyError.

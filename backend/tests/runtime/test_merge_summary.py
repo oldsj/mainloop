@@ -182,6 +182,76 @@ class MergeSummaryTests(unittest.TestCase):
             ],
         )
 
+    def test_merge_only_protected_paths_are_reasons_and_previewed_first(self):
+        proposal_facts = facts()
+        proposal_facts["files"][0]["filename"] = "src/build.yml"
+        proposal_facts["files_digest"] = canonical_digest(proposal_facts["files"])
+        merge_files = [
+            dict(proposal_facts["files"][0]),
+            {
+                "filename": ".github/workflows/build.yml",
+                "status": "renamed",
+                "previous_filename": "ci/build.yml",
+                "additions": 1,
+                "deletions": 1,
+            },
+        ]
+        proposal_facts.update(
+            merge_files=merge_files,
+            merge_files_digest=canonical_digest(merge_files),
+            protected_matches=[".github/workflows/build.yml"],
+        )
+        summary, digest = build_summary(proposal_facts, "proposal-17")
+        self.assertEqual(summary["availability"], "ready")
+        self.assertEqual(
+            summary["approval_reasons"],
+            [
+                {
+                    "type": "protected_path",
+                    "glob": ".github/**",
+                    "path": ".github/workflows/build.yml",
+                }
+            ],
+        )
+        self.assertEqual(
+            summary["paths_preview"],
+            [
+                "ci/build.yml → .github/workflows/build.yml (merge result only)",
+                "src/build.yml",
+            ],
+        )
+        self.assertFalse(summary["paths_preview_truncated"])
+        self.assertEqual(summary["merge_file_count"], 2)
+        self.assertEqual(summary["merge_only_file_count"], 1)
+        self.assertEqual(
+            summary["merge_paths_digest"], proposal_facts["merge_files_digest"]
+        )
+        validate_reviewed_context(
+            proposal_facts, "proposal-17", digest, summary, digest
+        )
+        changed = copy.deepcopy(proposal_facts)
+        changed["merge_files"][1]["filename"] = ".github/workflows/other.yml"
+        with self.assertRaises(ValueError):
+            validate_reviewed_context(changed, "proposal-17", digest, summary, digest)
+
+    def test_malformed_merge_inventory_cannot_be_approved(self):
+        for change in (
+            {"merge_files": None},
+            {"merge_files": [None]},
+            {"merge_files_digest": None},
+            {"merge_files": [{"filename": "a", "status": "added"}] * 2},
+        ):
+            with self.subTest(change=change):
+                proposal_facts = facts()
+                proposal_facts.update(merge_files=[], merge_files_digest="e" * 64)
+                proposal_facts.update(change)
+                summary, _ = build_summary(proposal_facts, "proposal-17")
+                self.assertEqual(summary["availability"], "unavailable")
+                self.assertIn(
+                    "Complete merge-result file details are unavailable",
+                    summary["unavailable_reasons"],
+                )
+
     def test_missing_description_or_incomplete_diff_cannot_be_approved(self):
         proposal_id = "proposal-17"
         proposal_facts = facts()
