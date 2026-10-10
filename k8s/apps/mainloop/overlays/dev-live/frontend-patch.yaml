@@ -10,6 +10,8 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/arch: arm64
+      # The -dev images are public; drop the base ghcr-secret reference.
+      imagePullSecrets: null
       containers:
         - name: frontend
           imagePullPolicy: Always

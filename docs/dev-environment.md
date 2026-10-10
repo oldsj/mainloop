@@ -275,25 +275,26 @@ Images: the **Publish live dev images** workflow builds the `--target=dev`
 backend and frontend images for arm64 on each push to `main` and pushes
 `ghcr.io/oldsj/mainloop-{backend,frontend}-dev` with `<short SHA>` and `latest`
 tags. Nothing is built locally on each run; the pods pull `latest` and the sync
-overlays the working tree. The node needs pull access to those packages: either
-the packages are public or a `ghcr-secret` exists in `mainloop-dev`.
+overlays the working tree. The packages are public, so no pull secret is needed.
 
 Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates
 the database credentials. Purging deletes the data.
 
 Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
 owner writes, Git transport and the push gate are off; every kagent role uses
-`claude-workspace-dev` or `codex-workspace-dev`. Once Git transport is enabled, dev
-work is meant to target `oldsj/testrepo` only, through a GitHub App installed only on
-that repository; with transport off, nothing reaches GitHub today.
+`claude-workspace-dev` or `codex-workspace-dev`. Dev work targets `oldsj/testrepo` only
+through the dev agents' instructions: Mainloop has no repository allowlist, and the
+shared production GitHub App can reach every repository it is installed on. With Git
+transport off, nothing reaches GitHub today.
 
-Secrets are not in this repository. Each reference is optional, so the instance
-starts without them, and the features that need them stay unavailable:
+Secrets are not in this repository. The infrastructure repository supplies them from
+production's existing items (mainloop-dev shares production's GitHub App, agent token
+key and kagent control principal). Each reference is optional, so the instance starts
+without them, and the features that need them stay unavailable:
 
 | Secret in `mainloop-dev` | Keys                                                         | Without it                                                                  |
 | ------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
 | `mainloop-secrets`       | `github-app-id`, `github-app-private-key`, `agent-token-key` | No GitHub access; the agent token key falls back to the database password   |
-| `ghcr-secret`            | `.dockerconfigjson`                                          | Pods cannot pull private dev images                                         |
 | `kagent-control-token`   | `current`                                                    | No kagent sessions; also enable the `control-auth` component in the overlay |
 | `kagent-control-ca`      | `ca.crt` (cert-manager)                                      | As above                                                                    |
 
