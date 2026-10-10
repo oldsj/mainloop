@@ -28,13 +28,11 @@
   };
 
   // Check if session needs user attention
-  const needsAttention = $derived(session.status === 'waiting_on_user');
+  const needsAttention = $derived(session.needs_owner === true);
 
   // Check if session is actively running
   const isActive = $derived(['active', 'implementing'].includes(session.status));
-  const workspace = $derived(
-    $workspaces.workspaces.find((item) => item.session_id === session.id)
-  );
+  const workspace = $derived($workspaces.workspaces.find((item) => item.session_id === session.id));
 
   // Extract repo name from URL
   function getRepoName(repoUrl: string): string {
@@ -58,7 +56,7 @@
 
 <button
   type="button"
-  class="w-full border border-l-4 bg-term-bg-secondary p-3 text-left transition-colors hover:border-term-accent {selected
+  class="bg-term-bg-secondary hover:border-term-accent w-full border border-l-4 p-3 text-left transition-colors {selected
     ? 'border-term-accent'
     : 'border-term-border'} {needsAttention ? 'bg-term-magenta/5' : ''}"
   style="border-left-color: {session.color};"
@@ -69,23 +67,28 @@
   <div class="flex items-center justify-between gap-2">
     <div class="flex min-w-0 items-center gap-2">
       {#if isActive}
-        <span class="h-3 w-3 animate-spin rounded-full border border-term-cyan border-t-transparent"></span>
+        <span class="border-term-cyan h-3 w-3 animate-spin rounded-full border border-t-transparent"
+        ></span>
       {/if}
-      <h3 class="truncate text-sm font-medium text-term-fg">
-        {#if session.parent_session_id}<span class="text-term-fg-muted" data-testid="child-marker">↳ </span>{/if}{session.title}
+      <h3 class="text-term-fg truncate text-sm font-medium">
+        {#if session.parent_session_id}<span class="text-term-fg-muted" data-testid="child-marker"
+            >↳
+          </span>{/if}{session.title}
       </h3>
       {#if session.topic}
-        <span class="shrink-0 text-xs text-term-fg-muted" data-testid="session-topic">#{session.topic}</span>
+        <span class="text-term-fg-muted shrink-0 text-xs" data-testid="session-topic"
+          >#{session.topic}</span
+        >
       {/if}
     </div>
-    <span class="shrink-0 text-xs text-term-fg-muted">{formatTime(session.created_at)}</span>
+    <span class="text-term-fg-muted shrink-0 text-xs">{formatTime(session.created_at)}</span>
   </div>
 
   <!-- Row 2: Label + links (left), repo (right) -->
   <div class="mt-2 flex items-center justify-between gap-2">
     <div class="flex items-center gap-2">
       <span
-        class="whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+        class="px-2 py-0.5 text-xs font-medium whitespace-nowrap {needsAttention
           ? 'bg-term-magenta/20 text-term-magenta'
           : session.status === 'completed'
             ? 'bg-term-green/20 text-term-green'
@@ -96,9 +99,9 @@
                 : 'bg-term-fg-muted/20 text-term-fg-muted'}"
         style="border-radius: 9999px;"
       >
-        {statusLabel(session.status)}
+        {statusLabel(session.status, session.needs_owner)}
       </span>
-      <span class="text-xs text-term-fg-muted" data-testid="session-kind">
+      <span class="text-term-fg-muted text-xs" data-testid="session-kind">
         {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
       </span>
       {#if workspace}
@@ -109,7 +112,7 @@
           href={session.issue_url}
           target="_blank"
           rel="noopener noreferrer"
-          class="text-xs text-term-fg-muted hover:text-term-accent"
+          class="text-term-fg-muted hover:text-term-accent text-xs"
           onclick={(e) => e.stopPropagation()}
         >
           #{session.issue_number}
@@ -120,7 +123,7 @@
           href={session.pr_url}
           target="_blank"
           rel="noopener noreferrer"
-          class="text-xs text-term-fg-muted hover:text-term-accent"
+          class="text-term-fg-muted hover:text-term-accent text-xs"
           onclick={(e) => e.stopPropagation()}
         >
           PR #{session.pr_number}
@@ -128,12 +131,12 @@
       {/if}
     </div>
     {#if session.repo_url}
-      <span class="text-xs text-term-accent">{getRepoName(session.repo_url)}</span>
+      <span class="text-term-accent text-xs">{getRepoName(session.repo_url)}</span>
     {/if}
   </div>
 
   {#if session.error}
-    <div class="mt-2 truncate text-xs text-term-red">
+    <div class="text-term-red mt-2 truncate text-xs">
       Error: {session.error}
     </div>
   {/if}

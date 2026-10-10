@@ -25,6 +25,7 @@ AttemptState = Literal[
     "completed",
 ]
 TaskReason = Literal[
+    "owner_decision",
     "awaiting_child",
     "approval",
     "ci",
@@ -113,7 +114,16 @@ class TaskReport(ContractModel):
     request_id: Identifier
     summary: Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
     outcome: Literal["progress", "completed", "failed", "blocked"]
+    owner_action: (
+        Annotated[str, Field(strict=True, min_length=1, max_length=4000)] | None
+    ) = None
     evidence_refs: Annotated[tuple[EvidenceRef, ...], Field(max_length=64)] = ()
+
+    @model_validator(mode="after")
+    def owner_action_requires_blocker(self):
+        if self.owner_action is not None and self.outcome != "blocked":
+            raise ValueError("owner_action requires a blocked report")
+        return self
 
 
 class TaskLookup(ContractModel):
@@ -131,6 +141,14 @@ class TaskScopedAction(TaskAction):
 
 class TaskScopedReassign(TaskReassign):
     task_id: Identifier
+
+
+class OwnerDecision(ContractModel):
+    """An unresolved report request, independent of native attention observations."""
+
+    attempt_id: Identifier
+    report_id: Identifier
+    action: Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
 
 
 class Task(ContractModel):
@@ -152,6 +170,7 @@ class Task(ContractModel):
     accepted_environment: WorkspaceEnvironment | None = None
     status: TaskStatus = "queued"
     reason: TaskReason | None = None
+    owner_decision: OwnerDecision | None = None
     current_attempt_id: Identifier | None = None
     version: Annotated[int, Field(strict=True, ge=1)] = 1
     checkout: TaskCheckout | None = None

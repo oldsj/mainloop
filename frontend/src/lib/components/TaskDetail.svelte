@@ -47,7 +47,9 @@
   }
 
   function factClass(fact: Fact): string {
-    return fact.known ? toneClass(fact.tone) : 'text-term-fg-muted border-term-border border-dashed';
+    return fact.known
+      ? toneClass(fact.tone)
+      : 'text-term-fg-muted border-term-border border-dashed';
   }
 </script>
 
@@ -61,7 +63,7 @@
         {/each}
       </nav>
     {/if}
-    <h1 class="text-term-fg break-words text-lg">{task.title}</h1>
+    <h1 class="text-term-fg text-lg break-words">{task.title}</h1>
     <div class="flex flex-wrap items-center gap-2 text-xs">
       <span
         class="border px-2 py-0.5 {toneClass(statusTone(task.status))}"
@@ -96,7 +98,9 @@
       <h2 id="pending-heading" class="text-term-yellow text-sm">
         {approvals.length} pending owner action{approvals.length === 1 ? '' : 's'}
       </h2>
-      <p class="text-term-fg-muted mt-1 text-xs">Answer in the Inbox; the task resumes from there.</p>
+      <p class="text-term-fg-muted mt-1 text-xs">
+        Answer in the Inbox; the task resumes from there.
+      </p>
       <button
         type="button"
         onclick={openInbox}
@@ -174,7 +178,9 @@
         <span class="text-term-fg-muted block text-xs">CI</span>
         {facts.ci.label}
         {#if facts.prHeadSha}
-          <span class="text-term-fg-muted block text-xs break-all">head {facts.prHeadSha.slice(0, 12)}</span>
+          <span class="text-term-fg-muted block text-xs break-all"
+            >head {facts.prHeadSha.slice(0, 12)}</span
+          >
         {/if}
       </li>
       <li class="border px-3 py-2 {factClass(facts.merge)}">
@@ -238,7 +244,9 @@
     {:else}
       <ol class="flex flex-col gap-2">
         {#each history as row (row.attempt.id)}
-          <li class="border-term-border border px-3 py-2 text-sm {row.superseded ? 'opacity-70' : ''}">
+          <li
+            class="border-term-border border px-3 py-2 text-sm {row.superseded ? 'opacity-70' : ''}"
+          >
             <span class="text-term-fg">
               Attempt {row.attempt.number} · {row.attempt.native_provider}
             </span>
@@ -273,8 +281,12 @@
 
   {#if summary}
     <section aria-labelledby="summary-heading" data-testid="task-unverified-summary">
-      <h2 id="summary-heading" class="text-term-fg mb-2 text-sm">[{summary.label.toUpperCase()}]</h2>
-      <p class="text-term-fg-muted border-term-border border border-dashed px-3 py-2 text-sm break-words whitespace-pre-wrap">
+      <h2 id="summary-heading" class="text-term-fg mb-2 text-sm">
+        [{summary.label.toUpperCase()}]
+      </h2>
+      <p
+        class="text-term-fg-muted border-term-border border border-dashed px-3 py-2 text-sm break-words whitespace-pre-wrap"
+      >
         {summary.text}
       </p>
     </section>
@@ -288,6 +300,9 @@
           <li class="border-term-border border border-dashed px-3 py-2 text-sm">
             <span class="text-term-fg-muted block text-xs">{reportLabel(report)}</span>
             <span class="text-term-fg break-words">{report.summary}</span>
+            {#if report.owner_action}
+              <p class="text-term-fg mt-2 break-words">Owner request: {report.owner_action}</p>
+            {/if}
           </li>
         {/each}
       </ul>

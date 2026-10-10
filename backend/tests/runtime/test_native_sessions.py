@@ -690,7 +690,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(side_effect=RuntimeError("standing context DB read failed")),
         ):
             mid = await self.send()
-        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.session.status, SessionStatus.IDLE)
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
         self.assertFalse(self.ledger.binding.get("child_start_failure"))
         self.assertEqual(len(self.fake.session_calls("DeleteSession")), 0)
@@ -767,7 +767,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         ):
             mid = await self.send()
         self.assertEqual(self.ledger.rows[mid]["state"], "failed")
-        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.session.status, SessionStatus.IDLE)
 
     async def test_reserved_aborted_create_progresses_only_on_same_request_retry(self):
         from tests.runtime.kagent_fake import grpc_response
@@ -891,7 +891,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(side_effect=OutcomeUnknown("Aborted after reservation")),
         ):
             await self.send()
-        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.session.status, SessionStatus.IDLE)
         self.assertFalse(self.ledger.binding.get("child_start_failure"))
 
     async def test_concurrent_create_loser_cannot_abandon_reserved_actor(self):
@@ -955,7 +955,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mirrored, [reply_id])
         self.assertEqual(self.ledger.binding["turns"], 1)
         self.assertEqual(self.ledger.binding["kagent_session_id"], CONTEXT_ID)
-        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.session.status, SessionStatus.IDLE)
         sent = self.fake.rpc_calls("SendStreamingMessage")
         self.assertEqual(sent[0]["params"]["message"]["messageId"], mid)
         self.assertEqual(sent[0]["params"]["message"]["contextId"], CONTEXT_ID)
@@ -1463,7 +1463,7 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.notes_for(mid), [ns.stopped_message("ok")])
         self.assertEqual(len(self.fake.rpc_calls("CancelTask")), 1)
         # The session and its kagent Session are untouched: idle, not cancelled or deleted.
-        self.assertEqual(self.session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(self.session.status, SessionStatus.IDLE)
         self.assertEqual(self.fake.session_calls("DeleteSession"), [])
         # A late observation cannot revive or re-settle it.
         await ns.sync(SESSION)

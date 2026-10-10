@@ -1,291 +1,145 @@
 <script lang="ts">
-  import { visiblePolling } from '../visiblePolling';
+  import { page } from '$app/stores';
   import { inbox, inboxItems, unreadCount } from '$lib/stores/inbox';
-  import HITLCard from './HITLCard.svelte';
   import { tasks } from '$lib/stores/tasks';
-  import type { QueueItem } from '$lib/api';
+  import { api, type ActivityItem } from '$lib/api';
+  import { visiblePolling, singleFlight } from '../visiblePolling';
+  import HITLCard from './HITLCard.svelte';
+  import QueueAttentionCard from './QueueAttentionCard.svelte';
 
   let { desktop = false, mobile = false }: { desktop?: boolean; mobile?: boolean } = $props();
+  let view = $state<'attention' | 'activity'>('attention');
+  let activity = $state<ActivityItem[]>([]);
+  let activityLoaded = $state(false);
+  let activityError = $state<string | null>(null);
+
+  const refreshActivity = singleFlight(async (signal?: AbortSignal) => {
+    try {
+      const result = await api.listActivity(signal);
+      if (signal?.aborted) return;
+      activity = result;
+      activityLoaded = true;
+      activityError = null;
+    } catch {
+      if (!signal?.aborted) activityError = 'Could not load activity. Try again.';
+    }
+  });
 
   $effect(() => {
     if (!desktop && !mobile) return;
-    // Task links on cards come from the task list; task events keep it current afterwards.
     void tasks.fetchList({});
-    // Observer projections can arrive without an SSE queue event.
-    return visiblePolling().watch('inbox', (signal) => inbox.fetchItems(signal));
+    if (view === 'activity')
+      return visiblePolling().watch('activity', (signal) => refreshActivity(signal));
   });
 
-  let respondingItemId = $state<string | null>(null);
-  let customResponses = $state<Record<string, string>>({});
-  let expandedPlanId = $state<string | null>(null);
-  let dismissErrors = $state<Record<string, string>>({});
-
-  function formatTime(dateStr: string): string {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (minutes < 1) return 'now';
-    if (minutes < 60) return `${minutes}m`;
-    if (hours < 24) return `${hours}h`;
-    return `${days}d`;
-  }
-
-  // Priority styles
-  const priorityStyles: Record<string, string> = {
-    urgent: 'border-l-term-error',
-    high: 'border-l-term-warning',
-    normal: 'border-l-term-info',
-    low: 'border-l-term-fg-muted'
-  };
-
-  // Type icons
-  const typeIcons: Record<string, string> = {
-    plan_review:
-      'M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z',
-    question:
-      'M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z',
-    error:
-      'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z',
-    notification:
-      'M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0'
-  };
-
-  function getIconPath(itemType: string): string {
-    return typeIcons[itemType] || typeIcons.notification;
-  }
-
-  function getPrUrl(item: QueueItem): string | undefined {
-    return item.context?.pr_url as string | undefined;
-  }
-
-  async function handleInboxOption(itemId: string, option: string) {
-    respondingItemId = itemId;
-    try {
-      await inbox.respond(itemId, option);
-    } catch (e) {
-      console.error('Failed to respond:', e);
-    } finally {
-      respondingItemId = null;
+  $effect(() => {
+    if ($page.url.searchParams.has('inbox')) {
+      view = 'attention';
+      inbox.open();
     }
-  }
-
-  async function handleCustomSubmit(itemId: string) {
-    const response = customResponses[itemId]?.trim();
-    if (!response) return;
-    respondingItemId = itemId;
-    try {
-      await inbox.respond(itemId, response);
-      customResponses[itemId] = '';
-    } catch (e) {
-      console.error('Failed to respond:', e);
-    } finally {
-      respondingItemId = null;
-    }
-  }
+  });
 </script>
 
 {#if desktop || mobile}
   <div class="bg-term-bg flex min-h-0 flex-col {mobile ? 'h-full' : ''}">
-    <header class="border-term-border flex items-center justify-between border-b px-4 py-3">
-      <div class="flex items-center gap-2">
-        <h2 class="text-term-fg">[INBOX]</h2>
-        {#if $unreadCount > 0}
-          <span class="border-term-info text-term-info border px-2 py-0.5 text-xs">
-            {$unreadCount}
-          </span>
-        {/if}
-      </div>
+    <header class="border-term-border flex flex-wrap items-center gap-4 border-b px-4">
+      <button
+        type="button"
+        class="focus-visible:outline-term-accent min-h-11 text-sm focus-visible:outline {view ===
+        'attention'
+          ? 'text-term-fg'
+          : 'text-term-fg-muted hover:text-term-fg'}"
+        aria-pressed={view === 'attention'}
+        onclick={() => (view = 'attention')}
+      >
+        Needs you{#if $unreadCount > 0}<span class="text-term-info ml-2">{$unreadCount}</span>{/if}
+      </button>
+      <button
+        type="button"
+        class="focus-visible:outline-term-accent min-h-11 text-sm focus-visible:outline {view ===
+        'activity'
+          ? 'text-term-fg'
+          : 'text-term-fg-muted hover:text-term-fg'}"
+        aria-pressed={view === 'activity'}
+        onclick={() => (view = 'activity')}>Activity</button
+      >
     </header>
-
-    <div class="flex-1 overflow-y-auto">
-      {#if $inboxItems.length === 0}
-        <div class="flex h-full flex-col items-center justify-center px-4 py-6 text-center">
-          <p class="text-term-fg-muted">$ ls inbox/</p>
-          <p class="text-term-fg-muted mt-2">All caught up</p>
-        </div>
-      {:else}
-        <div>
-          {#each $inboxItems as item (item.id)}
-            {#if item.item_type === 'hitl_request'}
-              {#if typeof item.context.hitl_request_id === 'string'}
-                <HITLCard requestId={item.context.hitl_request_id} />
-              {:else}<div class="text-term-fg-muted border-term-border border-b p-4">
-                  <p>Session input unavailable: missing request reference.</p>
-                  <button
-                    type="button"
-                    class="border-term-border mt-2 min-h-11 border px-3 py-2 text-sm"
-                    disabled={respondingItemId === item.id}
-                    onclick={async () => {
-                      respondingItemId = item.id;
-                      delete dismissErrors[item.id];
-                      try {
-                        await inbox.dismissDiagnostic(item.id);
-                      } catch (error) {
-                        dismissErrors[item.id] =
-                          error instanceof Error ? error.message : 'Could not dismiss notice';
-                      } finally {
-                        respondingItemId = null;
-                      }
-                    }}>Dismiss notice</button
-                  >
-                  {#if dismissErrors[item.id]}
-                    <p class="text-term-red mt-2 text-sm" role="alert">{dismissErrors[item.id]}</p>
-                  {/if}
-                </div>{/if}
+    <div class="min-h-0 flex-1 overflow-y-auto">
+      {#if view === 'attention'}
+        {#if $inbox.error}
+          <div class="border-term-border border-b p-4" role="alert">
+            <p class="text-term-red">Could not check what needs you.</p>
+            <button
+              type="button"
+              class="text-term-accent min-h-11 text-sm hover:underline"
+              onclick={() => inbox.fetchItems()}>Try again</button
+            >
+          </div>
+        {/if}
+        {#if !$inbox.error && !$inbox.loaded}
+          <p class="text-term-fg-muted p-4 text-sm">Checking what needs you…</p>
+        {:else if !$inbox.error && $inboxItems.length === 0}
+          <div class="px-4 py-8">
+            <p class="text-term-fg">Nothing needs you</p>
+            <p class="text-term-fg-muted mt-2 text-sm">
+              Approvals, questions and decisions appear here.
+            </p>
+          </div>
+        {/if}
+        {#each $inboxItems as entry (entry.id)}
+          <div
+            id="attention-{entry.queue_item?.hitl_request_id ?? entry.queue_item?.id ?? entry.id}"
+            class="border-term-border border-b"
+          >
+            {#if entry.queue_item?.item_type === 'hitl_request' && entry.queue_item.hitl_request_id}
+              <p class="text-term-fg px-4 pt-4 text-sm">{entry.needed}</p>
+              <HITLCard requestId={entry.queue_item.hitl_request_id} />
+            {:else if entry.queue_item}
+              <QueueAttentionCard item={entry.queue_item} />
             {:else}
-              <div
-                class="border-term-border border-b border-l-2 p-4 transition-colors {priorityStyles[
-                  item.priority
-                ]} {item.read_at ? 'opacity-75' : ''}"
-              >
-                <div class="flex items-start gap-3">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="1.5"
-                    stroke="currentColor"
-                    class="text-term-fg-muted mt-0.5 h-5 w-5 shrink-0"
-                  >
-                    <path
-                      stroke-linecap="square"
-                      stroke-linejoin="miter"
-                      d={getIconPath(item.item_type)}
-                    />
-                  </svg>
-
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center justify-between gap-2">
-                      <h3 class="text-term-fg">{item.title}</h3>
-                      <span class="text-term-fg-muted shrink-0 text-xs"
-                        >{formatTime(item.created_at)}</span
-                      >
-                    </div>
-
-                    {#if item.item_type === 'plan_review'}
-                      <button
-                        type="button"
-                        onclick={() =>
-                          (expandedPlanId = expandedPlanId === item.id ? null : item.id)}
-                        class="text-term-info mt-2 flex w-full items-center gap-2 text-left text-sm hover:underline"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke-width="1.5"
-                          stroke="currentColor"
-                          class="h-4 w-4 transition-transform {expandedPlanId === item.id
-                            ? 'rotate-180'
-                            : ''}"
-                        >
-                          <path
-                            stroke-linecap="square"
-                            stroke-linejoin="miter"
-                            d="m19.5 8.25-7.5 7.5-7.5-7.5"
-                          />
-                        </svg>
-                        {expandedPlanId === item.id ? 'Hide plan' : 'View plan'}
-                      </button>
-
-                      {#if expandedPlanId === item.id}
-                        <div
-                          class="border-term-border bg-term-bg-secondary mt-3 max-h-96 overflow-y-auto rounded border p-3"
-                        >
-                          <pre class="text-term-fg text-xs whitespace-pre-wrap">{item.content}</pre>
-                        </div>
-                      {/if}
-                    {:else}
-                      <p class="text-term-fg-muted mt-1 text-sm">{item.content}</p>
-                    {/if}
-
-                    {#if getPrUrl(item)}
-                      <a
-                        href={getPrUrl(item)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="text-term-info mt-2 inline-flex items-center gap-1 text-sm hover:underline"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke-width="1.5"
-                          stroke="currentColor"
-                          class="h-4 w-4"
-                        >
-                          <path
-                            stroke-linecap="square"
-                            stroke-linejoin="miter"
-                            d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                          />
-                        </svg>
-                        View PR
-                      </a>
-                    {/if}
-
-                    {#if item.options && item.options.length > 0 && item.status === 'pending'}
-                      <div class="mt-3 flex flex-wrap gap-2">
-                        {#each item.options as option}
-                          <button
-                            type="button"
-                            onclick={() => handleInboxOption(item.id, option)}
-                            disabled={respondingItemId === item.id}
-                            class="border-term-border bg-term-bg text-term-fg hover:border-term-accent hover:text-term-accent border px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
-                          >
-                            {option}
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-
-                    {#if (item.item_type === 'question' || item.item_type === 'plan_review') && item.status === 'pending'}
-                      <form
-                        onsubmit={(e) => {
-                          e.preventDefault();
-                          handleCustomSubmit(item.id);
-                        }}
-                        class="mt-3"
-                      >
-                        <div class="flex gap-2">
-                          <input
-                            type="text"
-                            bind:value={customResponses[item.id]}
-                            placeholder={item.item_type === 'plan_review'
-                              ? 'Request changes...'
-                              : 'Type your response...'}
-                            disabled={respondingItemId === item.id}
-                            class="border-term-border bg-term-bg text-term-fg placeholder:text-term-fg-muted focus:border-term-accent flex-1 border px-3 py-1.5 text-sm focus:outline-none disabled:opacity-50"
-                          />
-                          <button
-                            type="submit"
-                            disabled={respondingItemId === item.id ||
-                              !customResponses[item.id]?.trim()}
-                            class="border-term-border bg-term-bg text-term-fg hover:border-term-accent hover:text-term-accent border px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
-                          >
-                            SEND
-                          </button>
-                        </div>
-                      </form>
-                    {/if}
-
-                    {#if item.status === 'responded' && item.response}
-                      <div
-                        class="border-term-border bg-term-bg text-term-fg-muted mt-2 border px-2 py-1 text-sm"
-                      >
-                        > {item.response}
-                      </div>
-                    {/if}
-                  </div>
-                </div>
+              <div class="p-4">
+                <h3 class="text-term-fg text-sm">{entry.title}</h3>
+                <p class="text-term-fg-muted mt-2 text-sm break-words">{entry.needed}</p>
+                <a
+                  href={entry.href}
+                  class="text-term-accent focus-visible:outline-term-accent mt-2 inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline"
+                  >Review task and decide</a
+                >
               </div>
             {/if}
-          {/each}
-        </div>
+          </div>
+        {/each}
+      {:else}
+        {#if activityError}
+          <div class="p-4" role="alert">
+            <p class="text-term-red text-sm">{activityError}</p>
+            <button
+              type="button"
+              class="text-term-accent min-h-11 hover:underline"
+              onclick={() => refreshActivity()}>Try again</button
+            >
+          </div>
+        {:else if !activityLoaded}
+          <p class="text-term-fg-muted p-4 text-sm">Loading activity…</p>
+        {:else if activity.length === 0}
+          <p class="text-term-fg-muted p-4 text-sm">No activity yet</p>
+        {/if}
+        {#each activity as item (item.id)}
+          <div class="border-term-border border-b px-4 py-3">
+            <p class="text-term-fg-muted text-sm">{item.title}</p>
+            <p class="text-term-fg-muted mt-1 text-xs break-words whitespace-pre-wrap">
+              {item.content}
+            </p>
+            {#if item.href}<a
+                href={item.href}
+                class="text-term-accent mt-1 inline-flex min-h-11 items-center text-xs hover:underline"
+                >View task</a
+              >{/if}
+            <time datetime={item.created_at} class="text-term-fg-muted block text-xs"
+              >{new Date(item.created_at).toLocaleString()}</time
+            >
+          </div>
+        {/each}
       {/if}
     </div>
   </div>

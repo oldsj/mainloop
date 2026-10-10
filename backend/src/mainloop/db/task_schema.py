@@ -175,6 +175,9 @@ CREATE TABLE IF NOT EXISTS task_reports (
  FOREIGN KEY(task_id,attempt_id) REFERENCES task_attempts(task_id,id),
  UNIQUE(attempt_id,request_id)
 );
+CREATE INDEX IF NOT EXISTS task_report_history ON task_reports(task_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS task_report_recent ON task_reports(created_at DESC,id DESC) INCLUDE(task_id);
+CREATE INDEX IF NOT EXISTS task_attempt_session ON task_attempts((COALESCE(binding_id,session_id)));
 CREATE TABLE IF NOT EXISTS task_event_deliveries (
  event_id TEXT NOT NULL REFERENCES task_events(id),
  recipient_key TEXT NOT NULL, target_attempt_id TEXT REFERENCES task_attempts(id),

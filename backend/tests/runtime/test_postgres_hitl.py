@@ -45,11 +45,35 @@ class PolicyPostgresTests(PostgresTestCase):
             await conn.execute(
                 "CREATE TABLE projects(id TEXT PRIMARY KEY,user_id TEXT NOT NULL)"
             )
-            await conn.execute("CREATE TABLE queue_items(id TEXT PRIMARY KEY)")
+            # Pre-HITL queue/session columns already exist in the deployed base
+            # schema. Include the columns used by the owner attention indexes.
+            await conn.execute(
+                """CREATE TABLE queue_items(
+                    id TEXT PRIMARY KEY,user_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',item_type TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+            )
+            await conn.execute(
+                """CREATE TABLE sessions(
+                    id TEXT PRIMARY KEY,user_id TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    archived_at TIMESTAMPTZ)"""
+            )
             await conn.execute(
                 "INSERT INTO projects VALUES('mainloop','owner'),('testrepo','owner')"
             )
             await conn.execute(HITL_MIGRATION_SQL)
+            indexes = await conn.fetch(
+                "SELECT indexname FROM pg_indexes WHERE schemaname=$1", schema
+            )
+            self.assertTrue(
+                {
+                    "queue_owner_attention",
+                    "queue_owner_history",
+                    "session_owner_history",
+                }
+                <= {row["indexname"] for row in indexes}
+            )
             rows = await conn.fetch(
                 "SELECT merge_policy,merge_policy_version FROM projects"
             )
