@@ -421,3 +421,51 @@ test(
     });
   }
 );
+
+test(
+  'make check stays inside an old dev-postgres budget and otherwise defers to the deadline',
+  { timeout: 30000 },
+  async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const seconds = (overrides) =>
+      new Promise((resolve, reject) => {
+        let output = '';
+        const child = spawn(
+          process.env.MAKE || 'make',
+          [
+            '-s',
+            '--no-print-directory',
+            '--eval=show-check-seconds: ; @echo $(CHECK_SECONDS)',
+            'show-check-seconds'
+          ],
+          {
+            cwd: root,
+            env: {
+              ...env,
+              MAINLOOP_DEV_POSTGRES_WORKER: '',
+              MAINLOOP_TIMEOUT_DEADLINE_MS: '',
+              ...overrides
+            },
+            stdio: ['ignore', 'pipe', 'inherit']
+          }
+        );
+        child.stdout.on('data', (chunk) => (output += chunk));
+        child.on('error', reject);
+        child.on('exit', (code) =>
+          code === 0 ? resolve(output.trim()) : reject(new Error(`make exited ${code}`))
+        );
+      });
+    // Standalone: 565 s plus 30 s of cleanup ends inside a ten-minute turn.
+    assert.equal(await seconds({}), '565');
+    // An image without deadline export hides its 540 s command cap.
+    assert.equal(await seconds({ MAINLOOP_DEV_POSTGRES_WORKER: '1' }), '515');
+    // A deadline-exporting dev-postgres clamps the larger cap itself.
+    assert.equal(
+      await seconds({
+        MAINLOOP_DEV_POSTGRES_WORKER: '1',
+        MAINLOOP_TIMEOUT_DEADLINE_MS: String(Date.now() + 60000)
+      }),
+      '565'
+    );
+  }
+);

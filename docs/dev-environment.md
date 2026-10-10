@@ -37,11 +37,15 @@ stamp would miss deleted packages, changed workspace manifests and lifecycle hoo
 `make check` invokes each installer once. It does not cache successful checks or
 skip checks on a warm tree.
 Standalone frontend targets have a separate 120-second install phase before
-the check, test or build cap. The aggregate cap is 515 seconds, including
-cold installs. It fits inside `dev-postgres`'s command budget of 540 seconds
-minus setup, leaving room for `make check`'s own cleanup (at most seven seconds
-there). With the current image, `dev-postgres run make test-backend` still has a
-550-second cap above that budget; an image that exports deadlines clamps it.
+the check, test or build cap. The aggregate cap is 565 seconds, including
+cold installs; standalone, that plus 30 seconds of cleanup ends inside a ten-minute
+turn. Under a `dev-postgres` that exports its deadline, the cap is clamped to one
+second before the command's deadline (545 seconds minus setup), leaving room for
+`make check`'s own cleanup (at most seven seconds there). An older image's
+`dev-postgres` (570 s / 540 s minus setup) exports no deadline, so `make check`
+recognises it and uses a static 515 seconds instead. With such an image,
+`dev-postgres run make test-backend` still has a 550-second cap above that budget;
+an image that exports deadlines clamps it.
 
 ## Prewarmed dependency caches
 
@@ -111,32 +115,32 @@ before printing the table. When the aggregate deadline sends TERM, the inner tab
 records cancellation and the outer cap reports timeout 124. CI splits these checks
 into bounded jobs.
 
-| Command or phase                                             | Cap                       | Coverage                                                                        |
-| ------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------- |
-| `make check`                                                 | 515 s + cleanup           | Locked installs and complete offline check set; at most 545 s including cleanup |
-| `make check-non-backend`                                     | 515 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests       |
-| `make install`                                               | 240 s total               | Frontend, backend and shared models                                             |
-| `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                   |
-| pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1`    |
-| `make test-backend`                                          | 550 s                     | Includes install; runner: 60 s/test or fixture, 180 s imports, 540 s/suite      |
-| `make test-timeouts`                                         | 90 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup        |
-| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions         |
-| `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                     |
-| `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                                 |
-| `make frontend-build`, root/frontend `pnpm build`            | 240 s                     | Vite application build; shares CPUs with the backend lane in `make check`       |
-| `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                           |
-| `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                                 |
-| `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                          |
-| `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                       |
-| `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                                 |
-| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup        |
-| PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                                |
-| Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry          |
-| Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                            |
-| Dev-image uv cache / pnpm store prewarm                      | 240 s each                | Downloads every locked package once per image build                             |
-| CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                              |
-| CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                              |
-| CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                      |
+| Command or phase                                             | Cap                       | Coverage                                                                     |
+| ------------------------------------------------------------ | ------------------------- | ---------------------------------------------------------------------------- |
+| `make check`                                                 | 565 s + cleanup           | Clamped under an enclosing deadline; 515 s under an older `dev-postgres`     |
+| `make check-non-backend`                                     | 565 s + cleanup           | Same formatting/frontend/lint lane, without backend installation or tests    |
+| `make install`                                               | 240 s total               | Frontend, backend and shared models                                          |
+| `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                |
+| pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1` |
+| `make test-backend`                                          | 550 s                     | Includes install; runner: 60 s/test or fixture, 180 s imports, 540 s/suite   |
+| `make test-timeouts`                                         | 90 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup     |
+| `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions      |
+| `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                  |
+| `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                              |
+| `make frontend-build`, root/frontend `pnpm build`            | 240 s                     | Vite application build; shares CPUs with the backend lane in `make check`    |
+| `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                        |
+| `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                              |
+| `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                       |
+| `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                    |
+| `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                              |
+| `dev-postgres run` / supplied command                        | 575 s / 545 s minus setup | Reserves 30 s for teardown; at most 600 s including cancellation cleanup     |
+| PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                             |
+| Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry       |
+| Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                         |
+| Dev-image uv cache / pnpm store prewarm                      | 240 s each                | Downloads every locked package once per image build                          |
+| CI backend / frontend checks / lint                          | 10 min / 5 min / 5 min    | Recent successful jobs: 269–505 s / 11–14 s / 18 s                           |
+| CI app build and publish jobs                                | 8 min                     | Recent successful builds 12–126 s; publish 19–80 s                           |
+| CI dev-image build or publish / index                        | 10 min / 3 min            | Recent native builds 162–249 s; index 12 s                                   |
 
 `scripts/with-timeout.mjs` requires the installed Node runtime, starts an isolated
 process group, announces its deadline and elapsed time, and returns 124 with
@@ -207,7 +211,10 @@ further limited to one per 512 MiB of available memory; set it to `1` for serial
 `make check` sets `MAINLOOP_TEST_RESERVE_CPUS=1`, so the backend uses one CPU fewer
 (at least one worker) and the frontend lane keeps a CPU.
 Workers are separate interpreters started with fork and exec, not forked copies
-of the supervisor. The run summary starts with the run's status (`complete`,
+of the supervisor. Each worker discovers the whole suite, derives the same
+deterministic module plan and runs only its share, so there is no separate
+discovery pass. The supervisor requires every worker's inventory to match and the
+shares to cover it exactly once. The run summary starts with the run's status (`complete`,
 `failed`, `timed_out` or `cancelled`) and reports tests run out of those planned.
 After it, each worker that died from a signal or never reported a result gets a
 line naming the signal or exit code, the last deadline phase it entered, and its
@@ -246,11 +253,13 @@ evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`; completed test and 
 records are saved incrementally and survive timeouts. Existing module timings at
 that path balance the next run, longest module first. Modules without a recording
 use the committed weights in `backend/tests/module_weights.json`, so a fresh
-checkout is balanced too. `make check` saves timings to
+checkout is balanced too. The committed weights are seconds in a 6-vCPU gVisor
+workspace, where PostgreSQL-backed modules run about ten times slower than on a
+fast amd64 host; only their ratios matter. `make check` saves timings to
 `.cache/check/backend-timings.json` (or under `MAINLOOP_CHECK_LOG_DIR`). Refresh the
-committed weights from a complete run with
+committed weights from a complete workspace run with
 `jq -S '.modules | map_values(. * 100 | round / 100 | if . < 0.01 then 0.01 else . end)' TIMINGS > backend/tests/module_weights.json`.
-The runner verifies every worker's inventory against serial discovery. A focused run uses
+A focused run uses
 `make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
 Successful HTTP request logs are suppressed; warning/error logs and all test
 assertions remain enabled.

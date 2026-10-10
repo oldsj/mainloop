@@ -310,7 +310,7 @@ def select_suite(suite, modules):
     return selected
 
 
-def run_tests(names, plan=None, inventory_only=False):
+def run_tests(names, shard=None, weights=None):
     os.chdir(BACKEND)
     sys.path.insert(0, str(BACKEND))
     faulthandler.register(signal.SIGUSR1, all_threads=True)
@@ -334,16 +334,21 @@ def run_tests(names, plan=None, inventory_only=False):
         )
         suite = cap_suite(suite)
         entries = inventory(suite)
-        if plan:
-            expected = json.loads(Path(plan).read_text())
-            suite = select_suite(suite, {entry["module"] for entry in expected})
-            entries = inventory(suite)
-            verify_inventory(expected, entries)
-        else:
-            verify_inventory(entries, entries)
+        verify_inventory(entries, entries)
+        # Every worker reports its full discovery; the supervisor requires them
+        # all to match before trusting the shards.
         emit("inventory", tests=entries)
-    if inventory_only:
-        return 0
+        if shard is not None:
+            # Each worker derives the same deterministic plan and runs its part,
+            # so no separate discovery process has to import everything first.
+            index, count = shard
+            module_seconds = json.loads(Path(weights).read_text()) if weights else {}
+            plans = distribute(entries, count, module_seconds)
+            assigned = plans[index] if index < len(plans) else []
+            suite = select_suite(suite, {entry["module"] for entry in assigned})
+            planned = inventory(suite)
+            verify_inventory(assigned, planned)
+            emit("plan", tests=planned)
     # Filter only the existing console handlers. Log capture added by tests
     # must still receive HTTP records, including credential-leak assertions.
     for handler in logging.getLogger().handlers:
@@ -455,7 +460,7 @@ def describe_exit(worker):
     modules = sorted({entry["module"] for entry in worker.plan or []})
     return (
         f"Backend worker {worker.name} {status} during {phase}; "
-        f"modules: {', '.join(modules) or 'discovery'}"
+        f"modules: {', '.join(modules) or 'none planned yet'}"
     )
 
 
@@ -522,7 +527,7 @@ class Worker:
     process: subprocess.Popen
     log: Path
     buffer: bytes = b""
-    inventory: list = field(default_factory=list)
+    inventory: list | None = None
     plan: list | None = None
     executed: list = field(default_factory=list)
     counts: dict = field(default_factory=dict)
@@ -570,15 +575,13 @@ class Supervisor:
             raise subprocess.TimeoutExpired("backend suite", self.seconds)
         return seconds
 
-    def launch(self, name, *, plan=None, inventory_only=False):
+    def launch(self, name, *, shard=None, weights=None):
         self.remaining()
         arguments = [sys.executable, str(Path(__file__).resolve()), "--worker"]
-        if inventory_only:
-            arguments.append("--inventory-only")
-        if plan is not None:
-            path = self.root / f"{name}.plan.json"
-            path.write_text(json.dumps(plan))
-            arguments.extend(("--plan", str(path)))
+        if shard is not None:
+            arguments.extend(
+                ("--shard", f"{shard[0]}/{shard[1]}", "--weights", weights)
+            )
         arguments.extend(self.args.names)
         log = self.root / f"{name}.log"
         with log.open("w") as stream:
@@ -594,7 +597,7 @@ class Supervisor:
                         "MAINLOOP_TEST_NAMESPACE": f"{self.namespace}_w{name}",
                     },
                 )
-                worker = Worker(name, process, log, plan=plan)
+                worker = Worker(name, process, log)
                 self.workers.append(worker)
                 self.selector.register(process.stdout, selectors.EVENT_READ, worker)
             finally:
@@ -619,12 +622,23 @@ class Supervisor:
         kind = event.pop("event")
         if kind == "inventory":
             worker.inventory = event["tests"]
-            if worker.name != "discovery":
-                self.timings["worker_inventories"][worker.name] = [
-                    entry["id"] for entry in worker.inventory
-                ]
-            if self.args.workers == 1:
+            if not self.timings["inventory"]:
                 self.timings["inventory"] = [entry["id"] for entry in worker.inventory]
+                print(
+                    f"Backend inventory: {len(worker.inventory)} tests; "
+                    f"{self.args.workers} workers",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if self.args.workers == 1:
+                self.timings["worker_inventories"][worker.name] = self.timings[
+                    "inventory"
+                ]
+        elif kind == "plan":
+            worker.plan = event["tests"]
+            self.timings["worker_inventories"][worker.name] = [
+                entry["id"] for entry in worker.plan
+            ]
         elif kind == "execution":
             worker.executed.append({"id": event["id"]})
             self.timings["worker_executions"][worker.name] = [
@@ -690,34 +704,30 @@ class Supervisor:
     def run(self, previous):
         self.save()
         if self.args.workers == 1:
-            worker = self.launch("0")
-            self.collect()
-            expected = worker.inventory
+            self.launch("0")
         else:
-            discovery = self.launch("discovery", inventory_only=True)
-            self.collect()
-            if discovery.process.returncode != 0:
+            weights = self.root / "weights.json"
+            weights.write_text(json.dumps(previous))
+            for index in range(self.args.workers):
+                self.launch(
+                    str(index), shard=(index, self.args.workers), weights=str(weights)
+                )
+        self.collect()
+        # A worker that died before discovery has a crash line; nothing to verify.
+        if any(worker.inventory is None for worker in self.workers):
+            return 1
+        expected = self.workers[0].inventory
+        for worker in self.workers[1:]:
+            verify_inventory(expected, worker.inventory)
+            if worker.plan is None:
                 return 1
-            plans = distribute(discovery.inventory, self.args.workers, previous)
-            expected = discovery.inventory
-            self.timings["inventory"] = [entry["id"] for entry in discovery.inventory]
-            self.timings["workers"] = len(plans)
-            print(
-                f"Backend inventory: {len(discovery.inventory)} tests; {len(plans)} workers",
-                file=sys.stderr,
-                flush=True,
-            )
-            for index, plan in enumerate(plans):
-                self.launch(str(index), plan=plan)
-            self.collect()
+        if self.args.workers > 1:
+            if self.workers[0].plan is None:
+                return 1
             verify_inventory(
-                discovery.inventory,
-                [entry for worker in self.workers[1:] for entry in worker.inventory],
+                expected, [entry for worker in self.workers for entry in worker.plan]
             )
-        execution_workers = [
-            worker for worker in self.workers if worker.name != "discovery"
-        ]
-        for worker in execution_workers:
+        for worker in self.workers:
             verify_inventory(
                 worker.plan if worker.plan is not None else worker.inventory,
                 worker.executed,
@@ -725,13 +735,12 @@ class Supervisor:
             )
         verify_inventory(
             expected,
-            [entry for worker in execution_workers for entry in worker.executed],
+            [entry for worker in self.workers for entry in worker.executed],
             kind="execution (combined)",
         )
         return int(
             any(
-                worker.process.returncode != 0
-                or (worker.name != "discovery" and worker.result is None)
+                worker.process.returncode != 0 or worker.result is None
                 for worker in self.workers
             )
         )
@@ -827,11 +836,6 @@ def supervise(args):
                     if worker.process.stdout and not worker.process.stdout.closed:
                         worker.process.stdout.close()
                     if worker.process.returncode != 0 or worker.result is None:
-                        if (
-                            worker.name == "discovery"
-                            and worker.process.returncode == 0
-                        ):
-                            continue
                         print(
                             f"\nWorker {worker.name} (exit {worker.process.returncode}):",
                             file=sys.stderr,
@@ -871,8 +875,8 @@ def main():
     )
     parser.add_argument("--timings", default=os.environ.get("MAINLOOP_TEST_TIMINGS"))
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--inventory-only", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--plan", help=argparse.SUPPRESS)
+    parser.add_argument("--shard", help=argparse.SUPPRESS)
+    parser.add_argument("--weights", help=argparse.SUPPRESS)
     parser.add_argument(
         "--workers",
         type=int,
@@ -883,7 +887,11 @@ def main():
         # Reserve the pipe for events; test output goes into the worker's log.
         _events = sys.stdout
         sys.stdout = sys.stderr
-        return run_tests(args.names, args.plan, args.inventory_only)
+        shard = None
+        if args.shard:
+            index, count = (int(part) for part in args.shard.split("/"))
+            shard = (index, count)
+        return run_tests(args.names, shard, args.weights)
     if args.workers < 1:
         parser.error("MAINLOOP_TEST_WORKERS must be positive")
     if not os.environ.get("MAINLOOP_TEST_DATABASE_URL"):
