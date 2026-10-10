@@ -1203,7 +1203,7 @@ class Database:
         """Badge count: unresolved owner attention, including already-read requests."""
         from mainloop.attention import read
 
-        return (await read(self, user_id)).attention.count
+        return (await read(self, user_id, include_activity=False)).attention.count
 
     async def mark_queue_item_read(self, item_id: str) -> None:
         """Mark a queue item as read."""

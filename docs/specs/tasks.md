@@ -2,10 +2,15 @@
 
 Blocked reports may include `owner_action`, a specific question or decision required from the
 owner. This field is accepted only with outcome `blocked` and sets reason `owner_decision`.
-The attention projection includes it only for the current active, unarchived attempt while
-the task remains blocked. A generic blocked/reconciliation report does not by itself request
-owner input. A progress report from that current attempt acknowledges resumed work and clears
-its owner-decision blocker. Task pages retain the report and the existing task actions and session links.
+It also stores a separate durable `owner_decision` with the report ID, attempt ID and action.
+The attention projection includes that decision for the current active, unarchived attempt
+until it is cleared. Native attention may change task status/reason to waiting/approval and
+back without changing the owner decision. When both requests are pending, the inbox shows
+both; answering the native question does not answer the owner decision. A generic
+blocked/reconciliation or failed report does not create or clear an owner decision.
+A progress or completed report from the same current attempt clears the decision;
+task finality or replacement/removal of that attempt also clears it. Archived or retired
+attempts cannot surface it. Task pages retain the reports and the existing actions and links.
 
 Routine `progress` and `completed` reports remain durable and appear in Activity. They do not
 enqueue a main-agent chat turn. Parent-task notifications retain their existing delivery;

@@ -441,7 +441,7 @@ async def get_conversation(conversation_id: str, user_id: str = Depends(current_
 async def owner_attention(user_id: str = Depends(current_user)):
     from mainloop.attention import read
 
-    return (await read(db, user_id)).attention
+    return (await read(db, user_id, include_activity=False)).attention
 
 
 @app.get("/activity", response_model=list[ActivityItem])
@@ -1068,7 +1068,9 @@ async def get_project_detail(
 
     sessions = [
         s
-        for s in (await read(db, user_id)).listed_sessions
+        for s in (
+            await read(db, user_id, project_id=project_id, include_activity=False)
+        ).listed_sessions
         if s.project_id == project_id
     ]
 
@@ -1114,7 +1116,7 @@ async def list_sessions(
     """List user's sessions."""
     from mainloop.attention import read
 
-    projected = (await read(db, user_id)).listed_sessions
+    projected = (await read(db, user_id, include_activity=False)).listed_sessions
     return [s for s in projected if status is None or s.status.value == status]
 
 
@@ -1201,7 +1203,9 @@ async def get_session(session_id: str, user_id: str = Depends(current_user)):
     """Get a session by ID."""
     from mainloop.attention import read
 
-    session = (await read(db, user_id)).sessions.get(session_id)
+    session = (
+        await read(db, user_id, session_id=session_id, include_activity=False)
+    ).sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -1234,7 +1238,9 @@ async def get_session_conversation(
     messages = await db.get_messages(session.conversation_id)
     from mainloop.attention import read
 
-    session = (await read(db, user_id)).sessions.get(session_id, session)
+    session = (
+        await read(db, user_id, session_id=session_id, include_activity=False)
+    ).sessions.get(session_id, session)
     return SessionConversationResponse(session=session, messages=messages)
 
 

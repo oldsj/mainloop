@@ -9,6 +9,12 @@ cards, and tasks explicitly blocked on an owner decision. Each item states what 
 links to its canonical input card or task. Idle sessions, CI waits, publication updates and
 ordinary reconciliation do not imply owner attention. An empty inbox says **Nothing needs you**.
 
+An unresolved owner decision is stored separately from native input status. If a session also
+asks a native question or permission, both requests remain visible; settling the native
+request alone cannot hide the owner decision. Attention reads include every eligible pending
+request, independently of the history limit. Activity reads select at most the latest 100
+records in SQL; polling the attention snapshot does not load Activity history.
+
 Native input must have an unanswered verified leaf on the current live binding. Terminal tasks,
 noncurrent or finished attempts, archived attempts/sessions, deleted or replaced native sessions,
 superseded requests and recorded decisions never count. Parent task rollups reuse the canonical

@@ -332,6 +332,11 @@ async def insert_task(conn, task):
 
 async def save_task(conn, task, expected_version, event_key):
     require_transaction(conn)
+    if task.owner_decision and (
+        task.status in ("completed", "failed", "cancelled")
+        or task.owner_decision.attempt_id != task.current_attempt_id
+    ):
+        task = task.model_copy(update={"owner_decision": None})
     row = await conn.fetchrow(
         """UPDATE tasks SET current_attempt_id=$2,status=$3,version=$4,snapshot=$5::jsonb,updated_at=NOW()
         WHERE id=$1 AND version=$6 RETURNING id""",

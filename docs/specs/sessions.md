@@ -39,6 +39,13 @@ Explicit owner-decision blockers also set `needs_owner`, independently of activi
 sessions display **NEEDS YOU**. Idleness alone never sets it. Session reads and list filters
 use the server projection; SSE prompts a fresh read instead of copying raw activity flags.
 
+The list includes all active and needs-you sessions plus the latest 100 unarchived history
+records. History and idle toggle counts describe that returned window. Older sessions remain
+available by direct session link. Zoom mode consumes the same current projection for its
+status and attention banner, including settlement, task completion and reassignment. If a
+zoomed session disappears from the list, it reads that session directly; it does not reuse
+the conversation's old attention flag. An unavailable session disables message input.
+
 ## Creating and messaging sessions
 
 - `/agents` offers Claude Code and Codex. `POST /sessions` accepts a configured provider profile ID or alias in `agent_kind`; when omitted, it defaults to Claude Code. See [provider profiles](providers.md).

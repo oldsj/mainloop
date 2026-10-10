@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import type { Session, Message } from '$lib/api';
   import { agentLabel } from '$lib/agentLabel';
-  import { statusLabel } from '$lib/sessionStatus';
+  import { statusLabel, isFinished } from '$lib/sessionStatus';
+  import { zoomSession } from '$lib/zoomSession';
   import { api } from '$lib/api';
   import { navigationContext } from '$lib/stores/navigationContext';
   import { sessions } from '$lib/stores/sessions';
@@ -11,7 +11,21 @@
 
   let { sessionId }: { sessionId: string } = $props();
 
-  let session = $state<Session | null>(null);
+  let conversationSession = $state<Session | null>(null);
+  let reconciledSession = $state<Session | null>(null);
+  let unavailable = $state(false);
+  const session = $derived(
+    zoomSession(
+      sessionId,
+      conversationSession,
+      $sessions.sessions,
+      $sessions.loaded,
+      reconciledSession
+    )
+  );
+  const missingFromProjection = $derived(
+    $sessions.loaded && !$sessions.sessions.some((s) => s.id === sessionId)
+  );
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
   let error = $state<string | null>(null);
@@ -24,12 +38,34 @@
     }
   });
 
+  // A session may be archived, removed, or fall outside bounded history while zoom
+  // remains open. Reconcile once on disappearance; never fall back to stale input.
+  $effect(() => {
+    if (!missingFromProjection) return;
+    const id = sessionId;
+    let cancelled = false;
+    reconciledSession = null;
+    unavailable = false;
+    api
+      .getSession(id)
+      .then((current) => {
+        if (!cancelled) reconciledSession = current;
+      })
+      .catch(() => {
+        if (!cancelled) unavailable = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   async function loadSessionData(id: string) {
     try {
       isLoading = true;
       error = null;
       const data = await api.getSessionConversation(id);
-      session = data.session;
+      if (id !== sessionId) return;
+      conversationSession = data.session;
       messages = data.messages;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load session';
@@ -99,7 +135,7 @@
     cancelled: 'text-term-fg-muted'
   };
 
-  const needsAttention = $derived(session?.needs_owner === true);
+  const needsAttention = $derived(session?.needs_owner === true && !isFinished(session));
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -148,7 +184,9 @@
           </p>
         </div>
       {:else}
-        <span class="text-term-fg-muted">Loading session...</span>
+        <span class="text-term-fg-muted"
+          >{unavailable ? 'Session unavailable' : 'Loading session...'}</span
+        >
       {/if}
     </div>
 
@@ -218,7 +256,11 @@
       class="border-term-border bg-term-magenta/10 text-term-magenta flex items-center justify-center gap-2 border-t py-2"
     >
       <span class="animate-pulse">*</span>
-      <span class="text-sm">This session is waiting for your input</span>
+      <span class="text-sm"
+        >{session?.status === 'waiting_on_user'
+          ? 'This session is waiting for your input'
+          : 'This session needs your decision'}</span
+      >
     </div>
   {/if}
 
@@ -226,7 +268,7 @@
   <div class="border-term-border border-t p-4" style="border-left: 4px solid {session?.color};">
     <InputBar
       onsend={handleSendMessage}
-      disabled={isLoading || !session}
+      disabled={isLoading || !session || isFinished(session) || !!session.archived_at}
       placeholder="Reply to {session?.title || 'session'}..."
     />
   </div>

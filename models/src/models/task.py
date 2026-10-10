@@ -143,6 +143,14 @@ class TaskScopedReassign(TaskReassign):
     task_id: Identifier
 
 
+class OwnerDecision(ContractModel):
+    """An unresolved report request, independent of native attention observations."""
+
+    attempt_id: Identifier
+    report_id: Identifier
+    action: Annotated[str, Field(strict=True, min_length=1, max_length=4000)]
+
+
 class Task(ContractModel):
     id: Identifier
     owner_id: Identifier
@@ -162,6 +170,7 @@ class Task(ContractModel):
     accepted_environment: WorkspaceEnvironment | None = None
     status: TaskStatus = "queued"
     reason: TaskReason | None = None
+    owner_decision: OwnerDecision | None = None
     current_attempt_id: Identifier | None = None
     version: Annotated[int, Field(strict=True, ge=1)] = 1
     checkout: TaskCheckout | None = None

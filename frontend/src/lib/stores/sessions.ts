@@ -10,6 +10,7 @@ import { singleFlight } from '../visiblePolling';
 interface SessionsState {
   sessions: Session[];
   loading: boolean;
+  loaded: boolean;
   error: string | null;
 }
 
@@ -17,6 +18,7 @@ function createSessionsStore() {
   const { subscribe, set, update } = writable<SessionsState>({
     sessions: [],
     loading: false,
+    loaded: false,
     error: null
   });
 
@@ -24,14 +26,20 @@ function createSessionsStore() {
     subscribe,
 
     replaceSessions(projected: Session[]) {
-      update((state) => ({ ...state, sessions: projected, loading: false, error: null }));
+      update((state) => ({
+        ...state,
+        sessions: projected,
+        loading: false,
+        loaded: true,
+        error: null
+      }));
     },
 
     fetchSessions: singleFlight(async (signal?: AbortSignal) => {
       update((state) => ({ ...state, loading: true, error: null }));
       try {
         const sessions = await api.listSessions(undefined, signal);
-        update((state) => ({ ...state, sessions, loading: false }));
+        update((state) => ({ ...state, sessions, loading: false, loaded: true }));
       } catch (e) {
         update((state) => ({
           ...state,
@@ -100,7 +108,7 @@ function createSessionsStore() {
     },
 
     reset() {
-      set({ sessions: [], loading: false, error: null });
+      set({ sessions: [], loading: false, loaded: false, error: null });
     }
   };
 }

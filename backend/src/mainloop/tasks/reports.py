@@ -12,7 +12,7 @@ from mainloop.db import tasks as store
 from mainloop.tasks import lifecycle
 from mainloop.tasks.events import reserve_event
 
-from models.task import TaskReport
+from models.task import OwnerDecision, TaskReport
 
 
 def notification_id(event_id: str, recipient_key: str, target: str) -> str:
@@ -67,6 +67,15 @@ async def record(conn, principal, request: TaskReport) -> dict:
         request.model_dump_json(),
     )
     status, reason = task.status, task.reason
+    owner_decision = task.owner_decision
+    if request.owner_action:
+        owner_decision = OwnerDecision(
+            attempt_id=request.attempt_id,
+            report_id=report_id,
+            action=request.owner_action,
+        )
+    elif request.outcome in ("progress", "completed"):
+        owner_decision = None
     if request.outcome == "completed":
         status, reason = "waiting", (
             "publication" if task.mode == "code" else "reconciliation"
@@ -83,6 +92,7 @@ async def record(conn, principal, request: TaskReport) -> dict:
         update={
             "status": status,
             "reason": reason,
+            "owner_decision": owner_decision,
             "version": task.version + 1,
             "updated_at": datetime.now(UTC),
         }

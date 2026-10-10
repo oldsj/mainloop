@@ -495,6 +495,7 @@ export interface Task {
   accepted_environment?: WorkspaceManifest['development_environment'];
   status: TaskStatus;
   reason: TaskReason | null;
+  owner_decision?: { attempt_id: string; report_id: string; action: string } | null;
   current_attempt_id: string | null;
   version: number;
   checkout: TaskCheckout | null;
