@@ -8,7 +8,7 @@ export
 CAP := node "$(CURDIR)/scripts/with-timeout.mjs"
 UV_HTTP_TIMEOUT := 30
 UV_HTTP_RETRIES := 1
-.PHONY: install-backend install-models install-frontend check check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
+.PHONY: install-backend install-models install-frontend check check-non-backend check-frontend test-frontend frontend-build test-timeouts test-timeout-integration _install _check _fmt _fmt-all _test-backend
 
 # Configuration
 # Set GHCR_USER in .env file (see .env.example)
@@ -94,7 +94,10 @@ check: ## All offline checks in one turn (560s + cleanup; installs dependencies)
 	@$(CAP) 560 'make check' -- $(MAKE) --no-print-directory _check
 
 _check:
-	@$(MAKE) --no-print-directory test-timeouts test-backend check-frontend test-frontend frontend-build fmt lint
+	@node scripts/check.mjs --make '$(MAKE)'
+
+check-non-backend: ## Measure the offline checks outside the backend suite (560s + cleanup)
+	@$(CAP) 560 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
 
 check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 	@$(CAP) 120 'make check-frontend' -- pnpm check
@@ -106,7 +109,7 @@ frontend-build: install-frontend ## Build the frontend application (120s cap)
 	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
 
 test-timeouts: ## Timeout helper regression tests (30s cap)
-	@$(CAP) 30 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs
+	@$(CAP) 30 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
 
 test-timeout-integration: ## Opt-in real runner + dev-image PG16 cleanup regressions
 	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs
