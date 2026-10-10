@@ -40,6 +40,8 @@ BASE = "b" * 40
 MERGED = "c" * 40
 # Current default-branch head once main has moved past the PR's recorded base.
 MOVED = "f" * 40
+# GitHub's test merge commit for the PR (refs/pull/N/merge).
+TEST_MERGE = "9" * 40
 CAPTURED_AT = datetime(2026, 10, 9, 2, tzinfo=timezone.utc)
 
 
@@ -126,6 +128,7 @@ class GitHub:
             "mergeable": True,
             "mergeable_state": "clean",
             "merged": False,
+            "merge_commit_sha": TEST_MERGE,
             "head": {"ref": "feature", "sha": SHA, "repo": self.repo},
             "base": {"ref": "main", "sha": BASE, "repo": self.repo},
         }
@@ -157,6 +160,10 @@ class GitHub:
         self.hook = None
         # GitHub keeps pr.base.sha at the base of the last synchronization.
         self.main = BASE
+        # Test-merge inventory against main and its parents; None mirrors the
+        # PR files and [main, head].
+        self.merge_files = None
+        self.merge_parents = None
 
     def run(self, id, **changes):
         return {
@@ -207,6 +214,26 @@ class GitHub:
             "/rules/branches/main": self.rules,
             f"/commits/{SHA}/statuses": self.statuses,
         }
+        merge_sha = self.pr.get("merge_commit_sha")
+        if merge_sha and path == f"/commits/{merge_sha}":
+            files = self.files if self.merge_files is None else self.merge_files
+            page = int(req.url.params.get("page", 1))
+            parents = self.merge_parents or [self.main, self.pr["head"]["sha"]]
+            additions = sum(item["additions"] for item in files)
+            deletions = sum(item["deletions"] for item in files)
+            return httpx.Response(
+                200,
+                json={
+                    "sha": merge_sha,
+                    "parents": [{"sha": parent} for parent in parents],
+                    "stats": {
+                        "additions": additions,
+                        "deletions": deletions,
+                        "total": additions + deletions,
+                    },
+                    "files": copy.deepcopy(files[(page - 1) * 100 : page * 100]),
+                },
+            )
         for endpoint, key, items in [
             ("check-runs", "check_runs", self.runs),
             ("check-suites", "check_suites", self.suites),
@@ -563,9 +590,14 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_main_moving_during_evidence_is_stale(self):
+        reads = 0
+
         async def hook(req):
-            if req.url.path.endswith("/pulls/17/files"):
-                self.fake.main = MOVED
+            nonlocal reads
+            if req.url.path.endswith("/pulls/17"):
+                reads += 1
+                if reads == 2:
+                    self.fake.main = MOVED
 
         self.fake.hook = hook
         with self.assertRaisesRegex(PolicyError, "default branch moved"):
@@ -608,6 +640,73 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             PolicyError, "unsupported strict_required_status_checks_policy"
         ):
+            await self.evidence()
+
+    async def test_base_side_rename_into_protected_path_is_matched(self):
+        # Real git (review): main renames src/build.yml to
+        # .github/workflows/build.yml; the feature edits src/build.yml. The
+        # three-dot PR list shows only src/build.yml, the squash changes the
+        # workflow.
+        self.fake.main = MOVED
+        self.fake.pr.update(additions=1, deletions=1)
+        self.fake.files = [
+            dict(filename="src/build.yml", status="modified", additions=1, deletions=1)
+        ]
+        self.fake.merge_files = [
+            dict(
+                filename=".github/workflows/build.yml",
+                status="modified",
+                additions=1,
+                deletions=1,
+            )
+        ]
+        facts = await self.evidence()
+        self.assertEqual(facts["protected_matches"], [".github/workflows/build.yml"])
+        self.assertEqual(
+            [item["filename"] for item in facts["merge_files"]],
+            [".github/workflows/build.yml"],
+        )
+        self.assertEqual(facts["merge_commit_sha"], TEST_MERGE)
+
+    async def test_merge_result_rename_keeps_both_sides(self):
+        self.fake.merge_files = [
+            dict(
+                filename="src/app.py",
+                status="renamed",
+                previous_filename="k8s/app.py",
+                additions=3,
+                deletions=1,
+            )
+        ]
+        self.assertEqual((await self.evidence())["protected_matches"], ["k8s/app.py"])
+        self.fake.merge_files[0].pop("previous_filename")
+        with self.assertRaises(ValueError):
+            await self.evidence()
+
+    async def test_unverifiable_merge_result_never_falls_back_to_pr_files(self):
+        self.fake.main = MOVED
+        for parents in ([BASE, SHA], [MOVED, "e" * 40], [SHA, MOVED], [MOVED]):
+            with self.subTest(parents=parents):
+                self.fake.merge_parents = parents
+                with self.assertRaises(github_merge.MergeResultPending):
+                    await self.evidence()
+        self.fake.merge_parents = None
+        self.fake.pr["merge_commit_sha"] = None
+        with self.assertRaises(github_merge.MergeResultPending):
+            await self.evidence()
+        self.fake.pr["merge_commit_sha"] = TEST_MERGE
+        self.fake.merge_files = [
+            dict(filename=f"f{i}", status="modified", additions=0, deletions=0)
+            for i in range(3000)
+        ]
+        with self.assertRaisesRegex(PolicyError, "too many") as raised:
+            await self.evidence()
+        self.assertEqual(raised.exception.code, "merge_result")
+        self.fake.merge_files = [
+            dict(filename="src/app.py", status="modified", additions=9, deletions=1)
+        ]
+        self.fake.merge_files += [dict(self.fake.merge_files[0])]
+        with self.assertRaises(GitHubError):
             await self.evidence()
 
     async def test_default_head_refusal_is_precise(self):
@@ -1020,7 +1119,8 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.fake.runs.clear()
         self.assertFalse((await self.evidence())["ci"]["green"])
         self.fake.pr["mergeable"] = None
-        self.assertFalse((await self.evidence())["mergeable"])
+        with self.assertRaises(github_merge.MergeResultPending):
+            await self.evidence()
 
     async def test_complete_files_protected_renames_and_deletions(self):
         self.fake.files = [
@@ -1842,6 +1942,49 @@ class MergeTests(MergeFixture):
         self.assertEqual(
             (await self.execute(newer, request="invoke-2"))["state"], "merged"
         )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_base_side_rename_routes_to_approval(self):
+        self.fake.main = MOVED
+        self.fake.pr.update(additions=1, deletions=1)
+        self.fake.files = [
+            dict(filename="src/build.yml", status="modified", additions=1, deletions=1)
+        ]
+        self.fake.merge_files = [
+            dict(
+                filename=".github/workflows/build.yml",
+                status="modified",
+                additions=1,
+                deletions=1,
+            )
+        ]
+        p = await self.prepare()
+        self.assertEqual(p["route"], "approval")
+        self.assertEqual(p["protected_matches"], [".github/workflows/build.yml"])
+        with self.assertRaisesRegex(PolicyError, "protected merge tool"):
+            await self.execute(p)
+        auto = await merge.auto_merge(self.binding, {**self.args, "request_id": "auto"})
+        self.assertEqual(auto["state"], "approval_required")
+        self.assertEqual(len(self.fake.puts), 0)
+
+    async def test_missing_or_mismatched_test_merge_never_auto_merges(self):
+        self.fake.main = MOVED
+        self.fake.merge_parents = [BASE, SHA]
+        with self.assertRaisesRegex(PolicyError, "does not match"):
+            await self.prepare()
+        self.fake.merge_parents = None
+        p = await self.prepare(request_id="ready")
+        # GitHub recomputes the test merge: execution waits, sends nothing.
+        self.fake.merge_parents = [BASE, SHA]
+        self.assertEqual((await self.execute(p))["state"], "evaluating")
+        self.fake.merge_parents = None
+        self.fake.pr["merge_commit_sha"] = None
+        self.assertEqual((await self.execute(p))["state"], "evaluating")
+        self.assertEqual(len(self.fake.puts), 0)
+        # A recreated test merge commit with the same parents and inventory
+        # does not invalidate the proposal.
+        self.fake.pr["merge_commit_sha"] = "8" * 40
+        self.assertEqual((await self.execute(p))["state"], "merged")
         self.assertEqual(len(self.fake.puts), 1)
 
     async def test_conflict_refuses_prepare_and_blocks_execution(self):

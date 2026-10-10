@@ -14,7 +14,7 @@ from mainloop.services.github_creation import GitHubCreationClient
 from mainloop.services.github_merge import GitHubMergeClient
 from pydantic import SecretStr, ValidationError
 from tests.runtime.github_app_fake import ENCODED_KEY, PEM
-from tests.runtime.test_merge import SHA, GitHub
+from tests.runtime.test_merge import SHA, TEST_MERGE, GitHub
 
 
 class ScopedAppServer:
@@ -66,6 +66,7 @@ class ScopedAppServer:
             f"/repos/owner/repo/commits/{SHA}/statuses": {"statuses": "read"},
             "/repos/owner/repo/branches/main/protection": {"administration": "read"},
             "/repos/owner/repo/rules/branches/main": {"metadata": "read"},
+            f"/repos/owner/repo/commits/{TEST_MERGE}": {"contents": "read"},
         }[path]
         if permissions != required:
             raise AssertionError("evidence endpoint received the wrong permission set")
@@ -203,6 +204,7 @@ class MergeAppEvidenceTests(unittest.IsolatedAsyncioTestCase):
             (f"/commits/{SHA}/statuses", "statuses"),
             ("/branches/main/protection", "protection"),
             ("/rules/branches/main", "rules"),
+            (f"/commits/{TEST_MERGE}", "merge_result"),
         ):
             server = ScopedAppServer()
             server.product.errors[suffix] = (403, {"message": "upstream-secret"})

@@ -285,8 +285,21 @@ targeting the default branch, with squash support. GitHub updates a PR's recorde
 base SHA only when the PR is synchronized, so a PR may trail the default branch.
 Evidence reads the default branch's current head, records it as the proposal's
 `base_sha`, and refuses as stale if it moves before the read finishes. A trailing
-base is accepted when GitHub requires no up-to-date branch: the PR file list covers
-every path the squash can change, so protected-path policy still sees them. Merge
+base is accepted when GitHub requires no up-to-date branch.
+
+The PR's three-dot file list does not cover every path a squash changes: when the
+base branch renames a file the head edits, the squash changes the new path, which
+the PR list never names. Evidence therefore also reads GitHub's test merge commit
+(`merge_commit_sha`) through the commits API. Its parents must be exactly the pinned
+`base_sha` and the expected head, and its files against the first parent are read
+in full (including deletions and both sides of renames) with matching addition and
+deletion totals. Protected-path matching uses the union of the PR inventory and this
+merge-result inventory; the proposal pins both (`files_digest`, `merge_files_digest`)
+but not the test merge SHA, which GitHub recreates. A missing test merge, unknown
+mergeability or mismatched parents never falls back to the PR list: preparation is
+refused with a retry message (`merge_result_pending`), and execution returns
+`evaluating` unless the exact-head CI already failed. A merge result of 3,000 or more
+files cannot be listed completely and is refused (`merge_result`). Merge
 execution refuses a proposal whose pinned `base_sha` no longer matches the default
 branch ("default branch moved since preparation; prepare again"); a new preparation
 pins the new head. A PR GitHub reports as conflicting (`mergeable: false` or

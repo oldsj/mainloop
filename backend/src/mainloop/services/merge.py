@@ -13,7 +13,7 @@ from mainloop.db import tasks as task_store
 from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
-from mainloop.services.github_merge import GitHubMergeClient
+from mainloop.services.github_merge import GitHubMergeClient, MergeResultPending
 from mainloop.services.merge_summary import build_summary
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
@@ -52,7 +52,7 @@ def pinned(facts):
     return {
         k: v
         for k, v in facts.items()
-        if k not in ("ci", "mergeable", "mapping_evidence")
+        if k not in ("ci", "mergeable", "mapping_evidence", "merge_commit_sha")
     }
 
 
@@ -737,6 +737,14 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
             ),
         )
     except PolicyError as error:
+        reason = error.message
+        if isinstance(error, MergeResultPending):
+            if ci_state(error.ci, facts["head_sha"]) != "failure":
+                # Like unknown mergeability: wait for GitHub's test merge.
+                return state_result(
+                    "evaluating", p["id"], candidate["deadline"], approved=approved
+                )
+            reason = "CI failed for the PR head"
         async with db.connection() as conn, conn.transaction():
             await task_store.admission_lock(conn)
             await lock_candidate(
@@ -755,7 +763,7 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
                 return await remember_result(
                     conn,
                     p["id"],
-                    state_result("blocked", p["id"], reason=error.message),
+                    state_result("blocked", p["id"], reason=reason),
                 )
         raise
     async with db.connection() as conn, conn.transaction():
