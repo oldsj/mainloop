@@ -19,6 +19,8 @@ concurrency:
 jobs:
   publish:
     name: Publish ${{ matrix.image }}-dev (arm64)
+    # Dev pods pull :latest, so only main may publish it (also via workflow_dispatch).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     strategy:

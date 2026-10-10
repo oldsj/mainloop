@@ -279,19 +279,34 @@ profiles:
         path: hooks
       - op: remove
         path: commands
+      # v2beta1 has no kube-context key, so every live pipeline starts with this pin:
+      # it refuses any context or namespace other than admin@internal-01/mainloop-dev
+      # (pass --kube-context admin@internal-01 -n mainloop-dev, as scripts/dev-live.sh does).
+      - op: add
+        path: functions
+        value:
+          require_live_target: |-
+            if [ "${DEVSPACE_CONTEXT}" != "admin@internal-01" ] || [ "${DEVSPACE_NAMESPACE}" != "mainloop-dev" ]; then
+              echo "profile live runs only against context admin@internal-01, namespace mainloop-dev (got ${DEVSPACE_CONTEXT}/${DEVSPACE_NAMESPACE})" >&2
+              exit 1
+            fi
       # dev and deploy touch only mainloop-dev; the shared kagent namespace changes
       # only through the explicit deploy-agents pipeline (`make dev-agents`).
       - op: add
         path: pipelines
         value:
           dev: |-
+            require_live_target
             create_deployments mainloop
             start_dev --all
           deploy: |-
+            require_live_target
             create_deployments mainloop
           deploy-agents: |-
+            require_live_target
             create_deployments dev-agents
           purge: |-
+            require_live_target
             stop_dev --all
             purge_deployments --all
       - op: replace

@@ -3,6 +3,9 @@ kind: Kustomization
 
 # Dev-only kagent agents for mainloop-dev. kagent itself is shared and
 # Argo-managed; these objects are not, and only mainloop-dev refers to them.
+# Not applied by default: `make dev-live` never touches kagent; run `make dev-agents`.
+# They share the kagent-default worker pool (fine for a prototype) but snapshot under
+# their own prefix, s3://ate-snapshots/kagent-dev/, never beside production's.
 # DevSpace applies them (deployment dev-agents) and `make dev-harness` swaps
 # their harness images without touching the production agents.
 

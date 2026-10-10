@@ -251,7 +251,7 @@ make dev-live          # deploy mainloop-dev, then sync and stream logs (Ctrl-C 
 make dev-live-status   # pods, database, route and dev agents
 make dev-agents        # apply the *-dev kagent agents (shared kagent namespace)
 make dev-harness       # build arm64 harness images from ../kagent, apply them to the dev agents
-make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents
+make dev-live-purge    # delete namespace mainloop-dev and the *-dev agents (typed confirmation)
 ```
 
 All targets use kube context `admin@internal-01` (override with
@@ -283,18 +283,19 @@ the database credentials. Purging deletes the data.
 
 Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
 owner writes, Git transport and the push gate are off; every kagent role uses
-`claude-workspace-dev` or `codex-workspace-dev`. Dev work targets
-`oldsj/testrepo` only, through a GitHub App installed only on that repository.
+`claude-workspace-dev` or `codex-workspace-dev`. Once Git transport is enabled, dev
+work is meant to target `oldsj/testrepo` only, through a GitHub App installed only on
+that repository; with transport off, nothing reaches GitHub today.
 
 Secrets are not in this repository. Each reference is optional, so the instance
 starts without them, and the features that need them stay unavailable:
 
-| Secret in `mainloop-dev` | Keys | Without it |
-|---|---|---|
-| `mainloop-secrets` | `github-app-id`, `github-app-private-key`, `agent-token-key` | No GitHub access; the agent token key falls back to the database password |
-| `ghcr-secret` | `.dockerconfigjson` | Pods cannot pull private dev images |
-| `kagent-control-token` | `current` | No kagent sessions; also enable the `control-auth` component in the overlay |
-| `kagent-control-ca` | `ca.crt` (cert-manager) | As above |
+| Secret in `mainloop-dev` | Keys                                                         | Without it                                                                  |
+| ------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `mainloop-secrets`       | `github-app-id`, `github-app-private-key`, `agent-token-key` | No GitHub access; the agent token key falls back to the database password   |
+| `ghcr-secret`            | `.dockerconfigjson`                                          | Pods cannot pull private dev images                                         |
+| `kagent-control-token`   | `current`                                                    | No kagent sessions; also enable the `control-auth` component in the overlay |
+| `kagent-control-ca`      | `ca.crt` (cert-manager)                                      | As above                                                                    |
 
 Agent sessions also need code changes before they can work here. The MCP host
 allowlist, the agent credential MCP origin and the Git proxy origins are fixed to

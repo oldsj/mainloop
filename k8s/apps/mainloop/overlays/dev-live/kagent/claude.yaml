@@ -11,7 +11,7 @@ spec:
     workerPoolRef:
       name: kagent-default
     snapshotPolicy:
-      location: s3://ate-snapshots/kagent/
+      location: s3://ate-snapshots/kagent-dev/
       onQuiesce: Full
   sessionIdleTTL: 0s
   env:

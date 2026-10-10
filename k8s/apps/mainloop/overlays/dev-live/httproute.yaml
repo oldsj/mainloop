@@ -12,7 +12,7 @@ spec:
     - mainloop-dev.olds.network
   rules:
     - matches:
-        - path: {type: PathPrefix, value: /}
+        - path: { type: PathPrefix, value: / }
       backendRefs:
         - name: mainloop-frontend
           port: 3000
