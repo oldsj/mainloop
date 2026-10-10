@@ -14,7 +14,9 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Protocol
+from urllib.parse import urlsplit
 
+from mainloop.config import settings
 from mainloop.push_gate.authorization import ZERO_OID, authorize
 from mainloop.push_gate.protocol import (
     DEFAULT_LIMITS,
@@ -119,7 +121,9 @@ class GitApplication:
         self.upstream = upstream
         self.spool_root = spool_root
         self.limits = limits
-        self.hosts = hosts or (f"mainloop-{purpose}.mainloop.svc.cluster.local",)
+        self.hosts = hosts or (
+            urlsplit(getattr(settings, f"{purpose.replace('-', '_')}_origin")).netloc,
+        )
         self.slot = validation_slot or asyncio.Semaphore(1)
         self.response_secrets = response_secrets
         if (

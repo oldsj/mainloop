@@ -6,15 +6,23 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from mainloop.config import settings
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime import orphan_sessions
-from mainloop.runtime.kagent_client import KagentClient, RuntimeOperation, RuntimeState
+from mainloop.runtime.kagent_client import (
+    AgentRef,
+    KagentClient,
+    RuntimeOperation,
+    RuntimeState,
+)
 from tests.runtime.kagent_fake import FakeKagent
 
 BOUND = "00000000-0000-4000-8000-0000000000b1"
 ORPHAN_A = "00000000-0000-4000-8000-0000000000a1"
 ORPHAN_B = "00000000-0000-4000-8000-0000000000a2"
 ORPHAN_C = "00000000-0000-4000-8000-0000000000a3"
+FOREIGN = "00000000-0000-4000-8000-0000000000f1"
+UNKNOWN_AGENT = "00000000-0000-4000-8000-0000000000f2"
 READY = (RuntimeState.READY, RuntimeOperation.NONE)
 
 
@@ -29,6 +37,11 @@ class SweepTests(unittest.IsolatedAsyncioTestCase):
                 ORPHAN_C: (RuntimeState.DELETED, RuntimeOperation.NONE),
             }
         )
+        ours = AgentRef(
+            settings.kagent_namespace, settings.kagent_workspace_claude_agent
+        ).encode()
+        for sid in self.fake.sessions:
+            self.fake.session_agents[sid] = ours
         http = httpx.AsyncClient(
             transport=self.fake.transport(), base_url="http://kagent.test"
         )
@@ -110,6 +123,34 @@ class SweepTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(await orphan_sessions.sweep(True, self.out), 1)
         self.assertEqual(self.fake.session_calls("DeleteSession"), [])
+
+    async def test_sessions_on_other_instances_agents_are_ignored(self):
+        # Production and mainloop-dev share one kagent principal; neither sweeps the other.
+        self.fake.sessions[FOREIGN] = READY
+        self.fake.session_agents[FOREIGN] = AgentRef(
+            settings.kagent_namespace, "claude-workspace-dev"
+        ).encode()
+        self.fake.sessions[UNKNOWN_AGENT] = READY
+        orphans, _ = await orphan_sessions.find_orphans()
+        self.assertEqual({s.id for s in orphans}, {ORPHAN_A, ORPHAN_B})
+        status = await orphan_sessions.sweep(True, self.out)
+        self.assertEqual(status, 0)
+        self.assertNotIn(FOREIGN, "\n".join(self.lines))
+        self.assertNotIn(UNKNOWN_AGENT, "\n".join(self.lines))
+        self.assertEqual(self.fake.sessions[FOREIGN][0], RuntimeState.READY)
+        self.assertEqual(self.fake.sessions[UNKNOWN_AGENT][0], RuntimeState.READY)
+
+    def test_instance_agents_are_the_configured_ones(self):
+        agents = orphan_sessions.instance_agents()
+        self.assertIn(("kagent", settings.kagent_main_agent), agents)
+        self.assertIn(("kagent", settings.kagent_codex_agent), agents)
+        with patch.object(
+            settings, "kagent_workspace_claude_agent", "claude-workspace-dev"
+        ):
+            self.assertIn(
+                ("kagent", "claude-workspace-dev"), orphan_sessions.instance_agents()
+            )
+        self.assertNotIn(("kagent", "claude-workspace-dev"), agents)
 
     async def test_a_failed_delete_is_reported_and_the_exit_status_is_nonzero(self):
         with patch.object(

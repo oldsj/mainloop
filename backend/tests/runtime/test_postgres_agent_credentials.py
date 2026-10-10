@@ -150,7 +150,7 @@ class CredentialPostgresTests(PostgresTestCase):
         client.create_session.side_effect = create
         client.delete_session.side_effect = delete
         ref = SessionCredential(
-            credentials.MCP_ORIGIN,
+            "http://mainloop-mcp.mainloop.svc.cluster.local",
             "Authorization",
             f"mainloop-mcp-{sid}",
             "authorization",

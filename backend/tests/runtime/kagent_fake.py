@@ -317,7 +317,10 @@ class FakeKagent:
         chosen = ids[start : start + size]
         body = b"".join(
             session_message(
-                sid, *self.sessions[sid], workspace=self.workspaces.get(sid, b"")
+                sid,
+                *self.sessions[sid],
+                workspace=self.workspaces.get(sid, b""),
+                agent=self.session_agents.get(sid, b""),
             )
             for sid in chosen
         )
