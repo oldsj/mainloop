@@ -4,6 +4,7 @@
   import { api, type HealthView, type HealthEvents, type Project } from '$lib/api';
   import HITLCard from '$lib/components/HITLCard.svelte';
   import NativeIdentityStrip from '$lib/components/NativeIdentityStrip.svelte';
+  import { choiceScope } from '$lib/healthFilters';
 
   let view = $state<HealthView | null>(null);
   let choices = $state<HealthView['rows']>([]);
@@ -21,6 +22,8 @@
   let pendingSession = $state<string | null>(null);
   let openRows = $state<Record<string, boolean>>({});
   let refreshVersion = 0;
+  let choicesKey = '';
+  let choicesVersion = 0;
   let viewportWidth = $state<number>();
   let filtersOpen = $state(false);
   const wide = $derived((viewportWidth ?? 0) >= 640);
@@ -45,25 +48,41 @@
     error = null;
     observations = {};
     try {
-      const result = await api.orchestrationHealth(
-        {
-          project_id: projectId,
-          task_id: taskId,
-          session_id: sessionId,
-          attempt_id: attemptId,
-          provider,
-          hours
-        },
-        controller.signal
-      );
+      const filters = {
+        project_id: projectId,
+        task_id: taskId,
+        session_id: sessionId,
+        attempt_id: attemptId,
+        provider,
+        hours
+      };
+      const scope = choiceScope(filters);
+      if (scope.narrowed && scope.key !== choicesKey) void loadChoices(scope);
+      const result = await api.orchestrationHealth(filters, controller.signal);
       if (controller.signal.aborted) return;
       view = result;
-      if (!choices.length) choices = result.rows;
+      if (!scope.narrowed) {
+        choicesVersion++;
+        choices = result.rows;
+        choicesKey = scope.key;
+      }
     } catch (e) {
       if (!controller.signal.aborted)
         error = e instanceof Error ? e.message : 'Health could not be loaded.';
     } finally {
       if (!controller.signal.aborted) busy = false;
+    }
+  }
+
+  async function loadChoices(scope: ReturnType<typeof choiceScope>) {
+    const version = ++choicesVersion;
+    try {
+      const result = await api.orchestrationHealth(scope.filters);
+      if (version !== choicesVersion) return;
+      choices = result.rows;
+      choicesKey = scope.key;
+    } catch {
+      /* The selected filters remain usable without the wider option list. */
     }
   }
 

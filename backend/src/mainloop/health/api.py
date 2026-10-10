@@ -164,7 +164,18 @@ async def read_health(
         gaps = [
             dict(row)
             for row in await conn.fetch(
-                "SELECT * FROM orchestration_health_collection WHERE owner_id=$1", owner
+                # Only gaps for receipts in the selected window describe its coverage.
+                """SELECT g.* FROM orchestration_health_collection g
+               WHERE g.owner_id=$1 AND g.gateway=$2 AND (EXISTS (
+                 SELECT 1 FROM native_deliveries d WHERE d.session_id=g.session_id
+                   AND d.task_id=g.a2a_task_id AND d.created_at>$3)
+               OR EXISTS (
+                 SELECT 1 FROM orchestration_health_turns t WHERE t.owner_id=g.owner_id
+                   AND t.gateway=g.gateway AND t.session_id=g.session_id
+                   AND t.a2a_task_id=g.a2a_task_id AND t.occurred_at>$3))""",
+                owner,
+                settings.kagent_gateway_url,
+                since,
             )
         ]
         receipts = [

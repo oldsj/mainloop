@@ -1748,7 +1748,7 @@ async def _consume(
                     # kagent has the standing context now; never prefix it again.
                     await ledger.update_binding(session_id, standing_hash=standing_hash)
             if event.artifact_update:
-                await health_collector.collect(
+                health_collector.schedule(
                     session_id,
                     message_id,
                     event.artifact_update.task_id,
@@ -1756,7 +1756,7 @@ async def _consume(
                     [event.artifact_update.artifact],
                 )
             elif event.task:
-                await health_collector.collect(
+                health_collector.schedule(
                     session_id,
                     message_id,
                     proj.task_id,
@@ -1895,9 +1895,9 @@ async def _resolve(
         task_id=task.id,
         evidence_ref=f"a2a:task/{task.id}",
     )
-    from mainloop.health.collector import collect
+    from mainloop.health.collector import schedule
 
-    await collect(session_id, message_id, task.id, task.context_id, task.artifacts)
+    schedule(session_id, message_id, task.id, task.context_id, task.artifacts)
     if proj.terminal:
         return await _finalize(session_id, message_id, proj)
     return None
@@ -2111,9 +2111,9 @@ async def _observe(session_id: str, binding: dict, delivery: dict) -> str | None
         task_id=task.id,
         evidence_ref=f"a2a:task/{task.id}",
     )
-    from mainloop.health.collector import collect
+    from mainloop.health.collector import schedule
 
-    await collect(session_id, message_id, task.id, task.context_id, task.artifacts)
+    schedule(session_id, message_id, task.id, task.context_id, task.artifacts)
     if proj.terminal:
         return await _finalize(session_id, message_id, proj)
     if not proj.parked and message_id not in _streaming:

@@ -62,6 +62,9 @@ process starts a new epoch; multiple epochs under the same A2A receipt mark a pr
 EOF closes observed coverage; truncation or the post-result execution ceiling leaves it partial.
 Tool grouping uses opaque tool-operation/call keys, action, safe path and category. Generic MCP
 errors stay `mcp_error`; error text does not establish permission denial or an HTTP status.
+Health delivery is best-effort: the driver queues observations without blocking, a sink error
+or stall never fails, delays or blocks cancellation of the turn, and dropped observations leave
+a sequence gap that Mainloop reports as partial coverage.
 
 Result usage is a qualified single-result **turn total** (`basis=turn_total`), never added to
 assistant-response counters. Input means Claude's reported `input_tokens`, not an inferred
@@ -73,9 +76,12 @@ Cache, child attribution and context occupancy remain unknown.
 
 Mainloop validates the strict shared [event model](../../models/src/models/orchestration_health.py)
 and binds attribution through sessions, attempts and delivery receipts. Stream artifacts and
-`GetTask` snapshots share the same transactional importer. The existing reconciliation sweep
-and the owner read API recover completed receipts too; neither path sends a prompt or changes
-delivery success. Receipt recovery is bounded to 100 recent receipts and five seconds per pass;
+`GetTask` snapshots share the same transactional importer. Delivery handling only queues an
+import; one background worker imports from a bounded queue with time-limited database and lock
+waits, so health work never delays terminal delivery. A full queue or failed import is left to
+recovery. The existing reconciliation sweep and the owner read API recover completed receipts
+too; neither path sends a prompt or changes delivery success. Receipt recovery is bounded to
+100 recent receipts and five seconds per pass, covering every lookup, import and gap write;
 limits are visible, with a session filter available for narrower recovery. Import allows 2,048
 health events per receipt and 8 KiB per payload; overflow and integrity failures mark gaps.
 
@@ -97,6 +103,9 @@ reported input/output, coverage, existing blocked/failed report IDs and approval
 owner sessions without product tasks appear as **Unassigned**. Product child tasks remain
 separate rows, so their totals are not added to the parent's reported root total. Unknown metrics
 show **Unavailable**; partial sources and supported-versus-observed turn coverage stay explicit.
+Collection gaps count only for receipts or turns inside the selected window. Task, session and
+attempt choices list the whole project, provider and window scope, so a scoped entry link does
+not restrict later choices.
 
 Fixture acceptance is implemented in
 [Mainloop's PostgreSQL tests](../../backend/tests/runtime/test_orchestration_health.py).

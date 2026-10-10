@@ -1,5 +1,6 @@
 """Sanitized Claude artifacts, real PostgreSQL, fake gateway; no provider run."""
 
+import asyncio
 import copy
 import json
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,7 @@ from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db, health
 from mainloop.health import collector
-from mainloop.health.api import totals
+from mainloop.health.api import read_health, totals
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import ArtifactUpdate, StreamEvent, Task
 from pydantic import ValidationError
@@ -103,6 +104,7 @@ class OrchestrationHealthTests(PostgresTestCase):
         await ns._consume(
             self.sid, self.messages[0], await ns.get_binding(self.sid), dropped_stream()
         )
+        await collector.drain()
         self.assertEqual(
             (await self.summaries())[0]["summary"]["friction_coverage"], "partial"
         )
@@ -386,3 +388,129 @@ class OrchestrationHealthTests(PostgresTestCase):
         bad.artifacts[1].parts[0].data["usage"]["inclusion"] = "exclusive"
         await self.ingest(bad, self.messages[1])
         self.assertIsNone(totals(await self.summaries())["input_tokens"])
+
+    async def test_held_health_lock_does_not_delay_terminal_delivery(self):
+        import asyncpg
+        from mainloop.runtime.kagent_client import StatusUpdate, TaskStatus
+
+        task, message = self.tasks[0], self.messages[0]
+        await self.pool.execute(
+            "UPDATE native_deliveries SET state='delivered' WHERE message_id=$1",
+            message,
+        )
+
+        async def stream():
+            for artifact in task.artifacts:
+                yield StreamEvent(
+                    artifact_update=ArtifactUpdate(
+                        task_id=task.id, context_id=task.context_id, artifact=artifact
+                    )
+                )
+            yield StreamEvent(
+                status_update=StatusUpdate(
+                    task_id=task.id,
+                    context_id=task.context_id,
+                    status=TaskStatus(state="completed"),
+                )
+            )
+
+        # Only health import needs this lock; delivery must not wait for it.
+        blocker = await asyncpg.connect(self.url)
+        try:
+            await blocker.execute(
+                "SELECT pg_advisory_lock(hashtextextended('orchestration-health-retention',0))"
+            )
+            await asyncio.wait_for(
+                ns._consume(
+                    self.sid, message, await ns.get_binding(self.sid), stream()
+                ),
+                timeout=2,
+            )
+            self.assertEqual(await self.state_of(message), "completed")
+            self.assertEqual(await self.summaries(), [])
+        finally:
+            await blocker.close()
+        await collector.drain()
+        # The held import timed out into a recoverable gap, not lost delivery.
+        await self.ingest()
+        self.assertEqual(len(await self.summaries()), 1)
+
+    async def test_blocked_import_does_not_stall_stream_and_backlog_is_bounded(self):
+        release = asyncio.Event()
+        calls = []
+
+        async def blocked_import(*args, **kwargs):
+            calls.append(args[2])
+            await release.wait()
+
+        task = self.tasks[0]
+
+        async def stream():
+            for artifact in task.artifacts * 20:
+                yield StreamEvent(
+                    artifact_update=ArtifactUpdate(
+                        task_id=task.id, context_id=task.context_id, artifact=artifact
+                    )
+                )
+
+        with patch.object(health, "ingest", new=blocked_import):
+            await asyncio.wait_for(
+                ns._consume(
+                    self.sid, self.messages[0], await ns.get_binding(self.sid), stream()
+                ),
+                timeout=2,
+            )
+            release.set()
+            await asyncio.wait_for(collector.drain(), timeout=5)
+        # Excess work was dropped for recovery rather than queued without bound.
+        self.assertLessEqual(len(calls), collector.MAX_PENDING + 1)
+
+    async def test_recovery_deadline_covers_collection(self):
+        release = asyncio.Event()
+
+        async def blocked_collect(*args, **kwargs):
+            await release.wait()
+            return True
+
+        client = AsyncMock()
+        client.get_task.return_value = self.tasks[0]
+        with patch.object(ns, "get_client", return_value=client), patch.object(
+            ns, "binding_agent_ref", new=AsyncMock(return_value="fixture")
+        ), patch.object(collector, "collect", new=blocked_collect), patch.object(
+            collector, "RECOVERY_SECONDS", 0.2
+        ):
+            try:
+                limited = await asyncio.wait_for(
+                    collector.recover(self.user), timeout=2
+                )
+            finally:
+                release.set()
+        self.assertTrue(limited, "an unfinished recovery reports a partial view")
+
+    async def test_old_receipt_gaps_stay_out_of_the_selected_window(self):
+        await self.ingest()
+        await self.pool.execute(
+            "UPDATE native_deliveries SET created_at=now()-interval '90 days' WHERE message_id=$1",
+            self.messages[1],
+        )
+        with patch.object(collector, "recover", new=AsyncMock(return_value=False)):
+            before = await read_health(hours=24, provider=None, owner=self.user)
+        row = next(row for row in before["rows"] if row["task_id"] == self.tid)
+        self.assertEqual(row["totals"]["coverage"], "complete")
+        await self.pool.execute(
+            """INSERT INTO orchestration_health_collection(owner_id,gateway,session_id,a2a_task_id,reasons,updated_at)
+            VALUES($1,$2,$3,$4,ARRAY['source_unavailable'],now())""",
+            self.user,
+            settings.kagent_gateway_url,
+            self.sid,
+            self.tasks[1].id,
+        )
+        with patch.object(collector, "recover", new=AsyncMock(return_value=False)):
+            view = await read_health(hours=24, provider=None, owner=self.user)
+            wide = await read_health(hours=2400, provider=None, owner=self.user)
+        row = next(row for row in view["rows"] if row["task_id"] == self.tid)
+        self.assertEqual(row["gaps"], [])
+        self.assertEqual(row["totals"]["coverage"], "complete")
+        # The same gap still counts when its receipt is in the selected window.
+        row = next(row for row in wide["rows"] if row["task_id"] == self.tid)
+        self.assertEqual(row["gaps"], ["source_unavailable"])
