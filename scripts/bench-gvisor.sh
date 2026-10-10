@@ -267,7 +267,7 @@ metadata = {"date": datetime.datetime.now(datetime.UTC).isoformat(), "host": pla
             "scratch": str(scratch), "files": FILES, "runsc_flags": flags,
             "profiles": {name: PROFILES[name] for name in profiles},
             "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
-            "security_profile": Path("/proc/self/attr/current").read_text().strip(),
+            "security_profile": Path("/proc/self/attr/current").read_text().strip() if Path("/proc/self/attr/current").exists() else None,
             "disk_free_bytes": shutil.disk_usage(base).free}
 
 def version(command):
