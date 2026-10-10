@@ -1328,6 +1328,17 @@ class KagentClient:
     async def resume_session(self, session_id: str) -> KagentSession:
         return await self._identified_session_call("ResumeSession", session_id)
 
+    async def activate_session(self, session_id: str) -> KagentSession:
+        """Wake the current actor of a Ready Session that kagent quiesced while idle.
+
+        kagent's ResumeSession runs this as a fenced lifecycle operation on the same runtime
+        generation and actor UID, and never replaces compute. It refuses a changed actor, a
+        revoked generation, an active turn and pending idle work. The reply is not an
+        attestation: read a fresh GetSession for the running association. Calling it again
+        joins kagent's pending operation rather than starting another.
+        """
+        return await self.resume_session(session_id)
+
     async def delete_session(self, session_id: str) -> KagentSession:
         return await self._identified_session_call("DeleteSession", session_id)
 
@@ -1336,8 +1347,8 @@ class KagentClient:
     ) -> KagentSession:
         """Return the Session once it can take a turn: resume it if suspended, wait if busy.
 
-        A Session that is Ready is trusted as-is. Waking a Ready-but-quiesced actor is kagent's
-        job when the turn arrives.
+        A settled Ready Session is returned as-is; a pending operation is waited on. Waking a
+        Ready-but-quiesced actor, or joining a retained activation, is `activate_session`'s job.
         """
         deadline = asyncio.get_running_loop().time() + timeout
         contract = (

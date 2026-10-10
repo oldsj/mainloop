@@ -1138,6 +1138,10 @@ async def _replace_kagent_session(binding: dict) -> None:
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
 
 
+class PreSendRefused(ValueError):
+    """Readiness refused the send before any turn bytes; a known non-delivery."""
+
+
 class ChildStartPending(Exception):
     """The initial brief is unsent; reconcile the same Session before disposal."""
 
@@ -1532,47 +1536,60 @@ async def _guarded_send(binding, agent, **kwargs):
             async with lifecycle.guard(binding["session_id"], "submit", conn=conn):
                 from mainloop.push_gate.credentials import ready_for_binding
 
-                current_binding = await get_binding(binding["session_id"], conn=conn)
-                if current_binding is None or (
-                    current_binding["kagent_session_id"] != binding["kagent_session_id"]
-                    or _request_id(current_binding) != _request_id(binding)
-                    or await binding_agent_ref(current_binding, conn=conn) != agent
-                    or kwargs.get("context_id", current_binding["kagent_session_id"])
-                    != current_binding["kagent_session_id"]
-                ):
-                    raise lifecycle.LifecycleDenied("binding_changed")
-                issuance = await conn.fetchval(
-                    "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
-                    binding["session_id"],
-                    _request_id(current_binding),
-                )
-                if issuance is None and (
-                    await conn.fetchval(
-                        "SELECT EXISTS(SELECT 1 FROM git_enrollments WHERE binding_id=$1)",
-                        binding["session_id"],
+                try:
+                    current_binding = await get_binding(
+                        binding["session_id"], conn=conn
                     )
-                    or (
-                        settings.git_transport_enabled
-                        and current_binding["mcp_grant_kind"] == "workspace"
-                        and await ledger.get_workspace(binding["session_id"], conn=conn)
-                    )
-                ):
-                    raise ValueError("git_plan_missing")
-                if issuance:
-                    current = await get_client().get_session(
+                    if current_binding is None or (
                         current_binding["kagent_session_id"]
-                    )
-                    await ready_for_binding(conn, binding["session_id"], current)
-                    if (
-                        settings.git_transport_enabled
-                        and settings.push_gate_enabled
-                        and await conn.fetchval(
-                            "SELECT prepare_state FROM git_enrollments WHERE issuance_id=$1",
-                            issuance,
+                        != binding["kagent_session_id"]
+                        or _request_id(current_binding) != _request_id(binding)
+                        or await binding_agent_ref(current_binding, conn=conn) != agent
+                        or kwargs.get(
+                            "context_id", current_binding["kagent_session_id"]
                         )
-                        != "confirmed"
+                        != current_binding["kagent_session_id"]
                     ):
-                        raise ValueError("git_prepare_pending")
+                        raise lifecycle.LifecycleDenied("binding_changed")
+                    issuance = await conn.fetchval(
+                        "SELECT issuance_id FROM git_enrollments WHERE binding_id=$1 AND create_request_id=$2",
+                        binding["session_id"],
+                        _request_id(current_binding),
+                    )
+                    if issuance is None and (
+                        await conn.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM git_enrollments WHERE binding_id=$1)",
+                            binding["session_id"],
+                        )
+                        or (
+                            settings.git_transport_enabled
+                            and current_binding["mcp_grant_kind"] == "workspace"
+                            and await ledger.get_workspace(
+                                binding["session_id"], conn=conn
+                            )
+                        )
+                    ):
+                        raise ValueError("git_plan_missing")
+                    if issuance:
+                        current = await get_client().get_session(
+                            current_binding["kagent_session_id"]
+                        )
+                        await ready_for_binding(conn, binding["session_id"], current)
+                        if (
+                            settings.git_transport_enabled
+                            and settings.push_gate_enabled
+                            and await conn.fetchval(
+                                "SELECT prepare_state FROM git_enrollments WHERE issuance_id=$1",
+                                issuance,
+                            )
+                            != "confirmed"
+                        ):
+                            raise ValueError("git_prepare_pending")
+                except (lifecycle.LifecycleDenied, ServiceConfigurationError):
+                    raise
+                except Exception as exc:
+                    # No turn bytes have left: anext below starts the native send.
+                    raise PreSendRefused(str(exc)) from exc
                 try:
                     first = await anext(events)
                 except StopAsyncIteration:
@@ -1747,6 +1764,14 @@ async def _consume(
             "failed",
             from_states=_RESOLVABLE,
             detail=f"not sent: task attempt is not live ({exc.code})",
+        )
+        return None
+    except PreSendRefused as exc:
+        await ledger.transition(
+            message_id,
+            "failed",
+            from_states=_RESOLVABLE,
+            detail=f"not sent: {exc}",
         )
         return None
     except TaskNotFound:
