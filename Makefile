@@ -124,8 +124,8 @@ check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 test-frontend: install-frontend ## Frontend unit tests (60s cap)
 	@$(CAP) 60 'make test-frontend' -- pnpm --dir frontend test:unit
 
-frontend-build: install-frontend ## Build the frontend application (120s cap)
-	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
+frontend-build: install-frontend ## Build the frontend application (240s cap)
+	@$(CAP) 240 'make frontend-build' -- pnpm --dir frontend build
 
 test-timeouts: ## Timeout helper regression tests (90s cap)
 	@$(CAP) 90 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs

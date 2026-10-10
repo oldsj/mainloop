@@ -361,8 +361,11 @@ def run_tests(names, plan=None, inventory_only=False):
 
 def report(timings):
     print(f"Backend wall time: {timings['wall_seconds']:.3f}s", file=sys.stderr)
+    planned = len(timings["inventory"]) or "?"
+    # A cancelled or timed-out run still reaches this summary; say so first.
+    print(f"Backend status: {timings['status']}", file=sys.stderr)
     print(
-        f"Ran {timings['tests_run']} tests across {timings['workers']} workers; "
+        f"Ran {timings['tests_run']} of {planned} tests across {timings['workers']} workers; "
         f"failures={timings['failures']}, errors={timings['errors']}, "
         f"skipped={timings['skipped']}",
         file=sys.stderr,
@@ -413,8 +416,13 @@ def suite_seconds():
 
 
 def default_workers():
-    """One per CPU up to six, fewer when available memory cannot hold them."""
-    workers = min(os.cpu_count() or 1, 6)
+    """One per CPU up to six, fewer when available memory cannot hold them.
+
+    MAINLOOP_TEST_RESERVE_CPUS leaves CPUs for concurrent work (make check's
+    frontend lane).
+    """
+    reserve = int(os.environ.get("MAINLOOP_TEST_RESERVE_CPUS") or 0)
+    workers = max(1, min((os.cpu_count() or 1) - reserve, 6))
     try:
         with open("/proc/meminfo") as meminfo:
             for line in meminfo:
@@ -734,7 +742,15 @@ def module_weights(timings):
     weights = {}
     sources = [(MODULE_WEIGHTS, lambda data: data)]
     if timings:
-        sources.append((Path(timings), lambda data: data.get("modules", {})))
+        # A partial run's times would mix with committed weights of another scale.
+        sources.append(
+            (
+                Path(timings),
+                lambda data: (
+                    data.get("modules", {}) if data.get("status") == "complete" else {}
+                ),
+            )
+        )
     for path, select in sources:
         if not path.exists():
             continue
@@ -821,7 +837,13 @@ def supervise(args):
                             file=sys.stderr,
                         )
                         print(worker.log.read_text(), file=sys.stderr)
-                        crashes.append(describe_exit(worker))
+                        # Ordinary test failures are in the merged summary; only
+                        # name workers that died or never reported a result.
+                        if (
+                            worker.process.returncode is not None
+                            and worker.process.returncode < 0
+                        ) or worker.result is None:
+                            crashes.append(describe_exit(worker))
                 supervisor.save()
                 report(supervisor.timings)
                 # Repeat each failed worker last, after its full log.

@@ -272,7 +272,13 @@ class BackendRunnerTests(unittest.TestCase):
             with patch.object(runner, "MODULE_WEIGHTS", committed):
                 self.assertEqual(runner.module_weights(None), {"a": 10, "b": 9})
                 self.assertEqual(runner.module_weights(str(timings)), {"a": 10, "b": 9})
-                timings.write_text(json.dumps({"modules": {"b": 1, "c": 2}}))
+                timings.write_text(
+                    json.dumps({"status": "timed_out", "modules": {"b": 1}})
+                )
+                self.assertEqual(runner.module_weights(str(timings)), {"a": 10, "b": 9})
+                timings.write_text(
+                    json.dumps({"status": "complete", "modules": {"b": 1, "c": 2}})
+                )
                 self.assertEqual(
                     runner.module_weights(str(timings)), {"a": 10, "b": 1, "c": 2}
                 )
@@ -309,6 +315,15 @@ class BackendRunnerTests(unittest.TestCase):
                 self.assertEqual(runner.default_workers(), 1)
             with patch("builtins.open", side_effect=OSError):
                 self.assertEqual(runner.default_workers(), 6)
+            with patch.dict(os.environ, {"MAINLOOP_TEST_RESERVE_CPUS": "1"}):
+                with patch("builtins.open", meminfo(8192)):
+                    self.assertEqual(runner.default_workers(), 6)
+                with patch.object(runner.os, "cpu_count", return_value=6):
+                    with patch("builtins.open", meminfo(8192)):
+                        self.assertEqual(runner.default_workers(), 5)
+                with patch.object(runner.os, "cpu_count", return_value=1):
+                    with patch("builtins.open", meminfo(8192)):
+                        self.assertEqual(runner.default_workers(), 1)
 
     def test_suite_cap_ends_just_before_an_enclosing_deadline(self):
         with patch.dict(os.environ):

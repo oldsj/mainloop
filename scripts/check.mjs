@@ -29,7 +29,8 @@ export function checkPlan(make = 'make', nonBackend = false) {
         step('install-frontend', 120, make, ['--no-print-directory', '-j1', 'install-frontend']),
         step('check-frontend', 120, 'pnpm', ['check'], ['install-frontend']),
         step('test-frontend', 60, 'pnpm', ['--dir', 'frontend', 'test:unit'], ['install-frontend']),
-        step('frontend-build', 120, 'pnpm', ['--dir', 'frontend', 'build'], ['install-frontend']),
+        // Uses the lane's slack: it shares the CPUs with the backend suite.
+        step('frontend-build', 240, 'pnpm', ['--dir', 'frontend', 'build'], ['install-frontend']),
         // One complete lint pass, without writes racing either test lane.
         step('lint', 120, 'trunk', ['check', '--upstream', 'origin/main', '--no-fix'])
       ]
@@ -197,8 +198,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       ...checkPlan(make, args[0] === '--non-backend'),
       directory,
       // Keep backend module timings with the logs; a later run balances on them.
+      // Leave the frontend lane one CPU unless workers are set explicitly.
       env: {
         MAINLOOP_TEST_TIMINGS: resolve(directory, 'backend-timings.json'),
+        MAINLOOP_TEST_RESERVE_CPUS: '1',
         ...process.env
       }
     });

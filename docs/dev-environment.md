@@ -39,7 +39,9 @@ skip checks on a warm tree.
 Standalone frontend targets have a separate 120-second install phase before
 the check, test or build cap. The aggregate cap is 515 seconds, including
 cold installs. It fits inside `dev-postgres`'s command budget of 540 seconds
-minus setup, with room for the command's eight-second cleanup.
+minus setup, leaving room for `make check`'s own cleanup (at most seven seconds
+there). With the current image, `dev-postgres run make test-backend` still has a
+550-second cap above that budget; an image that exports deadlines clamps it.
 
 ## Prewarmed dependency caches
 
@@ -116,12 +118,12 @@ into bounded jobs.
 | `make install`                                               | 240 s total               | Frontend, backend and shared models                                             |
 | `make install-frontend`, `install-backend`, `install-models` | 120 s each                | Includes lifecycle hooks, Python selection and package builds                   |
 | pnpm/uv network reads                                        | 30 s, one retry           | pnpm retry delay 1–5 s; uv exports `UV_HTTP_TIMEOUT=30`, `UV_HTTP_RETRIES=1`    |
-| `make test-backend`                                          | 550 s                     | Includes backend install; runner: 60 s/test or fixture, 540 s/suite             |
+| `make test-backend`                                          | 550 s                     | Includes install; runner: 60 s/test or fixture, 180 s imports, 540 s/suite      |
 | `make test-timeouts`                                         | 90 s                      | Command supervisors, parallel lanes, log bounds and cancellation cleanup        |
 | `make test-timeout-integration`                              | 180 s                     | Opt-in real Make/backend and development-image PG16 cleanup regressions         |
 | `make check-frontend`, root/frontend `pnpm check`            | 120 s                     | Sync and Svelte diagnostics                                                     |
 | `make test-frontend`, frontend `pnpm test:unit`              | 60 s                      | Node unit tests                                                                 |
-| `make frontend-build`, root/frontend `pnpm build`            | 120 s                     | Vite application build                                                          |
+| `make frontend-build`, root/frontend `pnpm build`            | 240 s                     | Vite application build; shares CPUs with the backend lane in `make check`       |
 | `make lint`, root/frontend `pnpm lint`                       | 120 s                     | Changed-file Trunk or package linters                                           |
 | `make fmt`, root `pnpm format`                               | 180 s total               | Both format and follow-up check                                                 |
 | `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                          |
@@ -202,9 +204,14 @@ Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
 It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
 `MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes,
 further limited to one per 512 MiB of available memory; set it to `1` for serial execution.
+`make check` sets `MAINLOOP_TEST_RESERVE_CPUS=1`, so the backend uses one CPU fewer
+(at least one worker) and the frontend lane keeps a CPU.
 Workers are separate interpreters started with fork and exec, not forked copies
-of the supervisor. If a worker fails or dies from a signal, the runner's last
-lines name the signal, the phase it was in, and its modules.
+of the supervisor. The run summary starts with the run's status (`complete`,
+`failed`, `timed_out` or `cancelled`) and reports tests run out of those planned.
+After it, each worker that died from a signal or never reported a result gets a
+line naming the signal or exit code, the last deadline phase it entered, and its
+modules; ordinary test failures appear in the merged failure summary instead.
 Every test, including setup, teardown, cleanups and async runner shutdown, has a
 fatal 60-second deadline; module/class fixtures also have 60-second
 deadlines, including suites returned by `load_tests` hooks. Discovery and imports
