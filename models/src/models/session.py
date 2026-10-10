@@ -19,6 +19,8 @@ class SessionStatus(str, Enum):
 
     PENDING = "pending"
     ACTIVE = "active"
+    IDLE = "idle"
+    SUPERSEDED = "superseded"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -64,6 +66,9 @@ class Session(BaseModel):
     # Execution state
     status: SessionStatus = Field(
         default=SessionStatus.PENDING, description="Session status"
+    )
+    needs_owner: bool = Field(
+        default=False, description="Current owner attention projection"
     )
     worker_pod_name: str | None = Field(
         None, description="K8s pod running this session"
@@ -137,7 +142,7 @@ class Session(BaseModel):
     @property
     def needs_attention(self) -> bool:
         """Returns True if this session is waiting on user input."""
-        return self.status == SessionStatus.WAITING_ON_USER
+        return self.needs_owner
 
 
 class SessionCreate(BaseModel):

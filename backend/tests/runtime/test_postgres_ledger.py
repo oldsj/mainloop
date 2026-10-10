@@ -1274,7 +1274,7 @@ class DelegationTests(PostgresTestCase):
         self.assertEqual((first["role"], first["kind"]), ("main", "claude"))
         session = await db.get_session(first["session_id"])
         self.assertEqual(session.conversation_id, existing.id)
-        self.assertEqual(session.status, SessionStatus.WAITING_ON_USER)
+        self.assertEqual(session.status, SessionStatus.IDLE)
         self.assertEqual(
             await self.pool.fetchval(
                 "SELECT count(*) FROM native_bindings b JOIN sessions s ON s.id=b.session_id"
@@ -2564,7 +2564,7 @@ class StopTurnTests(PostgresTestCase):
         self.assertEqual(await self.state_of(first), "cancelled")
         self.assertEqual(
             await self.pool.fetchval("SELECT status FROM sessions WHERE id=$1", sid),
-            "waiting_on_user",
+            "idle",
         )
         self.assertFalse((await ns.identity(sid)).turn_in_flight)
         self.assertIn(("assistant", ns.stopped_message("ok")), await self.rows(cid))
@@ -2891,9 +2891,7 @@ class ReconcileTests(PostgresTestCase):
         )
         self.assertEqual(row["state"], "uncertain")
         self.assertIn("not replaying", row["detail"])
-        self.assertEqual(
-            (await db.get_session(sid)).status, SessionStatus.WAITING_ON_USER
-        )
+        self.assertEqual((await db.get_session(sid)).status, SessionStatus.IDLE)
 
 
 class ApiQueryTests(PostgresTestCase):

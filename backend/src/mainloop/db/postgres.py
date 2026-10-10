@@ -1200,21 +1200,10 @@ class Database:
                 )
 
     async def count_unread_queue_items(self, user_id: str) -> int:
-        """Count unread queue items for a user."""
-        if not self._pool:
-            return 0
-        from mainloop.tasks.inbox import PENDING_CARD_VISIBLE
+        """Badge count: unresolved owner attention, including already-read requests."""
+        from mainloop.attention import read
 
-        async with self.connection() as conn:
-            row = await conn.fetchrow(
-                f"""
-                SELECT COUNT(*) as count FROM queue_items q
-                WHERE user_id = $1 AND read_at IS NULL AND status = 'pending'
-                  AND {PENDING_CARD_VISIBLE}
-                """,
-                user_id,
-            )
-        return row["count"] if row else 0
+        return (await read(self, user_id, include_activity=False)).attention.count
 
     async def mark_queue_item_read(self, item_id: str) -> None:
         """Mark a queue item as read."""

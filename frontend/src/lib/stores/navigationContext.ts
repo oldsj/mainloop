@@ -9,6 +9,7 @@ import { writable, derived, get } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { page } from '$app/stores';
 import { sessions } from './sessions';
+import { isFinished } from '$lib/sessionStatus';
 
 export interface NavigationState {
   /** Current context: 'main' for main thread, or session ID */
@@ -163,5 +164,11 @@ export function getUrgencyScore(status: string): number {
  * Derived store: sessions sorted by urgency (for picker)
  */
 export const sessionsByUrgency = derived(sessions, ($sessions) =>
-  [...$sessions.sessions].sort((a, b) => getUrgencyScore(b.status) - getUrgencyScore(a.status))
+  $sessions.sessions
+    .filter((s) => !isFinished(s))
+    .sort(
+      (a, b) =>
+        Number(b.needs_owner === true) - Number(a.needs_owner === true) ||
+        getUrgencyScore(b.status) - getUrgencyScore(a.status)
+    )
 );

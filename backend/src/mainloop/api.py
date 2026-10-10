@@ -63,6 +63,7 @@ from models import (
     SessionNotification,
     SessionStatus,
 )
+from models.attention import ActivityItem, AttentionSnapshot
 from models.hitl import HITLResponse, Identifier
 from models.merge_policy import MergePolicyUpdate, MergePolicyView
 
@@ -436,6 +437,20 @@ async def get_conversation(conversation_id: str, user_id: str = Depends(current_
 # ============= Queue/Inbox Endpoints =============
 
 
+@app.get("/attention", response_model=AttentionSnapshot)
+async def owner_attention(user_id: str = Depends(current_user)):
+    from mainloop.attention import read
+
+    return (await read(db, user_id, include_activity=False)).attention
+
+
+@app.get("/activity", response_model=list[ActivityItem])
+async def owner_activity(user_id: str = Depends(current_user)):
+    from mainloop.attention import read
+
+    return (await read(db, user_id)).activity
+
+
 class UnreadCountResponse(BaseModel):
     """Unread count response."""
 
@@ -542,7 +557,9 @@ async def mark_all_queue_items_read(
     await db.mark_all_queue_items_read(user_id)
 
     # Notify SSE clients
-    await notify_inbox_updated(user_id, unread_count=0)
+    await notify_inbox_updated(
+        user_id, unread_count=await db.count_unread_queue_items(user_id)
+    )
 
     return {"status": "ok"}
 
@@ -1047,7 +1064,15 @@ async def get_project_detail(
     )
 
     # Fetch sessions for this project
-    sessions = await db.list_sessions(user_id=user_id, project_id=project_id, limit=50)
+    from mainloop.attention import read
+
+    sessions = [
+        s
+        for s in (
+            await read(db, user_id, project_id=project_id, include_activity=False)
+        ).listed_sessions
+        if s.project_id == project_id
+    ]
 
     return ProjectDetail(
         project=project,
@@ -1089,21 +1114,10 @@ async def list_sessions(
     status: str | None = None,
 ):
     """List user's sessions."""
-    session_status = SessionStatus(status) if status else None
-    sessions = await db.list_sessions(user_id=user_id, status=session_status)
-    if sessions:
-        async with db.connection() as conn:
-            rows = await conn.fetch(
-                """SELECT b.session_id, b.parent_session_id, t.name AS topic FROM native_bindings b
-                   LEFT JOIN topics t ON t.id=b.topic_id WHERE b.session_id = ANY($1)""",
-                [s.id for s in sessions],
-            )
-        info = {r["session_id"]: r for r in rows}
-        for s in sessions:
-            if s.id in info:
-                s.parent_session_id = info[s.id]["parent_session_id"]
-                s.topic = info[s.id]["topic"]
-    return sessions
+    from mainloop.attention import read
+
+    projected = (await read(db, user_id, include_activity=False)).listed_sessions
+    return [s for s in projected if status is None or s.status.value == status]
 
 
 # Color palette for session assignment - uses CSS variables for theme compatibility
@@ -1187,8 +1201,12 @@ async def create_session(
 @app.get("/sessions/{session_id}", response_model=Session)
 async def get_session(session_id: str, user_id: str = Depends(current_user)):
     """Get a session by ID."""
-    session = await db.get_session(session_id)
-    if not session or session.user_id != user_id:
+    from mainloop.attention import read
+
+    session = (
+        await read(db, user_id, session_id=session_id, include_activity=False)
+    ).sessions.get(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
@@ -1218,6 +1236,11 @@ async def get_session_conversation(
         session = await db.get_session(session_id)
 
     messages = await db.get_messages(session.conversation_id)
+    from mainloop.attention import read
+
+    session = (
+        await read(db, user_id, session_id=session_id, include_activity=False)
+    ).sessions.get(session_id, session)
     return SessionConversationResponse(session=session, messages=messages)
 
 

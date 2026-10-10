@@ -62,7 +62,7 @@ async def ensure_main_session(user_id: str) -> dict:
                     description="Native Claude main thread",
                     prompt="",
                     conversation_id=conversation.id,
-                    status=SessionStatus.WAITING_ON_USER,
+                    status=SessionStatus.IDLE,
                 ),
                 conn=conn,
             )

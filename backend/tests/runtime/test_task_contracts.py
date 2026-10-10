@@ -10,7 +10,7 @@ from mainloop.tasks.principal import TaskPrincipal
 from pydantic import ValidationError
 
 from models.agent_tools import TaskDelegate, TaskReportInput
-from models.task import Task, TaskAttempt, TaskCheckout, TaskCreate
+from models.task import Task, TaskAttempt, TaskCheckout, TaskCreate, TaskReport
 
 
 def create(**changes):
@@ -26,6 +26,20 @@ def create(**changes):
 
 
 class TaskContracts(unittest.TestCase):
+    def test_owner_action_is_an_explicit_blocked_report(self):
+        fields = dict(
+            task_id="t", attempt_id="a", request_id="r", summary="Need a choice"
+        )
+        for outcome in ("progress", "completed", "failed"):
+            with self.assertRaises(ValidationError):
+                TaskReport(**fields, outcome=outcome, owner_action="Choose an approach")
+        self.assertEqual(
+            TaskReport(
+                **fields, outcome="blocked", owner_action="Choose an approach"
+            ).owner_action,
+            "Choose an approach",
+        )
+
     def test_default_checkout_ref_selects_remote_default_branch(self):
         self.assertEqual(TaskCheckout(branch="feature/task").ref, "")
         self.assertEqual(TaskCheckout(branch="feature/task", ref="").ref, "")
