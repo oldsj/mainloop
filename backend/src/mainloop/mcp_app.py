@@ -167,6 +167,8 @@ class AgentAuth:
             ctx = await self.service.authenticate(token)
         except HTTPException:
             return await Response(status_code=401)(scope, receive, send)
+        except (PolicyError, LifecycleDenied):
+            return await Response(status_code=403)(scope, receive, send)
         marker = _context.set(ctx)
         try:
             await self.app(scope, receive, send)

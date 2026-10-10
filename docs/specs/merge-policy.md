@@ -317,12 +317,16 @@ read the durable outcome with the ordinary, non-protected
 This tool reads PostgreSQL only and cannot trigger evaluation, approval or dispatch.
 Its reads have a two-second budget. Contention returns a retriable `status_timeout`
 error; retrying the status read leaves durable merge continuation and consent intact.
-An exact completed task binding with a held current writer claim and retained positive
-receipt can authenticate solely for this immutable result read. The shared lifecycle
+An exact completed task binding with a held current writer claim can authenticate for
+this immutable result read, `whoami`, its own `task_get`, and a final `report` with outcome
+`completed`. An auto-route proposal requires no owner receipt; an approval-route proposal
+still requires its exact retained positive receipt. The shared lifecycle
 resolver relaxes only the leaf's completed product state; full current scope and parent
 ancestry checks still apply, including parent token, runtime, archive, attempt and claim.
-Execution authority stays closed. Replaced, revoked, archived or deleted bindings and
-children with revoked ancestors cannot use this access. No native
+The final report is idempotent by request ID, queues the usual durable notifications,
+and preserves completed product state and publication evidence. Progress, failed and
+blocked reports are refused. Execution authority stays closed. Replaced, revoked,
+archived or deleted bindings and children with revoked ancestors cannot use this access. No native
 turn or unsolicited message is sent by merge settlement.
 
 This completed-binding exception lasts only until runtime cleanup begins draining and revokes

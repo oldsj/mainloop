@@ -15,7 +15,8 @@ from mainloop.runtime.kagent_client import (
     _field_bytes,
     decode_fields,
 )
-from mainloop.runtime.policy import Actor, surface_tools, tools_for
+from mainloop.runtime.policy import Actor, PolicyError, surface_tools, tools_for
+from mainloop.tasks.lifecycle import LifecycleDenied
 from tests.runtime.test_context_model import KINDS, FakeStore
 
 
@@ -178,6 +179,23 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HTTPTests(unittest.TestCase):
+    def test_authentication_policy_and_lifecycle_denials_are_http_errors(self):
+        for error in (
+            PolicyError("consent", "synthetic private refusal"),
+            LifecycleDenied("attempt_scope"),
+        ):
+            for path in ("/mcp", "/mcp/merge-approval"):
+                with self.subTest(error=type(error).__name__, path=path):
+                    service = Mock(authenticate=AsyncMock(side_effect=error))
+                    with TestClient(create_app(service)) as client:
+                        response = client.post(
+                            path,
+                            headers={"Authorization": "Bearer fixture"},
+                            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                        )
+                    self.assertEqual(response.status_code, 403)
+                    self.assertEqual(response.content, b"")
+
     def test_stateless_protocol_auth_discovery_and_origin(self):
         store = FakeStore()
         with TestClient(create_app(AgentService(store, KINDS))) as client:

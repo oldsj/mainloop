@@ -373,7 +373,34 @@ class PgStore:
                         fresh["user_id"], binding_id=fresh["session_id"], role="main"
                     )
                 else:
-                    principal = await lifecycle.authenticate_binding(conn, dict(fresh))
+                    try:
+                        principal = await lifecycle.authenticate_binding(
+                            conn, dict(fresh)
+                        )
+                    except lifecycle.LifecycleDenied:
+                        from mainloop.services.merge import (
+                            completed_status_binding,
+                            enabled,
+                        )
+
+                        if (
+                            action not in ("identity", "task_get", "report")
+                            or not enabled()
+                            or fresh["mcp_grant_kind"] != "workspace"
+                            or await completed_status_binding(dict(fresh), conn=conn)
+                            is None
+                        ):
+                            raise
+                        principal = await lifecycle.authenticate_binding(
+                            conn, dict(fresh), allow_completed_read=True
+                        )
+                        if (
+                            action == "task_get"
+                            and arguments["task_id"] != principal.task_id
+                        ):
+                            raise task_store.TaskError(
+                                403, "completed_task_scope"
+                            ) from None
                 if action == "identity":
                     attempt = await lifecycle.load_attempt(conn, principal.attempt_id)
                     task = await task_store.get_task(conn, principal.task_id, principal)
