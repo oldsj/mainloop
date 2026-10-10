@@ -198,6 +198,8 @@ def endpoint(repository: str, method: str, path: str) -> dict[str, str]:
             return {"metadata": "read"}
         if suffix.startswith("/branches/"):
             return {"contents": "read"}
+        if suffix.startswith("/compare/"):
+            return {"contents": "read"}
         if suffix.startswith("/commits"):
             if suffix.endswith(("/check-runs", "/check-suites")):
                 return {"checks": "read"}

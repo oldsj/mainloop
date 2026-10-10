@@ -164,6 +164,8 @@ class GitHub:
         # PR files and [main, head].
         self.merge_files = None
         self.merge_parents = None
+        # Field overrides for the base...test-merge comparison response.
+        self.compare = {}
 
     def run(self, id, **changes):
         return {
@@ -215,23 +217,37 @@ class GitHub:
             f"/commits/{SHA}/statuses": self.statuses,
         }
         merge_sha = self.pr.get("merge_commit_sha")
+        parents = self.merge_parents or [self.main, self.pr["head"]["sha"]]
         if merge_sha and path == f"/commits/{merge_sha}":
-            files = self.files if self.merge_files is None else self.merge_files
-            page = int(req.url.params.get("page", 1))
-            parents = self.merge_parents or [self.main, self.pr["head"]["sha"]]
-            additions = sum(item["additions"] for item in files)
-            deletions = sum(item["deletions"] for item in files)
             return httpx.Response(
                 200,
                 json={
                     "sha": merge_sha,
                     "parents": [{"sha": parent} for parent in parents],
-                    "stats": {
-                        "additions": additions,
-                        "deletions": deletions,
-                        "total": additions + deletions,
-                    },
-                    "files": copy.deepcopy(files[(page - 1) * 100 : page * 100]),
+                },
+            )
+        if (
+            merge_sha
+            and path.startswith("/compare/")
+            and path.endswith(f"...{merge_sha}")
+        ):
+            base = path.removeprefix("/compare/").split("...")[0]
+            files = self.files if self.merge_files is None else self.merge_files
+            first_parent = base == parents[0]
+            # Compare lists files only on page 1, up to 300 in total.
+            page = int(req.url.params.get("page", 1))
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ahead" if first_parent else "diverged",
+                    "ahead_by": 2,
+                    "behind_by": 0 if first_parent else 1,
+                    "total_commits": 2,
+                    "base_commit": {"sha": base},
+                    "merge_base_commit": {"sha": base if first_parent else "0" * 40},
+                    "commits": [],
+                    "files": copy.deepcopy(files[:300]) if page == 1 else [],
+                    **self.compare,
                 },
             )
         for endpoint, key, items in [
@@ -697,7 +713,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.fake.pr["merge_commit_sha"] = TEST_MERGE
         self.fake.merge_files = [
             dict(filename=f"f{i}", status="modified", additions=0, deletions=0)
-            for i in range(3000)
+            for i in range(300)
         ]
         with self.assertRaisesRegex(PolicyError, "too many") as raised:
             await self.evidence()
@@ -708,6 +724,28 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.fake.merge_files += [dict(self.fake.merge_files[0])]
         with self.assertRaises(GitHubError):
             await self.evidence()
+        self.fake.merge_files = None
+        for changes in (
+            {"status": "diverged"},
+            {"status": "identical", "ahead_by": 0},
+            {"behind_by": 1},
+            {"merge_base_commit": {"sha": BASE}},
+            {"base_commit": {"sha": BASE}},
+        ):
+            with self.subTest(compare=changes):
+                self.fake.compare = changes
+                with self.assertRaises(GitHubError):
+                    await self.evidence()
+
+    async def test_merge_result_uses_documented_compare_against_pinned_base(self):
+        self.fake.main = MOVED
+        await self.evidence()
+        compares = [r for r in self.fake.calls if "/compare/" in r.url.path]
+        self.assertEqual(
+            [r.url.path for r in compares],
+            [f"/repos/owner/repo/compare/{MOVED}...{TEST_MERGE}"],
+        )
+        self.assertEqual(compares[0].url.params.get("page"), "1")
 
     async def test_default_head_refusal_is_precise(self):
         self.fake.pr["head"]["ref"] = "main"

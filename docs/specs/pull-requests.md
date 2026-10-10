@@ -290,16 +290,20 @@ base is accepted when GitHub requires no up-to-date branch.
 The PR's three-dot file list does not cover every path a squash changes: when the
 base branch renames a file the head edits, the squash changes the new path, which
 the PR list never names. Evidence therefore also reads GitHub's test merge commit
-(`merge_commit_sha`) through the commits API. Its parents must be exactly the pinned
-`base_sha` and the expected head, and its files against the first parent are read
-in full (including deletions and both sides of renames) with matching addition and
-deletion totals. Protected-path matching uses the union of the PR inventory and this
+(`merge_commit_sha`) through the commits API, whose parents must be exactly the pinned
+`base_sha` and the expected head. It then reads the documented comparison
+`compare/{base_sha}...{merge_commit_sha}`: because `base_sha` is the merge's first
+parent, it is also the merge base, so the three-dot diff is exactly what the merge
+changes on the default branch. The comparison must report status `ahead`, `behind_by`
+0, at least one commit ahead and `base_sha` as both base and merge base. Its files
+(including deletions and both sides of renames) must have no duplicates. Compare lists
+changed files only on its first page and at most 300 for a comparison, so a list of
+300 or more is refused (`merge_result`) as possibly incomplete. Protected-path matching uses the union of the PR inventory and this
 merge-result inventory; the proposal pins both (`files_digest`, `merge_files_digest`)
 but not the test merge SHA, which GitHub recreates. A missing test merge, unknown
 mergeability or mismatched parents never falls back to the PR list: preparation is
 refused with a retry message (`merge_result_pending`), and execution returns
-`evaluating` unless the exact-head CI already failed. A merge result of 3,000 or more
-files cannot be listed completely and is refused (`merge_result`). Merge
+`evaluating` unless the exact-head CI already failed. Merge
 execution refuses a proposal whose pinned `base_sha` no longer matches the default
 branch ("default branch moved since preparation; prepare again"); a new preparation
 pins the new head. A PR GitHub reports as conflicting (`mergeable: false` or

@@ -68,9 +68,9 @@ OUT_OF_DATE = (
     "prepare again"
 )
 MERGE_RESULT_PENDING = "merge_result_pending"
-# GitHub's commit API returns at most 3,000 files; a full page set at the cap
-# cannot prove the inventory is complete.
-MERGE_FILES_LIMIT = 3000
+# GitHub's compare API lists at most 300 changed files for a comparison; a list
+# at the cap cannot prove the inventory is complete.
+MERGE_FILES_LIMIT = 300
 
 logger = logging.getLogger(__name__)
 
@@ -148,16 +148,18 @@ class Parent(BaseModel):
     sha: str = Field(pattern=r"^[0-9a-f]{40}$")
 
 
-class CommitStats(BaseModel):
-    additions: int = Field(ge=0)
-    deletions: int = Field(ge=0)
-
-
 class MergeCommit(BaseModel):
     sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     parents: list[Parent]
-    stats: CommitStats
-    files: list = Field(max_length=100)
+
+
+class Comparison(BaseModel):
+    status: str = Field(max_length=32)
+    ahead_by: int = Field(ge=0)
+    behind_by: int = Field(ge=0)
+    base_commit: Parent
+    merge_base_commit: Parent
+    files: list = Field(max_length=MERGE_FILES_LIMIT)
 
 
 class App(BaseModel):
@@ -543,48 +545,52 @@ class GitHubMergeClient(GitHubCreationClient):
     async def merge_result(self, name, pr, base_sha, head_sha):
         """Files GitHub's test merge changes relative to the pinned base.
 
-        Its parents must be exactly the pinned base and expected head. A test
-        merge that is missing, not yet recomputed for this base, or larger than
-        the API can list completely never falls back to the PR inventory.
+        Its parents must be exactly the pinned base and expected head. The
+        documented compare of ``base_sha...merge`` then equals the first-parent
+        diff, because the merge base is ``base_sha`` itself. A test merge that is
+        missing, not yet recomputed for this base, or larger than compare can
+        list completely never falls back to the PR inventory.
         """
         self.evidence_step = "merge_result"
         if pr.mergeable is not True or pr.merge_commit_sha is None:
             raise MergeResultPending(
                 "GitHub has not computed this PR's merge result yet; try again shortly"
             )
-        files, stats = [], None
-        for page in range(1, MERGE_FILES_LIMIT // 100 + 1):
-            commit = MergeCommit.model_validate(
-                await self._request(
-                    "GET",
-                    f"/repos/{name}/commits/{pr.merge_commit_sha}",
-                    params={"per_page": 100, "page": page},
-                )
+        commit = MergeCommit.model_validate(
+            await self._request("GET", f"/repos/{name}/commits/{pr.merge_commit_sha}")
+        )
+        if commit.sha != pr.merge_commit_sha:
+            raise GitHubError
+        if [parent.sha for parent in commit.parents] != [base_sha, head_sha]:
+            raise MergeResultPending(
+                "GitHub's merge result does not match the current default branch "
+                "and PR head yet; try again shortly"
             )
-            if commit.sha != pr.merge_commit_sha or (
-                stats is not None and commit.stats != stats
-            ):
-                raise GitHubError
-            if [parent.sha for parent in commit.parents] != [base_sha, head_sha]:
-                raise MergeResultPending(
-                    "GitHub's merge result does not match the current default branch "
-                    "and PR head yet; try again shortly"
-                )
-            stats = commit.stats
-            files.extend(changed_file(item) for item in commit.files)
-            if len(commit.files) < 100:
-                break
-        else:
+        # Compare lists changed files only on the first page, up to 300 for
+        # the whole comparison; per_page=1 keeps the commit list small.
+        comparison = Comparison.model_validate(
+            await self._request(
+                "GET",
+                f"/repos/{name}/compare/{base_sha}...{pr.merge_commit_sha}",
+                params={"per_page": 1, "page": 1},
+            )
+        )
+        if (
+            comparison.status != "ahead"
+            or comparison.behind_by != 0
+            or comparison.ahead_by < 1
+            or comparison.base_commit.sha != base_sha
+            or comparison.merge_base_commit.sha != base_sha
+        ):
+            raise GitHubError
+        if len(comparison.files) >= MERGE_FILES_LIMIT:
             raise PolicyError(
                 "merge_result",
                 f"merge result changes {MERGE_FILES_LIMIT} or more files, too many "
-                "to evaluate completely; update the branch from the default branch",
+                "to evaluate completely; split the PR or update the branch",
             )
-        if (
-            len({item.filename for item in files}) != len(files)
-            or sum(item.additions for item in files) != stats.additions
-            or sum(item.deletions for item in files) != stats.deletions
-        ):
+        files = [changed_file(item) for item in comparison.files]
+        if len({item.filename for item in files}) != len(files):
             raise GitHubError
         return files
 
