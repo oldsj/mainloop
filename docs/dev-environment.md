@@ -232,7 +232,7 @@ The runner verifies every worker's inventory against serial discovery. A focused
 Successful HTTP request logs are suppressed; warning/error logs and all test
 assertions remain enabled.
 Asyncio debug checks and slow-callback warnings remain enabled. Standalone workers
-capture at most three callback/future/task creation frames without consulting
+capture at most five callback/future/task creation frames without consulting
 linecache; source lines load only when a diagnostic renders them. Asyncio removes
 some internal frames, so the retained creation stack can be shorter. Ordinary
 stack extraction, exception and timeout tracebacks remain complete. Set

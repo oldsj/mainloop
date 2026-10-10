@@ -96,15 +96,17 @@ async def row_reset_plan(conn):
     )  # nosec B608 - validated fixture database and catalog-quoted identifiers
 
 
-async def wait_for_lock(conn, *, pid=None, query=None, timeout=3):
+async def wait_for_lock(conn, *, pid=None, query=None, timeout=3, locktype=None):
     """Observe actual PostgreSQL blocking without a client round trip per poll.
 
     Lock tests need server evidence, beyond a coroutine's readiness signal.
     Keep the bounded observation on the server and refresh its stats snapshot.
+    Pass locktype, such as 'advisory', to match only that kind of waited-on lock.
     """
     await conn.execute(
         """CREATE OR REPLACE FUNCTION pg_temp.fixture_wait_for_lock(
-             target_pid integer, query_pattern text, seconds double precision
+             target_pid integer, query_pattern text, seconds double precision,
+             wanted_locktype text
            ) RETURNS boolean LANGUAGE plpgsql AS $$
            DECLARE expires timestamptz := clock_timestamp() + seconds * interval '1 second';
            BEGIN
@@ -113,7 +115,8 @@ async def wait_for_lock(conn, *, pid=None, query=None, timeout=3):
                IF EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
                          WHERE a.datname=current_database() AND NOT l.granted
                            AND (target_pid IS NULL OR l.pid=target_pid)
-                           AND (query_pattern IS NULL OR a.query LIKE query_pattern)) THEN
+                           AND (query_pattern IS NULL OR a.query LIKE query_pattern)
+                           AND (wanted_locktype IS NULL OR l.locktype=wanted_locktype)) THEN
                  RETURN true;
                END IF;
                IF clock_timestamp() >= expires THEN RETURN false; END IF;
@@ -122,5 +125,9 @@ async def wait_for_lock(conn, *, pid=None, query=None, timeout=3):
            END $$"""
     )
     return await conn.fetchval(
-        "SELECT pg_temp.fixture_wait_for_lock($1,$2,$3)", pid, query, timeout
+        "SELECT pg_temp.fixture_wait_for_lock($1,$2,$3,$4)",
+        pid,
+        query,
+        timeout,
+        locktype,
     )
