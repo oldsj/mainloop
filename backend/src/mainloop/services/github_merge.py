@@ -60,6 +60,13 @@ KNOWN_RULE_TYPES = frozenset(
 )
 UNKNOWN_BRANCH_RULE = "unknown_branch_rule"
 UNKNOWN_PR_PARAMETER = "unknown_pull_request_parameter"
+# GitHub reports mergeable_state "behind" only when a branch rule requires the
+# head to contain the latest base; Mainloop performs no update-branch write.
+OUT_OF_DATE = (
+    "branch is out of date with the default branch and GitHub requires it to be "
+    "up to date; merge or rebase the default branch into the head, push, then "
+    "prepare again"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -382,10 +389,19 @@ class GitHubMergeClient(GitHubCreationClient):
             )
         if pr.head.ref == repo.default_branch:
             raise PolicyError("branch", "default branch is not allowed")
+        if pr.mergeable is False or pr.mergeable_state == "dirty":
+            raise PolicyError(
+                "merge_conflict",
+                f"PR has merge conflicts with {repo.default_branch}; merge or rebase "
+                f"{repo.default_branch} into {pr.head.ref}, push, then prepare again",
+            )
+        # GitHub updates pr.base.sha only when the PR is synchronized, so it is
+        # not the base a squash would land on. Evaluate and pin the current
+        # default-branch head instead; execution refuses if it moves.
         self.evidence_step = "branch"
         base = await self.branch(name, repo.default_branch)
-        if base.name != pr.base.ref or base.commit.sha != pr.base.sha:
-            raise PolicyError("base", "default branch moved; prepare again")
+        if base.name != repo.default_branch:
+            raise GitHubError
         self.evidence_step = "files"
         raw = await self.pages(f"/repos/{name}/pulls/{number}/files", limit=3000)
         files = [
@@ -418,7 +434,10 @@ class GitHubMergeClient(GitHubCreationClient):
         ):
             raise GitHubError
         matches = protected_matches(paths, complete=True)
-        ci = await self.checks(name, sha, repo.default_branch)
+        behind = pr.mergeable_state == "behind"
+        ci = await self.checks(name, sha, repo.default_branch, behind=behind)
+        if behind:
+            raise PolicyError("rules", OUT_OF_DATE)
         self.evidence_step = "description"
         description_source = (pr.body or "").encode("utf-8")
         description = description_source[: 16 * 1024].decode("utf-8", errors="ignore")
@@ -433,6 +452,11 @@ class GitHubMergeClient(GitHubCreationClient):
             raise PolicyError(
                 "stale", "PR or repository changed while reading evidence"
             )
+        self.evidence_step = "branch_refresh"
+        if await self.branch(name, repo.default_branch) != base:
+            raise PolicyError(
+                "stale", "default branch moved while reading evidence; prepare again"
+            )
         self.evidence_step = "summary"
         return {
             "repository_id": repo.id,
@@ -441,7 +465,7 @@ class GitHubMergeClient(GitHubCreationClient):
             "head_sha": sha,
             "head": pr.head.ref,
             "base": pr.base.ref,
-            "base_sha": pr.base.sha,
+            "base_sha": base.commit.sha,
             "title": pr.title,
             "description": description,
             "description_truncated": len(description_source) > 16 * 1024,
@@ -466,8 +490,11 @@ class GitHubMergeClient(GitHubCreationClient):
             and pr.mergeable_state in ("clean", "unstable", "has_hooks"),
         }
 
-    async def checks(self, name, sha, base, *, enforce_policy=True):
+    async def checks(self, name, sha, base, *, enforce_policy=True, behind=False):
         """CI evidence for ``sha``. Merge policy refusals raise PolicyError.
+
+        ``behind`` (GitHub's mergeable_state) turns a strict-checks refusal into
+        the actionable out-of-date reason.
 
         With ``enforce_policy=False`` (observation only, never merge evidence),
         refusals are listed in ``policy_rejections`` instead. A refused source
@@ -573,7 +600,11 @@ class GitHubMergeClient(GitHubCreationClient):
             classic = protection.required_status_checks
             if classic is not None:
                 if classic.strict:
-                    refuse("unsupported classic strict status checks")
+                    refuse(
+                        OUT_OF_DATE
+                        if behind
+                        else "unsupported classic strict status checks"
+                    )
                 required.extend((c.context, c.app_id) for c in classic.checks)
                 required.extend((c, None) for c in classic.contexts)
         self.evidence_step = "rules"
@@ -600,7 +631,11 @@ class GitHubMergeClient(GitHubCreationClient):
                     )
                     continue
                 if parameters.strict_required_status_checks_policy:
-                    refuse("unsupported strict_required_status_checks_policy")
+                    refuse(
+                        OUT_OF_DATE
+                        if behind
+                        else "unsupported strict_required_status_checks_policy"
+                    )
                 required.extend(
                     (c.context, c.integration_id)
                     for c in parameters.required_status_checks
@@ -729,7 +764,13 @@ class GitHubMergeClient(GitHubCreationClient):
         self.evidence_step = "pull_request"
         pr = await self.pull(name, number)
         try:
-            ci = await self.checks(name, pr.head.sha, pr.base.ref, enforce_policy=False)
+            ci = await self.checks(
+                name,
+                pr.head.sha,
+                pr.base.ref,
+                enforce_policy=False,
+                behind=pr.mergeable_state == "behind",
+            )
         except (GitHubError, PolicyError, ValueError) as error:
             logger.warning(
                 "PR CI observation unavailable for %s#%s at %s: %s%s",

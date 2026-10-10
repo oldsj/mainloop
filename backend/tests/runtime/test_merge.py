@@ -38,6 +38,8 @@ from models.hitl import (
 SHA = "a" * 40
 BASE = "b" * 40
 MERGED = "c" * 40
+# Current default-branch head once main has moved past the PR's recorded base.
+MOVED = "f" * 40
 CAPTURED_AT = datetime(2026, 10, 9, 2, tzinfo=timezone.utc)
 
 
@@ -153,6 +155,8 @@ class GitHub:
         self.lose = False
         self.fail_before_put = False
         self.hook = None
+        # GitHub keeps pr.base.sha at the base of the last synchronization.
+        self.main = BASE
 
     def run(self, id, **changes):
         return {
@@ -197,7 +201,7 @@ class GitHub:
             "/pulls/17/files": self.files,
             "/branches/main": {
                 "name": "main",
-                "commit": {"sha": self.pr["base"]["sha"]},
+                "commit": {"sha": self.main},
             },
             "/branches/main/protection": self.protection,
             "/rules/branches/main": self.rules,
@@ -535,6 +539,76 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
                 self.fake.runs = []
                 self.assertFalse((await self.evidence())["ci"]["green"])
         self.assertFalse(self.fake.puts)
+
+    async def observe(self):
+        async with github_merge.GitHubMergeClient(
+            "owner/repo", transport=app_transport(self.fake.handle)
+        ) as client:
+            return await client.observation("owner/repo", 17)
+
+    async def test_base_behind_main_is_evaluated_against_current_main(self):
+        self.fake.main = MOVED
+        self.fake.rules = live_mainloop_rules()
+        self.fake.runs = [self.fake.run(10, name="Lint", app={"id": 15368})]
+        facts = await self.evidence()
+        self.assertEqual(facts["base_sha"], MOVED)
+        self.assertTrue(facts["ci"]["green"])
+        self.assertTrue(facts["mergeable"])
+
+    async def test_protected_paths_unchanged_when_base_behind_main(self):
+        self.fake.main = MOVED
+        self.fake.files[0]["filename"] = "k8s/deploy.yaml"
+        self.assertEqual(
+            (await self.evidence())["protected_matches"], ["k8s/deploy.yaml"]
+        )
+
+    async def test_main_moving_during_evidence_is_stale(self):
+        async def hook(req):
+            if req.url.path.endswith("/pulls/17/files"):
+                self.fake.main = MOVED
+
+        self.fake.hook = hook
+        with self.assertRaisesRegex(PolicyError, "default branch moved"):
+            await self.evidence()
+
+    async def test_conflicting_pr_is_refused_with_next_step(self):
+        for mergeable, state in ((False, "dirty"), (None, "dirty"), (False, "unknown")):
+            with self.subTest(mergeable=mergeable, state=state):
+                self.fake.pr.update(mergeable=mergeable, mergeable_state=state)
+                with self.assertRaisesRegex(
+                    PolicyError, "merge conflicts with main; merge or rebase main"
+                ) as raised:
+                    await self.evidence()
+                self.assertEqual(raised.exception.code, "merge_conflict")
+
+    async def test_strict_policy_behind_reports_out_of_date_branch(self):
+        self.fake.main = MOVED
+        self.fake.pr["mergeable_state"] = "behind"
+        strict = live_mainloop_rules()
+        strict[-1]["parameters"]["strict_required_status_checks_policy"] = True
+        classic = {
+            "required_status_checks": {"strict": True, "checks": [], "contexts": []}
+        }
+        for rules, protection in (
+            (strict, {"required_status_checks": None}),
+            ([], classic),
+            ([], {"required_status_checks": None}),
+        ):
+            with self.subTest(rules=bool(rules), protection=protection):
+                self.fake.rules, self.fake.protection = rules, protection
+                with self.assertRaisesRegex(PolicyError, "out of date") as raised:
+                    await self.evidence()
+                self.assertEqual(raised.exception.code, "rules")
+        self.fake.rules = strict
+        self.fake.protection = {"required_status_checks": None}
+        _, ci = await self.observe()
+        self.assertEqual(ci["policy_rejections"], [github_merge.OUT_OF_DATE])
+        # Up to date under strict checks remains unsupported, as before.
+        self.fake.pr["mergeable_state"] = "clean"
+        with self.assertRaisesRegex(
+            PolicyError, "unsupported strict_required_status_checks_policy"
+        ):
+            await self.evidence()
 
     async def test_default_head_refusal_is_precise(self):
         self.fake.pr["head"]["ref"] = "main"
@@ -1733,10 +1807,10 @@ class MergeTests(MergeFixture):
     async def test_stale_base_policy_and_replacement_refuse_approval(self):
         p = await self.prepare()
         observer, projection, _ = await self.pause(p)
-        self.fake.pr["base"]["sha"] = "d" * 40
+        self.fake.main = "d" * 40
         with self.assertRaises(ValueError):
             await self.decide(observer, projection)
-        self.fake.pr["base"]["sha"] = BASE
+        self.fake.main = BASE
         replacement = await self.prepare(request_id="replacement")
         self.assertNotEqual(p["proposal_id"], replacement["proposal_id"])
         with self.assertRaises(ValueError):
@@ -1748,6 +1822,37 @@ class MergeTests(MergeFixture):
             ),
             0,
         )
+
+    async def test_base_behind_main_prepares_and_merges_against_current_main(self):
+        self.fake.main = MOVED
+        p = await self.prepare()
+        self.assertEqual(p["base_sha"], MOVED)
+        self.assertEqual((await self.execute(p))["state"], "merged")
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_main_moving_after_prepare_refuses_then_reprepare_merges(self):
+        p = await self.prepare()
+        self.fake.main = MOVED
+        result = await self.execute(p)
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("default branch moved since preparation", result["text"])
+        self.assertEqual(len(self.fake.puts), 0)
+        newer = await self.prepare(request_id="after-main-moved")
+        self.assertEqual(newer["base_sha"], MOVED)
+        self.assertEqual(
+            (await self.execute(newer, request="invoke-2"))["state"], "merged"
+        )
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_conflict_refuses_prepare_and_blocks_execution(self):
+        p = await self.prepare()
+        self.fake.pr.update(mergeable=False, mergeable_state="dirty")
+        result = await self.execute(p)
+        self.assertEqual(result["state"], "blocked")
+        self.assertIn("merge conflicts with main", result["text"])
+        with self.assertRaisesRegex(PolicyError, "merge conflicts with main"):
+            await self.prepare(request_id="conflicting")
+        self.assertEqual(len(self.fake.puts), 0)
 
     async def test_policy_change_before_claim_refuses_auto(self):
         p = await self.prepare()

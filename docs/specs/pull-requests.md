@@ -281,7 +281,20 @@ return their original proposal and cannot reset a deadline or reopen rejection. 
 ### Evidence and dispatch
 
 Evidence requires an open non-draft same-repository feature PR at the expected SHA,
-current default-branch base and squash support. Complete paths are read between
+targeting the default branch, with squash support. GitHub updates a PR's recorded
+base SHA only when the PR is synchronized, so a PR may trail the default branch.
+Evidence reads the default branch's current head, records it as the proposal's
+`base_sha`, and refuses as stale if it moves before the read finishes. A trailing
+base is accepted when GitHub requires no up-to-date branch: the PR file list covers
+every path the squash can change, so protected-path policy still sees them. Merge
+execution refuses a proposal whose pinned `base_sha` no longer matches the default
+branch ("default branch moved since preparation; prepare again"); a new preparation
+pins the new head. A PR GitHub reports as conflicting (`mergeable: false` or
+`mergeable_state: dirty`) is refused as `merge_conflict`, and one it reports as
+`behind` (a branch rule requiring an up-to-date head) is refused as a branch-rule
+block telling the agent to update the branch, push and prepare again. Mainloop does
+not update branches itself. Blocked execution results include the refusal reason.
+Complete paths are read between
 matching PR/repository observations, including deletion and rename sources. More
 than 3,000 files, malformed paths, pagination/count mismatches or duplicate paths
 fail closed. A complete evidence refresh has a 60-second bound (also shared across an owner decision batch). Protected globs and versions come from the server policy contract.
@@ -361,7 +374,8 @@ not attributed to a person, with no effect when zero approvals are required, and
 nonzero count is already refused. Ruleset checks require an explicit
 `strict_required_status_checks_policy: false`; true is unsupported because Mainloop
 does not prove the head was tested with the latest base. Classic `strict: true`
-is likewise unsupported. Unknown active rule types also fail closed; rule types
+is likewise unsupported. When GitHub reports the PR `behind`, the refusal (and the
+projection's branch-rule reason) says the branch is out of date instead. Unknown active rule types also fail closed; rule types
 outside GitHub's documented set are reported as `unknown_branch_rule`, so upstream
 identifiers are never copied into reasons or logs.
 
@@ -403,9 +417,10 @@ outcome, not proof that Mainloop was the actor. Terminal success and one determi
 informational inbox notification share a transaction. Duplicate callers receive the
 stored result and cannot duplicate publication.
 
-Head pinning does not make base/check observations atomic with GitHub's merge API.
-External base retargeting and CI changes in the final read/PUT gap remain limitations;
-stronger guarantees require GitHub enforcement. These fixtures are not live proof.
+Head pinning does not make base/check observations atomic with GitHub's merge API,
+which accepts no expected-base guard. The default branch moving, external base
+retargeting and CI changes in the final read/PUT gap remain limitations; stronger
+guarantees require GitHub enforcement. These fixtures are not live proof.
 
 ### Enablement remains separate
 
