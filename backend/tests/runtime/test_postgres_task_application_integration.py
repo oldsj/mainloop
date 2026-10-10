@@ -400,14 +400,71 @@ class TaskApplicationIntegrationTests(MergeFixture):
             if tid == ordered[0]:
                 await asyncio.Future()
 
-        ports = service.TaskPorts(projection=AsyncMock(refresh=refresh))
-        with patch.object(
-            service, "PROJECTION_RECONCILE_BUDGET_SECONDS", 0.05, create=True
+        ports = service.TaskPorts(projection=AsyncMock(refresh=refresh, step="fixture"))
+        with (
+            patch.object(service, "PROJECTION_RECONCILE_BUDGET_SECONDS", 0.05),
+            patch.object(service, "PROJECTION_REFRESH_DEADLINE_SECONDS", 0.05),
         ):
-            await service.reconcile_once(db, installed_ports=ports)
+            with self.assertLogs("mainloop.tasks.service", "WARNING") as logs:
+                await service.reconcile_once(db, installed_ports=ports)
             self.assertEqual(seen, ordered[:1])
             await service.reconcile_once(db, installed_ports=ports)
         self.assertEqual(seen[1], ordered[1])
+        self.assertRegex(
+            "\n".join(logs.output),
+            rf"refresh timed out: task={ordered[0]} step=fixture elapsed=",
+        )
+
+    async def slow_github(self, delay):
+        """Real observer over the fake GitHub with a fixed delay on every call."""
+        upstream = app_transport(self.fake.handle)
+        calls = []
+
+        async def delayed(request):
+            calls.append(request.url.path)
+            await asyncio.sleep(delay)
+            return await upstream.handle_async_request(request)
+
+        cls = github_merge.GitHubMergeClient
+        factory = patch.object(
+            github_merge,
+            "GitHubMergeClient",
+            lambda repository: cls(repository, transport=httpx.MockTransport(delayed)),
+        )
+        return factory, calls
+
+    async def test_slow_observation_outlasts_admission_budget_and_persists(self):
+        # Review probe: 300 ms per GitHub call, tokens warmed by prepare(). The
+        # old shared 2 s budget cancelled every pass before persistence.
+        await self.prepare()
+        self.fake.pr["state"] = "closed"
+        before = (await self.view())[1]
+        factory, calls = await self.slow_github(0.30)
+        ports = service.TaskPorts(projection=projection.Projection())
+        with factory:
+            await service.reconcile_projections(db, ports)
+        after = (await self.view())[1]
+        self.assertEqual(len(calls), 7)
+        self.assertEqual(after.pr_state, "closed")
+        self.assertNotEqual(after.observed_at, before.observed_at)
+        self.assertFalse(self.fake.puts)
+
+    async def test_refresh_deadline_logs_task_step_and_elapsed(self):
+        await self.prepare()
+        before = (await self.view())[1]
+        factory, _ = await self.slow_github(0.30)
+        ports = service.TaskPorts(projection=projection.Projection())
+        with (
+            factory,
+            patch.object(service, "PROJECTION_REFRESH_DEADLINE_SECONDS", 0.5),
+            self.assertLogs("mainloop.tasks.service", "WARNING") as logs,
+        ):
+            await service.reconcile_projections(db, ports)
+        self.assertRegex(
+            logs.output[0],
+            rf"refresh timed out: task={self.task.id} step=observation:\w+ elapsed=0\.\d",
+        )
+        self.assertEqual((await self.view())[1], before)
 
     async def test_committed_receipt_repairs_attention_after_request_projection_removal(
         self,
