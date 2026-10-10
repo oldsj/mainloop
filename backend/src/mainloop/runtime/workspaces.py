@@ -1093,8 +1093,8 @@ async def _resume_if_suspended(row) -> tuple[KagentSession, bool]:
         if binding is None:
             raise WorkspaceUnconfirmed("Persisted workspace binding is unavailable.")
         await ns.validate_bound_session(binding, session, conn=conn)
-        # Only a suspended Session is resumed. ResumeSession on a Ready one does not wake a
-        # quiesced actor (kagent); a turn or a preview request wakes it.
+        # Only a suspended Session is resumed here. A Ready one's quiesced actor is woken by a
+        # turn, a preview request, or gated readiness (credentials.ready_for_binding).
         if session.state == RuntimeState.SUSPENDED:
             resumed = await client.resume_session(row["kagent_session_id"])
             await ns.validate_bound_session(binding, resumed, conn=conn)

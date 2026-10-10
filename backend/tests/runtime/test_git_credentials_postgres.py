@@ -36,6 +36,9 @@ from mainloop.runtime.kagent_client import (
     RuntimeOperation,
     RuntimeState,
     SessionError,
+    StreamEvent,
+    Task,
+    TaskStatus,
 )
 from mainloop.services import github_checkout
 from mainloop.services.github_creation import GitHubCreationClient
@@ -112,6 +115,11 @@ class NativeGitClient:
         self.lose_prepare = False
         self.prepare_not_received = False
         self.prepare_error = None
+        # kagent suspends an idle actor but keeps the Session Ready; GetSession then
+        # omits the running association until ResumeSession wakes the same actor.
+        self.quiesced = set()
+        self.activations = []
+        self.activation_outcome = None
 
     async def create_session(
         self,
@@ -178,7 +186,21 @@ class NativeGitClient:
 
     async def get_session(self, sid):
         self.gets.append(sid)
-        session = self.sessions[sid]
+        session = self._projected(self.sessions[sid])
+        if sid in self.quiesced:
+            return replace(session, runtime_association=None)
+        return session
+
+    async def activate_session(self, sid):
+        self.activations.append(sid)
+        if self.activation_outcome is not None:
+            outcome, self.activation_outcome = self.activation_outcome, None
+            return await outcome(sid)
+        self.quiesced.discard(sid)
+        return self.sessions[sid]
+
+    @staticmethod
+    def _projected(session):
         receipt = session.workspace_preparation
         if receipt is None:
             return session
@@ -1921,6 +1943,133 @@ class GitTaskCredentialTests(GitCredentialsCase):
                 await anext(ns._guarded_send(binding, current.agent)), "event"
             )
             self.assertEqual(emitted, ["turn bytes"])
+
+    async def quiesced_follow_up(self):
+        """First brief completes, then kagent suspends the idle actor and keeps it Ready."""
+        _, task, attempt = await self.task()
+        sid = attempt.session_id
+        runtime = (await ns.get_binding(sid))["kagent_session_id"]
+        sends = []
+
+        async def send(agent, **kwargs):
+            sends.append(kwargs["message_id"])
+            yield StreamEvent(
+                task=Task(
+                    id="native-" + kwargs["message_id"],
+                    context_id=runtime,
+                    status=TaskStatus(state="TASK_STATE_COMPLETED"),
+                )
+            )
+
+        patcher = patch.object(self.native, "send_message", send, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        await ns._deliver(sid, attempt.brief_delivery_id, task.brief)
+        self.assertEqual(
+            await ns.ledger.delivery_state(attempt.brief_delivery_id), "completed"
+        )
+        self.assertEqual(sends, [attempt.brief_delivery_id])
+        self.native.quiesced.add(runtime)
+        idle = await self.native.get_session(runtime)
+        self.assertEqual(
+            (idle.state, idle.operation), (RuntimeState.READY, RuntimeOperation.NONE)
+        )
+        self.assertIsNone(idle.runtime_association)
+        self.native.activations.clear()
+        message_id = await ns.submit_message(sid, "Continue")
+        return sid, runtime, message_id, sends
+
+    async def assert_not_sent(self, message_id, sends, detail):
+        row = await self.pool.fetchrow(
+            "SELECT state,task_id,detail FROM native_deliveries WHERE message_id=$1",
+            message_id,
+        )
+        self.assertEqual((row["state"], row["task_id"]), ("failed", None))
+        self.assertIn(detail, row["detail"])
+        self.assertNotIn(message_id, sends)
+
+    async def test_quiesced_follow_up_activates_same_runtime_and_sends_once(self):
+        sid, runtime, message_id, sends = await self.quiesced_follow_up()
+        frozen = (await self.enrolled(sid)).association
+        resumes = len(self.native.resumes)
+        await ns._deliver(sid, message_id, "Continue")
+        self.assertEqual(await ns.ledger.delivery_state(message_id), "completed")
+        self.assertEqual(sends.count(message_id), 1)
+        self.assertEqual(len(sends), 2)
+        self.assertTrue(self.native.activations)
+        self.assertEqual(set(self.native.activations), {runtime})
+        self.assertEqual(len(self.native.resumes), resumes, "no Suspended-state resume")
+        woken = await self.native.get_session(runtime)
+        self.assertEqual(
+            credentials.observation((await self.enrolled(sid)).plan, woken), frozen
+        )
+
+    async def test_quiesced_follow_up_refuses_replacement_or_revocation(self):
+        for case in ("changed actor", "kagent refusal"):
+            with self.subTest(case=case):
+                sid, runtime, message_id, sends = await self.quiesced_follow_up()
+
+                async def outcome(runtime_id, case=case):
+                    if case == "kagent refusal":
+                        # kagent refuses a changed UID or revoked generation (grpc 9).
+                        raise SessionError(
+                            "ResumeSession failed (grpc 9)", grpc_status=9
+                        )
+                    current = self.native.sessions[runtime_id]
+                    self.native.sessions[runtime_id] = replace(
+                        current,
+                        runtime_association=replace(
+                            current.runtime_association, actor_uid="replacement-uid"
+                        ),
+                    )
+                    self.native.quiesced.discard(runtime_id)
+                    return self.native.sessions[runtime_id]
+
+                self.native.activation_outcome = outcome
+                await ns._deliver(sid, message_id, "Continue")
+                await self.assert_not_sent(
+                    message_id,
+                    sends,
+                    # A changed UID makes the confirmed receipt historical first.
+                    "git_prepare_failed" if case == "changed actor" else "grpc 9",
+                )
+                self.assertEqual(self.native.activations, [runtime])
+                self.assertEqual(len(sends), 1)
+
+    async def test_uncertain_activation_reconciles_without_replay_or_second_writer(
+        self,
+    ):
+        sid, runtime, message_id, sends = await self.quiesced_follow_up()
+
+        async def pending(runtime_id):
+            # kagent keeps the claimed RESUME pending; its outcome is unknown.
+            self.native.sessions[runtime_id] = replace(
+                self.native.sessions[runtime_id], operation=RuntimeOperation.RESUME
+            )
+            raise OutcomeUnknown("ResumeSession outcome unknown (grpc 14)")
+
+        self.native.activation_outcome = pending
+        await ns._deliver(sid, message_id, "Continue")
+        await self.assert_not_sent(message_id, sends, "runtime_activation_pending")
+        self.assertEqual(self.native.activations, [runtime], "never replayed")
+        self.assertEqual(len(sends), 1)
+
+        # The original operation finishes; a lost reply alone is reconciled by GetSession.
+        self.native.sessions[runtime] = replace(
+            self.native.sessions[runtime], operation=RuntimeOperation.NONE
+        )
+
+        async def completed(runtime_id):
+            self.native.quiesced.discard(runtime_id)
+            raise OutcomeUnknown("ResumeSession outcome unknown (grpc 14)")
+
+        self.native.activations.clear()
+        self.native.activation_outcome = completed
+        follow_up = await ns.submit_message(sid, "Continue again")
+        await ns._deliver(sid, follow_up, "Continue again")
+        self.assertEqual(await ns.ledger.delivery_state(follow_up), "completed")
+        self.assertEqual(sends.count(follow_up), 1)
+        self.assertEqual(len(sends), 2)
 
     async def test_prepare_marker_and_original_are_immutable_and_migration_reentrant(
         self,

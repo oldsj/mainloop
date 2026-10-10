@@ -794,6 +794,28 @@ async def _ready_preparation_session(client, runtime_id):
     return current
 
 
+async def _activate_runtime(client, runtime_id):
+    """Wake a Ready-but-quiesced runtime before attestation, without trusting the reply.
+
+    An unknown outcome is reconciled through GetSession and never replayed here. If kagent
+    still holds the operation, nothing is sent; otherwise the caller's fresh observation
+    fails closed unless the same frozen runtime is running.
+    """
+    try:
+        await client.activate_session(runtime_id)
+    except (OutcomeUnknown, Unreachable) as exc:
+        try:
+            current = await client.get_session(runtime_id)
+        except (OutcomeUnknown, Unreachable):
+            raise ValueError("runtime_activation_pending") from exc
+        if (
+            current.id != runtime_id
+            or current.state != RuntimeState.READY
+            or current.operation != RuntimeOperation.NONE
+        ):
+            raise ValueError("runtime_activation_pending") from exc
+
+
 async def reobserve(conn, enrollment, *, creating=False, trusted_client=None):
     no_transaction(conn)
     await validate_scope(conn, enrollment, creating=creating)
@@ -1193,6 +1215,9 @@ async def ready_for_binding(conn, binding_id, session, *, push=True):
                 current = await client.ensure_ready(
                     current, timeout=settings.kagent_session_ready_timeout_seconds
                 )
+        # kagent suspends an idle actor but keeps the Session Ready, so a fresh read has no
+        # running association to attest until the same actor is woken.
+        await _activate_runtime(client, session.id)
         # Never use Create/Resume/ensure_ready output as the association observation.
         if settings.git_transport_enabled and settings.push_gate_enabled:
             runtime_id = (

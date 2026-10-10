@@ -72,6 +72,14 @@ then obtains a fresh GetSession. READY, Create, List and Resume replies supply n
 Confirmation requires the exact stored Session/context/Agent/checkout/environment, prepared
 revision, reported composition and current active field-20 generation/atespace/Actor name/UID.
 The confirmed association is immutable. A changed generation or UID refuses old capabilities.
+kagent suspends an idle actor but keeps its Session READY, and a fresh GetSession then has no
+running association. Every readiness check (before admission and again before send bytes) first
+calls `ResumeSession`, which wakes only that Session's current generation and actor UID under
+kagent's lifecycle fencing and is a no-op for a running actor. It refuses a changed actor, a
+revoked generation, an active turn or pending idle work. Its reply is not an observation: the
+fresh GetSession must still match the frozen association. An unknown activation outcome is
+reconciled by GetSession and never replayed in the same attempt; while kagent holds the
+operation, nothing is sent.
 
 Read publication follows confirmation; delegated creating targets receive read only. Push follows
 active/current admission. Native send confirms required publications before external turn bytes.
