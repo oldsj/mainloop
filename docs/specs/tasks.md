@@ -22,7 +22,7 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
-An omitted checkout `depth` is 0, which leaves clone depth to the runtime default; a positive
+An omitted checkout `depth` is 0, which clones full history; a positive
 value requests that shallow depth. Existing tasks keep the depth stored in their snapshot.
 
 An omitted or empty checkout `ref` selects the repository's remote default branch. With both
