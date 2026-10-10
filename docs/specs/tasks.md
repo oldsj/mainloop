@@ -1,5 +1,30 @@
 # Durable tasks
 
+Blocked reports may include `owner_action`, a specific question or decision required from the
+owner. This field is accepted only with outcome `blocked` and sets reason `owner_decision`.
+It also stores a separate durable `owner_decision` with the report ID, attempt ID and action.
+The attention projection includes that decision for the current active, unarchived attempt
+until it is cleared. Native attention may change task status/reason to waiting/approval and
+back without changing the owner decision. When both requests are pending, the inbox shows
+both; answering the native question does not answer the owner decision. A generic
+blocked/reconciliation or failed report does not create or clear an owner decision.
+A progress or completed report from the same current attempt clears the decision;
+task finality or replacement/removal of that attempt also clears it. Archived or retired
+attempts cannot surface it. Task pages retain the reports and the existing actions and links.
+
+Routine `progress` and `completed` reports remain durable and appear in Activity. They do not
+enqueue a main-agent chat turn. Parent-task notifications retain their existing delivery;
+blocked and failed reports still notify the main agent. The main agent reads routine results
+through `task_get`, `task_list`, and standing task context on its next turn.
+
+This routing also applies to a final `completed` report from an agent whose coding task was
+already completed by verified merge: its report and event remain durable, with no main-thread
+delivery and exactly one parent-task delivery when it has a parent. Replaying the same report
+request creates no duplicate report or delivery. Recording it preserves the completed task's
+status, publication projection, result reference and held capacity. The completed binding's
+restricted tool scope and current authority checks still apply; Approval and protected-path
+routes require the exact original owner receipt.
+
 Implemented through S2: task/attempt/operation persistence, owner reads, project provider
 preferences, transactional admission, S1 native provisioning/cancellation and durable task
 notifications. MCP `delegate`, `report`, `task_get`, `task_list`, `task_history` and `task_cancel`

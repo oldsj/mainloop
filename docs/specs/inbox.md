@@ -1,9 +1,34 @@
 # Inbox
 
-The inbox shows native structured-input requests alongside existing notifications and questions.
+The inbox defaults to **Needs you**, read from `GET /attention`. Its badge counts unresolved
+owner actions, including requests the owner has already read. Reading a request does not settle it.
+The response includes the session-list projection from that same database snapshot; a foreground
+refresh updates the badge, attention items and session labels together.
+The server projects current native permission requests and questions, pending approval/review
+cards, and tasks explicitly blocked on an owner decision. Each item states what is needed and
+links to its canonical input card or task. Idle sessions, CI waits, publication updates and
+ordinary reconciliation do not imply owner attention. An empty inbox says **Nothing needs you**.
+
+An unresolved owner decision is stored separately from native input status. If a session also
+asks a native question or permission, both requests remain visible; settling the native
+request alone cannot hide the owner decision. Attention reads include every eligible pending
+request, independently of the history limit. Activity reads select at most the latest 100
+records in SQL; polling the attention snapshot does not load Activity history.
+
+Native input must have an unanswered verified leaf on the current live binding. Terminal tasks,
+noncurrent or finished attempts, archived attempts/sessions, deleted or replaced native sessions,
+superseded requests and recorded decisions never count. Parent task rollups reuse the canonical
+leaf card; aliases do not add badge items. Decisions whose transport is pending or uncertain
+remain inspectable through the existing session/HITL receipts, without soliciting a second answer.
+
+The quieter **Activity** view uses `GET /activity` for FYIs such as merged PRs, provider reports
+and unavailable input notices. Activity does not contribute to the badge. Provider reports are
+labelled unverified and link to the task; they are not proof of completion.
+
 A `hitl_request` item references the durable HITL projection. Inbox and chat mount one shared
-renderer and use the same response client and `/hitl/{id}/respond` route. The inbox refreshes
-while mounted and visible so discovery does not depend on a browser being present when a request arrives.
+renderer and use the same response client and `/hitl/{id}/respond` route. Foreground attention
+polling runs even when the inbox panel is closed, so discovery and the badge do not depend on
+the panel being mounted when a request arrives. Polling and SSE refresh the same projection.
 
 Tool calls show exact names, native call IDs and arguments. Each call needs an explicit decision;
 a complete batch is submitted together. Questions require all answers and respect single/multiple
@@ -20,10 +45,11 @@ An accepted response is marked responded and leaves the pending inbox on refresh
 current read-only receipts until superseded by newer input. Decision delivery never implies task
 completion. Supported provider reason behavior is documented in [chat](chat.md#native-structured-input).
 
-Inbox list and unread-count reads retire pending HITL cards whose verified leaves all belong
+Raw queue list and legacy count reads retire pending HITL cards whose verified leaves all belong
 to completed, failed or cancelled tasks, including unavailable input and uncertain decisions.
 Unavailable projections without leaves use the observer's verified session binding. Mixed
-active/terminal sources and unknown bindings remain visible. Retired cards have queue status
+active/terminal sources and unknown bindings remain available in raw queue history. The Needs
+you projection only includes verified current live sources. Retired cards have queue status
 `expired` and remain available through `/queue?status=expired` and the individual item route;
 request snapshots, aliases, decisions and delivery state are unchanged. This is presentation
 cleanup, with no native response or delivery retry.
@@ -33,9 +59,9 @@ Observer refresh and pending list/count use the same terminal-source rule: uncha
 sources cannot restore pending presentation; a verified source that becomes active can reopen
 the card on observer refresh. Accepted decisions remain responded.
 
-An input notice without a structured request reference offers **Dismiss notice**. The owner
-can expire that notice through `POST /queue/{id}/dismiss`; structured requests cannot use this
-route. Dismissal retains the notice for audit and records no approval or rejection.
+An input notice without a structured request reference is shown in Activity. The owner can
+expire it through `POST /queue/{id}/dismiss`; structured requests cannot use this route.
+Dismissal retains the notice for audit and records no approval or rejection.
 
 Polling pauses when the document is hidden and refreshes on return. Inbox/chat mounts share
 one poll per request ID; delivered receipts stop automatic polling. Pending and uncertain

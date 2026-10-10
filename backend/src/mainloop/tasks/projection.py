@@ -130,7 +130,9 @@ async def persist(
             raise PolicyError(
                 "publication", "task completion needs verified merge and exact CI"
             )
-        updated = updated.model_copy(update={"status": "completed", "reason": None})
+        updated = updated.model_copy(
+            update={"status": "completed", "reason": None, "owner_decision": None}
+        )
         state_update = "completed"
     elif attention and updated.status not in ("completed", "failed", "cancelled"):
         if value.pending_approval_ids:

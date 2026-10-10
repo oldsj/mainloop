@@ -10,6 +10,10 @@ the loading message. Retrying requests the details for the current project.
 
 - Chat takes main area
 - Sessions sidebar always visible on the right; the inbox and projects below it size to their content. The projects section also holds the **New workspace** control (repository, optional branch).
+- Sessions default to current work. **Show finished (N)** reveals history without clearing it;
+  available idle sessions have their own **Show idle (N)** filter.
+- The inbox defaults to **Needs you** with a badge for unresolved owner actions. Its **Activity**
+  tab holds quieter FYIs and unverified provider reports. Empty attention says **Nothing needs you**.
 - No tab bar
 
 ## Mobile
@@ -19,6 +23,9 @@ the loading message. Retrying requests the details for the current project.
 - Tab bar hidden on desktop viewports
 - Touch targets sized appropriately for mobile interaction
 - Tabs switch between the Chat, Sessions and Inbox views
+- Sessions use the same current/history filters as desktop. Inbox contains **Needs you** and
+  **Activity**; the Inbox badge excludes Activity. Filter and inbox-view controls are at least
+  44px tall and wrap within the available width.
 
 ## Tasks
 

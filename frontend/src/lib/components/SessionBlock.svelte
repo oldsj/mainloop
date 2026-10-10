@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Session } from '$lib/api';
   import { agentLabel } from '$lib/agentLabel';
+  import { statusLabel } from '$lib/sessionStatus';
   import { navigationContext } from '$lib/stores/navigationContext';
   import { workspaces } from '$lib/stores/workspaces';
   import WorkspaceLifecycleBadge from './WorkspaceLifecycleBadge.svelte';
@@ -19,25 +20,11 @@
   const sessionColor = $derived(session.color);
 
   // Status display
-  const statusLabels: Record<string, string> = {
-    pending: 'PENDING',
-    active: 'ACTIVE',
-    waiting_on_user: 'NEEDS INPUT',
-    implementing: 'IMPLEMENTING',
-    under_review: 'IN REVIEW',
-    completed: 'DONE',
-    failed: 'FAILED',
-    cancelled: 'CANCELLED'
-  };
 
-  const isRunning = $derived(
-    ['pending', 'active', 'implementing'].includes(session.status)
-  );
+  const isRunning = $derived(['pending', 'active', 'implementing'].includes(session.status));
 
-  const needsAttention = $derived(session.status === 'waiting_on_user');
-  const workspace = $derived(
-    $workspaces.workspaces.find((item) => item.session_id === session.id)
-  );
+  const needsAttention = $derived(session.needs_owner === true);
+  const workspace = $derived($workspaces.workspaces.find((item) => item.session_id === session.id));
 
   function handleClick() {
     if (onSelect) {
@@ -54,7 +41,9 @@
 </script>
 
 <div
-  class="session-block my-3 ml-4 border-l-4 {isActive ? 'bg-term-bg-secondary/80 ring-1 ring-term-accent' : 'bg-term-bg-secondary'}"
+  class="session-block my-3 ml-4 border-l-4 {isActive
+    ? 'bg-term-bg-secondary/80 ring-term-accent ring-1'
+    : 'bg-term-bg-secondary'}"
   style="border-color: {sessionColor};"
 >
   <!-- Header only - thread messages appear as notifications in timeline -->
@@ -66,20 +55,22 @@
     >
       <!-- Status indicator -->
       {#if isRunning}
-        <span class="h-3 w-3 shrink-0 animate-spin rounded-full border border-current border-t-transparent text-term-cyan"></span>
+        <span
+          class="text-term-cyan h-3 w-3 shrink-0 animate-spin rounded-full border border-current border-t-transparent"
+        ></span>
       {/if}
 
       <!-- Title -->
-      <span class="truncate text-sm font-medium text-term-fg">
+      <span class="text-term-fg truncate text-sm font-medium">
         {session.title}
       </span>
-      <span class="shrink-0 text-xs text-term-fg-muted" data-testid="session-kind">
+      <span class="text-term-fg-muted shrink-0 text-xs" data-testid="session-kind">
         {agentLabel(workspace?.manifest.agent_kind ?? session.agent_kind)}
       </span>
 
       <!-- Status badge -->
       <span
-        class="shrink-0 whitespace-nowrap px-2 py-0.5 text-xs font-medium {needsAttention
+        class="shrink-0 px-2 py-0.5 text-xs font-medium whitespace-nowrap {needsAttention
           ? 'bg-term-magenta/20 text-term-magenta'
           : session.status === 'completed'
             ? 'bg-term-green/20 text-term-green'
@@ -88,7 +79,7 @@
               : 'bg-term-fg-muted/20 text-term-fg-muted'}"
         style="border-radius: 9999px;"
       >
-        {statusLabels[session.status] || session.status.toUpperCase()}
+        {statusLabel(session.status, session.needs_owner)}
       </span>
       {#if workspace}
         <WorkspaceLifecycleBadge {workspace} />
@@ -98,12 +89,23 @@
     <!-- Zoom button -->
     <button
       type="button"
-      class="text-xs text-term-fg-muted hover:text-term-accent"
+      class="text-term-fg-muted hover:text-term-accent text-xs"
       onclick={handleZoom}
       aria-label="Open session fullscreen"
     >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        class="h-4 w-4"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+        />
       </svg>
     </button>
   </div>

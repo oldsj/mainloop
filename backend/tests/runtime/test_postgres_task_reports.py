@@ -157,7 +157,9 @@ class TaskReportsPostgresTests(KagentFakeCase):
         child_ctx = await agent.authenticate(token_for(child.binding_id))
         return agent, main_ctx, parent_ctx, child_ctx, parent, child
 
-    def report(self, child, *, outcome="progress", key="report-1"):
+    # These fixtures exercise actionable delivery's authority and locking. Routine
+    # outcomes have explicit tests below and must never queue a main-thread turn.
+    def report(self, child, *, outcome="blocked", key="report-1"):
         return TaskReport(
             task_id=child.task_id,
             attempt_id=child.id,
@@ -185,7 +187,9 @@ class TaskReportsPostgresTests(KagentFakeCase):
             ),
             (child.task_id, child.id, parent.task_id, parent.task_id, 2),
         )
-        result = await self.record(agent, child_ctx, self.report(child))
+        result = await self.record(
+            agent, child_ctx, self.report(child, outcome="progress")
+        )
         before = len(self.fake.requests)
         for ctx in (main, parent_ctx, child_ctx):
             read = await invoke(agent, ctx, "task_get", {"task_id": child.task_id})
@@ -202,7 +206,7 @@ class TaskReportsPostgresTests(KagentFakeCase):
         )
         self.assertEqual(
             {r["session_id"] for r in rows},
-            {main.binding["session_id"], parent.binding_id},
+            {parent.binding_id},
         )
         self.assertTrue(all(r["native_state"] == "queued" for r in rows))
         self.assertEqual(len(self.fake.requests), before)
@@ -212,13 +216,13 @@ class TaskReportsPostgresTests(KagentFakeCase):
                 "SELECT count(*) FROM task_event_deliveries WHERE event_id=$1",
                 result["event_id"],
             ),
-            2,
+            1,
         )
         self.assertEqual(
             await self.pool.fetchval(
                 "SELECT count(*) FROM native_deliveries WHERE source='report'"
             ),
-            2,
+            1,
         )
 
     async def test_atomic_report_and_intents_rollback_and_same_request_digest(self):
@@ -714,6 +718,39 @@ class TaskReportsPostgresTests(KagentFakeCase):
                 "SELECT owner_id FROM task_events WHERE id=$1", result["event_id"]
             ),
             self.user,
+        )
+
+    async def test_routine_root_reports_are_stored_without_main_chat_turns(self):
+        from mainloop.attention import read
+
+        agent, main, parent_ctx, child_ctx, parent, child = await self.tree()
+        await self.record(
+            agent,
+            parent_ctx,
+            self.report(parent, outcome="progress", key="routine-root"),
+        )
+        await self.record(
+            agent,
+            child_ctx,
+            self.report(child, outcome="completed", key="routine-child"),
+        )
+        await reports.dispatch_pending(db)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM native_deliveries WHERE session_id=$1 AND source='report'",
+                main.binding["session_id"],
+            ),
+            0,
+        )
+        stored = await invoke(agent, main, "task_get", {"task_id": child.task_id})
+        self.assertEqual(stored.structuredContent["reports"][0]["outcome"], "completed")
+        activity = (await read(db, self.user)).activity
+        self.assertTrue(any("unverified" in item.content for item in activity))
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_event_deliveries WHERE recipient_key='main'"
+            ),
+            0,
         )
 
     async def test_recipient_revocation_orders_against_transactional_enqueue(self):

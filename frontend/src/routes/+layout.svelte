@@ -4,7 +4,6 @@
   import type { WorkspaceLifecycle } from '$lib/api';
   import { onMount } from 'svelte';
   import { inbox } from '$lib/stores/inbox';
-  import { sessions } from '$lib/stores/sessions';
   import { workspaces } from '$lib/stores/workspaces';
   import { notifications } from '$lib/stores/notifications';
   import { themeStore } from '$lib/stores/theme';
@@ -45,6 +44,13 @@
     navigationContext.initFromUrl(searchParams);
   });
 
+  $effect(() => {
+    if ($page.url.searchParams.has('inbox')) {
+      inbox.open();
+      mobileTab.set('tasks');
+    }
+  });
+
   // Global keyboard handler for session navigation
   function handleGlobalKeydown(e: KeyboardEvent) {
     // Don't intercept if in an input/textarea (except for Tab shortcuts)
@@ -82,7 +88,6 @@
     const recoveries = $connection.recoveries;
     if (recoveries === seenRecoveries) return;
     seenRecoveries = recoveries;
-    sessions.fetchSessions();
     workspaces.fetchWorkspaces();
     notifications.fetchNotifications();
     inbox.fetchItems();
@@ -100,10 +105,7 @@
 
     // Listen for session events
     const client = getSSEClient();
-    const unsubSessionUpdated = client.on('session:updated', (event) => {
-      const { session_id, status } = event.data as { session_id: string; status: string };
-      sessions.updateSession(session_id, { status: status as any });
-    });
+    const unsubSessionUpdated = client.on('session:updated', () => void inbox.fetchItems());
     const unsubWorkspaceUpdated = client.on('workspace:updated', (event) => {
       const { workspace } = event.data as { workspace: WorkspaceLifecycle };
       workspaces.upsert(workspace);
@@ -126,7 +128,6 @@
     });
 
     // Fetch initial data
-    sessions.fetchSessions();
     workspaces.fetchWorkspaces();
     notifications.fetchNotifications();
     inbox.fetchItems();

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS native_observed_sessions (
     observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY(gateway, runtime_session_id)
 );
+CREATE INDEX IF NOT EXISTS native_observed_owner ON native_observed_sessions(owner_id,gateway,runtime_session_id);
 CREATE TABLE IF NOT EXISTS native_hitl_observer_checkpoints (
     gateway TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS native_hitl_requests (
 );
 -- Historical observations retain their snapshots but cannot compete as routes.
 ALTER TABLE native_hitl_requests ADD COLUMN IF NOT EXISTS superseded BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS native_hitl_pending ON native_hitl_requests(owner_id,id)
+    WHERE NOT superseded AND snapshot->>'availability'='pending';
 -- Only verified aliases enter this table. Unresolved payload hints have no leaf key.
 CREATE TABLE IF NOT EXISTS native_hitl_aliases (
     request_id TEXT NOT NULL REFERENCES native_hitl_requests(id) ON DELETE CASCADE,
@@ -84,6 +87,11 @@ ALTER TABLE queue_items ADD COLUMN IF NOT EXISTS hitl_request_id TEXT
     REFERENCES native_hitl_requests(id) ON DELETE CASCADE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_hitl_request
     ON queue_items(hitl_request_id) WHERE hitl_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS queue_owner_attention ON queue_items(user_id,created_at DESC,id)
+    WHERE status='pending' AND item_type IN ('question','approval','review','plan_review','hitl_request');
+CREATE INDEX IF NOT EXISTS queue_owner_history ON queue_items(user_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS session_owner_history ON sessions(user_id,created_at DESC,id DESC)
+    WHERE archived_at IS NULL;
 
 CREATE OR REPLACE FUNCTION immutable_hitl_receipt() RETURNS trigger AS $$
 BEGIN

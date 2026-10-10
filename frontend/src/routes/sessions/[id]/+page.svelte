@@ -203,7 +203,7 @@
                   : 'text-term-yellow'}"
           data-testid="session-status"
         >
-          [{statusLabel(session.status)}]
+          [{statusLabel(session.status, session.needs_owner)}]
         </span>
         {#if !session.archived_at && session.status !== 'failed' && session.status !== 'cancelled'}
           <button
@@ -217,7 +217,7 @@
             {stoppingId === session.id ? 'Stopping…' : 'Stop turn'}
           </button>
         {/if}
-        {#if session.status === 'active' || session.status === 'pending' || session.status === 'waiting_on_user'}
+        {#if session.status === 'active' || session.status === 'pending' || session.status === 'idle' || session.status === 'waiting_on_user'}
           <button
             type="button"
             onclick={handleCancel}

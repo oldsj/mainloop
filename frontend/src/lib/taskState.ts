@@ -36,6 +36,7 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 };
 
 const REASON_LABELS: Record<TaskReason, string> = {
+  owner_decision: 'awaiting your decision',
   awaiting_child: 'awaiting a child task',
   approval: 'awaiting owner approval',
   ci: 'awaiting CI',

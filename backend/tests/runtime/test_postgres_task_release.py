@@ -172,6 +172,13 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
         )
         self.assertTrue(conflict["isError"])
         self.assertIn("report_request_conflict", conflict["content"][0]["text"])
+        second = await self.mcp_call(
+            "report", self.final_report(request_id="second-final-report")
+        )
+        self.assertTrue(second["isError"])
+        self.assertIn(
+            "[409] completed_report_already_recorded", second["content"][0]["text"]
+        )
         task, projection = await self.view()
         self.assertEqual(
             (task.status, task.reason), (before_task.status, before_task.reason)
@@ -196,9 +203,24 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
         event_id = recorded["structuredContent"]["event_id"]
         self.assertEqual(
             await self.pool.fetchval(
-                "SELECT count(*) FROM task_event_deliveries WHERE event_id=$1", event_id
+                "SELECT event_key FROM task_events WHERE id=$1", event_id
             ),
-            1 if self.task.parent_task_id is None else 2,
+            f"report:{recorded['structuredContent']['report_id']}",
+        )
+        recipients = (
+            [(f"parent-task:{self.task.parent_task_id}", "pending")]
+            if self.task.parent_task_id
+            else []
+        )
+        self.assertEqual(
+            [
+                (row["recipient_key"], row["state"])
+                for row in await self.pool.fetch(
+                    "SELECT recipient_key,state FROM task_event_deliveries WHERE event_id=$1",
+                    event_id,
+                )
+            ],
+            recipients,
         )
         for tool in (
             "delegate",
@@ -248,6 +270,147 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
         await self.reconcile()
         await self.assert_released()
         self.assertEqual((await self.mcp("tools/list")).status_code, 401)
+
+    async def test_completed_binding_only_one_terminal_report(self):
+        # Regression for the reviewer's real MCP HTTP/scratch-PostgreSQL probe.
+        cid = (await db.get_session(self.sid)).conversation_id
+        await self.delivery(self.sid, cid, "delivered", source="brief")
+        await self.merged()
+        before, projection = await self.view()
+        result_ref = await self.pool.fetchval(
+            "SELECT snapshot->>'result_ref' FROM task_attempts WHERE id=$1",
+            self.attempt.id,
+        )
+        first = await self.mcp_call("report", self.final_report(request_id="final-1"))
+        replay = await self.mcp_call("report", self.final_report(request_id="final-1"))
+        self.assertFalse(first.get("isError"), first)
+        self.assertFalse(replay.get("isError"), replay)
+        self.assertEqual(
+            first["structuredContent"]["report_id"],
+            replay["structuredContent"]["report_id"],
+        )
+        second = await self.mcp_call(
+            "report",
+            self.final_report(request_id="final-2", summary="Second terminal claim"),
+        )
+        self.assertTrue(second.get("isError"), second)
+        self.assertIn(
+            "[409] completed_report_already_recorded", second["content"][0]["text"]
+        )
+        conflict = await self.mcp_call(
+            "report", self.final_report(request_id="final-1", summary="Changed claim")
+        )
+        self.assertTrue(conflict.get("isError"), conflict)
+        self.assertIn("[409] report_request_conflict", conflict["content"][0]["text"])
+        task, after_projection = await self.view()
+        counts = await self.pool.fetchrow(
+            """SELECT
+            (SELECT count(*) FROM task_reports WHERE attempt_id=$1) AS reports,
+            (SELECT count(*) FROM task_events WHERE task_id=$2 AND event_key LIKE 'report:%') AS events,
+            (SELECT count(*) FROM task_event_deliveries d JOIN task_events e ON e.id=d.event_id
+             WHERE e.task_id=$2 AND e.event_key LIKE 'report:%') AS recipient_intents""",
+            self.attempt.id,
+            self.task.id,
+        )
+        self.assertEqual(
+            dict(counts), {"reports": 1, "events": 1, "recipient_intents": 1}
+        )
+        self.assertEqual(task.version, before.version + 1)
+        self.assertEqual((task.status, task.reason), (before.status, before.reason))
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(projection, after_projection)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT snapshot->>'result_ref' FROM task_attempts WHERE id=$1",
+                self.attempt.id,
+            ),
+            result_ref,
+        )
+        self.assertTrue(await self.held())
+
+    async def test_concurrent_completed_reports_consume_one_allowance(self):
+        cid = (await db.get_session(self.sid)).conversation_id
+        await self.delivery(self.sid, cid, "delivered", source="brief")
+        await self.merged()
+        before, projection = await self.view()
+        requests = [self.final_report(request_id=f"final-{n}") for n in range(2)]
+        results = await asyncio.gather(
+            *(self.mcp_call("report", request) for request in requests)
+        )
+        accepted = [n for n, result in enumerate(results) if not result.get("isError")]
+        self.assertEqual(len(accepted), 1, results)
+        winner = accepted[0]
+        self.assertIn(
+            "[409] completed_report_already_recorded",
+            results[1 - winner]["content"][0]["text"],
+        )
+        replay = await self.mcp_call("report", requests[winner])
+        self.assertFalse(replay.get("isError"), replay)
+        self.assertEqual(
+            replay["structuredContent"]["report_id"],
+            results[winner]["structuredContent"]["report_id"],
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_reports"), 1
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_events WHERE event_key LIKE 'report:%'"
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_event_deliveries"), 1
+        )
+        task, after_projection = await self.view()
+        self.assertEqual(task.version, before.version + 1)
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(projection, after_projection)
+
+    async def test_active_progress_reports_leave_final_allowance_available(self):
+        for n in range(2):
+            result = await self.mcp_call(
+                "report",
+                self.final_report(request_id=f"progress-{n}", outcome="progress"),
+            )
+            self.assertFalse(result.get("isError"), result)
+        await self.merged()
+        result = await self.mcp_call("report", self.final_report())
+        self.assertFalse(result.get("isError"), result)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_reports"), 3
+        )
+
+    async def test_active_completed_reports_remain_unrestricted_and_replay_after_merge(
+        self,
+    ):
+        reports = [self.final_report(request_id=f"active-{n}") for n in range(2)]
+        recorded = []
+        for report in reports:
+            result = await self.mcp_call("report", report)
+            self.assertFalse(result.get("isError"), result)
+            recorded.append(result)
+        await self.merged()
+        before, projection = await self.view()
+        for report, result in zip(reports, recorded, strict=True):
+            replay = await self.mcp_call("report", report)
+            self.assertFalse(replay.get("isError"), replay)
+            self.assertEqual(
+                replay["structuredContent"]["report_id"],
+                result["structuredContent"]["report_id"],
+            )
+        new_report = await self.mcp_call("report", self.final_report())
+        self.assertTrue(new_report.get("isError"), new_report)
+        self.assertIn(
+            "[409] completed_report_already_recorded", new_report["content"][0]["text"]
+        )
+        task, after_projection = await self.view()
+        self.assertEqual(task.version, before.version)
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(projection, after_projection)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM task_reports"), 2
+        )
 
     async def test_approval_completed_mcp_keeps_exact_receipt_required(self):
         await self.pool.execute(

@@ -145,7 +145,8 @@ def next_status(
 
     A cancelled or failed session stays that way however the agent behaves afterwards. Otherwise
     an open turn is ``active``; an idle child that has reported is ``completed`` (its task is
-    done, nothing is waiting on the user); anything else idle is ``waiting_on_user``.
+    done, nothing is waiting on the user); anything else idle is ``idle``. Owner attention
+    is projected separately from current native input requests, never inferred from idleness.
     """
     if current in ENDED_STATUSES:
         return current
@@ -153,7 +154,7 @@ def next_status(
         return SessionStatus.ACTIVE
     if is_child and reported:
         return SessionStatus.COMPLETED
-    return SessionStatus.WAITING_ON_USER
+    return SessionStatus.IDLE
 
 
 def _lock(session_id: str) -> asyncio.Lock:

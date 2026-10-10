@@ -4,16 +4,18 @@
  * Uses SSE updates plus bounded foreground reads for observer-created requests.
  */
 
-import { singleFlight } from '../visiblePolling';
+import { singleFlight, visiblePolling } from '../visiblePolling';
 import { writable, derived } from 'svelte/store';
-import { api, type QueueItem } from '$lib/api';
-import { getSSEClient, type SSEEvent } from '$lib/sse';
+import { api, type AttentionItem } from '$lib/api';
+import { getSSEClient } from '$lib/sse';
+import { sessions } from './sessions';
 
 interface InboxState {
-  items: QueueItem[];
+  items: AttentionItem[];
   unreadCount: number;
   isOpen: boolean;
   isLoading: boolean;
+  loaded: boolean;
   error: string | null;
 }
 
@@ -22,6 +24,7 @@ const initialState: InboxState = {
   unreadCount: 0,
   isOpen: false,
   isLoading: false,
+  loaded: false,
   error: null
 };
 
@@ -29,6 +32,7 @@ function createInboxStore() {
   const { subscribe, set, update } = writable<InboxState>(initialState);
 
   let sseUnsubscribe: (() => void) | null = null;
+  let stopPolling: (() => void) | null = null;
 
   return {
     subscribe,
@@ -36,8 +40,17 @@ function createInboxStore() {
     fetchItems: singleFlight(async (signal?: AbortSignal) => {
       update((s) => ({ ...s, isLoading: true, error: null }));
       try {
-        const items = await api.listQueueItems({ status: 'pending' }, signal);
-        if (!signal?.aborted) update((s) => ({ ...s, items, isLoading: false }));
+        const snapshot = await api.getAttention(signal);
+        if (!signal?.aborted) {
+          sessions.replaceSessions(snapshot.sessions);
+          update((s) => ({
+            ...s,
+            items: snapshot.items,
+            unreadCount: snapshot.count,
+            isLoading: false,
+            loaded: true
+          }));
+        }
       } catch (e) {
         if (!signal?.aborted || signal.reason?.name === 'TimeoutError')
           update((s) => ({ ...s, error: 'Failed to load inbox', isLoading: false }));
@@ -47,12 +60,7 @@ function createInboxStore() {
     }),
 
     async fetchUnreadCount() {
-      try {
-        const unreadCount = await api.getUnreadCount();
-        update((s) => ({ ...s, unreadCount }));
-      } catch (e) {
-        console.error('Failed to fetch unread count:', e);
-      }
+      await this.fetchItems();
     },
 
     async dismissDiagnostic(itemId: string) {
@@ -64,13 +72,7 @@ function createInboxStore() {
     async markRead(itemId: string) {
       try {
         await api.markQueueItemRead(itemId);
-        update((s) => ({
-          ...s,
-          items: s.items.map((item) =>
-            item.id === itemId ? { ...item, read_at: new Date().toISOString() } : item
-          ),
-          unreadCount: Math.max(0, s.unreadCount - 1)
-        }));
+        await this.fetchItems();
       } catch (e) {
         console.error('Failed to mark item read:', e);
       }
@@ -79,11 +81,7 @@ function createInboxStore() {
     async markAllRead() {
       try {
         await api.markAllQueueItemsRead();
-        update((s) => ({
-          ...s,
-          items: s.items.map((item) => ({ ...item, read_at: new Date().toISOString() })),
-          unreadCount: 0
-        }));
+        await this.fetchItems();
       } catch (e) {
         console.error('Failed to mark all read:', e);
       }
@@ -92,14 +90,6 @@ function createInboxStore() {
     async respond(itemId: string, response: string) {
       try {
         await api.respondToQueueItem(itemId, response);
-        update((s) => ({
-          ...s,
-          items: s.items.map((item) =>
-            item.id === itemId
-              ? { ...item, status: 'responded', response, responded_at: new Date().toISOString() }
-              : item
-          )
-        }));
         // Refetch to update the list
         this.fetchItems();
         this.fetchUnreadCount();
@@ -136,32 +126,23 @@ function createInboxStore() {
     startListening() {
       this.stopListening();
       this.fetchUnreadCount(); // Initial fetch
+      stopPolling = visiblePolling().watch('attention', (signal) => this.fetchItems(signal));
 
       const client = getSSEClient();
 
       // Handle inbox updates from SSE
-      sseUnsubscribe = client.on('inbox:updated', (event: SSEEvent) => {
-        const { unread_count, item_id } = event.data as {
-          unread_count?: number;
-          item_id?: string;
-        };
-
-        // Update unread count if provided
-        if (unread_count !== undefined) {
-          update((s) => ({ ...s, unreadCount: unread_count }));
-        }
-
-        // If a specific item was updated, refetch the items list
-        if (item_id) {
-          this.fetchItems();
-        }
-      });
+      const listeners = (['inbox:updated', 'task:updated', 'session:updated'] as const).map(
+        (kind) => client.on(kind, () => void this.fetchItems())
+      );
+      sseUnsubscribe = () => listeners.forEach((stop) => stop());
     },
 
     /**
      * Stop listening for SSE updates.
      */
     stopListening() {
+      stopPolling?.();
+      stopPolling = null;
       if (sseUnsubscribe) {
         sseUnsubscribe();
         sseUnsubscribe = null;

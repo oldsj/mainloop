@@ -13,6 +13,7 @@
   import { deliveryNotices } from '$lib/delivery';
   import { createSendGuard, retryMessage } from '$lib/messageSend';
   import { connection } from '$lib/stores/connection';
+  import { isCurrent } from '$lib/sessionStatus';
   import ConversationView from './ConversationView.svelte';
   import MainThreadHeader from './MainThreadHeader.svelte';
 
@@ -73,9 +74,7 @@
 
   // Refresh session messages when sessions list changes (fixes race condition on page load)
   $effect(() => {
-    const activeSessions = $sessions.sessions.filter(
-      (s) => !['completed', 'failed', 'cancelled'].includes(s.status)
-    );
+    const activeSessions = $sessions.sessions.filter(isCurrent);
     if (activeSessions.length > 0) {
       allSessionMessages.refreshAll();
     }

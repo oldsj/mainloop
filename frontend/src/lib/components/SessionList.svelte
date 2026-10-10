@@ -1,113 +1,124 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { isCurrent, isFinished } from '$lib/sessionStatus';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import type { Session } from '$lib/api';
   import { sessions, activeSessions, finishedSessions } from '$lib/stores/sessions';
+  import { inbox } from '$lib/stores/inbox';
   import SessionListItem from './SessionListItem.svelte';
-
-  onMount(() => {
-    sessions.fetchSessions();
-  });
 
   function handleSessionClick(session: Session) {
     goto(`/sessions/${session.id}`);
   }
 
-  let clearError = $state<string | null>(null);
-
-  async function clearFinished() {
-    const count = $finishedSessions.length;
-    if (!confirm(`Clear ${count} finished session${count === 1 ? '' : 's'} from the list? They are kept for audit.`)) {
-      return;
-    }
-    clearError = null;
-    try {
-      await sessions.archiveFinished();
-      // The open session may have just been cleared; leave a page that no longer lists it.
-      if ($page.params.id && !$sessions.sessions.some((s) => s.id === $page.params.id)) {
-        goto('/');
-      }
-    } catch (e) {
-      clearError = e instanceof Error ? e.message : 'Failed to clear sessions';
-    }
-  }
+  let showFinished = $state(false);
+  const loadError = $derived($inbox.error ?? $sessions.error);
+  let showIdle = $state(false);
+  const idleSessions = $derived($sessions.sessions.filter((s) => !isCurrent(s) && !isFinished(s)));
+  const visibleSessions = $derived(
+    $sessions.sessions.filter(
+      (s) => isCurrent(s) || (showFinished && isFinished(s)) || (showIdle && !isFinished(s))
+    )
+  );
 </script>
 
-<div class="flex h-full flex-col bg-term-bg">
+<div class="bg-term-bg flex h-full flex-col">
   <!-- Header -->
-  <div class="flex items-center justify-between border-b border-term-border p-3">
-    <a href="/agents" class="mr-2 border border-term-accent px-2 py-0.5 text-xs text-term-accent hover:bg-term-accent/10" data-testid="new-agent-link">+ agent</a>
-    <h2 class="text-sm font-medium text-term-fg">
+  <div class="border-term-border flex items-center justify-between border-b p-3">
+    <a
+      href="/agents"
+      class="border-term-accent text-term-accent hover:bg-term-accent/10 mr-2 border px-2 py-0.5 text-xs"
+      data-testid="new-agent-link">+ agent</a
+    >
+    <h2 class="text-term-fg text-sm font-medium">
       Sessions
       {#if $activeSessions.length > 0}
-        <span class="ml-2 inline-flex items-center gap-1 rounded bg-term-cyan/20 px-2 py-0.5 text-xs font-medium text-term-cyan">
-          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-term-cyan"></span>
-          {$activeSessions.length} active
+        <span
+          class="bg-term-cyan/20 text-term-cyan ml-2 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium"
+        >
+          <span class="bg-term-cyan h-1.5 w-1.5 animate-pulse rounded-full"></span>
+          {$activeSessions.length} current
         </span>
       {/if}
     </h2>
     <div class="flex items-center gap-2">
-      {#if $finishedSessions.length > 0}
-        <button
-          type="button"
-          onclick={clearFinished}
-          class="text-xs text-term-fg-muted hover:text-term-accent"
-          data-testid="clear-finished"
-          title="Clear finished sessions from the list"
+      <button
+        type="button"
+        onclick={() => inbox.fetchItems()}
+        class="text-term-fg-muted hover:text-term-accent text-xs"
+        aria-label="Refresh sessions"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          class="h-4 w-4"
+          viewBox="0 0 20 20"
+          fill="currentColor"
         >
-          clear {$finishedSessions.length}
-        </button>
-      {/if}
-    <button
-      type="button"
-      onclick={() => sessions.fetchSessions()}
-      class="text-xs text-term-fg-muted hover:text-term-accent"
-      aria-label="Refresh sessions"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
-      </svg>
-    </button>
+          <path
+            fill-rule="evenodd"
+            d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
+            clip-rule="evenodd"
+          />
+        </svg>
+      </button>
     </div>
   </div>
 
-  {#if clearError}
-    <p class="border-b border-term-border px-3 py-2 text-xs text-term-red" role="alert">
-      {clearError}
-    </p>
+  {#if $finishedSessions.length > 0 || idleSessions.length > 0}
+    <div class="border-term-border flex flex-wrap gap-x-4 border-b px-3">
+      {#if $finishedSessions.length > 0}
+        <button
+          type="button"
+          class="text-term-fg-muted hover:text-term-accent focus-visible:outline-term-accent min-h-11 text-xs focus-visible:outline"
+          aria-pressed={showFinished}
+          onclick={() => (showFinished = !showFinished)}
+          data-testid="show-finished"
+        >
+          {showFinished ? 'Hide finished' : 'Show finished'} ({$finishedSessions.length})
+        </button>
+      {/if}
+      {#if idleSessions.length > 0}
+        <button
+          type="button"
+          class="text-term-fg-muted hover:text-term-accent focus-visible:outline-term-accent min-h-11 text-xs focus-visible:outline"
+          aria-pressed={showIdle}
+          onclick={() => (showIdle = !showIdle)}
+        >
+          {showIdle ? 'Hide idle' : 'Show idle'} ({idleSessions.length})
+        </button>
+      {/if}
+    </div>
   {/if}
 
   <!-- Content -->
   <div class="min-h-0 flex-1 overflow-y-auto">
-    {#if $sessions.loading && $sessions.sessions.length === 0}
-      <div class="flex items-center justify-center p-8 text-term-fg-muted">
+    {#if ($sessions.loading || (!$inbox.loaded && $inbox.isLoading)) && $sessions.sessions.length === 0}
+      <div class="text-term-fg-muted flex items-center justify-center p-8">
         <span>Loading sessions...</span>
       </div>
-    {:else if $sessions.error && $sessions.sessions.length === 0}
+    {:else if loadError && $sessions.sessions.length === 0}
       <div
-        class="flex flex-col items-center justify-center p-8 text-term-fg-muted"
+        class="text-term-fg-muted flex flex-col items-center justify-center p-8"
         data-testid="sessions-error"
       >
         <p class="text-term-red">Couldn't load sessions</p>
-        <p class="mt-2 text-xs">{$sessions.error}</p>
+        <p class="mt-2 text-xs">{loadError}</p>
         <button
           type="button"
-          class="mt-3 text-xs text-term-accent hover:underline"
-          onclick={() => sessions.fetchSessions()}
+          class="text-term-accent mt-3 text-xs hover:underline"
+          onclick={() => inbox.fetchItems()}
         >
           retry
         </button>
       </div>
-    {:else if $sessions.sessions.length === 0}
-      <div class="flex flex-col items-center justify-center p-8 text-term-fg-muted">
-        <p class="text-term-accent">$ sessions --list</p>
-        <p class="mt-2 text-sm">No sessions yet</p>
+    {:else if visibleSessions.length === 0}
+      <div class="text-term-fg-muted flex flex-col items-center justify-center p-8">
+        <p class="mt-2 text-sm">No active sessions</p>
         <p class="text-xs">Start an agent with + agent, or delegate work from the home thread</p>
       </div>
     {:else}
       <div class="space-y-2 p-3">
-        {#each $sessions.sessions as session (session.id)}
+        {#each visibleSessions as session (session.id)}
           <SessionListItem
             {session}
             selected={$page.params.id === session.id}
