@@ -42,6 +42,8 @@ MERGED = "c" * 40
 MOVED = "f" * 40
 # GitHub's test merge commit for the PR (refs/pull/N/merge).
 TEST_MERGE = "9" * 40
+# Comparison override that drops a field from the response.
+OMITTED = object()
 CAPTURED_AT = datetime(2026, 10, 9, 2, tzinfo=timezone.utc)
 
 
@@ -207,9 +209,10 @@ class GitHub:
                 "base_commit": {"sha": base},
                 "merge_base_commit": {"sha": self.merge_base},
                 "commits": [],
-                "files": copy.deepcopy(files[:300]) if page == 1 else [],
-                **self.compare,
             }
+            if page == 1:
+                body["files"] = copy.deepcopy(files[:300])
+            body.update(self.compare)
         elif (base, head) == (self.merge_base, self.main):
             body = {
                 "status": "ahead",
@@ -218,11 +221,14 @@ class GitHub:
                 "base_commit": {"sha": base},
                 "merge_base_commit": {"sha": base},
                 "commits": commits[(page - 1) * per_page : page * per_page],
-                "files": copy.deepcopy(self.base_files[:300]) if page == 1 else [],
-                **self.base_compare,
             }
+            # GitHub omits files after the first page rather than sending [].
+            if page == 1:
+                body["files"] = copy.deepcopy(self.base_files[:300])
+            body.update(self.base_compare)
         else:
             raise AssertionError(f"unexpected comparison {base}...{head}")
+        body = {key: value for key, value in body.items() if value is not OMITTED}
         return httpx.Response(200, json=body)
 
     @property
@@ -893,15 +899,38 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("more than 1000 commits", error.message)
 
     async def test_base_side_commits_are_paginated(self):
-        self.moved_main()
-        self.fake.base_commits = self.fake.linear(150)
-        await self.evidence()
-        pages = [
-            r.url.params["page"]
-            for r in self.fake.calls
-            if r.url.path.endswith(f"/compare/{BASE}...{MOVED}")
-        ]
-        self.assertEqual(pages, ["1", "2"])
+        # GitHub omits files on later pages (the fake drops the key, as live
+        # does); a full final page needs no empty follow-up read.
+        for count, expected in ((100, ["1"]), (101, ["1", "2"]), (150, ["1", "2"])):
+            with self.subTest(count=count):
+                self.moved_main(
+                    base_files=[dict(filename="docs/other.md", status="modified")]
+                )
+                self.fake.base_commits = self.fake.linear(count)
+                self.fake.calls.clear()
+                facts = await self.evidence()
+                self.assertEqual(facts["merge_base_sha"], BASE)
+                pages = [
+                    r
+                    for r in self.fake.calls
+                    if r.url.path.endswith(f"/compare/{BASE}...{MOVED}")
+                ]
+                self.assertEqual([r.url.params["page"] for r in pages], expected)
+                bodies = [self.fake.comparison(r, BASE, MOVED) for r in pages]
+                self.assertEqual(
+                    ["files" in body.json() for body in bodies],
+                    [page == "1" for page in expected],
+                )
+
+    async def test_missing_first_page_files_never_read_as_empty(self):
+        for name in ("compare", "base_compare"):
+            with self.subTest(name=name):
+                self.moved_main()
+                self.fake.compare, self.fake.base_compare = {}, {}
+                setattr(self.fake, name, {"files": OMITTED})
+                with self.assertRaises(GitHubError):
+                    await self.evidence()
+                self.assertFalse(self.fake.puts)
 
     async def test_unverifiable_comparisons_fail_closed(self):
         for name, changes in (

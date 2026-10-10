@@ -166,7 +166,9 @@ class Comparison(BaseModel):
     base_commit: Commit
     merge_base_commit: Commit
     commits: list[ComparedCommit] = Field(max_length=COMPARE_COMMITS_PER_PAGE)
-    files: list = Field(max_length=MERGE_FILES_LIMIT)
+    # GitHub omits files after the first page; compared_files() requires them
+    # on the first.
+    files: list | None = Field(default=None, max_length=MERGE_FILES_LIMIT)
 
 
 def parents(path):
@@ -610,6 +612,8 @@ class GitHubMergeClient(GitHubCreationClient):
     def compared_files(self, comparison, side):
         # Compare lists changed files only on its first page, up to 300 for the
         # whole comparison, so a list at the cap may be incomplete.
+        if comparison.files is None:
+            raise GitHubError
         if len(comparison.files) >= MERGE_FILES_LIMIT:
             raise PolicyError(
                 "merge_inventory",
@@ -675,7 +679,12 @@ class GitHubMergeClient(GitHubCreationClient):
                 if commit.sha in commits:
                     raise GitHubError
                 commits[commit.sha] = commit
-            if len(base_side.commits) < COMPARE_COMMITS_PER_PAGE:
+            # Stop once every commit is listed; a full page then needs no
+            # empty follow-up read.
+            if (
+                len(commits) >= base_side.ahead_by
+                or len(base_side.commits) < COMPARE_COMMITS_PER_PAGE
+            ):
                 break
         if len(commits) != base_side.ahead_by or base_sha not in commits:
             raise GitHubError
