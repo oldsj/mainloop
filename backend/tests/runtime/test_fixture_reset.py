@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import asyncpg
 from mainloop.db import db
-from tests.runtime.postgres_fixture import clear_rows, row_reset_plan
+from tests.runtime.postgres_fixture import clear_rows, row_reset_plan, wait_for_lock
 from tests.runtime.test_postgres_ledger import TEST_URL, PostgresTestCase
 from tests.runtime.test_push_transport_git import GitFixtureCase
 
@@ -250,6 +250,79 @@ class RowResetTests(PostgresTestCase):
         self.assertIs(db._pool, saved_pool)
         self.assertTrue(Shared.loop_ref.is_closed())
         self.assertTrue(Shared.pool_ref.is_closing())
+
+    async def test_reused_pool_drops_statements_after_column_layout_change(self):
+        class CacheProbe(PostgresTestCase):
+            reuse_pool = True
+
+            async def test_a_prepare_on_every_connection(self):
+                conns = [await self.pool.acquire() for _ in range(6)]
+                try:
+                    for conn in conns:
+                        async with conn.transaction():
+                            await conn.fetch("SELECT * FROM main_threads")
+                finally:
+                    for conn in conns:
+                        await self.pool.release(conn)
+
+            async def test_b_column_layout_change(self):
+                await self.pool.execute(
+                    "ALTER TABLE main_threads ADD COLUMN probe_extra integer"
+                )
+
+            async def test_c_cached_statement_inside_transaction(self):
+                async with self.pool.acquire() as conn, conn.transaction():
+                    await conn.fetch("SELECT * FROM main_threads")
+
+        def run():
+            return unittest.TextTestRunner(stream=io.StringIO()).run(
+                unittest.TestLoader().loadTestsFromTestCase(CacheProbe)
+            )
+
+        result = await asyncio.to_thread(run)
+        self.assertEqual(result.testsRun, 3)
+        self.assertEqual(result.errors, [], result.errors)
+        self.assertEqual(result.failures, [], result.failures)
+
+    async def test_lock_wait_filter_separates_advisory_from_row_waits(self):
+        holder = await asyncpg.connect(self.url)
+        waiter = await asyncpg.connect(self.url)
+        monitor = await asyncpg.connect(self.url)
+        for conn in (holder, waiter, monitor):
+            self.addAsyncCleanup(conn.close)
+        waiter_pid = await waiter.fetchval("SELECT pg_backend_pid()")
+        # A row-lock wait is visible to an unfiltered check but not to an advisory one.
+        await holder.execute("BEGIN")
+        await holder.execute(
+            f"SELECT FROM {self.parent} WHERE id=1 FOR UPDATE"  # nosec B608 - generated fixture name
+        )
+        row_wait = asyncio.create_task(
+            waiter.execute(
+                f"SELECT FROM {self.parent} WHERE id=1 FOR UPDATE"  # nosec B608 - generated fixture name
+            )
+        )
+        try:
+            self.assertTrue(await wait_for_lock(monitor, pid=waiter_pid))
+            self.assertFalse(
+                await wait_for_lock(
+                    monitor, pid=waiter_pid, locktype="advisory", timeout=0.2
+                )
+            )
+        finally:
+            await holder.execute("ROLLBACK")
+            await row_wait
+        # An advisory-lock wait must still satisfy the advisory filter.
+        await holder.execute("SELECT pg_advisory_lock(4242)")
+        advisory_wait = asyncio.create_task(
+            waiter.execute("SELECT pg_advisory_lock(4242)")
+        )
+        try:
+            self.assertTrue(
+                await wait_for_lock(monitor, pid=waiter_pid, locktype="advisory")
+            )
+        finally:
+            await holder.execute("SELECT pg_advisory_unlock(4242)")
+            await advisory_wait
 
 
 class GitSeedIsolationTests(GitFixtureCase):
