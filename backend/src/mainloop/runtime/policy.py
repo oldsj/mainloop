@@ -107,7 +107,7 @@ MERGE_TOOLS = frozenset(
 def tools_for(actor: Actor) -> frozenset[str]:
     if actor.merge_status_only:
         return (
-            frozenset({"get_pull_request_merge_status"})
+            frozenset({"get_pull_request_merge_status", "whoami", "task_get", "report"})
             if os.environ.get("MAINLOOP_MERGE_TOOLS_ENABLED") == "true"
             else frozenset()
         )

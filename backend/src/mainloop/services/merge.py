@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from mainloop.db import db
@@ -558,16 +559,27 @@ async def reconcile(binding, p, candidate):
     return state_result("uncertain", p["id"])
 
 
-async def completed_replay(binding, arguments, *, approved, reevaluate=False):
+@asynccontextmanager
+async def _replay_connection(conn):
+    if conn is not None:
+        yield conn
+    else:
+        async with db.connection() as connection:
+            yield connection
+
+
+async def completed_replay(
+    binding, arguments, *, approved, reevaluate=False, conn=None
+):
     """Return an immutable outcome after product completion, without execution.
 
     Completion closes submit authority. A lost tool response must still be
     recoverable by the same live binding/current writer; this never claims an
     intent or sends a PUT. Superseded/revoked sources still fail closed.
     """
-    async with db.connection() as conn:
+    async with _replay_connection(conn) as conn:
         row = await conn.fetchrow(
-            """SELECT p.id,p.runtime_session_id,r.result FROM merge_proposals p
+            """SELECT p.id,p.runtime_session_id,p.facts->>'route' AS route,r.result FROM merge_proposals p
                JOIN merge_proposal_results r ON r.proposal_id=p.id
                JOIN native_bindings b ON b.session_id=p.binding_id
                JOIN sessions s ON s.id=b.session_id
@@ -607,7 +619,7 @@ async def completed_replay(binding, arguments, *, approved, reevaluate=False):
         )
         if prior and prior["payload_hash"] != digest:
             raise PolicyError("conflict", "invocation ID has different arguments")
-        if approved:
+        if approved or row["route"] != "auto":
             key = MergeReceiptKey(
                 owner_id=binding["user_id"],
                 leaf_binding_id=binding["session_id"],
@@ -907,7 +919,7 @@ async def _status(binding, arguments):
     """Read persisted state without GitHub access, approval, or merge execution."""
     require_enabled()
     body = MergePullRequestWithApproval.model_validate(arguments)
-    replay = await completed_replay(binding, body.model_dump(), approved=True)
+    replay = await completed_replay(binding, body.model_dump(), approved=False)
     if replay is not None:
         return replay
     async with db.connection() as conn:
@@ -940,11 +952,15 @@ async def _status(binding, arguments):
         )
 
 
-async def completed_status_binding(binding):
-    """Allow only immutable merge-result reads for an exact completed writer."""
-    async with db.connection() as conn:
-        rows = await conn.fetch(
-            """SELECT p.id,c.intent_invocation_id,a.depth FROM merge_proposals p
+async def completed_status_binding(binding, *, conn=None):
+    """Allow status and final reporting for an exact completed writer.
+
+    Approval-route proposals still require their exact owner decision receipt.
+    Reuse the caller's connection when revalidating under its authority lock.
+    """
+    async with _replay_connection(conn) as conn:
+        row = await conn.fetchrow(
+            """SELECT p.id,p.facts->>'route' AS route,c.intent_invocation_id,a.depth FROM merge_proposals p
                JOIN merge_requests c ON c.active_proposal_id=p.id
                JOIN task_attempts a ON a.id=p.facts->>'attempt_id'
                JOIN tasks t ON t.id=a.task_id
@@ -954,11 +970,15 @@ async def completed_status_binding(binding):
             binding["user_id"],
             binding["session_id"],
         )
-    for row in rows:
-        if row["intent_invocation_id"] and await completed_replay(
-            binding,
-            {"proposal_id": row["id"], "request_id": row["intent_invocation_id"]},
-            approved=True,
+        if (
+            row
+            and row["intent_invocation_id"]
+            and await completed_replay(
+                binding,
+                {"proposal_id": row["id"], "request_id": row["intent_invocation_id"]},
+                approved=row["route"] != "auto",
+                conn=conn,
+            )
         ):
             return row["depth"]
     return None
