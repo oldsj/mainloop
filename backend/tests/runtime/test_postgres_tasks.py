@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import asyncpg
 import httpx
+from fastapi import HTTPException
 from mainloop import api
 from mainloop.config import settings
 from mainloop.db import db
@@ -14,6 +15,7 @@ from mainloop.db import tasks as store
 from mainloop.db.postgres import MIGRATION_SQL, SCHEMA_SQL
 from mainloop.identity import current_user
 from mainloop.providers import registry
+from mainloop.runtime import task_api
 from mainloop.services.github_repo import parse_github_repo
 from mainloop.tasks.events import dispatch_committed_events
 from mainloop.tasks.principal import TaskPrincipal
@@ -77,6 +79,51 @@ class TaskPostgresTests(PostgresTestCase):
             await conn.execute(SCHEMA_SQL)
             await conn.execute(MIGRATION_SQL)
             self.assertEqual(await conn.fetchval("SELECT count(*) FROM tasks"), before)
+
+    async def test_capacity_rest_details_include_only_the_parent_admission_bucket(self):
+        held = [await self.admit(self.task()) for _ in range(3)]
+        other_project = await db.get_or_create_project(
+            "other-owner", parse_github_repo("example/app")
+        )
+        await self.admit(
+            self.task(owner="other-owner", project=other_project.id), global_cap=10
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            child = self.task(parent=held[0][0])
+            await store.insert_task(conn, child)
+            await store.admit_attempt(
+                conn,
+                child,
+                registry().resolve("claude", "child"),
+                role="child",
+                depth=2,
+                global_cap=10,
+            )
+        with self.assertRaises(HTTPException) as caught:
+            async with task_api.transaction() as conn:
+                task = self.task()
+                await store.insert_task(conn, task)
+                await store.admit_attempt(
+                    conn,
+                    task,
+                    registry().resolve("claude", "supervisor"),
+                    role="supervisor",
+                    depth=1,
+                    global_cap=10,
+                )
+        self.assertEqual(caught.exception.status_code, 409)
+        detail = caught.exception.detail
+        self.assertEqual(detail["reason"], "parent_capacity")
+        self.assertEqual(
+            {row["task_id"] for row in detail["held_tasks"]},
+            {task.id for task, _ in held},
+        )
+        self.assertEqual(
+            {row["held_attempt_id"] for row in detail["held_tasks"]},
+            {attempt.id for _, attempt in held},
+        )
+        self.assertIn("task_cancel", detail["recovery"])
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM tasks"), 5)
 
     async def test_concurrent_same_request_and_changed_payload(self):
         request = TaskCreate(

@@ -27,10 +27,11 @@ from models.workspace import WorkspaceEnvironment
 
 
 class TaskError(ValueError):
-    def __init__(self, status: int, code: str):
+    def __init__(self, status: int, code: str, *, details: dict | None = None):
         super().__init__(code)
         self.status = status
         self.code = code
+        self.details = details or {}
 
 
 def decode(value):
@@ -421,7 +422,28 @@ async def admit_attempt(
         task.parent_task_id,
     )
     if count >= per_parent_cap:
-        raise TaskError(409, "parent_capacity")
+        held = await conn.fetch(
+            """SELECT t.id AS task_id,t.snapshot->>'title' AS title,t.status,
+                      t.snapshot->>'reason' AS reason,t.version,t.current_attempt_id,
+                      a.id AS held_attempt_id,a.state AS attempt_state
+               FROM task_attempts a JOIN tasks t ON t.id=a.task_id
+               WHERE a.capacity_held AND t.owner_id=$1
+                 AND t.parent_task_id IS NOT DISTINCT FROM $2 ORDER BY t.id,a.id""",
+            task.owner_id,
+            task.parent_task_id,
+        )
+        raise TaskError(
+            409,
+            "parent_capacity",
+            details={
+                "limit": per_parent_cap,
+                "held_tasks": [dict(row) for row in held],
+                "recovery": "Read task_get, then use task_cancel with the current task "
+                "version and attempt to stop abandoned work. Capacity releases only "
+                "after confirmed runtime termination. Completed coding tasks are cleaned up "
+                "automatically after outstanding work settles.",
+            },
+        )
     if (
         await conn.fetchval("SELECT current_attempt_id FROM tasks WHERE id=$1", task.id)
         is not None

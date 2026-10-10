@@ -1,6 +1,7 @@
 """Persisted task-result cleanup on scratch PostgreSQL; GitHub/kagent are fakes."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
@@ -116,6 +117,116 @@ class CodingTaskReleaseTests(merge_fixtures.MergeFixture):
                     provisioning=provisioning.Provisioning()
                 ),
             )
+
+    async def test_parent_merge_projects_blocked_task_without_child_merge_proposal(
+        self,
+    ):
+        from mainloop.services import github_creation, github_merge
+        from mainloop.tasks.projection import Projection
+        from tests.runtime.github_app_fake import app_transport
+        from tests.runtime.test_open_pull_request import ARGS, FakeGitHub
+
+        # This task created its PR before the publication gate refused its work.
+        fake = FakeGitHub()
+        fake.repo["default_branch"] = "main"
+        fake.pr_changes = lambda pr: pr["head"].update(ref="feature")
+        cls = github_creation.GitHubCreationClient
+        with patch.object(
+            github_creation,
+            "GitHubCreationClient",
+            lambda repository: cls(repository, transport=app_transport(fake.handle)),
+        ):
+            await github_creation.open_pull_request(
+                self.binding,
+                {**ARGS, "project_id": self.project.id, "branch": "feature"},
+            )
+        async with self.pool.acquire() as conn, conn.transaction():
+            task = await lifecycle.load_task(conn, self.task.id)
+            await store.save_task(
+                conn,
+                task.model_copy(
+                    update={
+                        "status": "blocked",
+                        "reason": "reconciliation",
+                        "version": task.version + 1,
+                    }
+                ),
+                task.version,
+                "fixture:publication-blocked",
+            )
+        parent, _ = await self.bound_session(role="main")
+        await self.pool.execute(
+            "UPDATE native_bindings SET kagent_session_id=$2 WHERE session_id=$1",
+            parent,
+            f"runtime-{parent}",
+        )
+        result = await merge.auto_merge(await PgStore().get_binding(parent), self.args)
+        self.assertEqual(result["state"], "merged")
+        self.assertEqual((await self.view())[0].status, "blocked")
+        # The parent outcome has no child task association or transferable consent.
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM merge_proposals WHERE facts->>'task_id'=$1",
+                self.task.id,
+            ),
+            0,
+        )
+        self.fake.errors[f"/commits/{merge_fixtures.SHA}/check-runs"] = 503
+        cls = github_merge.GitHubMergeClient
+        with patch.object(
+            github_merge,
+            "GitHubMergeClient",
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
+        ):
+            await Projection().refresh(db, self.task.id)
+            async with self.pool.acquire() as conn:
+                view = await service.read(conn, TaskPrincipal(self.user), self.task.id)
+            self.assertEqual(
+                (view.projection.pr_state, view.projection.merge_state),
+                ("merged", "merged"),
+            )
+            self.assertEqual(view.projection.ci_state, "unknown")
+            self.assertIsNone(view.projection.merge_proposal_id)
+            self.assertEqual(
+                (view.task.status, view.task.reason), ("blocked", "reconciliation")
+            )
+            self.assertTrue(await self.held())
+            self.client.delete_session.assert_not_awaited()
+            await Projection().refresh(db, self.task.id)
+            self.assertEqual((await self.view())[0].version, view.task.version)
+        self.assertEqual(len(self.fake.puts), 1)
+
+    async def test_merged_observation_outranks_old_child_proposal_on_read(self):
+        from mainloop.services import github_merge
+        from mainloop.tasks.projection import Projection
+        from tests.runtime.github_app_fake import app_transport
+
+        await self.prepare()
+        # A merge outside this proposal leaves the child's durable candidate prepared.
+        self.fake.pr.update(state="closed", merged=True, merge_commit_sha="c" * 40)
+        cls = github_merge.GitHubMergeClient
+        with patch.object(
+            github_merge,
+            "GitHubMergeClient",
+            lambda repository: cls(
+                repository, transport=app_transport(self.fake.handle)
+            ),
+        ):
+            await Projection().refresh(db, self.task.id)
+        async with self.pool.acquire() as conn:
+            view = await service.read(conn, TaskPrincipal(self.user), self.task.id)
+        self.assertEqual(view.projection.merge_state, "merged")
+        self.assertNotEqual(view.task.status, "completed")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT state FROM merge_requests WHERE owner_id=$1", self.user
+            ),
+            "prepared",
+        )
+        self.assertTrue(await self.held())
+        self.assertFalse(self.fake.puts)
 
     async def test_merged_released_once_and_owner_result_survives_agent_revocation(
         self,
@@ -405,6 +516,122 @@ class CodingCapacityReleaseTests(ledger_fixtures.KagentFakeCase):
     asyncTearDown = report_fixtures.TaskReportsPostgresTests.asyncTearDown
     request = report_fixtures.TaskReportsPostgresTests.request
     create_task = report_fixtures.TaskReportsPostgresTests.create_task
+
+    async def test_parent_can_identify_and_cancel_abandoned_blocked_reservation(self):
+        main = await ensure_main_session(self.user)
+        agent = AgentService(PgStore())
+        ctx = await agent.authenticate(token_for(main["session_id"]))
+        held = {}
+        for status in ("blocked", "waiting", "completed"):
+            result = await invoke(
+                agent, ctx, "delegate", self.request().model_dump(mode="json")
+            )
+            self.assertFalse(result.isError, result.content)
+            async with self.pool.acquire() as conn:
+                operation = await store.operation(
+                    conn, result.structuredContent["id"], self.owner
+                )
+            await self.worker.reconcile(db, operation)
+            if status in ("blocked", "waiting"):
+                async with self.pool.acquire() as conn:
+                    attempt = await lifecycle.load_attempt(conn, operation.attempt_id)
+                writer = await agent.authenticate(token_for(attempt.binding_id))
+                report = await invoke(
+                    agent,
+                    writer,
+                    "report",
+                    {
+                        "task_id": operation.task_id,
+                        "attempt_id": attempt.id,
+                        "request_id": "result",
+                        "summary": "Fixture result",
+                        "outcome": "blocked" if status == "blocked" else "completed",
+                    },
+                )
+                self.assertFalse(report.isError, report.content)
+            async with self.pool.acquire() as conn, conn.transaction():
+                task = await lifecycle.load_task(conn, operation.task_id)
+                if status == "completed":
+                    await store.save_task(
+                        conn,
+                        task.model_copy(
+                            update={"status": status, "version": task.version + 1}
+                        ),
+                        task.version,
+                        "fixture:old-completed",
+                    )
+                else:
+                    self.assertEqual(task.status, status)
+                held[status] = task.id
+        refusal = await invoke(
+            agent, ctx, "delegate", self.request().model_dump(mode="json")
+        )
+        self.assertTrue(refusal.isError)
+        detail = json.loads(refusal.content[0].text.split(" ", 2)[2])
+        self.assertEqual(detail["limit"], 3)
+        self.assertEqual(
+            {row["task_id"] for row in detail["held_tasks"]}, set(held.values())
+        )
+        self.assertIn("task_cancel", detail["recovery"])
+        blocked = next(
+            row for row in detail["held_tasks"] if row["status"] == "blocked"
+        )
+        self.assertEqual(blocked["task_id"], held["blocked"])
+        self.assertEqual(blocked["attempt_state"], "active")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_attempts WHERE capacity_held"
+            ),
+            3,
+        )
+        cancellation = await invoke(
+            agent,
+            ctx,
+            "task_cancel",
+            {
+                "task_id": blocked["task_id"],
+                "request_id": "cancel-abandoned",
+                "expected_version": blocked["version"],
+                "expected_attempt_id": blocked["current_attempt_id"],
+            },
+        )
+        self.assertFalse(cancellation.isError, cancellation.content)
+        async with self.pool.acquire() as conn:
+            operation = await store.operation(
+                conn, cancellation.structuredContent["id"], self.owner
+            )
+        with patch.object(
+            ns.get_client(),
+            "delete_session",
+            AsyncMock(side_effect=OutcomeUnknown("delete reply lost")),
+        ):
+            await self.worker.reconcile(db, operation)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_attempts WHERE capacity_held"
+            ),
+            3,
+        )
+        still_full = await invoke(
+            agent, ctx, "delegate", self.request().model_dump(mode="json")
+        )
+        self.assertTrue(still_full.isError)
+        self.assertIn(blocked["task_id"], still_full.content[0].text)
+        await self.worker.reconcile(db, operation)
+        async with self.pool.acquire() as conn:
+            task = await lifecycle.load_task(conn, blocked["task_id"])
+            attempt = await lifecycle.load_attempt(conn, blocked["held_attempt_id"])
+        self.assertEqual((task.status, attempt.state), ("cancelled", "cancelled"))
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM task_attempts WHERE capacity_held"
+            ),
+            2,
+        )
+        admitted = await invoke(
+            agent, ctx, "delegate", self.request().model_dump(mode="json")
+        )
+        self.assertFalse(admitted.isError, admitted.content)
 
     async def test_new_main_delegate_succeeds_after_full_parent_bucket_released(self):
         main = await ensure_main_session(self.user)
