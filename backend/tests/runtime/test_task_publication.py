@@ -101,7 +101,19 @@ class PublicationFactsTests(unittest.TestCase):
         data.update(merged=True, merge_commit_sha="c" * 40)
         value = self.project(data)
         self.assertEqual(value.pr_state, "merged")
-        self.assertIsNone(value.merge_state)
+        self.assertEqual(value.merge_state, "merged")
+
+    def test_merged_observation_overrides_stale_proposal_and_ci_readiness(self):
+        data = copy.deepcopy(GitHub().pr)
+        data.update(state="closed", merged=True, merge_commit_sha="c" * 40)
+        for state in (None, "prepared", "evaluating", "uncertain", POLICY_BLOCKED):
+            with self.subTest(state=state):
+                previous = TaskProjection(pr_head_sha=SHA, merge_state=state)
+                value = self.project(data, previous, ci={"head_sha": SHA})
+                self.assertEqual(
+                    (value.pr_state, value.merge_state), ("merged", "merged")
+                )
+                self.assertEqual(value.ci_state, "unknown")
 
     def test_sibling_or_parent_branch_is_not_publication_evidence(self):
         data = copy.deepcopy(GitHub().pr)

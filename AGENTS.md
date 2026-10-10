@@ -73,10 +73,18 @@ Run the smallest checks that establish confidence for the changed area, then exp
 Common commands:
 
 ```bash
+make test-backend        # offline backend + scratch PostgreSQL; 30s/test, 9m/suite
 make fmt                 # format and check files changed from main
 make lint                # lint files changed from main
 pnpm check               # workspace frontend/type checks
 ```
+
+Set `MAINLOOP_TEST_DATABASE_URL` to a disposable PostgreSQL server first, or use
+`dev-postgres run make test-backend` in the development image. The capped command
+requires PostgreSQL so database coverage cannot silently skip. Use
+`TEST_ARGS='tests.runtime.test_merge_acceptance'` for a focused run and
+`MAINLOOP_TEST_TIMINGS=/path/to/timings.json` for module/test timing evidence.
+Timeouts print the active test or fixture and all thread stacks, then fail the run.
 
 The Playwright suites (`fast`, `mobile`, `e2e`) and the live worker e2e script are disabled: CI no longer runs them, and `make test`, `make test-run`, `make test-ci`, `make test-worker-e2e`, and the frontend `pnpm test` scripts refuse to start unless `ENABLE_E2E=1` is set. The specs and test files are kept for reference and for a deliberate opt-in run.
 

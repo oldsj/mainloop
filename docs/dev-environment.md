@@ -25,7 +25,7 @@ Copy or clone a checkout into `/workspace` and sync its locked dependencies:
 ```bash
 (cd backend && uv sync --frozen --python 3.13)
 pnpm install --frozen-lockfile
-dev-postgres run bash -c 'cd backend && uv run --no-sync python -m unittest discover -s tests -t . -v'
+dev-postgres run make test-backend
 pnpm check
 (cd frontend && node --test src/lib/*.test.ts)
 make lint
@@ -37,9 +37,10 @@ checks and Trunk skips update checks. CI fetches the latest checks, so results c
 differ slightly.
 Guarded browser, live-agent, and cluster suites are separate opt-in checks.
 
-Local amd64 verification ran the commands above successfully as both 65532 and
-root, with networking disabled after dependency sync.
-The backend ran 615 tests without skips. Frontend unit tests passed 34 tests;
+Earlier amd64 image qualification ran uncapped backend discovery and the
+frontend/lint checks as both 65532 and root, with networking disabled after
+dependency sync. That historical backend run covered 615 tests without skips.
+Frontend unit tests passed 34 tests;
 the two existing integration-fixture tests skipped without their optional inputs.
 Local arm64 verification awaits an available arm64 builder or QEMU registration.
 
@@ -53,6 +54,42 @@ The scratch superuser uses trust authentication on loopback and the private
 socket only. Root launches PostgreSQL as uid 65532; the supplied command retains
 the caller's user. This helper is for disposable test environments.
 Stop PostgreSQL before parking a workspace; Full-restore support is unproven.
+
+Scratch PostgreSQL skips `initdb`'s sync and disables `fsync`,
+`synchronous_commit`, and `full_page_writes`.
+These settings remove disk durability costs from SQL integration tests; never use
+this helper for persistent data. CI uses the same settings and a 512 MiB tmpfs for
+PGDATA, with `max_wal_size=128MB` to keep WAL inside that memory budget.
+In a workspace with sufficient shared memory, `DEV_POSTGRES_ROOT` may
+point to a dedicated directory under `/dev/shm`; the default remains `/data`.
+Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
+
+`make test-backend` runs the same offline unittest discovery in CI and workspaces.
+It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
+Every test, including setup, teardown and cleanups, has a fatal 30-second deadline;
+module/class fixtures and discovery also have 30-second deadlines. On a timeout,
+the runner prints the active test/fixture and all thread stacks. The whole run has
+a 540-second cap with up to five seconds for process cleanup, leaving headroom
+under the harness's ten-minute foreground limit. CI's job cap is ten minutes.
+The supervisor kills the test process group on timeout or cancellation, including
+test subprocesses; `dev-postgres` then removes its disposable cluster.
+Class databases clone one migrated, empty template per run; migration tests still
+execute the real migrations and each class retains its own independent database.
+
+The runner reports the slowest 15 modules and tests. Module totals include class
+and module fixtures; test totals include setup/teardown. Save machine-readable
+evidence with `MAINLOOP_TEST_TIMINGS=/path/to/timings.json`. A focused run uses
+`make test-backend TEST_ARGS='tests.runtime.test_merge_acceptance'`.
+Successful HTTP request logs are suppressed; warning/error logs and all test
+assertions remain enabled.
+Asyncio debug checks remain enabled. The runner limits callback/future/task
+creation stacks to one frame to reduce diagnostic overhead on SQL-heavy tests;
+ordinary exception and timeout tracebacks remain complete. Set
+`MAINLOOP_TEST_DEBUG_STACK_DEPTH=10` when diagnosing resource creation sites.
+
+Changes to `dev-postgres` require publishing a new development image through the
+workflow below, then pinning/selecting its immutable digest for workspaces.
+Editing the checkout alone does not update the installed helper in existing images.
 
 The **Mainloop dev image** workflow validates pull requests with native amd64
 (`ubuntu-latest`) and arm64 (`ubuntu-24.04-arm`) builds, without registry login

@@ -45,6 +45,14 @@ reconciliation. Agent activity, delivery, workspace health, attention and public
 separate observations. A provider report or finished turn cannot prove coding-task completion.
 Verified merged publication is the later completion gate.
 
+A verified observation of the task's own linked PR projects both `pr_state: merged`
+and `merge_state: merged`, including a merge by the parent or another actor. It outranks
+an older child proposal's readiness state. Observation does not transfer proposal consent
+or complete the task: completion still requires the existing merge service to settle
+the task-associated intent with policy and exact-head CI evidence. A merged observation
+with no such settlement can leave the task blocked and its runtime reservation held;
+the parent can use `task_cancel` to dispose of that runtime safely.
+
 Task GET authorizes the task before reading its cached publication projection. Reads stay
 DB-only: successful CI becomes unknown when its head differs, its timestamp is missing,
 future or older than five minutes. The response includes the existing publication mode and
@@ -256,6 +264,18 @@ All persistence mutations take the caller's asyncpg connection inside one transa
 order is global admission key, request key, parent task, branch claim. Trusted cap settings
 (default 3 per parent, 6 globally) count held reservations including uncertain creates/drains.
 Idempotency is checked before reservation, and transaction rollback removes all admission rows.
+
+Capacity counts reservations rather than task status. Blocked, waiting and completed tasks
+still count while their attempts hold capacity; their runtimes may remain writable or have
+an uncertain stop. Confirmed fencing releases the slot regardless of the task's diagnostic
+status. There is no age-based expiry of abandoned blocked tasks. The parent can cancel its
+managed tasks through the existing `task_cancel` tool; `task_get` supplies the current
+version and attempt for that request. A `409 parent_capacity` includes `limit`, `held_tasks`
+(task ID, title, status/reason, version, current attempt, held attempt and attempt state),
+and guidance to cancel abandoned work. The list covers only the caller's admission bucket,
+including root tasks in the owner's main bucket. MCP returns these details in the error
+text and owner REST returns them alongside `detail.reason`. Cancellation does not free a
+slot until runtime termination is confirmed; uncertain disposal remains visible in the list.
 
 Writer claims key owner/canonical repository/exact branch, covering project URL/name aliases.
 Generations increase when a released claim is reused. Compare-and-swap release checks generation

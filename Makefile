@@ -1,4 +1,4 @@
-.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
+.PHONY: help dev dev-stop dev-reset dev-logs dev-shell dev-legacy install clean lint lint-all fmt fmt-all build-backend build-frontend build-all push-backend push-frontend push-all build-all-parallel push-all-parallel kind-create kind-delete kind-load kind-secrets kind-deploy kind-reset kind-logs kind-shell test test-backend test-run test-reset test-ci debug-tasks debug-task debug-retry debug-logs debug-db
 
 # Load .env file if it exists
 -include .env
@@ -168,6 +168,9 @@ test-loop: ## Watch for changes and auto-redeploy to Kind
 # =============================================================================
 TEST_API_URL := http://localhost:8081
 TEST_FRONTEND_URL := http://localhost:5173
+
+test-backend: ## Offline backend + scratch PostgreSQL; 30s/test, 9m/suite
+	@cd backend && uv run --no-sync python scripts/test_backend.py $(TEST_ARGS)
 
 test: ## Deploy to Kind + open Playwright UI (disabled; ENABLE_E2E=1 to opt in)
 	@./scripts/e2e-guard.sh

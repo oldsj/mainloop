@@ -21,7 +21,9 @@ async def transaction():
         async with db.connection() as conn, conn.transaction():
             yield conn
     except store.TaskError as exc:
-        raise HTTPException(exc.status, detail={"reason": exc.code}) from exc
+        raise HTTPException(
+            exc.status, detail={"reason": exc.code, **exc.details}
+        ) from exc
 
 
 @router.get("/tasks")
