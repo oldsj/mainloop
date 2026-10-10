@@ -38,6 +38,23 @@ MCP/read/optional-push references, attempt/claim generation and reserved push ve
 and protected workspaces reserve read only; coordination sessions receive no Git plan. Historical
 or dispatched bindings without a plan cannot be retrofitted. Missing dispatch history is a hold.
 
+With the push gate enabled, a workspace writer plan needs the project's default branch. When the
+cached value is empty (as on every freshly imported project), Mainloop reads the repository's
+default branch through the repository-scoped GitHub App client before reserving any references,
+whatever checkout ref was requested, and stores it through the same atomic project-metadata and
+protected-branch-policy update the owner metadata refresh uses. If GitHub cannot supply it, no
+plan or enrollment is frozen and creation holds: a task attempt stays `creating` with evidence
+`git-hold:default_branch_unavailable` and the next reconciliation pass retries. Mainloop never
+guesses a default branch and never freezes a feature-branch writer into a read-only plan because
+metadata is missing. A writer whose plan has no push reference records why on its task attempt
+as `git-push-absent:<reason>` (for example `default_branch` or `protected_branch`).
+
+New plans spell the Git read and push reference header as lowercase `authorization`, the exact
+form kagent's preparation check counts; it requires exactly one read and one push reference at
+the configured origins, each with Secret key `authorization`. The MCP reference is unchanged.
+Plans frozen earlier keep their original bytes and digest; publication and cleanup reuse each
+plan's frozen references.
+
 With both gates enabled, new task and owner workspace checkouts resolve to full commit SHAs
 through the repository-scoped GitHub App commits endpoint (`contents: read`) before admission
 rows and the create plan are frozen. Empty refs resolve GitHub's current default branch; explicit
@@ -66,7 +83,12 @@ authoritative binding role. The `prepare_receipt` row initially contains only th
 authority. Lost replies with no receipt retry identical bytes and the same action. Pending or
 uncertain receipts are polled without reissuing Prepare; confirmed receipts never open another
 challenge. ALREADY_EXISTS, definite failure, receipt identity/profile disagreement and historical
-receipts hold the enrollment for Session replacement. A non-READY Session or an operation in
+receipts hold the enrollment for Session replacement. A failed preparation keeps a bounded,
+secret-free reason: `prepare_receipt.failure` records Mainloop's failure code, the gRPC status
+when kagent refused Prepare, and Mainloop's own count of kagent-acceptable Git references
+(`git_refs: {read, push}`); the task attempt gains matching evidence such as
+`git-prepare-failed:git_prepare_failed:grpc=9:git-refs read=1 push=0`. Runtime error text is
+never stored. A non-READY Session or an operation in
 progress holds preparation without failing its durable state. kagent temporarily projects
 historical receipts during ordinary suspension/resume; only a fresh settled READY observation
 of the original runtime can classify history as terminal. The authoritative binding role alone

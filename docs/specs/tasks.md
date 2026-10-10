@@ -29,6 +29,10 @@ admission. The task and workspace store the full commit SHA; an unavailable ref 
 with `checkout_ref_unavailable` and leaves no task, attempt, workspace or create plan. Retries
 with the same request ID reuse the stored SHA even if the remote ref moves. Successors continue
 using their checkpoint's verified `remote_sha`. With either flag off, refs pass through unchanged.
+With the push gate enabled and the project's cached default branch empty, provisioning reads it
+from GitHub before freezing the attempt's Git plan, for explicit SHAs as well as named refs; if
+that read fails the attempt stays `creating` with evidence `git-hold:default_branch_unavailable`
+and retries (see `push-gate.md`).
 Existing task checkouts are not rewritten. The required checkout `branch` remains the feature
 branch used for the writer claim and push target, independently of `ref`.
 

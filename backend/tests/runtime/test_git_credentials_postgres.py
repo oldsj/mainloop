@@ -515,6 +515,18 @@ class OwnerWorkspaceApiCheckoutTests(GitCredentialsCase):
         self.resolve.assert_awaited_once_with("owner/new-repo", "base/topic")
         self.assertEqual(await self.project_count(), before_projects + 1)
         self.assertEqual(len(self.native.creates), 1)
+        # A freshly imported project caches '' until the writer plan learns GitHub's value.
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT default_branch FROM projects WHERE lower(full_name)='owner/new-repo' AND user_id=$1",
+                self.user,
+            ),
+            "trunk",
+        )
+        plan = (await self.enrolled(response.json()["workspace_id"])).plan
+        self.assertEqual(
+            credentials.git_reference_counts(plan.references), {"read": 1, "push": 1}
+        )
 
 
 class GitCredentialTests(GitCredentialsCase):
@@ -2088,3 +2100,226 @@ class GitTaskCredentialTests(GitCredentialsCase):
             with self.assertRaises(TransportError):
                 await self.authority.authenticate(token, purpose)
         self.assertIsNotNone(await ns.get_binding(sid))
+
+    # ---- writer plans must satisfy kagent's preparation check -----------------------
+
+    async def unknown_default_branch(self):
+        await self.pool.execute(
+            "UPDATE projects SET default_branch='' WHERE id=$1", self.pid
+        )
+        await self.pool.execute(
+            "DELETE FROM push_branch_policies WHERE project_id=$1", self.pid
+        )
+
+    def github(self, server):
+        return (
+            app_settings(),
+            patch.object(
+                github_checkout,
+                "GitHubCreationClient",
+                partial(
+                    GitHubCreationClient, transport=httpx.MockTransport(server.handle)
+                ),
+            ),
+        )
+
+    async def attempt_evidence(self, attempt_id):
+        from mainloop.tasks import lifecycle
+
+        async with self.pool.acquire() as conn:
+            return (await lifecycle.load_attempt(conn, attempt_id)).evidence_refs
+
+    def assert_kagent_accepts(self, references, accepted=True):
+        refs = [r if isinstance(r, dict) else r.model_dump() for r in references]
+        self.assertEqual(kagent_preparation_accepts(refs), accepted)
+        counts = credentials.git_reference_counts(refs)
+        self.assertEqual(counts == {"read": 1, "push": 1}, accepted)
+
+    async def test_writer_learns_unknown_default_branch_and_freezes_read_and_push(self):
+        await self.unknown_default_branch()
+        server = CheckoutServer()
+        patchers = self.github(server)
+        with patchers[0], patchers[1]:
+            # The fixture checkout is an explicit SHA, so no ref resolution reads GitHub.
+            _, task, attempt = await self.task(branch="mainloop/x")
+        self.assertEqual(task.checkout.ref, "a" * 40)
+        self.assertEqual(attempt.state, "active")
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT default_branch FROM projects WHERE id=$1", self.pid
+            ),
+            "trunk",
+        )
+        async with self.pool.acquire() as conn:
+            policy = await store.load_policy(conn, self.pid)
+        self.assertEqual((policy.default_branch, policy.version), ("trunk", 1))
+        enrollment = await self.enrolled(attempt.session_id)
+        git = [
+            r
+            for r in enrollment.plan.references
+            if r.origin in (settings.git_read_origin, settings.git_push_origin)
+        ]
+        self.assertEqual(
+            sorted(r.origin for r in git),
+            sorted((settings.git_read_origin, settings.git_push_origin)),
+        )
+        for ref in git:
+            self.assertEqual(
+                (ref.header, ref.secret_key), ("authorization", "authorization")
+            )
+        self.assertIsNotNone(enrollment.plan.push_version)
+        self.assertEqual(enrollment.push_state, "published")
+        self.assert_kagent_accepts(enrollment.plan.references)
+        # The created Session carried exactly the frozen references.
+        self.assertEqual(
+            tuple(asdict(r) for r in self.native.creates[-1][1][1]),
+            tuple(r.model_dump() for r in enrollment.plan.references),
+        )
+        self.assertFalse(
+            [e for e in attempt.evidence_refs if e.startswith("git-push-absent:")]
+        )
+
+    async def test_default_branch_lookup_failure_holds_admission_without_enrollment(
+        self,
+    ):
+        await self.unknown_default_branch()
+        server = CheckoutServer()
+        server.repo_status = 503
+        patchers = self.github(server)
+        with patchers[0], patchers[1]:
+            operation, _, attempt = await self.task(branch="mainloop/x")
+        self.assertEqual(attempt.state, "creating")
+        self.assertIn("git-hold:default_branch_unavailable", attempt.evidence_refs)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM git_enrollments WHERE binding_id=$1",
+                attempt.session_id,
+            ),
+            0,
+        )
+        self.assertFalse(self.native.creates)
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT default_branch FROM projects WHERE id=$1", self.pid
+            ),
+            "",
+        )
+        self.assertIsNone(
+            await self.pool.fetchrow(
+                "SELECT 1 FROM push_branch_policies WHERE project_id=$1", self.pid
+            )
+        )
+        # Once GitHub answers, the held admission resumes with both references.
+        server.repo_status = 200
+        with patchers[0], patchers[1]:
+            await self.worker.reconcile(db, operation)
+        enrollment = await self.enrolled(attempt.session_id)
+        self.assert_kagent_accepts(enrollment.plan.references)
+        self.assertEqual(len(self.native.creates), 1)
+
+    async def test_writer_on_default_branch_stays_read_only_with_reason(self):
+        await self.unknown_default_branch()
+        server = CheckoutServer()
+        patchers = self.github(server)
+        with patchers[0], patchers[1]:
+            _, _, attempt = await self.task(branch="trunk", ready=False)
+            binding = await ns.get_binding(attempt.session_id)
+            await ns._create_bound_session(binding)
+        enrollment = await self.enrolled(attempt.session_id)
+        self.assertIsNone(enrollment.plan.push_version)
+        self.assertEqual(enrollment.push_state, "absent")
+        self.assertEqual(
+            credentials.git_reference_counts(enrollment.plan.references),
+            {"read": 1, "push": 0},
+        )
+        self.assert_kagent_accepts(enrollment.plan.references, accepted=False)
+        self.assertIn(
+            "git-push-absent:default_branch",
+            await self.attempt_evidence(attempt.id),
+        )
+
+    async def test_kagent_predicate_accepts_new_plans_and_rejects_old_spelling(self):
+        _, _, attempt = await self.task(branch="mainloop/x", ready=False)
+        binding = await ns.get_binding(attempt.session_id)
+        await ns._create_bound_session(binding)
+        new = [
+            r.model_dump()
+            for r in (await self.enrolled(attempt.session_id)).plan.references
+        ]
+        self.assert_kagent_accepts(new)
+        # The first gated run froze capitalized headers: read=0, push=0 for kagent.
+        old = [
+            (
+                {**r, "header": "Authorization"}
+                if r["origin"] in (settings.git_read_origin, settings.git_push_origin)
+                else r
+            )
+            for r in new
+        ]
+        self.assert_kagent_accepts(old, accepted=False)
+        self.assert_kagent_accepts(
+            [r for r in new if r["origin"] != settings.git_push_origin], accepted=False
+        )
+
+    async def test_previously_frozen_capitalized_plan_keeps_its_references(self):
+        with patch.object(credentials, "GIT_HEADER", "Authorization"):
+            _, sid, runtime = await self.preparation_target()
+        before = await self.preparation_row(sid)
+        plan = (await self.enrolled(sid)).plan
+        self.assertEqual({r.header for r in plan.references[1:]}, {"Authorization"})
+        for purpose in ("git-read", "git-push"):
+            self.assertEqual(
+                credentials.reference(plan, purpose).header, "Authorization"
+            )
+        await self.ready_preparation(sid, runtime)
+        after = await self.preparation_row(sid)
+        self.assertEqual(
+            (after["plan"], after["plan_digest"]),
+            (before["plan"], before["plan_digest"]),
+        )
+        self.assertEqual(after["read_state"], "published")
+
+    async def test_prepare_failure_keeps_a_bounded_reason(self):
+        _, sid, runtime = await self.preparation_target()
+        attempt_id = (await self.enrolled(sid)).plan.attempt_id
+        self.native.prepare_error = SessionError(
+            "Current prepared runtime identity is unavailable: secret-ish detail",
+            grpc_status=9,
+        )
+        with self.assertRaisesRegex(ValueError, "git_prepare_failed"):
+            await self.ready_preparation(sid, runtime)
+        row = await self.preparation_row(sid)
+        receipt = json.loads(row["prepare_receipt"])
+        self.assertEqual(
+            receipt["failure"],
+            {
+                "code": "git_prepare_failed",
+                "grpc_status": 9,
+                "git_refs": {"read": 1, "push": 1},
+            },
+        )
+        self.assertIn("original", receipt)
+        evidence = await self.attempt_evidence(attempt_id)
+        self.assertIn(
+            "git-prepare-failed:git_prepare_failed:grpc=9:git-refs read=1 push=1",
+            evidence,
+        )
+        self.assertNotIn("secret-ish", row["prepare_receipt"])
+        self.assertFalse([e for e in evidence if "secret-ish" in e])
+
+
+def kagent_preparation_accepts(references):
+    """Mirror of kagent 9c0c373 native_handoff.go:157-169 (CheckPreparationRuntime).
+
+    Only exact lowercase ``authorization`` headers count, at the exact read/push origins,
+    with Secret key ``authorization``; preparation needs exactly one of each.
+    """
+    read = push = 0
+    for ref in references:
+        if ref["header"] != "authorization" or ref["secret_key"] != "authorization":
+            continue
+        if ref["origin"] == settings.git_read_origin:
+            read += 1
+        elif ref["origin"] == settings.git_push_origin:
+            push += 1
+    return read == 1 and push == 1

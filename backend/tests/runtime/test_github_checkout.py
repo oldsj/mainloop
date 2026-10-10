@@ -19,16 +19,23 @@ class CheckoutServer(AppServer):
         super().__init__()
         self.sha, self.status = SHA, 200
         self.repository = "owner/repo"
+        self.default_branch, self.repo_status = "trunk", 200
 
     async def handle(self, request):
         if "/commits/" in request.url.path:
             self.requests.append(request)
             return httpx.Response(self.status, json={"sha": self.sha})
-        if request.url.path == "/repos/owner/repo":
+        path = request.url.path
+        if path.startswith("/repos/owner/") and path.count("/") == 3:
             self.requests.append(request)
+            name = path.removeprefix("/repos/")
             return httpx.Response(
-                200,
-                json={"id": 1, "full_name": self.repository, "default_branch": "trunk"},
+                self.repo_status,
+                json={
+                    "id": 1,
+                    "full_name": self.repository if name == "owner/repo" else name,
+                    "default_branch": self.default_branch,
+                },
             )
         return await super().handle(request)
 
@@ -127,3 +134,37 @@ class CheckoutResolutionTests(unittest.IsolatedAsyncioTestCase):
             if r.url.path.endswith("/access_tokens")
         ]
         self.assertEqual(permissions, [{"contents": "read"}])
+
+    async def test_default_branch_reads_the_repository_through_the_app(self):
+        self.assertEqual(
+            await github_checkout.resolve_default_branch("Owner/Repo"), "trunk"
+        )
+        self.assertIn("/repos/owner/repo", [r.url.path for r in self.server.requests])
+        self.assertFalse(any("/commits/" in r.url.path for r in self.server.requests))
+        self.assertTrue(all(r.method in ("GET", "POST") for r in self.server.requests))
+
+    async def test_unknown_default_branch_refuses_and_never_guesses(self):
+        cases = (
+            ("repository", "other/repo"),
+            ("default_branch", ""),
+            ("repo_status", 404),
+            ("repo_status", 503),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                self.server = CheckoutServer()
+                setattr(self.server, field, value)
+                with (
+                    patch.object(
+                        github_checkout,
+                        "GitHubCreationClient",
+                        partial(
+                            GitHubCreationClient,
+                            transport=httpx.MockTransport(self.server.handle),
+                        ),
+                    ),
+                    self.assertRaisesRegex(
+                        github_checkout.DefaultBranchUnavailable, "could not be read"
+                    ),
+                ):
+                    await github_checkout.resolve_default_branch("owner/repo")

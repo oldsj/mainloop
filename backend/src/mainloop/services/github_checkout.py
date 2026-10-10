@@ -40,3 +40,24 @@ async def resolve_checkout_ref(repository: str, ref: str) -> str:
         raise CheckoutRefUnavailable(
             "Checkout ref could not be resolved to a GitHub commit."
         ) from None
+
+
+class DefaultBranchUnavailable(ValueError):
+    """Owner-safe refusal; upstream bodies and credentials must not escape."""
+
+
+async def resolve_default_branch(repository: str) -> str:
+    """Read the repository's default branch through the App client. Never guessed."""
+    repository = parse_github_repo(repository).full_name.lower()
+    try:
+        async with GitHubCreationClient(repository) as client:
+            repo = await client.repo(repository)
+    except (GitHubError, PolicyError, ValueError, TimeoutError):
+        raise DefaultBranchUnavailable(
+            "Repository default branch could not be read from GitHub."
+        ) from None
+    if repo.full_name.lower() != repository or not repo.default_branch:
+        raise DefaultBranchUnavailable(
+            "Repository default branch could not be read from GitHub."
+        )
+    return repo.default_branch
