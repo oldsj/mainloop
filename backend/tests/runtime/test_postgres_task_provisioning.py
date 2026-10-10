@@ -1,6 +1,7 @@
 """S1 admission, runtime races and authority on PostgreSQL 16 with fake kagent."""
 
 import asyncio
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -66,10 +67,12 @@ class RejectedCreateCrash(BaseException):
 
 
 class TaskProvisioningPostgresTests(KagentFakeCase):
+    reuse_database = True
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks", "task_attempts", "workspace_writer_claims", "task_operations"
         )
         self.fake.next_session_ids = [str(uuid.uuid4()) for _ in range(12)]
         self.project = "p-" + self.user
@@ -2382,8 +2385,6 @@ class TaskProvisioningPostgresTests(KagentFakeCase):
     async def test_separate_backend_process_parent_drain_waits_for_child_admission(
         self,
     ):
-        _, _, parent = await self.create_task()
-        _, _, child = await self.create_task(principal=await self.principal(parent))
         code = """
 import asyncio, sys
 import asyncpg
@@ -2404,46 +2405,66 @@ async def main():
 asyncio.run(main())
 """
         process = None
+        committed = None
+        error_output = None
         try:
-            async with lifecycle.guard(child.session_id, "submit"):
-                process = await asyncio.create_subprocess_exec(
-                    "uv",
-                    "run",
-                    "python",
-                    "-c",
-                    code,
-                    self.url,
-                    parent.session_id,
-                    parent.id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            # One readiness/coordination budget includes interpreter startup,
+            # observed SQL blocking and commit. Leave room for cleanup in the
+            # runner's 60-second test phase; no fixed startup sleeps.
+            async with asyncio.timeout(45):
+                _, _, parent = await self.create_task()
+                _, _, child = await self.create_task(
+                    principal=await self.principal(parent)
                 )
-                pid = int(await asyncio.wait_for(process.stdout.readline(), 10))
-                committed = asyncio.create_task(process.stdout.readline())
-
-                async def observe():
-                    while not committed.done():
-                        if await self.pool.fetchval(
-                            "SELECT cardinality(pg_blocking_pids($1)) > 0", pid
-                        ):
-                            return
-                    self.fail(
-                        "separate process committed parent drain during child admission"
-                    )
-
-                await asyncio.wait_for(observe(), 10)
-                self.assertIsNotNone(
-                    (await ns.get_binding(parent.session_id))["token_hash"]
-                )
-            self.assertEqual(await asyncio.wait_for(committed, 10), b"committed\n")
-            self.assertEqual(await asyncio.wait_for(process.wait(), 10), 0)
-            with self.assertRaises(lifecycle.LifecycleDenied):
                 async with lifecycle.guard(child.session_id, "submit"):
-                    self.fail("child admitted after separate-process parent drain")
+                    process = await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-c",
+                        code,
+                        self.url,
+                        parent.session_id,
+                        parent.id,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    error_output = asyncio.create_task(process.stderr.read())
+                    ready = await process.stdout.readline()
+                    if not ready:
+                        self.fail(
+                            "backend child exited before readiness: "
+                            + (await error_output).decode(errors="replace")
+                        )
+                    pid = int(ready)
+                    committed = asyncio.create_task(process.stdout.readline())
+
+                    async def observe():
+                        while not committed.done():
+                            if await self.pool.fetchval(
+                                "SELECT cardinality(pg_blocking_pids($1)) > 0", pid
+                            ):
+                                return
+                        self.fail(
+                            "separate process committed parent drain during child admission"
+                        )
+
+                    await observe()
+                    self.assertIsNotNone(
+                        (await ns.get_binding(parent.session_id))["token_hash"]
+                    )
+                self.assertEqual(await committed, b"committed\n")
+                self.assertEqual(await process.wait(), 0)
+                with self.assertRaises(lifecycle.LifecycleDenied):
+                    async with lifecycle.guard(child.session_id, "submit"):
+                        self.fail("child admitted after separate-process parent drain")
         finally:
             if process is not None and process.returncode is None:
                 process.kill()
-                await process.wait()
+                await asyncio.wait_for(process.wait(), 5)
+            for reader in (committed, error_output):
+                if reader is not None:
+                    if not reader.done():
+                        reader.cancel()
+                    await asyncio.gather(reader, return_exceptions=True)
 
     async def test_enrollment_reply_loss_recovers_existing_grant_once(self):
         op, _, attempt = await self.create_task(ready=False)

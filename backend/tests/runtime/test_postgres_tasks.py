@@ -30,8 +30,12 @@ class TaskPostgresTests(PostgresTestCase):
         await super().asyncSetUp()
         # Parent test classes retain their rows between tests; isolate our capacity
         # assertions without touching any other server/database.
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.principal = TaskPrincipal(self.user)
         self.project = await db.get_or_create_project(
@@ -166,8 +170,12 @@ class TaskPostgresTests(PostgresTestCase):
         self.assertEqual(
             await self.pool.fetchval("SELECT count(*) FROM task_events"), 3
         )
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         result = await asyncio.gather(
             *(

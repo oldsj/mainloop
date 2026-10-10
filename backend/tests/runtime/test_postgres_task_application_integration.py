@@ -41,6 +41,8 @@ from models.task import TaskAction, TaskReassign, TaskReport
 
 
 class TaskApplicationIntegrationTests(MergeFixture):
+    reuse_database = True
+
     # Reuse the accepted fixture helpers without inheriting its test methods.
     enroll = fixtures.TaskAttentionTests.enroll
     child = fixtures.TaskAttentionTests.child
@@ -49,8 +51,12 @@ class TaskApplicationIntegrationTests(MergeFixture):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        await self.pool.execute(
-            "TRUNCATE tasks,task_attempts,workspace_writer_claims,task_events,task_operations CASCADE"
+        await self.clear_tables(
+            "tasks",
+            "task_attempts",
+            "workspace_writer_claims",
+            "task_events",
+            "task_operations",
         )
         self.task, self.attempt = await self.enroll(self.sid, "feature")
         self.binding = await PgStore().get_binding(self.sid)
