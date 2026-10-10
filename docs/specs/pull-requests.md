@@ -248,7 +248,11 @@ separate and is labelled as an agent note.
 
 The snapshot includes the repository and PR, exact head/base refs and SHAs, proposal ID,
 description digest, changed-path digest and statistics, approval reasons, CI inventory
-digest/completeness/time, and policy versions. Mainloop stores its canonical SHA-256 digest
+digest/completeness/time, and policy versions. Proposals with a merge inventory also
+include its file count, the count of files the PR list does not name, and its digest.
+Approval reasons cover protected paths from both inventories, and the path preview lists
+merge-inventory rows the PR list does not name first, labelled "(merge result only)", so
+truncation cannot hide them. Mainloop stores its canonical SHA-256 digest
 with the immutable proposal. The owner card labels CI as historical evidence and says that
 it does not establish that a merge is safe or complete. Current evidence is read again by
 the response and merge paths.
@@ -287,31 +291,84 @@ Evidence reads the default branch's current head, records it as the proposal's
 `base_sha`, and refuses as stale if it moves before the read finishes. A trailing
 base is accepted when GitHub requires no up-to-date branch.
 
-The PR's three-dot file list does not cover every path a squash changes: when the
-base branch renames a file the head edits, the squash changes the new path, which
-the PR list never names. Evidence therefore also reads GitHub's test merge commit
-(`merge_commit_sha`) through the commits API, whose parents must be exactly the pinned
-`base_sha` and the expected head. It then reads the documented comparison
-`compare/{base_sha}...{merge_commit_sha}`: because `base_sha` is the merge's first
-parent, it is also the merge base, so the three-dot diff is exactly what the merge
-changes on the default branch. The comparison must report status `ahead`, `behind_by`
-0, at least one commit ahead and `base_sha` as both base and merge base. Its files
-(including deletions and both sides of renames) must have no duplicates. Compare lists
-changed files only on its first page and at most 300 for a comparison, so a list of
-300 or more is refused (`merge_result`) as possibly incomplete. Protected-path matching uses the union of the PR inventory and this
-merge-result inventory; the proposal pins both (`files_digest`, `merge_files_digest`)
-but not the test merge SHA, which GitHub recreates. A missing test merge, unknown
-mergeability or mismatched parents never falls back to the PR list: preparation is
-refused with a retry message (`merge_result_pending`), and execution returns
-`evaluating` unless the exact-head CI already failed. Merge
-execution refuses a proposal whose pinned `base_sha` no longer matches the default
+#### Merge inventory
+
+The PR's own file list is a three-dot diff against its recorded base, and GitHub's
+test merge (`merge_commit_sha`) stays built on that recorded base after the default
+branch moves; neither describes a squash onto the current `base_sha`. Evidence
+therefore computes the inventory itself from two documented comparisons
+([compare two commits](https://docs.github.com/en/rest/commits/commits#compare-two-commits)):
+
+1. Head side: `compare/{base_sha}...{head}`. Its `merge_base_commit` is the merge base
+   `M`; the files are what the head changed since `M`. It must name `base_sha` as its
+   base, be at least one commit ahead, and report `ahead` with nothing behind when
+   `M` is `base_sha`, or `diverged` with something behind otherwise.
+2. Base side, only when `M` is not `base_sha`: `compare/{M}...{base_sha}`, what the
+   default branch changed since `M`. It must report `ahead`, nothing behind, `M` as base
+   and merge base, and as many commits ahead as the head side is behind. Its commits
+   are read page by page (100 per page) and must all be listed, include `base_sha`, and
+   form a single-parent chain back to `M`.
+
+Compare lists changed files only on its first page and at most 300 for a comparison,
+so either side listing 300 or more files is refused as possibly incomplete. Both
+sides must have valid, unique paths and rename sources. A default branch more than
+1,000 commits ahead of `M`, or with a merge commit in that range, is refused. Each of
+these refusals (`merge_inventory`) tells the agent to update the branch (merge or
+rebase the default branch into the head), push, then prepare again; after that `M`
+is `base_sha` and the base side is empty. Mainloop does not update branches itself.
+
+The proposal records `merge_base_sha` and the head-side inventory as `merge_files`
+with `merge_files_digest`; protected-path matching uses the union of the PR inventory
+and the head-side inventory. `merge_commit_sha` is recorded for diagnosis only. It
+is neither read nor pinned and does not gate preparation or execution.
+
+**Why the head-side inventory covers the squash.** A squash merge commits Git's
+three-way merge of `base_sha` and the head with base `M`. Path by path: where only the
+default branch changed a path since `M`, the result keeps its version at `base_sha`, so the
+squash does not change that path. Where the head changed a path (alone or with the
+default branch), the path is in the head-side inventory. Paths neither side changed are
+unchanged. A path the head changed and the default branch deleted is a modify/delete
+conflict, and GitHub refuses a conflicting merge. So every path the squash changes
+relative to `base_sha` is in the head-side inventory, under three conditions that
+evidence enforces instead of assuming:
+
+- **One merge base.** With several merge bases Git merges against a virtual base,
+  not `M`. A single-parent chain from `M` to `base_sha` leaves `M` as the only best
+  common ancestor, because every other ancestor of `base_sha` is in that chain (and
+  so descends from `M`) or is an ancestor of `M`.
+- **No base-side rename of a head path.** Git's rename detection carries a head
+  change to wherever the default branch moved the file, a path neither inventory
+  names (for example main renames `src/build.yml` to `.github/workflows/build.yml` and
+  the head edits `src/build.yml`; the squash changes the workflow). Evidence refuses
+  when a path the default branch renamed away _or removed_ is any path in the head
+  inventory. Removals count because GitHub's compare and Git's merge can pair renames
+  differently.
+- **No directory rename across the sides.** When one side renames or removes every
+  file in a directory, Git moves files the other side adds there into the new
+  directory. Evidence refuses when a file one side adds or renames into a directory
+  lies under any non-root directory the other side renamed or removed a file from,
+  unless that directory is proven to still exist on the renaming side (a file there
+  that the renaming side lists as present, or that the other side shows existed at
+  `M` and the renaming side did not rename or remove). The repository root always
+  exists.
+
+These are conservative checks: they can refuse merges Git would place safely, never
+the reverse, and refusing costs only a branch update. A head-side rename on its own is
+covered, because both its source and target are in the head-side inventory.
+
+Unknown mergeability (`mergeable: null`) is refused at preparation with a retry
+message (`mergeability_pending`); execution returns `evaluating` unless the exact-head
+CI already failed. GitHub computes `mergeable` against the PR's recorded base, so a
+conflict with the current default branch can still surface only at dispatch, where
+GitHub's merge API refuses it.
+
+Merge execution refuses a proposal whose pinned `base_sha` no longer matches the default
 branch ("default branch moved since preparation; prepare again"); a new preparation
 pins the new head. A PR GitHub reports as conflicting (`mergeable: false` or
 `mergeable_state: dirty`) is refused as `merge_conflict`, and one it reports as
 `behind` (a branch rule requiring an up-to-date head) is refused as a branch-rule
-block telling the agent to update the branch, push and prepare again. Mainloop does
-not update branches itself. Blocked execution results include the refusal reason.
-Complete paths are read between
+block telling the agent to update the branch, push and prepare again. Blocked
+execution results include the refusal reason. Complete paths are read between
 matching PR/repository observations, including deletion and rename sources. More
 than 3,000 files, malformed paths, pagination/count mismatches or duplicate paths
 fail closed. A complete evidence refresh has a 60-second bound (also shared across an owner decision batch). Protected globs and versions come from the server policy contract.

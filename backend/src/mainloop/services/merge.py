@@ -13,7 +13,7 @@ from mainloop.db import tasks as task_store
 from mainloop.db.hitl import lookup_merge_receipt
 from mainloop.runtime.policy import PolicyError
 from mainloop.services.github_creation import GitHubError
-from mainloop.services.github_merge import GitHubMergeClient, MergeResultPending
+from mainloop.services.github_merge import GitHubMergeClient, MergeabilityPending
 from mainloop.services.merge_summary import build_summary
 from mainloop.services.workspace_authority import (
     ScopeUnavailable,
@@ -738,9 +738,9 @@ async def execute_once(binding, arguments, *, approved, reevaluate=False):
         )
     except PolicyError as error:
         reason = error.message
-        if isinstance(error, MergeResultPending):
+        if isinstance(error, MergeabilityPending):
             if ci_state(error.ci, facts["head_sha"]) != "failure":
-                # Like unknown mergeability: wait for GitHub's test merge.
+                # Unknown mergeability: wait for GitHub to compute it.
                 return state_result(
                     "evaluating", p["id"], candidate["deadline"], approved=approved
                 )
