@@ -86,6 +86,10 @@ requires PostgreSQL so database coverage cannot silently skip. Use
 `MAINLOOP_TEST_TIMINGS=/path/to/timings.json` for module/test timing evidence.
 Timeouts print the active test or fixture and all thread stacks, then fail the run.
 
+In a Mainloop workspace, run the backend suite as `dev-postgres run make test-backend`.
+The helper starts and stops scratch PostgreSQL and exports `MAINLOOP_TEST_DATABASE_URL`.
+Run checks in the foreground and wait for them to finish before ending your turn.
+
 The Playwright suites (`fast`, `mobile`, `e2e`) and the live worker e2e script are disabled: CI no longer runs them, and `make test`, `make test-run`, `make test-ci`, `make test-worker-e2e`, and the frontend `pnpm test` scripts refuse to start unless `ENABLE_E2E=1` is set. The specs and test files are kept for reference and for a deliberate opt-in run.
 
 Some historical tests and Make targets invoke live agents, external services, containers, or Kubernetes. Do not run the browser `e2e` tests, live-agent tests, subscription-consuming commands, deployments, destructive resets, or production commands unless the task explicitly requires them and their target is known. Default automated tests for new native-agent adapters must use sanitized fixtures or fakes; keep live proofs opt-in and bounded.
