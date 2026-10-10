@@ -439,8 +439,8 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
             "secret_name": "mainloop-mcp-binding-id",
             "secret_key": "authorization",
         }
-        conn.fetchrow = AsyncMock(
-            side_effect=[
+        rows = iter(
+            [
                 {
                     "mcp_grant_kind": "workspace",
                     "credential_ref": reference,
@@ -451,6 +451,13 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
                 {"credential_ref": reference},
             ]
         )
+
+        async def fetchrow(sql, binding_id):
+            if sql.lstrip().startswith("WITH route"):
+                return {"key": "mainloop:task-authority:" + binding_id}
+            return next(rows)
+
+        conn.fetchrow = AsyncMock(side_effect=fetchrow)
         conn.execute = AsyncMock()
         conn.fetchval = AsyncMock(return_value=None)
         conn.fetch = AsyncMock(return_value=[{"session_id": "binding-id"}])
@@ -495,9 +502,15 @@ class RevocationTests(unittest.IsolatedAsyncioTestCase):
         git_cleanup.assert_awaited_once_with()
         self.assertFalse(conn.is_in_transaction())
         lock_keys = [
-            call.args[1]
+            # The combined authority query supplies the binding; its returned
+            # key has the authority prefix (real tree routing is tested in SQL).
+            (
+                "mainloop:task-authority:" + call.args[1]
+                if call[0] == "fetchrow"
+                else call.args[1]
+            )
             for call in conn.mock_calls
-            if call[0] in ("execute", "fetchval")
+            if call[0] in ("execute", "fetchval", "fetchrow")
             and "pg_advisory_lock(" in call.args[0]
         ]
         self.assertEqual(

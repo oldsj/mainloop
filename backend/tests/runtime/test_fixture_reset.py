@@ -1,11 +1,14 @@
 """Fixture reuse must preserve isolation and restore normal database authority."""
 
 import asyncio
+import io
+import unittest
 import uuid
 from unittest.mock import patch
 
 import asyncpg
-from tests.runtime.postgres_fixture import clear_rows
+from mainloop.db import db
+from tests.runtime.postgres_fixture import clear_rows, row_reset_plan
 from tests.runtime.test_postgres_ledger import TEST_URL, PostgresTestCase
 from tests.runtime.test_push_transport_git import GitFixtureCase
 
@@ -91,6 +94,47 @@ class RowResetTests(PostgresTestCase):
             for table in (self.parent, self.child):
                 self.assertEqual(await self.row_count(conn, table), 1)
 
+    async def test_cached_reset_is_atomic_and_bound_to_its_database(self):
+        async with self.pool.acquire() as conn:
+            reset = await row_reset_plan(conn)
+            async with conn.transaction():
+                with self.assertRaisesRegex(ValueError, "own its transaction"):
+                    await reset.clear(conn)
+                self.assertEqual(
+                    await conn.fetchval("SHOW session_replication_role"), "origin"
+                )
+            await conn.execute(
+                f"CREATE TRIGGER fail_reset BEFORE DELETE ON {self.parent} "
+                "FOR EACH ROW EXECUTE FUNCTION "
+                f"{self.parent.removesuffix('_parent')}_immutable(); "
+                f"ALTER TABLE {self.parent} ENABLE ALWAYS TRIGGER fail_reset"  # nosec B608 - generated fixture identifiers
+            )
+            with self.assertRaisesRegex(asyncpg.RaiseError, "fixture immutable"):
+                await reset.clear(conn)
+            self.assertEqual(
+                await conn.fetchval("SHOW session_replication_role"), "origin"
+            )
+            self.assertFalse(conn.is_in_transaction())
+            for table in (self.parent, self.child, self.other):
+                self.assertEqual(await self.row_count(conn, table), 1)
+            await conn.execute(
+                f"DROP TRIGGER fail_reset ON {self.parent}"
+            )  # nosec B608
+            await reset.clear(conn)
+            self.assertEqual(await self.row_count(conn, self.parent), 0)
+            self.assertEqual(
+                await conn.fetchval("SHOW session_replication_role"), "origin"
+            )
+        foreign = await asyncpg.connect(TEST_URL)
+        try:
+            with self.assertRaisesRegex(asyncpg.RaiseError, "owned test database"):
+                await reset.clear(foreign)
+            self.assertEqual(
+                await foreign.fetchval("SHOW session_replication_role"), "origin"
+            )
+        finally:
+            await foreign.close()
+
     async def test_cleanup_refuses_foreign_databases_unknown_tables_and_nested_transactions(
         self,
     ):
@@ -145,6 +189,67 @@ class RowResetTests(PostgresTestCase):
                 await asyncio.to_thread(Unqualified.doClassCleanups)
         finally:
             await conn.close()
+
+    async def test_class_pool_survives_setup_failure_without_rows_tasks_or_context_leaking(
+        self,
+    ):
+        import contextvars
+
+        marker = contextvars.ContextVar("fixture_marker", default="clean")
+
+        class Shared(PostgresTestCase):
+            reuse_pool = True
+
+            async def asyncSetUp(self):
+                await super().asyncSetUp()
+                if self._testMethodName == "test_a_setup_failure":
+                    Shared.pool_ref = self.pool
+                    Shared.loop_ref = asyncio.get_running_loop()
+                    marker.set("previous test")
+                    await self.thread()
+                    await self.pool.fetchval(
+                        "SELECT nextval('project_merge_policy_audit_id_seq')"
+                    )
+                    Shared.pending = asyncio.create_task(asyncio.sleep(3600))
+                    raise RuntimeError("injected setup failure after seeding")
+
+            async def test_a_setup_failure(self):
+                self.fail("setup should fail")
+
+            async def test_b_clean(self):
+                self.assertIs(self.pool, Shared.pool_ref)
+                self.assertIs(asyncio.get_running_loop(), Shared.loop_ref)
+                self.assertTrue(Shared.loop_ref.get_debug())
+                self.assertTrue(Shared.pending.cancelled())
+                self.assertEqual(marker.get(), "clean")
+                self.assertIs(db._pool, self.pool)
+                self.assertEqual(
+                    await self.pool.fetchval("SELECT count(*) FROM main_threads"), 0
+                )
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT nextval('project_merge_policy_audit_id_seq')"
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    await self.pool.fetchval("SHOW session_replication_role"), "origin"
+                )
+
+        def run():
+            return unittest.TextTestRunner(stream=io.StringIO()).run(
+                unittest.TestLoader().loadTestsFromTestCase(Shared)
+            )
+
+        saved_pool = db._pool
+        result = await asyncio.to_thread(run)
+        self.assertEqual(result.testsRun, 2)
+        self.assertEqual(len(result.errors), 1, result.errors)
+        self.assertEqual(result.failures, [])
+        self.assertIn("injected setup failure after seeding", result.errors[0][1])
+        self.assertIs(db._pool, saved_pool)
+        self.assertTrue(Shared.loop_ref.is_closed())
+        self.assertTrue(Shared.pool_ref.is_closing())
 
 
 class GitSeedIsolationTests(GitFixtureCase):

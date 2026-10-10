@@ -1788,6 +1788,8 @@ class MergeFixture(PostgresTestCase):
 
 
 class MergeTests(MergeFixture):
+    reuse_pool = True
+
     async def test_workspace_merge_access_uses_the_same_persisted_scope(self):
         sid, _ = await self.session("active")
         await self.pool.execute(

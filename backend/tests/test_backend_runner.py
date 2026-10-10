@@ -610,6 +610,43 @@ class BackendRunnerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_debug_creation_stacks_do_not_consult_linecache(self):
+        result, _ = self.probe(
+            "import asyncio, traceback, unittest\n"
+            "from unittest.mock import patch\n"
+            "class Case(unittest.IsolatedAsyncioTestCase):\n"
+            " async def test_stacks(self):\n"
+            "  loop = asyncio.get_running_loop()\n"
+            "  with patch('linecache.checkcache', side_effect=AssertionError('stat lookup')), patch('linecache.getline', side_effect=AssertionError('source lookup')):\n"
+            "   handle = loop.call_soon(lambda: None)\n"
+            "   future = loop.create_future()\n"
+            "   task = asyncio.create_task(asyncio.sleep(0))\n"
+            "   for value in (handle, future, task):\n"
+            "    self.assertGreaterEqual(len(value._source_traceback), 1)\n"
+            "    self.assertLessEqual(len(value._source_traceback), 3)\n"
+            "   future.cancel()\n"
+            "   await task\n"
+            "  self.assertIn('create_future', ''.join(future._source_traceback.format()))\n"
+            "  self.assertGreater(len(traceback.extract_stack()), 1)\n"
+            "  self.assertEqual(len(traceback.extract_stack(limit=2)), 2)\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_asyncio_debug_still_warns_about_slow_callbacks(self):
+        result, _ = self.probe(
+            "import asyncio, unittest\n"
+            "class Case(unittest.IsolatedAsyncioTestCase):\n"
+            " async def test_warning(self):\n"
+            "  loop = asyncio.get_running_loop()\n"
+            "  loop.slow_callback_duration = 0\n"
+            "  with self.assertLogs('asyncio', level='WARNING') as logs:\n"
+            "   loop.call_soon(lambda: None)\n"
+            "   await asyncio.sleep(0)\n"
+            "  loop.slow_callback_duration = .1\n"
+            "  self.assertTrue(any('Executing <Handle' in message for message in logs.output))\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_class_fixture_has_named_fatal_deadline(self):
         result, _ = self.probe(
             "import sys, threading, unittest\n"

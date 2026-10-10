@@ -1,6 +1,7 @@
 """Concurrent task persistence against disposable PostgreSQL; no live agents."""
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -17,9 +18,11 @@ from mainloop.identity import current_user
 from mainloop.providers import registry
 from mainloop.runtime import task_api
 from mainloop.services.github_repo import parse_github_repo
+from mainloop.tasks import lifecycle
 from mainloop.tasks.events import dispatch_committed_events
 from mainloop.tasks.principal import TaskPrincipal
 from mainloop.tasks.service import mutate
+from tests.runtime.postgres_fixture import wait_for_lock
 from tests.runtime.test_postgres_ledger import PostgresTestCase
 
 from models.task import ProjectProviderUpdate, Task, TaskCheckout, TaskCreate
@@ -61,16 +64,16 @@ class TaskPostgresTests(PostgresTestCase):
             updated_at=now,
         )
 
-    async def admit(self, task, *, per_parent_cap=3, global_cap=6):
+    async def admit(self, task, *, per_parent_cap=3, global_cap=6, role="supervisor"):
         async with self.pool.acquire() as conn, conn.transaction():
             await store.admission_lock(conn)
             await store.insert_task(conn, task)
             return await store.admit_attempt(
                 conn,
                 task,
-                registry().resolve("claude", "supervisor"),
-                role="supervisor",
-                depth=1,
+                registry().resolve("claude", role),
+                role=role,
+                depth=2 if role == "child" else 1,
                 per_parent_cap=per_parent_cap,
                 global_cap=global_cap,
             )
@@ -83,6 +86,98 @@ class TaskPostgresTests(PostgresTestCase):
             await conn.execute(SCHEMA_SQL)
             await conn.execute(MIGRATION_SQL)
             self.assertEqual(await conn.fetchval("SELECT count(*) FROM tasks"), before)
+
+    async def test_single_attempt_read_preserves_sql_authority_and_uses_one_query(self):
+        task, attempt = await self.admit(self.task())
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE task_attempts SET snapshot=snapshot || $2::jsonb WHERE id=$1",
+                attempt.id,
+                json.dumps(
+                    {
+                        "id": "forged",
+                        "task_id": "forged",
+                        "profile_id": "forged",
+                        "role": "child",
+                    }
+                ),
+            )
+            queries = []
+            with conn.query_logger(queries.append):
+                actual = await lifecycle.load_attempt(conn, attempt.id)
+                await asyncio.sleep(0)  # asyncpg delivers query logs with call_soon
+            self.assertEqual(len(queries), 1)
+            self.assertEqual(actual, attempt)
+            self.assertEqual(actual.task_id, task.id)
+            self.assertIsNone(await lifecycle.load_attempt(conn, "missing"))
+            self.assertEqual(await store.attempts(conn, task.id), [actual])
+
+    async def test_single_attempt_read_keeps_its_row_lock_until_commit(self):
+        _, attempt = await self.admit(self.task())
+        pending = None
+        async with self.pool.acquire() as conn, self.pool.acquire() as writer, self.pool.acquire() as monitor:
+            try:
+                async with conn.transaction():
+                    self.assertEqual(
+                        await lifecycle.load_attempt(conn, attempt.id, lock=True),
+                        attempt,
+                    )
+                    pending = asyncio.create_task(
+                        writer.execute(
+                            "UPDATE task_attempts SET state=state WHERE id=$1",
+                            attempt.id,
+                        )
+                    )
+                    self.assertTrue(
+                        await wait_for_lock(monitor, pid=writer.get_server_pid())
+                    )
+                    self.assertFalse(pending.done())
+                await asyncio.wait_for(pending, 3)
+            finally:
+                if pending is not None and not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+
+    async def test_authority_lock_routes_parent_child_and_releases_on_error(self):
+        parent, parent_attempt = await self.admit(self.task())
+        _, child_attempt = await self.admit(self.task(parent=parent), role="child")
+        parent_sid, _ = await self.bound_session()
+        child_sid, _ = await self.bound_session()
+        pending = None
+        async with self.pool.acquire() as conn, self.pool.acquire() as peer, self.pool.acquire() as monitor:
+            await conn.executemany(
+                "UPDATE task_attempts SET binding_id=$2 WHERE id=$1",
+                [(parent_attempt.id, parent_sid), (child_attempt.id, child_sid)],
+            )
+
+            async def child():
+                async with lifecycle.authority_locked(peer, child_sid):
+                    return "child admitted"
+
+            try:
+                with self.assertRaisesRegex(RuntimeError, "injected"):
+                    async with lifecycle.authority_locked(conn, parent_sid):
+                        pending = asyncio.create_task(child())
+                        self.assertTrue(
+                            await wait_for_lock(monitor, pid=peer.get_server_pid())
+                        )
+                        self.assertFalse(pending.done())
+                        raise RuntimeError("injected")
+                self.assertEqual(await asyncio.wait_for(pending, 3), "child admitted")
+                ordinary, _ = await self.bound_session()
+                with self.assertRaisesRegex(RuntimeError, "injected"):
+                    async with lifecycle.authority_locked(conn, ordinary):
+                        raise RuntimeError("injected")
+                self.assertFalse(
+                    await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory')",
+                        conn.get_server_pid(),
+                    )
+                )
+            finally:
+                if pending is not None and not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
 
     async def test_capacity_rest_details_include_only_the_parent_admission_bucket(self):
         held = [await self.admit(self.task()) for _ in range(3)]
