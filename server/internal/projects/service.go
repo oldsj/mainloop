@@ -111,8 +111,8 @@ func (s *Service) Import(ctx context.Context, text string) (dbq.Project, error) 
 	}
 	refreshed, err := s.refresh(ctx, p)
 	switch {
-	case err == nil:
-		return refreshed, nil
+	case err == nil, errors.Is(err, errMetadataMoved):
+		return refreshed, nil // a moved row is the fresher one another refresh stored
 	case errors.Is(err, errRepoMismatch):
 		return p, nil
 	default:
@@ -131,12 +131,22 @@ type writeError struct{ err error }
 func (e *writeError) Error() string { return e.err.Error() }
 func (e *writeError) Unwrap() error { return e.err }
 
+// errMetadataMoved means another refresh stored newer metadata while this one waited on GitHub.
+var errMetadataMoved = errors.New("projects: metadata refreshed by another caller")
+
 // refresh reads the project's repository from GitHub and stores the answer. The network read
 // happens first and alone; nothing is written when GitHub cannot be read, answers for another
-// repository or returns no usable default branch, so a failure leaves the row as it was. When the
-// default branch changed, the push policy advances before the project row does: a failure between
-// the two leaves policy and project disagreeing, which the push gate refuses, and the next refresh
-// finishes the job.
+// repository or omits the default branch or URL, so a failure leaves the row as it was.
+//
+// The push policy follows GitHub's default branch on every successful refresh, not only when it
+// differs from the project row: the advance does nothing when the policy already names the branch,
+// and a policy that lags the row (a gate-off period, an older build) is repaired by the next pass.
+// It advances before the project row does, so a failure between the two leaves policy and project
+// disagreeing, which the push gate refuses, and the next refresh finishes the job.
+//
+// A refresh whose project row was refreshed by someone else during the GitHub read stops with
+// errMetadataMoved before touching the policy, and the row write is conditional on the same
+// check, so an older answer never overwrites a newer one.
 func (s *Service) refresh(ctx context.Context, p dbq.Project) (dbq.Project, error) {
 	repo := github.Repo{Owner: p.Owner, Name: p.Name}
 	timeout := s.MetadataTimeout
@@ -155,21 +165,48 @@ func (s *Service) refresh(ctx context.Context, p dbq.Project) (dbq.Project, erro
 	if !gitref.Valid(md.DefaultBranch) {
 		return p, errors.New("GitHub returned no usable default branch")
 	}
-	if md.DefaultBranch != p.DefaultBranch && s.Policy != nil {
+	if md.HTMLURL == "" {
+		return p, errors.New("GitHub returned no repository URL")
+	}
+	q := dbq.New(s.Pool)
+	if s.Policy != nil {
+		now, err := q.GetOwnedProject(ctx, dbq.GetOwnedProjectParams{ID: p.ID, UserID: s.OwnerID})
+		if err != nil {
+			return p, &writeError{fmt.Errorf("re-read project: %w", err)}
+		}
+		if !sameInstant(now.MetadataUpdatedAt, p.MetadataUpdatedAt) {
+			return now, errMetadataMoved
+		}
 		if err := s.Policy.AdvanceDefaultBranch(ctx, p.ID, md.DefaultBranch); err != nil {
 			return p, fmt.Errorf("advance push policy: %w", err)
 		}
 	}
-	refreshed, err := dbq.New(s.Pool).RefreshProjectMetadata(ctx, dbq.RefreshProjectMetadataParams{
+	refreshed, err := q.RefreshProjectMetadata(ctx, dbq.RefreshProjectMetadataParams{
 		ID: p.ID, UserID: s.OwnerID, Owner: md.Repo.Owner, Name: md.Repo.Name, FullName: md.Repo.FullName(),
 		HTMLURL: md.HTMLURL, Description: md.Description, DefaultBranch: md.DefaultBranch,
 		AvatarURL: md.AvatarURL, OpenPRCount: count32(md.OpenPRs),
-		OpenIssueCount: count32(md.OpenIssues),
+		OpenIssueCount:        count32(md.OpenIssues),
+		ReadMetadataUpdatedAt: p.MetadataUpdatedAt,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		now, getErr := q.GetOwnedProject(ctx, dbq.GetOwnedProjectParams{ID: p.ID, UserID: s.OwnerID})
+		if getErr != nil {
+			return p, &writeError{fmt.Errorf("re-read project: %w", getErr)}
+		}
+		return now, errMetadataMoved
+	}
 	if err != nil {
 		return p, &writeError{fmt.Errorf("refresh project metadata: %w", err)}
 	}
 	return refreshed, nil
+}
+
+// sameInstant reports whether two optional timestamps are the same moment.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 func (s *Service) now() time.Time {
@@ -245,8 +282,8 @@ func (s *Service) refreshStale(ctx context.Context, f *failures) error {
 		}
 		attempts++
 		_, err := s.refresh(ctx, p)
-		if err == nil {
-			f.clear(p.ID)
+		if err == nil || errors.Is(err, errMetadataMoved) {
+			f.clear(p.ID) // another refresh got there first, which is as good
 			continue
 		}
 		var w *writeError

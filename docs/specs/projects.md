@@ -27,13 +27,17 @@ The `project-metadata` sweep keeps that metadata current. Every minute it reads 
 default branch or URL is empty, or whose metadata is older than 15 minutes, empty ones first, up
 to 25 per pass. It reads GitHub with no database transaction open and writes only what GitHub
 answered: a GitHub error, a reply for a different repository or a reply without a usable default
-branch changes nothing. The failing project is asked again after five minutes, and other projects
+branch or URL changes nothing (Mainloop never guesses a default branch). The failing project is asked again after five minutes, and other projects
 are still refreshed. There is no owner refresh route; the sweep replaces it.
 
-When GitHub's default branch differs from the stored one and the push gate is on, the sweep
-advances the project's push policy first (see [push gate](push-gate.md)) and only then writes the
-project row. If the policy cannot advance, the row stays as it was and the next pass retries; a
-manual import takes the same path. Proven by Postgres tests against a fake GitHub, including a real
+Every successful refresh also asks the push policy to follow GitHub's default branch (see
+[push gate](push-gate.md)); that does nothing when the project has no policy or the policy already
+names the branch, whether or not the push gate is on. The policy advances first and only then is
+the project row written, so a policy that lags the row is repaired by the next pass. If the policy
+cannot advance, the row stays as it was and the next pass retries; a manual import takes the same
+path. A refresh writes only if the project's metadata is still as old as when it was read: if
+another refresh stored newer metadata during the GitHub read, the older answer writes nothing and
+leaves the policy alone. Proven by Postgres tests against a fake GitHub, including a real
 push through the gate; not measured against live GitHub.
 
 ## React status (migration F7)

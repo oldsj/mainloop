@@ -74,6 +74,16 @@ func TestMetadataWithNoPullRequests(t *testing.T) {
 	}
 }
 
+// A reply without a default branch is reported as such, never filled in with a guess.
+func TestMetadataDoesNotInventADefaultBranch(t *testing.T) {
+	fake, app := seeded(t)
+	fake.Update("oldsj", "mainloop", func(r *githubtest.Repository) { r.DefaultBranch = "" })
+	m, err := app.Metadata(context.Background(), repo)
+	if err != nil || m.DefaultBranch != "" {
+		t.Fatalf("%+v %v", m, err)
+	}
+}
+
 func TestPullRequestsAndCommits(t *testing.T) {
 	_, app := seeded(t)
 	prs, err := app.OpenPullRequests(context.Background(), repo, 2)

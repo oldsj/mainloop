@@ -350,24 +350,28 @@ UPDATE projects
 SET owner = $2, name = $3, full_name = $4, html_url = $5, description = $6, default_branch = $7,
     avatar_url = $8, open_pr_count = $9, open_issue_count = $10, metadata_updated_at = now()
 WHERE id = $1 AND user_id = $11
+  AND metadata_updated_at IS NOT DISTINCT FROM $12::timestamptz
 RETURNING id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at
 `
 
 type RefreshProjectMetadataParams struct {
-	ID             string
-	Owner          string
-	Name           string
-	FullName       string
-	HTMLURL        string
-	Description    *string
-	DefaultBranch  string
-	AvatarURL      *string
-	OpenPRCount    int32
-	OpenIssueCount int32
-	UserID         string
+	ID                    string
+	Owner                 string
+	Name                  string
+	FullName              string
+	HTMLURL               string
+	Description           *string
+	DefaultBranch         string
+	AvatarURL             *string
+	OpenPRCount           int32
+	OpenIssueCount        int32
+	UserID                string
+	ReadMetadataUpdatedAt *time.Time
 }
 
-// Applies GitHub's answer without touching the owner's own fields (policy, last use).
+// Applies GitHub's answer without touching the owner's own fields (policy, last use). It applies
+// only if the metadata is still as old as when the caller read the project, so a slower, older
+// answer cannot overwrite a fresher one; no row comes back when it moved.
 func (q *Queries) RefreshProjectMetadata(ctx context.Context, arg RefreshProjectMetadataParams) (Project, error) {
 	row := q.db.QueryRow(ctx, refreshProjectMetadata,
 		arg.ID,
@@ -381,6 +385,7 @@ func (q *Queries) RefreshProjectMetadata(ctx context.Context, arg RefreshProject
 		arg.OpenPRCount,
 		arg.OpenIssueCount,
 		arg.UserID,
+		arg.ReadMetadataUpdatedAt,
 	)
 	var i Project
 	err := row.Scan(

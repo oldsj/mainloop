@@ -490,7 +490,7 @@ func (q *Queries) GetWorkspaceOp(ctx context.Context, id string) (WorkspaceOp, e
 }
 
 const getWorkspacePushAttempt = `-- name: GetWorkspacePushAttempt :one
-SELECT a.id AS attempt_id
+SELECT a.id AS attempt_id, p.default_branch
 FROM workspaces w
 JOIN sessions s ON s.id = w.id AND s.archived_at IS NULL
     AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
@@ -499,7 +499,6 @@ JOIN tasks t ON t.id = a.task_id AND t.current_attempt_id = a.id AND t.mode = 'c
     AND t.owner_id = w.user_id AND t.project_id = w.project_id AND t.checkout_branch = w.branch
     AND t.status NOT IN ('completed', 'failed', 'cancelled')
 JOIN projects p ON p.id = w.project_id AND p.user_id = w.user_id
-    AND p.default_branch <> '' AND w.branch <> p.default_branch
 JOIN workspace_writer_claims c ON c.attempt_id = a.id AND c.held
     AND c.owner_id = w.user_id AND c.repository = lower(p.full_name) AND c.branch = w.branch
     AND c.generation = a.writer_generation
@@ -511,13 +510,20 @@ WHERE w.id = $1
 FOR SHARE OF s, a, t, p, c
 `
 
+type GetWorkspacePushAttemptRow struct {
+	AttemptID     string
+	DefaultBranch string
+}
+
 // T1's request identity locates the attempt before the caller attaches the returned workspace.
-// Standalone workspaces, default branches, stale attempts and lost writers get no reference.
-func (q *Queries) GetWorkspacePushAttempt(ctx context.Context, id string) (string, error) {
+// Standalone workspaces, stale attempts and lost writers get no reference. The project default is
+// returned, not filtered on: the caller refuses a default-branch workspace and waits while the
+// default is still unknown.
+func (q *Queries) GetWorkspacePushAttempt(ctx context.Context, id string) (GetWorkspacePushAttemptRow, error) {
 	row := q.db.QueryRow(ctx, getWorkspacePushAttempt, id)
-	var attempt_id string
-	err := row.Scan(&attempt_id)
-	return attempt_id, err
+	var i GetWorkspacePushAttemptRow
+	err := row.Scan(&i.AttemptID, &i.DefaultBranch)
+	return i, err
 }
 
 const getWorkspacePushReservation = `-- name: GetWorkspacePushReservation :one

@@ -202,8 +202,10 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		}
 		gate := &pushgate.Service{Pool: pool, Native: kc, Upstream: upstream, Credentials: creds}
 		gate.Register(runner)
-		projectSvc.Policy = gate // a renamed default branch advances the push policy
 	}
+	// A renamed default branch advances the push policy whether or not the gate is on: the policy
+	// is database state that outlives a gate-off period, and advancing it needs no gate.
+	projectSvc.Policy = &pushgate.Service{Pool: pool}
 	runner.AddSweep(projectSvc.MetadataSweep())
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)

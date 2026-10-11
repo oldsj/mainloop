@@ -26,11 +26,14 @@ WHERE s.user_id = $1 AND s.project_id = $2 AND s.archived_at IS NULL
 ORDER BY s.created_at DESC, s.id;
 
 -- name: RefreshProjectMetadata :one
--- Applies GitHub's answer without touching the owner's own fields (policy, last use).
+-- Applies GitHub's answer without touching the owner's own fields (policy, last use). It applies
+-- only if the metadata is still as old as when the caller read the project, so a slower, older
+-- answer cannot overwrite a fresher one; no row comes back when it moved.
 UPDATE projects
 SET owner = $2, name = $3, full_name = $4, html_url = $5, description = $6, default_branch = $7,
     avatar_url = $8, open_pr_count = $9, open_issue_count = $10, metadata_updated_at = now()
 WHERE id = $1 AND user_id = $11
+  AND metadata_updated_at IS NOT DISTINCT FROM sqlc.narg('read_metadata_updated_at')::timestamptz
 RETURNING *;
 
 -- name: SetOwnedProjectMergePolicy :one

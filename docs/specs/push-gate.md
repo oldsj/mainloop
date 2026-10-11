@@ -86,12 +86,17 @@ to the current policy. A remote default disagreement refuses publication until t
 and policy agree.
 
 The `project-metadata` sweep (see [projects](projects.md#metadata)) is what makes them agree. It
-fills an empty `projects.default_branch`, which unblocks enrollment (`metadata_unavailable`
-otherwise). When GitHub's default branch changes, it calls `AdvanceDefaultBranch`, which reads the
+fills an empty `projects.default_branch`. A task workspace whose project default is still empty
+when it is created does not freeze a "no push" decision: creation fails retryably ("waiting for
+the project's default branch from GitHub") until the sweep fills the default, and the create's
+retry window bounds the wait, after which the workspace operation is `gave_up` with that reason.
+A workspace created with a known default is unaffected, and a reservation can only be made once
+the default is known. On every successful refresh the sweep calls `AdvanceDefaultBranch`, which reads the
 policy and moves the new default in through `SetPolicy`'s compare-and-swap, keeping the owner's
 patterns and retiring the old default into the previous defaults, so pushes to either are refused.
 A project with no policy yet is left for enrollment, and a policy already naming the branch is not
-changed. A lost swap or a GitHub error leaves everything as it was and is retried by the next
+changed, so a policy that lags the project row (a gate-off period, an older build) is repaired by
+the next pass. A lost swap or a GitHub error leaves everything as it was and is retried by the next
 pass. The policy advances before the project row, so a failure between the two is refused as a
 disagreement until the next pass completes it.
 

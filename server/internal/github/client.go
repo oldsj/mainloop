@@ -77,14 +77,10 @@ func (a *App) Metadata(ctx context.Context, repo Repo) (*Metadata, error) {
 		openPRs = resp.LastPage
 	}
 	issues := max(r.GetOpenIssuesCount()-openPRs, 0)
-	branch := r.GetDefaultBranch()
-	if branch == "" {
-		branch = "main"
-	}
 	return &Metadata{
 		Repo:          Repo{Owner: r.GetOwner().GetLogin(), Name: r.GetName()},
 		HTMLURL:       r.GetHTMLURL(),
-		DefaultBranch: branch,
+		DefaultBranch: r.GetDefaultBranch(),
 		Description:   r.Description,
 		AvatarURL:     r.GetOwner().AvatarURL,
 		OpenPRs:       openPRs,

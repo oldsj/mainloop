@@ -581,9 +581,114 @@ func TestMetadataAdvancesPolicyBeforeTheProjectRow(t *testing.T) {
 	if len(adv.calls) != 1 || adv.calls[0] != p.ID+"=trunk" || adv.was[0] != "" {
 		t.Fatalf("calls %v, stored branch at the call %v", adv.calls, adv.was)
 	}
-	// Unchanged default: no policy call.
-	if _, err := svc.Import(context.Background(), "oldsj/mainloop"); err != nil || len(adv.calls) != 1 {
+	// An unchanged default still reaches the policy: it may lag the row, and the advance is a no-op
+	// when it does not.
+	if _, err := svc.Import(context.Background(), "oldsj/mainloop"); err != nil || len(adv.calls) != 2 || adv.calls[1] != p.ID+"=trunk" {
 		t.Fatalf("%v %v", err, adv.calls)
+	}
+}
+
+// replies is a Remote that answers with a fixed Metadata, optionally after a hook has run.
+type replies struct {
+	md   github.Metadata
+	hook func()
+}
+
+func (r *replies) Metadata(context.Context, github.Repo) (*github.Metadata, error) {
+	if r.hook != nil {
+		r.hook()
+	}
+	md := r.md
+	return &md, nil
+}
+
+func (*replies) OpenPullRequests(context.Context, github.Repo, int) ([]github.PullRequest, error) {
+	return nil, nil
+}
+
+func (*replies) RecentCommits(context.Context, github.Repo, string, int) ([]github.Commit, error) {
+	return nil, nil
+}
+
+// A reply that lacks the default branch or the URL changes nothing: no project write and no
+// policy call, and the project is asked about again after the pause.
+func TestPartialGitHubReplyChangesNothing(t *testing.T) {
+	for name, md := range map[string]github.Metadata{
+		"no default branch": {Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, HTMLURL: "https://github.com/oldsj/mainloop"},
+		"no URL":            {Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, DefaultBranch: "trunk"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			svc := newService(t, &replies{md: md}, false)
+			adv := &advancer{}
+			svc.Policy = adv
+			p, err := svc.Import(ctx, "oldsj/mainloop")
+			if err != nil || p.DefaultBranch != "" || p.MetadataUpdatedAt != nil || p.HTMLURL != "https://github.com/oldsj/mainloop" {
+				t.Fatalf("import changed the row: %+v %v", p, err)
+			}
+			if err := svc.MetadataSweep().Run(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got, err := svc.Get(ctx, p.ID)
+			if err != nil || got.DefaultBranch != "" || got.HTMLURL != p.HTMLURL || got.MetadataUpdatedAt != nil || len(adv.calls) != 0 {
+				t.Fatalf("a partial reply changed state: %+v %v policy calls %v", got, err, adv.calls)
+			}
+		})
+	}
+}
+
+// Another refresh stores newer metadata while this one waits on GitHub: the slow, older answer
+// writes nothing and does not move the policy back.
+func TestInterleavedRefreshDoesNotOverwriteNewerMetadata(t *testing.T) {
+	ctx := context.Background()
+	repo := github.Repo{Owner: "oldsj", Name: "mainloop"}
+	slow := &replies{md: github.Metadata{Repo: repo, HTMLURL: "https://github.com/oldsj/mainloop", DefaultBranch: "main"}}
+	svc := newService(t, slow, false)
+	adv := &advancer{}
+	svc.Policy = adv
+	// A fresh process's view: an empty row the sweep will pick up.
+	p, err := svc.Import(ctx, "oldsj/mainloop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Pool.Exec(ctx, `UPDATE projects SET default_branch = '', metadata_updated_at = NULL WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	adv.calls = nil
+	// While the sweep waits on GitHub (still answering "main"), the owner renames the default
+	// and an import through the API refreshes the row to "trunk".
+	fresh := newService(t, &replies{md: github.Metadata{Repo: repo, HTMLURL: "https://github.com/oldsj/mainloop", DefaultBranch: "trunk"}}, false)
+	fresh.Pool = svc.Pool
+	fresh.Policy = adv
+	slow.hook = func() {
+		slow.hook = nil
+		if _, err := fresh.Import(ctx, "oldsj/mainloop"); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := svc.MetadataSweep().Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, p.ID)
+	if err != nil || got.DefaultBranch != "trunk" || got.MetadataUpdatedAt == nil {
+		t.Fatalf("the older answer overwrote the newer: %+v %v", got, err)
+	}
+	if len(adv.calls) != 1 || adv.calls[0] != p.ID+"=trunk" {
+		t.Fatalf("the stale answer moved the policy: %v", adv.calls)
+	}
+	// And an import of a project another refresh just stored returns the stored row.
+	slow.hook = func() {
+		slow.hook = nil
+		if _, err := fresh.Import(ctx, "oldsj/mainloop"); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := svc.Pool.Exec(ctx, `UPDATE projects SET metadata_updated_at = now() - interval '1 hour' WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	out, err := svc.Import(ctx, "oldsj/mainloop")
+	if err != nil || out.DefaultBranch != "trunk" {
+		t.Fatalf("import over a moved row: %+v %v", out, err)
 	}
 }
 

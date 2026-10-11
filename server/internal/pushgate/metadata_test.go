@@ -40,30 +40,30 @@ func (e *env) policy() (Policy, int64) {
 	return p, row.Version
 }
 
-// A project that came in without GitHub metadata (a repo URL, or an import during a GitHub blip)
-// is refused every push until the sweep fills its default branch; afterwards the same
-// credential publishes.
-func TestEmptyDefaultBranchGainsPushAuthorityAfterSweep(t *testing.T) {
+// The policy lags the project row (a gate-off period, an older build, an interleaved refresh):
+// policy "main", project "trunk", GitHub "trunk". Every refresh repairs it, not only one that sees
+// the row change; a second pass leaves the version alone.
+func TestPolicyLaggingTheProjectRowIsRepaired(t *testing.T) {
 	e := newEnv(t)
-	e.exec(`UPDATE projects SET default_branch = '', metadata_updated_at = NULL`)
-	body := e.body(zeroOID, e.head, "refs/heads/feature/test")
-	if _, err := e.svc.Enroll(context.Background(), "ws"); err == nil || !strings.Contains(err.Error(), "metadata_unavailable") {
-		t.Fatalf("enroll with no project metadata: %v", err)
+	e.exec(`UPDATE projects SET default_branch = 'trunk', metadata_updated_at = now() - interval '1 hour'`)
+	e.fake.Update("oldsj", "alpha", func(r *githubtest.Repository) { r.DefaultBranch = "trunk" })
+	if p, _ := e.policy(); p.DefaultBranch != "main" {
+		t.Fatalf("fixture policy: %+v", p)
 	}
-	if w := e.request(body, nil); w.Code == 200 || !strings.HasPrefix(w.Body.String(), "metadata_unavailable ") {
-		t.Fatalf("push before the sweep: %d %s", w.Code, w.Body.String())
-	}
+	_, version := e.policy()
 	if err := e.metadataSweep()(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Enroll(context.Background(), "ws"); err != nil {
-		t.Fatalf("enroll after the sweep: %v", err)
+	p, after := e.policy()
+	if p.DefaultBranch != "trunk" || len(p.PreviousDefaults) != 1 || p.PreviousDefaults[0] != "main" || after != version+1 {
+		t.Fatalf("policy %+v version %d -> %d", p, version, after)
 	}
-	if w := e.request(body, nil); w.Code != 200 {
-		t.Fatalf("push after the sweep: %d %s", w.Code, w.Body.String())
+	e.exec(`UPDATE projects SET metadata_updated_at = now() - interval '1 hour'`)
+	if err := e.metadataSweep()(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if p, _ := e.policy(); p.DefaultBranch != "main" || len(p.PreviousDefaults) != 0 {
-		t.Fatalf("policy changed though the default did not: %+v", p)
+	if _, again := e.policy(); again != after {
+		t.Fatalf("policy version moved without a change: %d -> %d", after, again)
 	}
 }
 

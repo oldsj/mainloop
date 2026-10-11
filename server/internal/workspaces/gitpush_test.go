@@ -72,6 +72,13 @@ func (u *localPushUpstream) Push(ctx context.Context, _ github.Repo, body io.Rea
 
 func queuedPushWorkspace(t *testing.T, h *harness, branch string, task bool) (wsRow, *authtest.Env, *localPushUpstream) {
 	t.Helper()
+	return queuedPushWorkspaceWithDefault(t, h, branch, task, "main")
+}
+
+// queuedPushWorkspaceWithDefault queues the workspace of a project whose stored default branch is
+// def; empty is a project imported without GitHub metadata.
+func queuedPushWorkspaceWithDefault(t *testing.T, h *harness, branch string, task bool, def string) (wsRow, *authtest.Env, *localPushUpstream) {
+	t.Helper()
 	a := h.withGitRead()
 	u := &localPushUpstream{}
 	h.svc.GitPush = &GitPush{Upstream: u, Origin: h.cfg.Git.PushOrigin}
@@ -81,7 +88,7 @@ func queuedPushWorkspace(t *testing.T, h *harness, branch string, task bool) (ws
 		t.Fatal(err)
 	}
 	r := h.row(w.WorkspaceId)
-	h.exec(`UPDATE projects SET default_branch='main' WHERE id=$1`, r.ProjectID)
+	h.exec(`UPDATE projects SET default_branch=$2 WHERE id=$1`, r.ProjectID, def)
 	h.exec(`UPDATE workspaces SET environment='{"environment_id":"env","version_id":"v","image":"example.test/dev@sha256:abc","platform":"linux/amd64","policy_identity":"policy"}' WHERE id=$1`, r.ID)
 	if task {
 		h.exec(`INSERT INTO tasks (id,owner_id,project_id,root_task_id,title,brief,mode,assigned_profile_id,selection_source,status,checkout_branch,checkout_ref,checkout_depth)
@@ -301,9 +308,18 @@ func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
 	}
 }
 
-func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
-	h := newHarness(t, nil)
-	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
+// pushFixture is a work tree on the workspace's branch and a bare upstream behind u, both under a
+// cache directory removed at the end of the test.
+type pushFixture struct {
+	t    *testing.T
+	root string
+	work string
+	head string
+	git  func(dir string, args ...string) string
+}
+
+func newPushFixture(t *testing.T, h *harness, w wsRow, u *localPushUpstream) *pushFixture {
+	t.Helper()
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatal(err)
@@ -337,13 +353,15 @@ func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
 	git(work, "push", u.bare, "main")
 	git(work, "checkout", "-b", w.Branch)
 	git(work, "commit", "--allow-empty", "-m", "workspace change")
-	head := git(work, "rev-parse", "HEAD")
 	h.exec(`UPDATE workspaces SET ref=$1 WHERE id=$2`, base, w.ID)
-	createPushSession(t, h)
-	activatePushAttempt(h, w.ID)
-	if err = reconcilePush(t, h, w.ID); err != nil {
-		t.Fatal(err)
-	}
+	return &pushFixture{t: t, root: root, work: work, head: git(work, "rev-parse", "HEAD"), git: git}
+}
+
+// pushThroughGate pushes the workspace branch to a real gate with the workspace-held credential
+// and checks the upstream received the workspace head.
+func (f *pushFixture) pushThroughGate(h *harness, a *authtest.Env, w wsRow, u *localPushUpstream) {
+	f.t.Helper()
+	t := f.t
 	ref := pushgate.Reference(a.Creds, h.cfg.Git.PushOrigin, w.ID)
 	secret, err := a.Cluster.CoreV1().Secrets(authtest.Namespace).Get(bg, ref.GetSecretRef().GetName(), metav1.GetOptions{})
 	if err != nil {
@@ -351,12 +369,12 @@ func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
 	}
 	credential := secret.Data[ref.GetSecretRef().GetKey()]
 	gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.client, Upstream: u}
-	server := &pushgate.Server{Service: gate, Enabled: true, Dev: true, SpoolRoot: filepath.Join(root, "spool"), Limits: pushgate.Limits{BodyBytes: 1 << 20, DiskBytes: 8 << 20}}
+	server := &pushgate.Server{Service: gate, Enabled: true, Dev: true, SpoolRoot: filepath.Join(f.root, "spool"), Limits: pushgate.Limits{BodyBytes: 1 << 20, DiskBytes: 8 << 20}}
 	proxy := httptest.NewServer(server.Handler())
 	t.Cleanup(proxy.Close)
 	// Git reads the credential from the fake workspace-held Secret. Do not put it in argv/logs.
-	cmd := exec.CommandContext(bg, "git", "-C", work, "push", proxy.URL+"/oldsj/mainloop.git", w.Branch)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: " + string(credential), "GIT_TERMINAL_PROMPT=0"}
+	cmd := exec.CommandContext(bg, "git", "-C", f.work, "push", proxy.URL+"/oldsj/mainloop.git", w.Branch)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + f.root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: " + string(credential), "GIT_TERMINAL_PROMPT=0"}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("workspace push failed: %v", err)
@@ -364,9 +382,21 @@ func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
 	if bytes.Contains(out, credential) {
 		t.Fatal("git exposed the workspace credential")
 	}
-	if got := git(u.bare, "rev-parse", "refs/heads/"+w.Branch); got != head {
+	if got := f.git(u.bare, "rev-parse", "refs/heads/"+w.Branch); got != f.head {
 		t.Fatal("gate did not publish the workspace head")
 	}
+}
+
+func TestWorkspaceHeldCredentialPushesThroughGate(t *testing.T) {
+	h := newHarness(t, nil)
+	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
+	f := newPushFixture(t, h, w, u)
+	createPushSession(t, h)
+	activatePushAttempt(h, w.ID)
+	if err := reconcilePush(t, h, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.pushThroughGate(h, a, w, u)
 	if pushCredentials(h, w.ID) != 1 {
 		t.Fatal("push created another credential")
 	}

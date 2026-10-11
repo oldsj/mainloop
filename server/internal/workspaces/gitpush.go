@@ -47,12 +47,19 @@ func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCre
 			if !off {
 				a, err := q.GetWorkspacePushAttempt(ctx, w.ID)
 				if err == nil {
+					// A live task attempt with no known default branch cannot be judged yet: freezing
+					// "no push" now would leave the workspace read-only for good. Fail the create
+					// retryably; the project-metadata sweep fills the default, and the create's retry
+					// window bounds the wait and records this reason if GitHub never answers.
+					if a.DefaultBranch == "" {
+						return &unconfirmed{"waiting for the project's default branch from GitHub"}
+					}
 					allowed, policyErr := pushAllowed(ctx, q, cur.ProjectID, cur.Branch)
 					if policyErr != nil {
 						return policyErr
 					}
-					if allowed {
-						attempt = a
+					if allowed && cur.Branch != a.DefaultBranch {
+						attempt = a.AttemptID
 						raw, err = protojson.Marshal(pushgate.Reference(s.Credentials, s.GitPush.Origin, w.ID))
 					}
 				}
@@ -83,7 +90,7 @@ func pushAllowed(ctx context.Context, q *dbq.Queries, project, branch string) (b
 	p, err := q.GetPushPolicy(ctx, project)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return true, nil
-	} // the project default was checked by the attempt query
+	} // the caller checked the project default
 	if err != nil {
 		return false, err
 	}
