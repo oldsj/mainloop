@@ -441,5 +441,21 @@ two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing lo
 retains its pinned Agent identity after configuration changes; creator, ownership,
 lifecycle and stored identity checks still apply.
 
+Smoke: `mainloop smoke --read-only` probes a running instance: health, the owner reads, the
+event stream, the MCP and Git listeners' refusals, and with `--kagent` the kagent probe. It
+sends no writes and spends no quota, so run it after each deploy. Run it in the backend
+container, where the in-cluster Service names resolve:
+
+```bash
+kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+  go run ./cmd/mainloop smoke --read-only --kagent
+```
+
+Git transport is off here, so `git-read` and `git-push` report `skip` and no run can reach
+merge on this instance. `smoke --live --budget N` (N from 1 to 3) drives one task from chat to
+merge. It has no defaults: name every target with `--base-url`, `--git-push-url`, `--project-id`,
+`--repo`, `--app-login`, `--provider` and `--merge-tools on|off`. A run that fails or skips a step
+ends the budget, and only a run that reaches merge proves the full path.
+
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
 the namespace, the database and the dev agents.

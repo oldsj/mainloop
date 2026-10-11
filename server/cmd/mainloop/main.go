@@ -37,8 +37,7 @@ import (
 )
 
 const (
-	exitFailure        = 1
-	exitNotImplemented = 2
+	exitFailure = 1
 
 	mcpAddr     = ":8002"
 	gitReadAddr = ":8003"
@@ -71,8 +70,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "sweep-orphans":
 		return workspaces.RunSweepOrphans(context.Background(), args[1:], stdout, stderr)
 	case "smoke":
-		_, _ = fmt.Fprintf(stderr, "%s: not implemented yet\n", cmd)
-		return exitNotImplemented
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
+		return runSmoke(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		usage(stdout)
 		return 0
@@ -93,7 +93,7 @@ commands:
   migrate         up | status | reset the database schema
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them;
                   --forget-agent ns/name drops an Agent from the swept set)
-  smoke           not implemented yet
+  smoke           --read-only: probe a running Mainloop (no quota); --live --budget N: one task from chat to merge
   kagent-probe    read-only check that kagent answers (GetAgent and ListSessions)
 `)
 }

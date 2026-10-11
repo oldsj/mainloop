@@ -14,7 +14,7 @@ func TestRun(t *testing.T) {
 		stdoutHas  string
 		stderrOnly bool
 	}{
-		{[]string{"smoke"}, 2, "not implemented yet", "", true},
+		{[]string{"smoke"}, 2, "choose exactly one of --read-only or --live", "", true},
 		{nil, 1, "usage:", "", true},
 		{[]string{"bogus"}, 1, `unknown command "bogus"`, "", true},
 		{[]string{"help"}, 0, "", "serve-api", false},
