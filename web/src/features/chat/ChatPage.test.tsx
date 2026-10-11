@@ -228,6 +228,71 @@ describe('sending', () => {
     expect(loadDraft(CONVERSATION_ID)).toBe('lost');
   });
 
+  it("does not count another client's user message that lands in a lost reply window", async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        // The override stands in for the default route, so it records the post as that route does.
+        state.chatPosts = [
+          ...state.chatPosts,
+          (await request.json()) as ChatBackendState['chatPosts'][number]
+        ];
+        // Another client's message is recorded while the owner's reply is lost. It is a new user
+        // delivery, but it is not the owner's text, so the owner's text must stay recoverable.
+        state.messages = [
+          ...state.messages,
+          messageFixture({ id: 'other-1', content: 'from the laptop' })
+        ];
+        recordDelivery(state, deliveryFixture({ message_id: 'other-1' }));
+        return HttpResponse.error();
+      })
+    );
+    await userEvent.type(input(), 'lost{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box. Mainloop could not confirm whether it was recorded."
+    );
+    expect(screen.queryByText(LOST_REPLY_RECORDED)).toBeNull();
+    expect(input().value).toBe('lost');
+    expect(loadDraft(CONVERSATION_ID)).toBe('lost');
+    expect(state.chatPosts).toHaveLength(1);
+  });
+
+  it('does not count an earlier message with the same text as this send', async () => {
+    const base = existing();
+    const { state } = setup({
+      ...base,
+      messages: [messageFixture({ id: 'old-1', content: 'lost' }), ...(base.messages ?? [])]
+    });
+    await screen.findByText('build it');
+    state.lostSend = 'unrecorded';
+    await userEvent.type(input(), 'lost{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box."
+    );
+    expect(screen.queryByText(LOST_REPLY_RECORDED)).toBeNull();
+    expect(input().value).toBe('lost');
+    expect(loadDraft(CONVERSATION_ID)).toBe('lost');
+  });
+
+  it('says so when the conversation cannot be read after a lost reply that was recorded', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.lostSend = 'recorded';
+    server.use(
+      http.get(`${API_URL}/conversations/:id`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    await userEvent.type(input(), 'kept{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      'Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.'
+    );
+    expect(input().value).toBe('kept');
+    expect(loadDraft(CONVERSATION_ID)).toBe('kept');
+    expect(state.chatPosts).toHaveLength(1);
+  });
+
   it('takes the baseline from the ledger just before the send, not from the last render', async () => {
     const { state } = setup(existing());
     await screen.findByText('build it');

@@ -179,37 +179,80 @@ export function useThread(source: ThreadSource) {
     [isMain, mainChat, sessionChat, sessionId]
   );
 
-  /** The deliveries the thread holds, read fresh. Throws when the thread cannot be read. */
-  const readDeliveries = useCallback(async (): Promise<NativeDelivery[]> => {
+  /**
+   * The thread as the server holds it now, read fresh: its deliveries and, for the main thread, the
+   * conversation id it reports. Throws when the thread cannot be read.
+   */
+  const readThread = useCallback(async (): Promise<{
+    deliveries: NativeDelivery[];
+    conversationId: string | null;
+  }> => {
     if (isMain) {
       const { data } = await fetchClient.GET('/main-thread');
       if (!data) throw new Error('The main thread could not be read.');
-      return data.native?.deliveries ?? [];
+      return {
+        deliveries: data.native?.deliveries ?? [],
+        conversationId: data.conversation_id ?? null
+      };
     }
     const { data } = await fetchClient.GET('/sessions/{session_id}/native', {
       params: { path: { session_id: sessionId } }
     });
     if (!data) throw new Error('The session could not be read.');
-    return data.deliveries;
+    return { deliveries: data.deliveries, conversationId: null };
   }, [isMain, sessionId]);
 
+  /** The messages of the thread's conversation, read fresh. Throws when they cannot be read. */
+  const readMessages = useCallback(
+    async (conversationId: string | null): Promise<Message[]> => {
+      if (isMain) {
+        if (conversationId === null) throw new Error('The main thread has no conversation.');
+        const { data } = await fetchClient.GET('/conversations/{conversation_id}', {
+          params: { path: { conversation_id: conversationId } }
+        });
+        if (!data) throw new Error('The conversation could not be read.');
+        return data.messages;
+      }
+      const { data } = await fetchClient.GET('/sessions/{session_id}/conversation', {
+        params: { path: { session_id: sessionId } }
+      });
+      if (!data) throw new Error('The session conversation could not be read.');
+      return data.messages;
+    },
+    [isMain, sessionId]
+  );
+
   /**
-   * Whether a send that lost its reply was recorded: the thread now holds a user delivery it did not
-   * hold before the send. Other deliveries (reports, for one) are not the owner's message, so they
-   * do not count. Null when the thread cannot be re-read, so nothing is known.
+   * Whether a send that lost its reply was recorded. Only a new user delivery counts: reports and
+   * other sources are not the owner's message. A new user delivery counts as this send only when the
+   * conversation holds a user message under that delivery's id, with the sent text. Another client's
+   * message therefore cannot pass for this one. False when no new user delivery landed. Null when
+   * nothing can be established: a read failed, or no matching message is there.
    */
   const recordedSince = useCallback(
-    async (known: ReadonlySet<string>): Promise<boolean | null> => {
+    async (known: ReadonlySet<string>, text: string): Promise<boolean | null> => {
       try {
-        const deliveries = await readDeliveries();
-        return deliveries.some(
-          (delivery) => (delivery.source ?? 'user') === 'user' && !known.has(delivery.message_id)
+        const { deliveries, conversationId } = await readThread();
+        const fresh = new Set(
+          deliveries
+            .filter((delivery) => (delivery.source ?? 'user') === 'user')
+            .map((delivery) => delivery.message_id)
+            .filter((messageId) => !known.has(messageId))
         );
+        if (fresh.size === 0) return false;
+        const messages = await readMessages(conversationId);
+        const sent = text.trim();
+        const matched = messages.some(
+          (message) =>
+            message.role === 'user' && fresh.has(message.id) && message.content.trim() === sent
+        );
+        // A new user delivery with no matching message is not proof either way: unknown.
+        return matched ? true : null;
       } catch {
         return null;
       }
     },
-    [readDeliveries]
+    [readMessages, readThread]
   );
 
   /** Posts one message and shows it at once; the caller holds the send guard. */
@@ -236,7 +279,7 @@ export function useThread(source: ThreadSource) {
       // cannot be checked, so the send does not go.
       let known: ReadonlySet<string>;
       try {
-        known = new Set((await readDeliveries()).map((delivery) => delivery.message_id));
+        known = new Set((await readThread()).deliveries.map((delivery) => delivery.message_id));
       } catch {
         setOptimistic((list) => list.filter((item) => item !== entry));
         setSendError(
@@ -261,7 +304,7 @@ export function useThread(source: ThreadSource) {
           // No reply does not mean no record. Re-read before the text goes back to the box, so it
           // is not sent a second time.
           const lost = isLostReply(error);
-          const recorded = lost ? await recordedSince(known) : false;
+          const recorded = lost ? await recordedSince(known, text) : false;
           if (recorded) {
             accepted = true;
             if (composer) clearDraft(draftKey);
@@ -275,7 +318,7 @@ export function useThread(source: ThreadSource) {
       }
       return accepted;
     },
-    [draftKey, post, readDeliveries, recordedSince, refresh]
+    [draftKey, post, readThread, recordedSince, refresh]
   );
 
   /**
