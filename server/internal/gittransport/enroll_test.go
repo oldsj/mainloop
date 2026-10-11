@@ -190,3 +190,21 @@ func TestReferenceNamesTheCapabilitySecret(t *testing.T) {
 		t.Fatalf("reference = %+v, secret %s", ref, en.SecretName)
 	}
 }
+
+// An enrollment whose publish never got a credential must still be revocable, or one such row
+// fails the whole stranded sweep on every pass.
+func TestStrandedPlannedEnrollmentWithoutCredentialIsRevoked(t *testing.T) {
+	e := newGitEnv(t)
+	ws := e.workspace(repoA)
+	ctx := context.Background()
+	if _, err := e.auth.Pool.Exec(ctx,
+		`INSERT INTO git_enrollments (workspace_id, repository, state, updated_at) VALUES ($1, 'oldsj/mainloop', 'planned', now() - interval '1 hour')`, ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.enroller.RevokeStranded(ctx); err != nil {
+		t.Fatalf("a credential-less planned enrollment failed the sweep: %v", err)
+	}
+	if row, err := dbq.New(e.auth.Pool).GetGitEnrollment(ctx, ws); err != nil || row.State != dbstate.GitEnrollmentRevoked {
+		t.Fatalf("state = %s, %v", row.State, err)
+	}
+}

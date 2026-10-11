@@ -28,6 +28,13 @@ immutable Secret. No reference is added to an existing Session. A refused, aband
 deleted or expired creation releases the reservation; release also revokes any push grant and
 credential, with Secret deletion handled by the existing credential cleanup loop. The reservation
 expires after the configured workspace create retry window if enrollment never completes.
+A delete request revokes the reservation, grant and push credential in the transaction that records
+the delete intent, and the gate refuses any workspace that has a delete op, in any state, so a
+delayed or failing native delete cannot leave a window for a new push. A push already dispatched is
+not recalled. A delete later rejected (for example because a turn is open) leaves the workspace
+without push authority on purpose: it fails closed and the terminal reservation cannot reopen.
+The release sweep also settles a grant or push credential still planned or published behind an
+already revoked reservation (a crash between `Enroll` and its fence), so the Secret is cleaned up.
 Terminal reservations and their identities cannot reopen or change. No owner policy API is added,
 and authentication never issues credentials.
 

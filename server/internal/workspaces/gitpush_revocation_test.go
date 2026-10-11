@@ -58,6 +58,17 @@ func reviewProbe(gate *pushgate.Service, auth, repository string) *httptest.Resp
 	return w
 }
 
+// runCredentialCleanup runs the real credential cleanup loop for the test's lifetime.
+func runCredentialCleanup(t *testing.T, h *harness, a *authtest.Env) {
+	t.Helper()
+	runner := reconcile.NewRunner(h.svc.Pool, h.svc.Log, nil)
+	a.Creds.Register(runner)
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan struct{})
+	go func() { defer close(done); _ = runner.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
 func TestReviewPublishedAuthorityRevocation(t *testing.T) {
 	for _, kind := range []string{"archive", "delete intent", "attempt change", "generation change"} {
 		t.Run(kind, func(t *testing.T) {
@@ -79,6 +90,16 @@ func TestReviewPublishedAuthorityRevocation(t *testing.T) {
 			case "delete intent":
 				if _, err := h.svc.enqueue(bg, w.ID, dbstate.OpDelete, nil); err != nil {
 					t.Fatal(err)
+				}
+				// The intent revokes push authority itself, before any sweep: the gate's own
+				// delete-op check is a snapshot read and does not serialize with a dispatch.
+				if g, err := h.dq.GetPushGrant(bg, w.ID); err != nil || g.State != dbstate.GitGrantRevoked {
+					t.Fatal("delete intent left the grant unrevoked")
+				}
+				for _, c := range h.credentialRows(w.ID) {
+					if c.Kind == dbstate.CredentialGitPush && c.State != dbstate.CredentialRevoked {
+						t.Fatal("delete intent left the push credential unrevoked")
+					}
 				}
 			case "attempt change":
 				h.exec(`UPDATE task_attempts SET state='fenced',stop_state='confirmed' WHERE id='attempt'`)
@@ -112,12 +133,7 @@ func TestReviewPublishedAuthorityRevocation(t *testing.T) {
 			if res := reviewProbe(gate, auth, "oldsj/mainloop"); res.Code == http.StatusOK {
 				t.Fatal("ended credential usable after sweep")
 			}
-			runner := reconcile.NewRunner(h.svc.Pool, h.svc.Log, nil)
-			a.Creds.Register(runner)
-			ctx, cancel := context.WithCancel(bg)
-			done := make(chan struct{})
-			go func() { defer close(done); _ = runner.Run(ctx) }()
-			defer func() { cancel(); <-done }()
+			runCredentialCleanup(t, h, a)
 			eventually(t, "revoked push Secret deleted", func() bool { return a.Cluster.UID(authtest.Namespace, name) == "" })
 			t.Logf("%s: before-sweep HTTP %d, reservation/grant/credential revoked, Secret removed", kind, before.Code)
 		})
@@ -166,6 +182,11 @@ func TestReviewPartialGrantReleaseAndDeletion(t *testing.T) {
 			if err != nil || g.State != dbstate.GitGrantPlanned || g.CredentialID != nil {
 				t.Fatal("fixture did not leave unlinked planned grant")
 			}
+			name := a.Creds.SecretName(dbstate.CredentialGitPush, w.ID)
+			if a.Cluster.UID(authtest.Namespace, name) == "" {
+				t.Fatal("fixture left no Secret to clean up")
+			}
+			runCredentialCleanup(t, h, a)
 			switch kind {
 			case "expired":
 				h.exec(`UPDATE workspace_push_reservations SET expires_at=now()-interval '1 second' WHERE workspace_id=$1`, w.ID)
@@ -198,17 +219,16 @@ func TestReviewPartialGrantReleaseAndDeletion(t *testing.T) {
 			if queryErr := h.svc.Pool.QueryRow(bg, `SELECT state FROM credentials WHERE binding_id=$1 AND kind='git_push'`, w.ID).Scan(&state); queryErr != nil {
 				t.Fatal(queryErr)
 			}
-			secretPresent := a.Cluster.UID(authtest.Namespace, a.Creds.SecretName(dbstate.CredentialGitPush, w.ID)) != ""
-			t.Logf("%s: reservation=%s credential=%s Secret present=%t workspace rows=%d native Sessions=%d", kind, r.State, state, secretPresent, h.workspaceCount(), len(h.sessions()))
 			if r.State != string(dbstate.GitGrantRevoked) {
 				t.Error("partial grant cleanup rolled back reservation revocation")
 			}
 			if state != string(dbstate.CredentialRevoked) && state != string(dbstate.CredentialDeleted) {
 				t.Error("partial grant cleanup failed to revoke credential")
 			}
-			if kind == "delete" && h.workspaceCount() != 0 {
+			if kind == "delete" && (h.workspaceCount() != 0 || len(h.sessions()) != 0) {
 				t.Error("confirmed native deletion could not remove workspace rows")
 			}
+			eventually(t, "the stale push Secret is removed", func() bool { return a.Cluster.UID(authtest.Namespace, name) == "" })
 		})
 	}
 }
@@ -318,4 +338,65 @@ func pushAfterDeletionIntent(t *testing.T, nativeDeleteFails bool) {
 	if pushCredentials(h, w.ID) != 1 {
 		t.Fatal("push created another credential")
 	}
+}
+
+// A delete can commit between Enroll reading its authority and planning the grant. If the process
+// then dies before the enrollment fence, the grant and credential stay published behind a revoked
+// reservation; the release sweep must still settle them and remove the Secret.
+func TestReviewLatePlanAfterDeleteIntent(t *testing.T) {
+	h := newHarness(t, nil)
+	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
+	createPushSession(t, h)
+	activatePushAttempt(h, w.ID)
+	gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.svc.Kagent, Upstream: u, Credentials: a.Creds}
+	// An uncommitted grant row holds Enroll's plan insert until the delete has committed.
+	tx, err := h.svc.Pool.Begin(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(bg, `INSERT INTO git_push_grants (workspace_id,branch,policy_version) VALUES ($1,'blocker',1)`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := gate.Enroll(bg, w.ID) // the enrollment fence never runs: the crash
+		errc <- err
+	}()
+	eventually(t, "Enroll blocked on the grant insert", func() bool {
+		var n int
+		_ = h.svc.Pool.QueryRow(bg, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'`).Scan(&n)
+		return n > 0
+	})
+	if _, err = h.svc.enqueue(bg, w.ID, dbstate.OpDelete, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Rollback(bg); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-errc; err != nil {
+		t.Fatalf("late Enroll: %v", err)
+	}
+	name := a.Creds.SecretName(dbstate.CredentialGitPush, w.ID)
+	g, err := h.dq.GetPushGrant(bg, w.ID)
+	if err != nil || g.State != dbstate.GitGrantPublished || a.Cluster.UID(authtest.Namespace, name) == "" {
+		t.Fatal("fixture did not leave a published grant and Secret behind the revoked reservation")
+	}
+	if r, rerr := h.dq.GetWorkspacePushReservation(bg, w.ID); rerr != nil || r.State != string(dbstate.GitGrantRevoked) {
+		t.Fatal("fixture reservation is not revoked")
+	}
+	runCredentialCleanup(t, h, a)
+	for range 2 { // idempotent
+		if err = h.svc.releaseEndedPush(bg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if g, err = h.dq.GetPushGrant(bg, w.ID); err != nil || g.State != dbstate.GitGrantRevoked {
+		t.Fatal("sweep left the late grant unrevoked")
+	}
+	for _, c := range h.credentialRows(w.ID) {
+		if c.Kind == dbstate.CredentialGitPush && c.State != dbstate.CredentialRevoked && c.State != dbstate.CredentialDeleted {
+			t.Fatal("sweep left the late push credential unrevoked")
+		}
+	}
+	eventually(t, "the late push Secret is removed", func() bool { return a.Cluster.UID(authtest.Namespace, name) == "" })
 }

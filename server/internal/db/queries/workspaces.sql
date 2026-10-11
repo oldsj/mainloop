@@ -97,8 +97,15 @@ SELECT EXISTS (
 UPDATE workspace_push_reservations SET state = 'revoked', lease_owner = NULL, lease_until = NULL
 WHERE workspace_id = $1 AND state <> 'revoked';
 
--- name: ListLiveWorkspacePushReservations :many
-SELECT workspace_id FROM workspace_push_reservations WHERE state <> 'revoked' ORDER BY id LIMIT $1;
+-- name: ListUnsettledWorkspacePushReservations :many
+-- Reservations still live, and revoked ones whose grant or push credential is not (a crash after
+-- Enroll but before its fence); revoking again is idempotent.
+SELECT r.workspace_id FROM workspace_push_reservations r
+WHERE r.state <> 'revoked'
+    OR EXISTS (SELECT 1 FROM git_push_grants g WHERE g.workspace_id = r.workspace_id AND g.state <> 'revoked')
+    OR EXISTS (SELECT 1 FROM credentials c WHERE c.binding_id = r.workspace_id AND c.kind = 'git_push'
+        AND c.state IN ('planned', 'published'))
+ORDER BY r.id LIMIT $1;
 
 -- name: RevokeWorkspacePushCredential :exec
 UPDATE credentials SET state = 'revoked', lease_owner = NULL, lease_until = NULL,

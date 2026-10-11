@@ -979,12 +979,19 @@ func (q *Queries) ListLatestCreateOps(ctx context.Context, userID string) ([]Wor
 	return items, nil
 }
 
-const listLiveWorkspacePushReservations = `-- name: ListLiveWorkspacePushReservations :many
-SELECT workspace_id FROM workspace_push_reservations WHERE state <> 'revoked' ORDER BY id LIMIT $1
+const listUnsettledWorkspacePushReservations = `-- name: ListUnsettledWorkspacePushReservations :many
+SELECT r.workspace_id FROM workspace_push_reservations r
+WHERE r.state <> 'revoked'
+    OR EXISTS (SELECT 1 FROM git_push_grants g WHERE g.workspace_id = r.workspace_id AND g.state <> 'revoked')
+    OR EXISTS (SELECT 1 FROM credentials c WHERE c.binding_id = r.workspace_id AND c.kind = 'git_push'
+        AND c.state IN ('planned', 'published'))
+ORDER BY r.id LIMIT $1
 `
 
-func (q *Queries) ListLiveWorkspacePushReservations(ctx context.Context, limit int32) ([]string, error) {
-	rows, err := q.db.Query(ctx, listLiveWorkspacePushReservations, limit)
+// Reservations still live, and revoked ones whose grant or push credential is not (a crash after
+// Enroll but before its fence); revoking again is idempotent.
+func (q *Queries) ListUnsettledWorkspacePushReservations(ctx context.Context, limit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, listUnsettledWorkspacePushReservations, limit)
 	if err != nil {
 		return nil, err
 	}

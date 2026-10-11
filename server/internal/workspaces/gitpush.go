@@ -192,7 +192,7 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 }
 
 func (s *Service) releaseEndedPush(ctx context.Context) error {
-	ids, err := dbq.New(s.Pool).ListLiveWorkspacePushReservations(ctx, 1000)
+	ids, err := dbq.New(s.Pool).ListUnsettledWorkspacePushReservations(ctx, 1000)
 	if err != nil {
 		return err
 	}

@@ -20,7 +20,8 @@ CREATE TABLE git_enrollments (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     revoked_at timestamptz,
-    CHECK (state = 'planned' OR credential_id IS NOT NULL),
+    -- Revocable before a credential is linked, as the grants below; only published needs one.
+    CHECK (state <> 'published' OR credential_id IS NOT NULL),
     CHECK ((state = 'revoked') = (revoked_at IS NOT NULL))
 );
 -- The sweep that revokes enrollments looks at the ones still live.
