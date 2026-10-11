@@ -175,7 +175,7 @@ func TestRequestValidation(t *testing.T) {
 		{"wrong method", "DELETE", "/health", "", 405, "Method Not Allowed"},
 		{"missing body", "POST", "/chat", "", 422, ""},
 		{"wrong body type", "POST", "/chat", `{"message": 5}`, 422, ""},
-		{"valid body reaches the 501 fallback", "POST", "/tasks/t1/cancel", `{"request_id": "r1", "expected_version": 1, "expected_attempt_id": null}`, 501, "Not implemented"},
+		{"valid body reaches the 501 fallback", "POST", "/schedules", `{"request_id": "r1", "agent": {"namespace": "kagent", "name": "a1"}, "config": {"schedule": "0 * * * *", "prompt": "go"}}`, 501, "Not implemented"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 		}
 	})
 	t.Run("frontend origin write passes", func(t *testing.T) {
-		r := send(h, "POST", "/tasks/t1/cancel", `{"request_id":"r1","expected_version":1,"expected_attempt_id":null}`, map[string]string{"Origin": "https://mainloop.test"})
+		r := send(h, "POST", "/schedules", `{"request_id":"r1","agent":{"namespace":"kagent","name":"a1"},"config":{"schedule":"0 * * * *","prompt":"go"}}`, map[string]string{"Origin": "https://mainloop.test"})
 		if r.status != 501 {
 			t.Fatalf("got %d %s", r.status, r.body)
 		}

@@ -61,15 +61,25 @@ SELECT * FROM task_attempts WHERE task_id = ANY(sqlc.arg(task_ids)::text[]) ORDE
 -- name: SetAttemptResult :exec
 UPDATE task_attempts SET result_ref = $2, updated_at = now() WHERE id = $1;
 
--- The task principal behind an MCP binding: its attempt, the task it belongs to and whether that
--- attempt is still the task's current one.
+-- The task principal behind an MCP binding: its attempt, the task it belongs to, whether that
+-- attempt is still the task's current one, and the state of the parent's current attempt.
 -- name: GetAttemptPrincipal :one
 SELECT a.id AS attempt_id, a.task_id, a.state AS attempt_state, a.role AS attempt_role, a.depth AS attempt_depth,
        t.owner_id, t.status AS task_status, t.mode AS task_mode, t.project_id, t.root_task_id, t.parent_task_id,
-       (coalesce(t.current_attempt_id = a.id, false))::boolean AS is_current
+       (coalesce(t.current_attempt_id = a.id, false))::boolean AS is_current,
+       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state
 FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
+LEFT JOIN tasks pt ON pt.id = t.parent_task_id
+LEFT JOIN task_attempts pa ON pa.id = pt.current_attempt_id
 WHERE a.binding_id = $1;
+
+-- Locks an attempt against being moved while the caller's write commits, and reads its state.
+-- name: LockTaskAttemptShared :one
+SELECT * FROM task_attempts WHERE id = $1 FOR SHARE;
+
+-- name: GetTaskCurrentAttempt :one
+SELECT current_attempt_id FROM tasks WHERE id = $1;
 
 -- Operations
 
@@ -142,5 +152,5 @@ UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND ver
 -- A task cancelled before it was provisioned ends its create request with it, so the reconcile
 -- loop does not provision a cancelled task.
 -- name: BlockRequestedCreateOps :exec
-UPDATE task_operations SET state = 'blocked', updated_at = now()
+UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
 WHERE task_id = $1 AND kind = 'create' AND state = 'requested';

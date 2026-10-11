@@ -253,3 +253,16 @@ func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOper
 	}
 	return views, nil
 }
+
+// hideOwnerFields blanks what only the owner may see, as Python's read_native did for agent
+// bindings: operation idempotency keys and payloads, and attempt evidence and internal refs.
+func hideOwnerFields(v *api.TaskView) {
+	for i := range v.Operations {
+		o := &v.Operations[i]
+		o.PrincipalKey, o.RequestDigest, o.RequestPayload = "", "", map[string]any{}
+	}
+	for i := range v.Attempts {
+		a := &v.Attempts[i]
+		a.EvidenceRefs, a.ResultRef, a.BriefDeliveryId, a.RetentionHold = []string{}, nil, nil, nil
+	}
+}

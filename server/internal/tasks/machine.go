@@ -111,11 +111,16 @@ func AttemptFinal(s dbstate.AttemptState) bool {
 	return false
 }
 
+// attemptEdges are the moves an attempt can make. Settlement is the only way out of the unfenced
+// states: an attempt is fenced first, so a successor is never admitted while the old runtime may
+// still write.
 var attemptEdges = map[dbstate.AttemptState][]dbstate.AttemptState{
-	dbstate.AttemptCreating: {dbstate.AttemptActive, dbstate.AttemptFailed, dbstate.AttemptCancelled},
-	dbstate.AttemptActive:   {dbstate.AttemptDraining, dbstate.AttemptCompleted, dbstate.AttemptFailed},
-	dbstate.AttemptDraining: {dbstate.AttemptFenced, dbstate.AttemptCompleted, dbstate.AttemptFailed},
-	dbstate.AttemptFenced:   {dbstate.AttemptSuperseded, dbstate.AttemptCancelled, dbstate.AttemptFailed},
+	dbstate.AttemptCreating: {dbstate.AttemptActive, dbstate.AttemptDraining},
+	dbstate.AttemptActive:   {dbstate.AttemptDraining},
+	dbstate.AttemptDraining: {dbstate.AttemptFenced},
+	dbstate.AttemptFenced: {
+		dbstate.AttemptSuperseded, dbstate.AttemptFailed, dbstate.AttemptCancelled, dbstate.AttemptCompleted,
+	},
 }
 
 // TransitionAttempt checks an attempt move. There is no move out of a final state and none to the

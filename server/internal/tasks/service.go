@@ -17,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/providers"
 )
 
@@ -265,11 +266,24 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 	return toOperation(op)
 }
 
+// Limits the database also enforces; checked here so a request over them is refused, not a 500.
+const (
+	maxBriefBytes    = 16384
+	maxCheckoutDepth = 1000
+)
+
 func validateCreate(in CreateInput) error {
 	switch in.Mode {
 	case dbstate.TaskModeCode:
 		if in.Checkout == nil {
 			return refusal(422, ReasonCodeNeedsCheckout)
+		}
+		c := in.Checkout
+		if !gitref.ValidCheckoutRef(c.Branch) || c.Ref != "" && !gitref.ValidCheckoutRef(c.Ref) {
+			return refusal(422, ReasonInvalidCheckout)
+		}
+		if c.Depth < 0 || c.Depth > maxCheckoutDepth {
+			return refusal(422, ReasonInvalidCheckout)
 		}
 	case dbstate.TaskModeCoordination:
 		if in.Checkout != nil {
@@ -277,6 +291,9 @@ func validateCreate(in CreateInput) error {
 		}
 	default:
 		return refusal(422, ReasonInvalidRequest)
+	}
+	if len(in.Brief) > maxBriefBytes {
+		return refusal(422, ReasonBriefTooLong)
 	}
 	return nil
 }
@@ -287,6 +304,9 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: p.TaskID, OwnerID: p.OwnerID})
 		if err != nil {
 			return dbq.Task{}, notFoundOr(err, ReasonTaskNotFound)
+		}
+		if err := ensureActive(ctx, q, p); err != nil {
+			return dbq.Task{}, err
 		}
 		if TaskFinal(t.Status) {
 			return dbq.Task{}, refusal(409, ReasonParentNotActive)
@@ -384,6 +404,9 @@ func lockManaged(ctx context.Context, q *dbq.Queries, p Principal, in ActionInpu
 	t, err := q.GetTaskForUpdate(ctx, dbq.GetTaskForUpdateParams{ID: in.TaskID, OwnerID: p.OwnerID})
 	if err != nil {
 		return t, notFoundOr(err, ReasonTaskNotFound)
+	}
+	if err := ensureActive(ctx, q, p); err != nil {
+		return t, err
 	}
 	read, manage := p.access(t)
 	if !read {
@@ -561,7 +584,7 @@ func (s *Service) Report(ctx context.Context, p Principal, in ReportInput) (Repo
 	if !p.isTaskAgent() || p.TaskID != in.TaskID || p.AttemptID != in.AttemptID {
 		return Reported{}, refusal(403, ReasonReportScope)
 	}
-	if in.OwnerAction != "" && in.Outcome != dbstate.OutcomeBlocked && in.Outcome != dbstate.OutcomeFailed {
+	if in.OwnerAction != "" && in.Outcome != dbstate.OutcomeBlocked {
 		return Reported{}, refusal(422, ReasonOwnerActionOutcome)
 	}
 	refs := in.EvidenceRefs
@@ -602,6 +625,9 @@ func (s *Service) Report(ctx context.Context, p Principal, in ReportInput) (Repo
 		}
 		if t.CurrentAttemptID == nil || *t.CurrentAttemptID != in.AttemptID {
 			return nil, refusal(403, ReasonInactivePrincipal)
+		}
+		if err := ensureActive(ctx, q, p); err != nil {
+			return nil, err
 		}
 		after, report, err := s.applyReport(ctx, q, t, in, dig, refs)
 		if err != nil {
@@ -655,7 +681,8 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 	}
 	to := reportedState(t, in)
 	var after dbq.Task
-	if alreadyDone || to == from {
+	// A new owner question replaces the one on the task even when status and reason stay the same.
+	if alreadyDone || to == from && in.OwnerAction == "" {
 		after, err = q.TouchTask(ctx, dbq.TouchTaskParams{ID: t.ID, Version: t.Version})
 	} else {
 		if err = TransitionTask(from, to); err != nil {
@@ -733,6 +760,9 @@ func (s *Service) Get(ctx context.Context, p Principal, id string) (api.TaskView
 	if err != nil {
 		return api.TaskView{}, err
 	}
+	if p.Role != "" {
+		hideOwnerFields(&views[0])
+	}
 	return views[0], nil
 }
 
@@ -750,7 +780,16 @@ func (s *Service) List(ctx context.Context, p Principal, projectID, parentID str
 			visible = append(visible, t)
 		}
 	}
-	return s.load(ctx, q, visible)
+	views, err := s.load(ctx, q, visible)
+	if err != nil {
+		return nil, err
+	}
+	if p.Role != "" {
+		for i := range views {
+			hideOwnerFields(&views[i])
+		}
+	}
+	return views, nil
 }
 
 func (s *Service) load(ctx context.Context, q *dbq.Queries, tasks []dbq.Task) ([]api.TaskView, error) {
@@ -799,7 +838,11 @@ func (s *Service) Operation(ctx context.Context, p Principal, id string) (api.Ta
 	if !visible {
 		return api.TaskOperation{}, refusal(404, ReasonOperationNotFound)
 	}
-	return toOperation(op)
+	out, err := toOperation(op)
+	if err == nil && p.Role != "" {
+		out.PrincipalKey, out.RequestDigest, out.RequestPayload = "", "", map[string]any{}
+	}
+	return out, err
 }
 
 // roleChild is the provider Agent role of a child task's attempt. The registry names the roles

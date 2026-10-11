@@ -3,8 +3,10 @@ package tasks_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -218,14 +220,45 @@ func TestCreateValidation(t *testing.T) {
 		"missing project":          {tasks.CreateInput{ProjectID: "nope"}, 404, tasks.ReasonProjectNotFound},
 		"missing topic":            {tasks.CreateInput{TopicID: "nope"}, 404, tasks.ReasonTopicNotFound},
 		"unknown provider":         {tasks.CreateInput{ProviderProfileID: "nope"}, 422, tasks.ReasonProviderUnknown},
+		"brief over the byte limit": {
+			tasks.CreateInput{Brief: strings.Repeat("é", 8193)}, 422, tasks.ReasonBriefTooLong,
+		},
+		"depth over the limit": {
+			tasks.CreateInput{Mode: dbstate.TaskModeCode, ProjectID: "p1", Checkout: &tasks.Checkout{Branch: "b", Depth: 1001}},
+			422, tasks.ReasonInvalidCheckout,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := e.create(e.own, tc.in)
 			wantRefusal(t, err, tc.status, tc.reason)
 		})
 	}
-	if n := e.count(`SELECT count(*) FROM tasks`) + e.count(`SELECT count(*) FROM task_operations`) + e.count(`SELECT count(*) FROM events`); n != 0 {
-		t.Fatalf("refused requests left %d rows", n)
+	// Branch and ref names that git would read as options or ref expressions are refused.
+	for _, bad := range []string{
+		"-x", "--upload-pack=x", "refs/heads/main", "refs/tags/v1", "a..b", "@", "@{u}", "x.lock", "a b", "a~1", "a^", "a:b",
+		"a?", "a*", "a[", `a\b`, "a//b", "/a", "a/", "a.", ".a", "a/.b", "a/b.lock", "a\x00b", strings.Repeat("a", 256),
+	} {
+		for field, co := range map[string]*tasks.Checkout{
+			"branch": {Branch: bad}, "ref": {Branch: "ok", Ref: bad},
+		} {
+			_, err := e.create(e.own, tasks.CreateInput{Mode: dbstate.TaskModeCode, ProjectID: "p1", Checkout: co})
+			if err == nil {
+				t.Errorf("%s %q accepted", field, bad)
+				continue
+			}
+			wantRefusal(t, err, 422, tasks.ReasonInvalidCheckout)
+		}
+	}
+	if _, err := e.create(e.own, tasks.CreateInput{
+		Mode: dbstate.TaskModeCode, ProjectID: "p1", Checkout: &tasks.Checkout{Branch: "feat/x", Ref: "v1.0", Depth: 1000},
+	}); err != nil {
+		t.Fatalf("a valid checkout was refused: %v", err)
+	}
+	if n := e.count(`SELECT count(*) FROM tasks`); n != 1 {
+		t.Fatalf("refused requests left %d tasks", n)
+	}
+	if n := e.count(`SELECT count(*) FROM task_operations`); n != 1 {
+		t.Fatalf("refused requests left %d operations", n)
 	}
 	if _, err := e.create(tasks.Principal{OwnerID: owner, Role: dbstate.RoleChild, BindingID: "c"}, tasks.CreateInput{}); err == nil {
 		t.Fatal("child created a task")
@@ -366,6 +399,12 @@ func TestCancelWithoutAttemptCompletes(t *testing.T) {
 			t.Fatalf("create operation is %s after cancel", o.State)
 		}
 	}
+	// The create request ends with the task and says nothing about provisioning any more.
+	for _, o := range v.Operations {
+		if o.Kind == "create" && o.Reason != nil {
+			t.Fatalf("cancelled create operation keeps reason %s", *o.Reason)
+		}
+	}
 	// A replay returns the stored operation and changes nothing.
 	again, err := e.svc.Cancel(context.Background(), e.own, in)
 	if err != nil || again.Id != op.Id || e.view(e.own, id).Task.Version != 2 {
@@ -494,7 +533,27 @@ func TestReportMovesTheTask(t *testing.T) {
 		t.Fatal("blocked report left no result ref")
 	}
 
+	// A second question replaces the first, though status and reason do not change.
+	in = report(sup, "r2b", dbstate.OutcomeBlocked)
+	in.OwnerAction = "pick a cache"
+	r, err = e.svc.Report(ctx, sup, in)
+	if err != nil || r.Status != "blocked" || r.Version != 4 {
+		t.Fatalf("second blocked = %+v, %v", r, err)
+	}
+	v = e.view(e.own, id)
+	var second string
+	if err := e.pool.QueryRow(ctx, `SELECT id FROM task_reports WHERE request_id = 'r2b'`).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	if d := v.Task.OwnerDecision; d == nil || d.Action != "pick a cache" || d.ReportId != second {
+		t.Fatalf("decision = %+v", v.Task.OwnerDecision)
+	}
 	// Progress while waiting for the owner resumes the task and clears the decision.
+	in = report(sup, "r2c", dbstate.OutcomeBlocked)
+	in.OwnerAction = "pick a queue"
+	if _, err = e.svc.Report(ctx, sup, in); err != nil {
+		t.Fatal(err)
+	}
 	r, err = e.svc.Report(ctx, sup, report(sup, "r3", dbstate.OutcomeProgress))
 	if err != nil || r.Status != "running" {
 		t.Fatalf("resume = %+v, %v", r, err)
@@ -518,8 +577,8 @@ func TestReportMovesTheTask(t *testing.T) {
 	if v := e.view(e.own, id); *v.Task.Reason != "publication" {
 		t.Fatalf("completed task = %+v", v.Task)
 	}
-	if n := e.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key = 'main'`); n != 2 {
-		t.Fatalf("main deliveries = %d, want 2 (blocked, failed)", n)
+	if n := e.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key = 'main'`); n != 4 {
+		t.Fatalf("main deliveries = %d, want 4 (three blocked, one failed)", n)
 	}
 }
 
@@ -565,6 +624,10 @@ func TestReportScopeAndRules(t *testing.T) {
 	_, err = e.svc.Report(ctx, sup, bad)
 	wantRefusal(t, err, 403, tasks.ReasonReportScope)
 	bad = report(sup, "r", dbstate.OutcomeProgress)
+	bad.OwnerAction = "ask"
+	_, err = e.svc.Report(ctx, sup, bad)
+	wantRefusal(t, err, 422, tasks.ReasonOwnerActionOutcome)
+	bad = report(sup, "r", dbstate.OutcomeFailed)
 	bad.OwnerAction = "ask"
 	_, err = e.svc.Report(ctx, sup, bad)
 	wantRefusal(t, err, 422, tasks.ReasonOwnerActionOutcome)
@@ -674,10 +737,11 @@ func TestAuthMergeStatusOnly(t *testing.T) {
 	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
 	sup := e.agent(dbstate.RoleSupervisor, "sup-1")
 	id := e.mustCreate(sup, tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "b"}})
-	e.attempt(id, dbstate.AttemptChild, dbstate.AttemptCompleted, "kid-1")
-	// The attempt is done but the task is not.
-	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); !errors.Is(err, tasks.ErrInactive) {
-		t.Fatalf("task not completed = %v", err)
+	e.attempt(id, dbstate.AttemptChild, dbstate.AttemptActive, "kid-1")
+	e.setStatus(id, "running", "")
+	// The task is not completed yet: an ordinary live attempt, not merge status only.
+	if st, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); err != nil || st.MergeStatusOnly {
+		t.Fatalf("running = %+v, %v", st, err)
 	}
 	e.setStatus(id, "completed", "")
 	st, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1")
@@ -690,6 +754,93 @@ func TestAuthMergeStatusOnly(t *testing.T) {
 	e.svc.MergeTools = false
 	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); !errors.Is(err, tasks.ErrInactive) {
 		t.Fatalf("merge tools off = %v", err)
+	}
+	e.svc.MergeTools = true
+	// Once the attempt has settled it is final, and nothing gets in: not even merge status.
+	e.exec(`UPDATE task_attempts SET state = 'completed', capacity_held = false WHERE binding_id = 'kid-1'`)
+	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); !errors.Is(err, tasks.ErrInactive) {
+		t.Fatalf("settled attempt = %v", err)
+	}
+	// Likewise an active attempt that is no longer current.
+	e.exec(`UPDATE task_attempts SET state = 'active', capacity_held = true WHERE binding_id = 'kid-1'`)
+	e.exec(`UPDATE tasks SET current_attempt_id = NULL WHERE id = $1`, id)
+	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); !errors.Is(err, tasks.ErrInactive) {
+		t.Fatalf("not current = %v", err)
+	}
+}
+
+func TestAuthRefusesCreatingAttempts(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustCreate(e.own, tasks.CreateInput{})
+	e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptCreating, "sup-1")
+	if _, err := e.svc.Auth(context.Background(), dbstate.RoleSupervisor, dbstate.GrantCoordination, "sup-1"); !errors.Is(err, tasks.ErrInactive) {
+		t.Fatalf("creating = %v", err)
+	}
+}
+
+// A child is let in only while its parent is running an active attempt of its own.
+func TestAuthChecksTheParent(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	root := e.mustCreate(e.own, tasks.CreateInput{})
+	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
+	e.setStatus(root, "running", "")
+	sup := e.agent(dbstate.RoleSupervisor, "sup-1")
+	child := e.mustCreate(sup, tasks.CreateInput{})
+	e.attempt(child, dbstate.AttemptChild, dbstate.AttemptActive, "kid-1")
+	e.setStatus(child, "running", "")
+	auth := func() error {
+		_, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantCoordination, "kid-1")
+		return err
+	}
+	if err := auth(); err != nil {
+		t.Fatalf("live parent = %v", err)
+	}
+	for name, set := range map[string]string{
+		"parent attempt draining": `UPDATE task_attempts SET state = 'draining' WHERE binding_id = 'sup-1'`,
+		"parent task failed":      `UPDATE tasks SET status = 'failed', reason = NULL WHERE id = '` + root + `'`,
+		"parent task cancelled":   `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = '` + root + `'`,
+		"no parent attempt":       `UPDATE tasks SET current_attempt_id = NULL WHERE id = '` + root + `'`,
+	} {
+		e.exec(`UPDATE task_attempts SET state = 'active' WHERE binding_id = 'sup-1'`)
+		e.exec(`UPDATE tasks SET status = 'running', reason = NULL, current_attempt_id = (SELECT id FROM task_attempts WHERE binding_id = 'sup-1') WHERE id = $1`, root)
+		e.exec(set)
+		if err := auth(); !errors.Is(err, tasks.ErrInactive) {
+			t.Errorf("%s = %v", name, err)
+		}
+		_, err := e.svc.Resolve(ctx, tasks.Principal{OwnerID: owner, Role: dbstate.RoleChild, BindingID: "kid-1"})
+		wantRefusal(t, err, 403, tasks.ReasonInactivePrincipal)
+	}
+}
+
+// The principal was resolved before the attempt was drained: the write checks again.
+func TestWritesRecheckTheAttempt(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	root := e.mustCreate(e.own, tasks.CreateInput{})
+	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
+	e.setStatus(root, "running", "")
+	sup := e.agent(dbstate.RoleSupervisor, "sup-1")
+	child := e.mustCreate(sup, tasks.CreateInput{})
+	e.setStatus(child, "running", "")
+
+	e.exec(`UPDATE task_attempts SET state = 'draining' WHERE binding_id = 'sup-1'`)
+	before := e.count(`SELECT count(*) FROM tasks`)
+	_, err := e.svc.Report(ctx, sup, report(sup, "late", dbstate.OutcomeProgress))
+	wantRefusal(t, err, 403, tasks.ReasonInactivePrincipal)
+	_, err = e.create(sup, tasks.CreateInput{})
+	wantRefusal(t, err, 403, tasks.ReasonInactivePrincipal)
+	cv := e.view(e.own, child)
+	_, err = e.svc.Cancel(ctx, sup, action(child, cv, "c1"))
+	wantRefusal(t, err, 403, tasks.ReasonInactivePrincipal)
+	if got := e.count(`SELECT count(*) FROM tasks`); got != before {
+		t.Fatalf("tasks = %d, want %d", got, before)
+	}
+	if n := e.count(`SELECT count(*) FROM task_reports`); n != 0 {
+		t.Fatalf("reports = %d", n)
+	}
+	if v := e.view(e.own, child); v.Task.Status != "running" || v.Task.Version != cv.Task.Version {
+		t.Fatalf("child changed: %+v", v.Task)
 	}
 }
 
@@ -736,4 +887,76 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// Two cancels at one expected version: one wins, the other sees a stale version.
+func TestConcurrentCancels(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	id := e.mustCreate(e.own, tasks.CreateInput{})
+	in := action(id, e.view(e.own, id), "")
+	errs := make(chan error, 2)
+	for i := range 2 {
+		go func() {
+			in := in
+			in.RequestID = fmt.Sprintf("c%d", i)
+			_, err := e.svc.Cancel(ctx, e.own, in)
+			errs <- err
+		}()
+	}
+	won, stale := 0, 0
+	for range 2 {
+		if err := <-errs; err == nil {
+			won++
+		} else {
+			wantRefusal(t, err, 409, tasks.ReasonStaleVersion)
+			stale++
+		}
+	}
+	if won != 1 || stale != 1 {
+		t.Fatalf("won = %d, stale = %d", won, stale)
+	}
+	if v := e.view(e.own, id); v.Task.Status != "cancelled" || v.Task.Version != 2 {
+		t.Fatalf("task = %+v", v.Task)
+	}
+	if n := e.count(`SELECT count(*) FROM events WHERE type = 'task:updated'`); n != 2 { // create, cancel
+		t.Fatalf("events = %d", n)
+	}
+}
+
+// A cancel racing a report: whichever commits first wins, the other is refused, and the version
+// advances once per winner.
+func TestCancelRacesReport(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	id := e.codeTask()
+	e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
+	e.setStatus(id, "running", "")
+	sup := e.agent(dbstate.RoleSupervisor, "sup-1")
+	in := action(id, e.view(e.own, id), "c1")
+	cancelErr, reportErr := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := e.svc.Cancel(ctx, e.own, in)
+		cancelErr <- err
+	}()
+	go func() {
+		_, err := e.svc.Report(ctx, sup, report(sup, "r1", dbstate.OutcomeCompleted))
+		reportErr <- err
+	}()
+	cerr, rerr := <-cancelErr, <-reportErr
+	if rerr != nil {
+		t.Fatalf("report: %v", rerr)
+	}
+	// The cancel names the version it saw; the report may have moved it first.
+	if cerr != nil {
+		wantRefusal(t, cerr, 409, tasks.ReasonStaleVersion)
+	}
+	v := e.view(e.own, id)
+	want := 2
+	if cerr == nil {
+		want = 3
+	}
+	if v.Task.Version != want || len(v.Reports) != 1 {
+		t.Fatalf("version = %d (cancel err %v), reports = %d", v.Task.Version, cerr, len(v.Reports))
+	}
 }

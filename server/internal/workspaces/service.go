@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gitref"
 )
 
 // InvalidError is a request that cannot be a workspace; the API answers 422 with the message.
@@ -580,7 +581,7 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 		return plan{}, &InvalidError{err.Error()}
 	}
 	for field, v := range map[string]*string{"ref": body.Ref, "branch": body.Branch} {
-		if v != nil && *v != "" && !validGitName(*v) {
+		if v != nil && *v != "" && !gitref.Valid(*v) {
 			return plan{}, &InvalidError{fmt.Sprintf("%s is not a valid git name", field)}
 		}
 	}

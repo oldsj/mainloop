@@ -41,5 +41,7 @@ const (
 	ReasonProviderRole         = "provider_role_unavailable"
 	ReasonProviderDisabled     = "provider_disabled"
 	ReasonInvalidRequest       = "invalid_request"
-	ReasonOwnerActionOutcome   = "owner_action_requires_blocked_or_failed"
+	ReasonOwnerActionOutcome   = "owner_action_requires_blocked"
+	ReasonInvalidCheckout      = "invalid_checkout"
+	ReasonBriefTooLong         = "brief_too_long"
 )

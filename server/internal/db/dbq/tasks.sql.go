@@ -13,7 +13,7 @@ import (
 )
 
 const blockRequestedCreateOps = `-- name: BlockRequestedCreateOps :exec
-UPDATE task_operations SET state = 'blocked', updated_at = now()
+UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
 WHERE task_id = $1 AND kind = 'create' AND state = 'requested'
 `
 
@@ -44,29 +44,34 @@ func (q *Queries) CountLiveChildTasks(ctx context.Context, arg CountLiveChildTas
 const getAttemptPrincipal = `-- name: GetAttemptPrincipal :one
 SELECT a.id AS attempt_id, a.task_id, a.state AS attempt_state, a.role AS attempt_role, a.depth AS attempt_depth,
        t.owner_id, t.status AS task_status, t.mode AS task_mode, t.project_id, t.root_task_id, t.parent_task_id,
-       (coalesce(t.current_attempt_id = a.id, false))::boolean AS is_current
+       (coalesce(t.current_attempt_id = a.id, false))::boolean AS is_current,
+       coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state
 FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
+LEFT JOIN tasks pt ON pt.id = t.parent_task_id
+LEFT JOIN task_attempts pa ON pa.id = pt.current_attempt_id
 WHERE a.binding_id = $1
 `
 
 type GetAttemptPrincipalRow struct {
-	AttemptID    string
-	TaskID       string
-	AttemptState dbstate.AttemptState
-	AttemptRole  dbstate.AttemptRole
-	AttemptDepth int32
-	OwnerID      string
-	TaskStatus   dbstate.TaskStatus
-	TaskMode     dbstate.TaskMode
-	ProjectID    *string
-	RootTaskID   string
-	ParentTaskID *string
-	IsCurrent    bool
+	AttemptID          string
+	TaskID             string
+	AttemptState       dbstate.AttemptState
+	AttemptRole        dbstate.AttemptRole
+	AttemptDepth       int32
+	OwnerID            string
+	TaskStatus         dbstate.TaskStatus
+	TaskMode           dbstate.TaskMode
+	ProjectID          *string
+	RootTaskID         string
+	ParentTaskID       *string
+	IsCurrent          bool
+	ParentTaskStatus   string
+	ParentAttemptState string
 }
 
-// The task principal behind an MCP binding: its attempt, the task it belongs to and whether that
-// attempt is still the task's current one.
+// The task principal behind an MCP binding: its attempt, the task it belongs to, whether that
+// attempt is still the task's current one, and the state of the parent's current attempt.
 func (q *Queries) GetAttemptPrincipal(ctx context.Context, bindingID *string) (GetAttemptPrincipalRow, error) {
 	row := q.db.QueryRow(ctx, getAttemptPrincipal, bindingID)
 	var i GetAttemptPrincipalRow
@@ -83,6 +88,8 @@ func (q *Queries) GetAttemptPrincipal(ctx context.Context, bindingID *string) (G
 		&i.RootTaskID,
 		&i.ParentTaskID,
 		&i.IsCurrent,
+		&i.ParentTaskStatus,
+		&i.ParentAttemptState,
 	)
 	return i, err
 }
@@ -173,6 +180,17 @@ func (q *Queries) GetTaskAttempt(ctx context.Context, id string) (TaskAttempt, e
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getTaskCurrentAttempt = `-- name: GetTaskCurrentAttempt :one
+SELECT current_attempt_id FROM tasks WHERE id = $1
+`
+
+func (q *Queries) GetTaskCurrentAttempt(ctx context.Context, id string) (*string, error) {
+	row := q.db.QueryRow(ctx, getTaskCurrentAttempt, id)
+	var current_attempt_id *string
+	err := row.Scan(&current_attempt_id)
+	return current_attempt_id, err
 }
 
 const getTaskForUpdate = `-- name: GetTaskForUpdate :one
@@ -866,6 +884,50 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, created_at, updated_at FROM task_attempts WHERE id = $1 FOR SHARE
+`
+
+// Locks an attempt against being moved while the caller's write commits, and reads its state.
+func (q *Queries) LockTaskAttemptShared(ctx context.Context, id string) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, lockTaskAttemptShared, id)
+	var i TaskAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Number,
+		&i.ProfileID,
+		&i.NativeProvider,
+		&i.ConfigurationRevision,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Role,
+		&i.Depth,
+		&i.State,
+		&i.CapacityHeld,
+		&i.SessionID,
+		&i.BindingID,
+		&i.WorkspaceID,
+		&i.WriterGeneration,
+		&i.BriefDeliveryID,
+		&i.PredecessorID,
+		&i.SuccessorID,
+		&i.EvidenceRefs,
+		&i.ResultRef,
+		&i.Environment,
+		&i.InitialRef,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.SupersededAt,
+		&i.ArchivedAt,
+		&i.NativeDeletedAt,
+		&i.RetentionHold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const lockTaskRequest = `-- name: LockTaskRequest :exec

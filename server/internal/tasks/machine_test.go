@@ -114,10 +114,12 @@ func TestTransitionTaskReasonChangesWithinAStatus(t *testing.T) {
 
 func TestTransitionAttempt(t *testing.T) {
 	allowed := map[dbstate.AttemptState][]dbstate.AttemptState{
-		dbstate.AttemptCreating: {dbstate.AttemptActive, dbstate.AttemptFailed, dbstate.AttemptCancelled},
-		dbstate.AttemptActive:   {dbstate.AttemptDraining, dbstate.AttemptCompleted, dbstate.AttemptFailed},
-		dbstate.AttemptDraining: {dbstate.AttemptFenced, dbstate.AttemptCompleted, dbstate.AttemptFailed},
-		dbstate.AttemptFenced:   {dbstate.AttemptSuperseded, dbstate.AttemptCancelled, dbstate.AttemptFailed},
+		dbstate.AttemptCreating: {dbstate.AttemptActive, dbstate.AttemptDraining},
+		dbstate.AttemptActive:   {dbstate.AttemptDraining},
+		dbstate.AttemptDraining: {dbstate.AttemptFenced},
+		dbstate.AttemptFenced: {
+			dbstate.AttemptSuperseded, dbstate.AttemptFailed, dbstate.AttemptCancelled, dbstate.AttemptCompleted,
+		},
 	}
 	for _, from := range allAttemptStates {
 		for _, to := range allAttemptStates {

@@ -80,7 +80,9 @@ type AuthState struct {
 var ErrInactive = errors.New("tasks: binding is not a live current task attempt")
 
 // principalOf loads the attempt behind a supervisor or child binding and checks it: the attempt
-// must be the task's current one, and live; or, for a completed task, the completed current one.
+// must be the task's current one and active, and a child's parent must still be running its own
+// active attempt. A completed task's attempt, still active and current until it settles, is let
+// in for merge status only.
 func principalOf(ctx context.Context, q *dbq.Queries, role dbstate.BindingRole, binding string) (dbq.GetAttemptPrincipalRow, bool, error) {
 	row, err := q.GetAttemptPrincipal(ctx, &binding)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -96,10 +98,19 @@ func principalOf(ctx context.Context, q *dbq.Queries, role dbstate.BindingRole, 
 	if row.AttemptRole != want || !row.IsCurrent {
 		return row, false, ErrInactive
 	}
+	if row.AttemptState != dbstate.AttemptActive {
+		return row, false, ErrInactive
+	}
+	if row.ParentTaskID != nil {
+		parent := dbstate.TaskStatus(row.ParentTaskStatus)
+		if row.ParentAttemptState != string(dbstate.AttemptActive) || TaskFinal(parent) {
+			return row, false, ErrInactive
+		}
+	}
 	switch {
-	case AttemptLive(row.AttemptState) && !TaskFinal(row.TaskStatus):
+	case !TaskFinal(row.TaskStatus):
 		return row, false, nil
-	case row.AttemptState == dbstate.AttemptCompleted && row.TaskStatus == dbstate.TaskCompleted:
+	case row.TaskStatus == dbstate.TaskCompleted:
 		return row, true, nil
 	}
 	return row, false, ErrInactive
@@ -117,6 +128,30 @@ func (s *Service) Auth(ctx context.Context, role dbstate.BindingRole, grant dbst
 		return AuthState{}, ErrInactive
 	}
 	return AuthState{Depth: int(row.AttemptDepth), MergeStatusOnly: final}, nil
+}
+
+// ensureActive checks, inside a write transaction, that the caller's attempt is still the current
+// one and active, and holds it so it cannot move before the write commits. The check in Resolve
+// ran before the transaction and the attempt may have been drained since.
+func ensureActive(ctx context.Context, q *dbq.Queries, p Principal) error {
+	if !p.isTaskAgent() {
+		return nil
+	}
+	a, err := q.LockTaskAttemptShared(ctx, p.AttemptID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return refusal(403, ReasonInactivePrincipal)
+	}
+	if err != nil {
+		return err
+	}
+	cur, err := q.GetTaskCurrentAttempt(ctx, a.TaskID)
+	if err != nil {
+		return err
+	}
+	if a.State != dbstate.AttemptActive || cur == nil || *cur != a.ID {
+		return refusal(403, ReasonInactivePrincipal)
+	}
+	return nil
 }
 
 // Resolve completes a principal built from an authenticated MCP actor. The main thread needs no

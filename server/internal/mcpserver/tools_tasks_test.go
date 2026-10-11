@@ -244,9 +244,7 @@ func TestMergeStatusOnlyAfterTheTaskEnds(t *testing.T) {
 			if _, err := h.env.Pool.Exec(context.Background(), `UPDATE tasks SET status = 'completed', reason = NULL WHERE id = $1`, childTask); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := h.env.Pool.Exec(context.Background(), `UPDATE task_attempts SET state = 'completed', capacity_held = false WHERE task_id = $1`, childTask); err != nil {
-				t.Fatal(err)
-			}
+			// The attempt is still active and current: settlement has not run yet.
 			w, r := h.post(ordinary, host, child.Token, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 				"params": map[string]any{"name": "whoami", "arguments": map[string]any{}}})
 			if tc.wantOK {
@@ -266,5 +264,75 @@ func TestMergeStatusOnlyAfterTheTaskEnds(t *testing.T) {
 				t.Errorf("status = %d, want 401", w.Code)
 			}
 		})
+	}
+}
+
+func TestDelegateRefusesBadCheckouts(t *testing.T) {
+	h := newTaskHarness(t, false)
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	n := 0
+	for _, bad := range []string{"-x", "--upload-pack=x", "refs/heads/main", "a..b", "@", "x.lock", "a b", "a~1"} {
+		for _, field := range []string{"branch", "ref"} {
+			n++
+			checkout := map[string]any{"branch": "ok", "ref": ""}
+			checkout[field] = bad
+			args := map[string]any{
+				"request_id": "bad-" + string(rune('a'+n)), "title": "Fix", "brief": "b", "mode": "code",
+				"project_id": "p1", "checkout": checkout,
+			}
+			if _, r := h.call(ordinary, main.Token, "delegate", args); !r.Result.IsError || r.text() != "[422] invalid_checkout" {
+				t.Errorf("%s %q = %v %q", field, bad, r.Result.IsError, r.text())
+			}
+		}
+	}
+}
+
+func TestAgentReadsHideOwnerFields(t *testing.T) {
+	h := newTaskHarness(t, false)
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
+	_, attempt := h.seedTask(t, nil, dbstate.AttemptSupervisor, dbstate.AttemptActive, sup)
+	ctx := context.Background()
+	if _, err := h.env.Pool.Exec(ctx, `UPDATE task_attempts SET evidence_refs = '{"e1"}', result_ref = 'report:r', brief_delivery_id = 'd1', retention_hold = 'hold' WHERE id = $1`, attempt); err != nil {
+		t.Fatal(err)
+	}
+	if _, r := h.call(ordinary, main.Token, "delegate", map[string]any{"request_id": "o1", "title": "T", "brief": "b", "mode": "coordination"}); r.Result.IsError {
+		t.Fatal(r.text())
+	}
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{{"supervisor", sup.Token}, {"main", main.Token}} {
+		_, r := h.call(ordinary, tc.token, "task_list", map[string]any{})
+		list, _ := r.Result.StructuredContent["tasks"].([]any)
+		if len(list) == 0 {
+			t.Fatalf("%s lists nothing", tc.name)
+		}
+		for _, v := range list {
+			view := v.(map[string]any)
+			for _, o := range view["operations"].([]any) {
+				op := o.(map[string]any)
+				if op["principal_key"] != "" || op["request_digest"] != "" || len(op["request_payload"].(map[string]any)) != 0 {
+					t.Errorf("%s sees operation fields %v", tc.name, op)
+				}
+			}
+			for _, a := range view["attempts"].([]any) {
+				at := a.(map[string]any)
+				if len(at["evidence_refs"].([]any)) != 0 || at["result_ref"] != nil || at["brief_delivery_id"] != nil || at["retention_hold"] != nil {
+					t.Errorf("%s sees attempt fields %v", tc.name, at)
+				}
+			}
+		}
+	}
+}
+
+func TestCreatingAttemptsAreNotAdmitted(t *testing.T) {
+	h := newTaskHarness(t, false)
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
+	h.seedTask(t, nil, dbstate.AttemptSupervisor, dbstate.AttemptCreating, sup)
+	// A creating attempt is not let into MCP.
+	if w, _ := h.post(ordinary, host, sup.Token, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}); w.Code != http.StatusUnauthorized {
+		t.Errorf("creating attempt: status = %d, want 401", w.Code)
 	}
 }

@@ -233,7 +233,7 @@ CREATE TABLE task_reports (
     created_at timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (task_id, attempt_id) REFERENCES task_attempts (task_id, id),
     UNIQUE (attempt_id, request_id),
-    CONSTRAINT task_reports_owner_action CHECK (owner_action IS NULL OR outcome = 'blocked' OR outcome = 'failed')
+    CONSTRAINT task_reports_owner_action CHECK (owner_action IS NULL OR outcome = 'blocked')
 );
 CREATE INDEX task_reports_task ON task_reports (task_id, created_at, id);
 

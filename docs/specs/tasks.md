@@ -47,6 +47,11 @@ coordination mode, selected profile/source, optional inherited owner provider co
 status/reason, current attempt, version and timestamps. Code requires an owner-owned project
 and typed branch/ref/depth. Coordination has no checkout or repository authority.
 
+The server refuses a code task's checkout with 422 `invalid_checkout` when the branch or ref is
+not a plain git name (a leading `-`, `..`, `@`, a `.lock` ending, spaces or any of `~^:?*[\`, empty
+components, over 255 bytes) or starts with `refs/`, or when the depth is outside 0..1000. A brief over
+16,384 bytes is refused with 422 `brief_too_long`. REST and MCP share these checks.
+
 An omitted checkout `depth` is 0, which clones full history; a positive
 value requests that shallow depth. Existing tasks keep the depth stored in their snapshot.
 
@@ -239,7 +244,8 @@ Frozen handoff operation states, not an implemented S0 handoff:
 ```
 
 Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `failed`,
-`cancelled`, `completed`. Capacity remains held separately until confirmed fencing/termination;
+`cancelled`, `completed`. Allowed moves: `creating` to `active` or `draining`; `active` to
+`draining`; `draining` to `fenced`; `fenced` to `superseded`, `failed`, `cancelled` or `completed`. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
 
 Verified merged coding tasks enter automatic runtime cleanup through the existing task
@@ -435,7 +441,7 @@ Labels: **implemented** means built in `server/` and covered by tests on a scrat
 - **Implemented:** the task record (migration `00060_tasks`): tasks, attempts, operations, artifacts, reports and event deliveries. The database refuses a changed owner, mode or hierarchy, a version that goes down, a second unfenced attempt for a task, and a writer generation that does not rise by exactly one.
 - **Implemented:** the task, attempt and operation state machines in `server/internal/tasks`. Every allowed and refused move is tested.
 - **Implemented:** `GET /tasks`, `GET /tasks/{id}`, `GET /task-operations/{id}` and `POST /tasks`, `/tasks/{id}/retry`, `/reassign` and `/cancel`. Reads carry the task version. Writes answer 202 with an operation. An operation is keyed by owner, principal and request ID. The same request ID with the same payload returns the stored operation; with a different payload it answers 409 `request_payload_conflict`.
-- **Implemented:** the MCP tools `delegate`, `report`, `task_get`, `task_history` (the same read as `task_get`), `task_list` and `task_cancel`, with the per-actor visibility in `api/mcp-tools.json`. A supervisor or child binding authenticates only while its attempt is the task's current, live attempt. `whoami` returns the task fields. Merge status stays readable after the task completes only when merge tools are on and the grant is `workspace`.
+- **Implemented:** the MCP tools `delegate`, `report`, `task_get`, `task_history` (the same read as `task_get`), `task_list` and `task_cancel`, with the per-actor visibility in `api/mcp-tools.json`. A supervisor or child binding authenticates only while its attempt is the task's current, live attempt. `whoami` returns the task fields. Only an `active` attempt authenticates; `creating` does not. A child also needs its parent's current attempt to be `active` and the parent task to be open. Every write re-checks the caller's attempt under the task lock, so an attempt drained after authentication is refused with 403 `inactive_principal`. Merge status stays readable only when merge tools are on, the grant is `workspace`, and the attempt is still `active` and current while its task is `completed`; G10 adds the condition that the task has a merged proposal. `owner_action` is accepted only with `blocked`; a later blocked report with a new `owner_action` replaces the earlier decision even when the status does not change. Agent reads blank the owner-only fields: operation `principal_key`, `request_payload`, `request_digest`, and attempt `evidence_refs`, `result_ref`, `brief_delivery_id`, `retention_hold`.
 - **Implemented:** every task change commits with its `task:updated` event in one transaction, from the API and the MCP process alike. A rolled-back change publishes nothing.
 - **Implemented:** the preview lookup refuses a workspace owned by a task attempt unless that attempt is `active` and the task's current one.
 - **Waits for provisioning (G8b):** `delegate` and `POST /tasks` record the task and a `create` operation, then stop. The operation stays `requested` and the task stays `queued` with reason `provisioning_unavailable`. No workspace, session or writer claim exists yet.
