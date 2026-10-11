@@ -1,10 +1,11 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { API_URL } from '@/api/config';
 import { connection } from '@/api';
 import { loadDraft } from '@/features/chat/drafts';
-import { messageFixture } from '@/features/chat/fixtures';
+import { deliveryFixture, messageFixture } from '@/features/chat/fixtures';
 import { LOST_REPLY_RECORDED } from '@/features/chat/useThread';
 import { server } from '@/test/msw/server';
 import { testChat } from '@/test/msw/handlers';
@@ -147,6 +148,47 @@ describe('session chat', () => {
     expect(composerOf(slot)).toHaveValue('');
     expect(loadDraft('session:s1')).toBe('');
     expect(testChat.state.sessionPosts.s1).toHaveLength(1);
+  });
+
+  it("does not count another client's message that lands in a lost reply window", async () => {
+    const user = userEvent.setup();
+    const slot = await openSession();
+    await waitFor(() => expect(composerOf(slot)).toBeEnabled());
+    server.use(
+      http.post(`${API_URL}/sessions/:sessionId/message`, () => {
+        // Another client's message is recorded while the owner's reply is lost.
+        const thread = testChat.state.sessionThreads.s1;
+        if (!thread) throw new Error('openSession sets the session thread');
+        testChat.state.sessionThreads = {
+          ...testChat.state.sessionThreads,
+          s1: {
+            native: {
+              ...thread.native,
+              deliveries: [...thread.native.deliveries, deliveryFixture({ message_id: 'other-1' })]
+            },
+            messages: [
+              ...thread.messages,
+              messageFixture({
+                id: 'other-1',
+                conversation_id: 'conv-s1',
+                content: 'from the laptop'
+              })
+            ]
+          }
+        };
+        return HttpResponse.error();
+      })
+    );
+
+    await user.type(composerOf(slot), 'Check the logs');
+    await user.click(within(slot).getByRole('button', { name: 'Send message' }));
+
+    expect(await within(slot).findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box. Mainloop could not confirm whether it was recorded."
+    );
+    expect(within(slot).queryByText(LOST_REPLY_RECORDED)).toBeNull();
+    expect(composerOf(slot)).toHaveValue('Check the logs');
+    expect(loadDraft('session:s1')).toBe('Check the logs');
   });
 
   it('says so when a lost reply cannot be checked, and gives the text back', async () => {

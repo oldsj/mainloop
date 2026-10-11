@@ -151,7 +151,7 @@ Implemented in the React client:
 - Rows sort by failures, most first, with unknown counts last. An unknown count shows
   "Unavailable". A row with no task or title shows "Unassigned".
 - Each row is checked on its own. A malformed row is dropped and counted; the others render. A row
-  whose id repeats an earlier row is dropped and counted the same way.
+  whose id repeats an earlier row is dropped and counted separately, with its own notice.
 - Each report and approval is checked on its own. A malformed one is left out of its row, and the
   row says how many were left out. Its totals and other claims still show.
 - A session's source observations load only when asked for. A reload clears them.
