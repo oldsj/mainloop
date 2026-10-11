@@ -20,6 +20,16 @@ import type {
 
 type Schemas = components['schemas'];
 
+/** A refusal the next request gets: the status, the detail, and the contract's `code` when it has one. */
+export interface Refusal {
+  status: number;
+  detail: string;
+  code?: Schemas['CodedHTTPError']['code'];
+}
+
+/** The body a refusal answers with: `code` is present only when the refusal has one. */
+const refusalBody = ({ detail, code }: Refusal) => (code ? { detail, code } : { detail });
+
 /** One session's conversation, as its native routes read it. */
 export interface SessionThreadState {
   native: NativeSessionInfo;
@@ -49,16 +59,16 @@ export interface ChatBackendState {
   stopped: string[];
   /** How many times `GET /main-thread` was read. */
   mainThreadReads: number;
-  /** The next `POST /chat` is refused with this status and detail, then the field clears. */
-  rejectNextChat: { status: number; detail: string } | null;
+  /** The next `POST /chat` is refused this way, then the field clears. */
+  rejectNextChat: Refusal | null;
   /** The next send, to either route, loses its reply. The flag clears after one send. */
   lostSend: LostSend | null;
   /** Sessions other than the main one, created on first use: their native state and messages. */
   sessionThreads: Record<string, SessionThreadState>;
   /** Every `PUT /main-thread/provider` body the backend received, in order. */
   providerPosts: Schemas['MainProviderSelection'][];
-  /** The next provider PUT is refused with this status and detail, then the field clears. */
-  rejectNextProvider: { status: number; detail: string } | null;
+  /** The next provider PUT is refused this way, then the field clears. */
+  rejectNextProvider: Refusal | null;
   /** The next provider PUT loses its reply, as `lostSend` does for a send. The flag clears after one. */
   lostProvider: LostSend | null;
   /** How many provider reads fail before they succeed again. Each failed read counts once. */
@@ -268,9 +278,9 @@ export function createChatBackend(
       const body = (await request.json()) as Schemas['MainProviderSelection'];
       state.providerPosts = [...state.providerPosts, body];
       if (state.rejectNextProvider) {
-        const { status, detail } = state.rejectNextProvider;
+        const refusal = state.rejectNextProvider;
         state.rejectNextProvider = null;
-        return HttpResponse.json({ detail }, { status });
+        return HttpResponse.json(refusalBody(refusal), { status: refusal.status });
       }
       const lost = takeLostProvider();
       if (lost === 'unrecorded') return HttpResponse.error();
@@ -304,9 +314,9 @@ export function createChatBackend(
       state.chatPosts.push(body);
       await waitHeld('chat');
       if (state.rejectNextChat) {
-        const { status, detail } = state.rejectNextChat;
+        const refusal = state.rejectNextChat;
         state.rejectNextChat = null;
-        return HttpResponse.json({ detail }, { status });
+        return HttpResponse.json(refusalBody(refusal), { status: refusal.status });
       }
       if (state.mainThread.native?.turn_in_flight)
         return HttpResponse.json({ detail: 'A turn is already running.' }, { status: 409 });

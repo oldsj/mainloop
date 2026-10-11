@@ -1,12 +1,32 @@
+import { contractEnum } from '../lib/contractEnum';
 import type { components } from './schema.gen';
 
 type TaskErrorDetail = components['schemas']['TaskErrorDetail'];
 
-/** A request failed with an HTTP response, so the backend was reachable. */
+/** The stable `code` a refused main-thread switch or message carries (`CodedHTTPError`). */
+export type RefusalCode = NonNullable<components['schemas']['CodedHTTPError']['code']>;
+
+/**
+ * Every `RefusalCode`. The list is checked against the generated union, so a code the contract adds
+ * or drops fails tsc here instead of reaching the page as an unknown value.
+ */
+export const REFUSAL_CODES = contractEnum<RefusalCode>()([
+  'busy',
+  'pending',
+  'unconfirmed',
+  'unresolved',
+  'agent_unavailable'
+]);
+
+/**
+ * A request failed with an HTTP response, so the backend was reachable. `code` is the contract's
+ * refusal code when the body carried one, otherwise null.
+ */
 export class ApiError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly code: RefusalCode | null = null
   ) {
     super(message);
     this.name = 'ApiError';
@@ -32,11 +52,15 @@ export class TaskApiError extends ApiError {
   }
 }
 
-/** A message send the backend did not accept. `status` is 0 when no HTTP response arrived. */
+/**
+ * A message send the backend did not accept. `status` is 0 when no HTTP response arrived. `code` is
+ * the contract's refusal code when the body carried one, otherwise null.
+ */
 export class SendError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly code: RefusalCode | null = null
   ) {
     super(message);
     this.name = 'SendError';

@@ -1,4 +1,4 @@
-import { ApiError } from '@/api/errors';
+import { ApiError, REFUSAL_CODES } from '@/api/errors';
 import type {
   MainProvider,
   MainProviderInfo,
@@ -163,8 +163,6 @@ const REFUSAL_NOTICE: Record<MainProviderRefusalCode, (requested: MainProvider) 
   unresolved: () => 'Provider change refused: a native create for the main is still unresolved.',
   agent_unavailable: (requested) => `${providerLabel(requested)} isn't installed here. Nothing changed.`
 };
-
-const REFUSAL_CODES = Object.keys(REFUSAL_NOTICE) as MainProviderRefusalCode[];
 
 /** The notice for a chat message the backend refused because of the main's provider state. */
 const SEND_REFUSAL_NOTICE: Record<MainProviderRefusalCode, string> = {

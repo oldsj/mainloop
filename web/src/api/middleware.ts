@@ -1,5 +1,13 @@
 import type { Middleware } from 'openapi-fetch';
-import { ApiError, errorDetail, SendError, TaskApiError, taskErrorDetail } from './errors';
+import {
+  ApiError,
+  errorDetail,
+  REFUSAL_CODES,
+  type RefusalCode,
+  SendError,
+  TaskApiError,
+  taskErrorDetail
+} from './errors';
 
 export const READ_TIMEOUT_MS = 10_000;
 export const READS_PER_SECOND = 4;
@@ -12,6 +20,12 @@ const isTaskPath = (path: string) =>
 const isSendPath = (path: string) => path === '/chat' || path === '/sessions/{session_id}/message';
 
 const isRead = (method: string) => method === 'GET' || method === 'HEAD';
+
+/** The contract's refusal code in an error body, or null. A value the contract does not name is dropped. */
+const refusalCodeOf = (body: unknown): RefusalCode | null => {
+  if (typeof body !== 'object' || body === null || !('code' in body)) return null;
+  return REFUSAL_CODES.find((code) => code === body.code) ?? null;
+};
 
 // By name, not instanceof: the error can come from another realm (an iframe, jsdom).
 const isNamed = (error: unknown, name: string) =>
@@ -84,7 +98,8 @@ export interface MiddlewareDeps {
  * - a request that never gets an HTTP response is reported to the connection state (a timeout is
  *   not: a slow read says nothing about reachability, so the /health probe decides);
  * - HTTP errors become ApiError, TaskApiError (task routes) or SendError (message sends), so
- *   TanStack Query and callers see one typed error instead of a raw body.
+ *   TanStack Query and callers see one typed error instead of a raw body. A contract refusal
+ *   `code` rides on the error.
  */
 export function createMiddleware(deps: MiddlewareDeps): Middleware {
   const acquireRead = deps.acquireRead ?? createReadLimiter();
@@ -115,12 +130,13 @@ export function createMiddleware(deps: MiddlewareDeps): Middleware {
         // Not JSON (a proxy's error page); the fallback message applies.
       }
       const message = errorDetail(body, `Request failed (${response.status})`);
-      if (isSendPath(schemaPath)) throw new SendError(message, response.status);
+      const code = refusalCodeOf(body);
+      if (isSendPath(schemaPath)) throw new SendError(message, response.status, code);
       if (isTaskPath(schemaPath)) {
         const detail = taskErrorDetail(body);
         throw new TaskApiError(message, response.status, detail?.reason ?? null, detail);
       }
-      throw new ApiError(message, response.status);
+      throw new ApiError(message, response.status, code);
     }
   };
 }

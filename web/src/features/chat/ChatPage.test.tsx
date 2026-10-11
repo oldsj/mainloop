@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
 import { keys } from '@/api';
+import type { RefusalCode } from '@/api/errors';
 import { server } from '@/test/msw/server';
 import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
 import { ChatPage } from './ChatPage';
@@ -585,6 +586,19 @@ describe('loading the conversation', () => {
     expect(screen.queryByText('$ mainloop --help')).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
+
+  it('leaves the composer usable when the conversation cannot be read', async () => {
+    setup(existing());
+    server.use(
+      http.get(`${API_URL}/conversations/:id`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    expect(await screen.findByText('Could not load the conversation')).toBeInTheDocument();
+    expect(input()).toBeEnabled();
+    await userEvent.type(input(), 'still here');
+    expect(input()).toHaveValue('still here');
+  });
 });
 
 describe('delivery notices and retry', () => {
@@ -1039,5 +1053,67 @@ describe('the main lock does not reach drafts or a child session', () => {
     // Sending to the child changes neither the main lock nor the main draft.
     expect(main.getByTestId('command-input')).toBeDisabled();
     expect(loadDraft(CONVERSATION_ID)).toBe('main draft');
+  });
+});
+
+// The backend answers a refusal with `{detail, code}`. These go through the real client, so the
+// code the page reads is the one the middleware kept from the response body.
+describe('refusal codes from the backend', () => {
+  it.each<[RefusalCode, string]>([
+    ['busy', 'Provider change refused: the main has open work or changed while the request ran.'],
+    ['pending', 'Provider change refused: a switch is already pending and must settle or be recoverable first.'],
+    ['unconfirmed', 'Provider change refused: kagent could not confirm the main is idle.'],
+    ['unresolved', 'Provider change refused: a native create for the main is still unresolved.'],
+    ['agent_unavailable', "Codex isn't installed here. Nothing changed."]
+  ])('a switch refused as %s shows its notice, not the server detail', async (code, text) => {
+    const { state } = setup(idleThread());
+    state.rejectNextProvider = { status: 409, detail: 'Raw server prose.', code };
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(`${text} State is refreshed; no automatic retry.`);
+    expect(alert).not.toHaveTextContent('Raw server prose');
+    expect(state.providerPosts).toHaveLength(1);
+  });
+
+  it('a switch refused with a code the contract does not name shows the server detail', async () => {
+    const { state } = setup(idleThread());
+    state.rejectNextProvider = {
+      status: 409,
+      detail: 'Main provider is busy.',
+      code: 'mystery' as RefusalCode
+    };
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Provider change blocked (409): Main provider is busy. State is refreshed; no automatic retry.'
+    );
+  });
+
+  it.each<[RefusalCode, string]>([
+    ['busy', 'Message not sent: the main has open work or changed while the request ran.'],
+    ['pending', 'Message not sent: a provider switch is pending.'],
+    ['unconfirmed', 'Message not sent: kagent could not confirm the main is idle.'],
+    ['unresolved', 'Message not sent: a native create for the main is unresolved.'],
+    ['agent_unavailable', "Message not sent: the other provider isn't installed here. Nothing changed."]
+  ])('a message refused as %s shows its notice, and the box keeps the text', async (code, text) => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.rejectNextChat = { status: 409, detail: 'Raw server prose.', code };
+    await userEvent.type(input(), 'too soon{Enter}');
+    const error = await screen.findByTestId('send-error');
+    expect(error).toHaveTextContent(`${text} Your message is back in the box.`);
+    expect(error).not.toHaveTextContent('Raw server prose');
+    expect(input().value).toBe('too soon');
+  });
+
+  it('a message refused with a code the contract does not name shows the server detail', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.rejectNextChat = { status: 409, detail: 'Raw server prose.', code: 'mystery' as RefusalCode };
+    await userEvent.type(input(), 'too soon{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      'Raw server prose. Your message is back in the box.'
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '@/api/errors';
+import { ApiError, type RefusalCode } from '@/api/errors';
 import { deliveryFixture, mainThreadFixture, nativeFixture, providerFixture } from './fixtures';
 import {
   boundedText,
@@ -227,12 +227,11 @@ describe('selectionNotice', () => {
   });
 });
 
-/** A 409 as the client holds it once the contract's `code` is carried on the error. */
-const coded = (code: unknown, detail = 'Raw server prose.') =>
-  Object.assign(new ApiError(detail, 409), { code });
+/** A 409 as the client builds it from a body with the contract's `code`. */
+const coded = (code: RefusalCode, detail = 'Raw server prose.') => new ApiError(detail, 409, code);
 
 describe('refusalCode', () => {
-  it.each(['busy', 'pending', 'unconfirmed', 'unresolved', 'agent_unavailable'])(
+  it.each<RefusalCode>(['busy', 'pending', 'unconfirmed', 'unresolved', 'agent_unavailable'])(
     'reads the %s code',
     (code) => {
       expect(refusalCode(coded(code))).toBe(code);
@@ -240,18 +239,21 @@ describe('refusalCode', () => {
   );
 
   it.each([
-    ['an unknown code', coded('mystery')],
     ['no code', new ApiError('Raw server prose.', 409)],
-    ['a code that is not a string', coded(7)],
     ['a plain string', 'busy'],
     ['nothing', undefined]
   ])('gives no code for %s', (_label, error) => {
     expect(refusalCode(error)).toBeNull();
   });
+
+  it('gives no code for a value the contract does not name', () => {
+    // The client never passes one through; the list check is still the guard for any other caller.
+    expect(refusalCode(coded('mystery' as RefusalCode))).toBeNull();
+  });
 });
 
 describe('selectionNotice refusal codes', () => {
-  it.each([
+  it.each<[RefusalCode, string]>([
     ['busy', 'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'],
     ['pending', 'Provider change refused: a switch is already pending and must settle or be recoverable first. State is refreshed; no automatic retry.'],
     ['unconfirmed', 'Provider change refused: kagent could not confirm the main is idle. State is refreshed; no automatic retry.'],
@@ -270,7 +272,7 @@ describe('selectionNotice refusal codes', () => {
   });
 
   it.each([
-    ['an unknown code', coded('mystery')],
+    ['an unknown code', new ApiError('Raw server prose.', 409, 'mystery' as RefusalCode)],
     ['no code', new ApiError('Raw server prose.', 409)]
   ])('falls back to the detail for %s', (_label, error) => {
     expect(selectionNotice(error, 'codex')).toBe(
@@ -279,7 +281,7 @@ describe('selectionNotice refusal codes', () => {
   });
 
   it('a code wins over the status it arrived with', () => {
-    const error = Object.assign(new ApiError('Forbidden.', 403), { code: 'busy' });
+    const error = new ApiError('Forbidden.', 403, 'busy');
     expect(selectionNotice(error, 'codex')).toBe(
       'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'
     );
