@@ -39,6 +39,17 @@ describe('session row selection', () => {
     expect(within(row).getByText('▌')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('gives the open row its fill and text from the aria-current variant', async () => {
+    // jsdom does not compute the cascade, so this pins the classes the row renders with. A base
+    // bg-background or text-foreground would win over an active-only class of the same weight.
+    renderRowAt('/sessions/s1');
+    const row = await screen.findByRole('link', { name: /Open work/ });
+    expect(row).toHaveClass(
+      'aria-[current=page]:bg-accent',
+      'aria-[current=page]:text-accent-foreground'
+    );
+  });
+
   it('leaves a row that is not open without aria-current', async () => {
     renderRowAt('/sessions/s2');
     const row = await screen.findByRole('link', { name: /Open work/ });

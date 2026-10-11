@@ -1,13 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { agentLabel } from '@/lib/agentLabel';
-import {
-  agentKindOf,
-  keepValid,
-  repoKey,
-  workspaceRowSchema,
-  type WorkspaceLifecycle
-} from './model';
+import { agentKindOf, keepValid, repoKey, workspaceRowSchema, type WorkspaceRow } from './model';
 import { useWorkspaces } from './queries';
 
 const RECENT = 5;
@@ -18,15 +12,15 @@ const RECENT = 5;
  * check. The server sends newest first, and each group keeps that order.
  */
 function recentFor(
-  rows: WorkspaceLifecycle[],
+  rows: WorkspaceRow[],
   repo: string | null | undefined,
   branch: string | undefined
-): WorkspaceLifecycle[] {
+): WorkspaceRow[] {
   const wanted = repo ? repoKey(repo) : null;
   const inRepo = rows.filter(
     (workspace) => wanted === null || repoKey(workspace.manifest.repo_url) === wanted
   );
-  const onBranch = (workspace: WorkspaceLifecycle) =>
+  const onBranch = (workspace: WorkspaceRow) =>
     Boolean(branch) && workspace.manifest.branch === branch;
   return [...inRepo.filter(onBranch), ...inRepo.filter((workspace) => !onBranch(workspace))];
 }
@@ -50,11 +44,7 @@ export function CreateCheck({
   onAcknowledge: () => void;
 }) {
   const list = useWorkspaces();
-  const rows = recentFor(
-    keepValid<WorkspaceLifecycle>(list.data, workspaceRowSchema),
-    repo,
-    branch
-  ).slice(0, RECENT);
+  const rows = recentFor(keepValid(list.data, workspaceRowSchema), repo, branch).slice(0, RECENT);
   // A list that failed to re-read cannot confirm anything, so the owner gets a retry, not a way on.
   const settled = !reading && list.isSuccess;
 

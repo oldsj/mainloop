@@ -1,11 +1,6 @@
 import type { ReactNode } from 'react';
-import {
-  declaredPorts,
-  digestPrefix,
-  isHttpUrl,
-  lastActivity,
-  type WorkspaceLifecycle
-} from './model';
+import { httpUrl } from '@/lib/url';
+import { declaredPorts, digestPrefix, lastActivity, type WorkspaceLifecycle } from './model';
 
 /**
  * The facts the workspace was declared with. Every value is shown as the server sent it; the only
@@ -16,6 +11,7 @@ export function WorkspaceManifest({ workspace }: { workspace: WorkspaceLifecycle
   const { manifest } = workspace;
   const { ports, dropped } = declaredPorts(manifest.dev.ports);
   const environment = manifest.development_environment;
+  const repoHref = httpUrl(manifest.repo_url);
 
   return (
     <section aria-labelledby="manifest-heading" className="gap-sm flex flex-col">
@@ -26,9 +22,9 @@ export function WorkspaceManifest({ workspace }: { workspace: WorkspaceLifecycle
         <Fact label="Repository">
           {manifest.repo_url === '' ? (
             'Not declared'
-          ) : isHttpUrl(manifest.repo_url) ? (
+          ) : repoHref ? (
             <a
-              href={manifest.repo_url}
+              href={repoHref}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex min-h-11 items-center break-all underline"

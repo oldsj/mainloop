@@ -5,13 +5,12 @@
  */
 import { z } from 'zod';
 import { ApiError, type components } from '@/api';
+import { contractEnum } from '@/lib/contractEnum';
 
 type Schemas = components['schemas'];
-export type DevEnvironment = Schemas['DevEnvironment'];
-export type EnvironmentVersion = Schemas['EnvironmentVersion'];
 export type Selection = Schemas['ProjectEnvironmentSelection'];
 export type RegisteredEnvironment = Schemas['RegisteredEnvironment'];
-export type Architecture = 'amd64' | 'arm64';
+export type Architecture = NonNullable<Schemas['EnvironmentVersion']['architecture']>;
 
 /** The only validator a version may carry to be selected. Older validators are obsolete policy. */
 export const VALIDATOR_VERSION = 'oci-static-v2';
@@ -20,20 +19,42 @@ export const VALIDATOR_VERSION = 'oci-static-v2';
 export const IMAGE_PATTERN = '[^\\s]+/[^\\s]+@sha256:[0-9a-f]{64}';
 const IMAGE_RE = new RegExp(`^${IMAGE_PATTERN}$`);
 
+const SOURCE_KINDS = contractEnum<Schemas['DevEnvironment']['source_kind']>()([
+  'prebuilt_image',
+  'definition_repo',
+  'operator_default'
+]);
+const VALIDATION_STATUSES = contractEnum<Schemas['EnvironmentVersion']['validation_status']>()([
+  'pending_build',
+  'static_validated'
+]);
+const ARCHITECTURES = contractEnum<Architecture>()(['amd64', 'arm64']);
+
+/** The environment fields the selection and registration forms read. */
 export const environmentRowSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
-  source_kind: z.enum(['prebuilt_image', 'definition_repo', 'operator_default']),
+  source_kind: z.enum(SOURCE_KINDS),
   accepted_default_version_id: z.string().nullable()
-});
+}) satisfies z.ZodType<
+  Pick<Schemas['DevEnvironment'], 'id' | 'name' | 'source_kind' | 'accepted_default_version_id'>
+>;
+export type EnvironmentRow = z.output<typeof environmentRowSchema>;
 
+/** The version fields the selection form reads to decide whether a version can be chosen. */
 export const versionRowSchema = z.object({
   id: z.string().min(1),
   environment_id: z.string().min(1),
-  validation_status: z.enum(['pending_build', 'static_validated']),
+  validation_status: z.enum(VALIDATION_STATUSES),
   validator_version: z.string(),
-  architecture: z.enum(['amd64', 'arm64']).nullable()
-});
+  architecture: z.enum(ARCHITECTURES).nullable()
+}) satisfies z.ZodType<
+  Pick<
+    Schemas['EnvironmentVersion'],
+    'id' | 'environment_id' | 'validation_status' | 'validator_version' | 'architecture'
+  >
+>;
+export type VersionRow = z.output<typeof versionRowSchema>;
 
 export const selectionSchema = z.object({
   project_id: z.string().min(1),
@@ -43,21 +64,32 @@ export const selectionSchema = z.object({
   revision: z.number().int().nonnegative(),
   access_revoked: z.boolean(),
   resolved_version_id: z.string().nullable()
-});
+}) satisfies z.ZodType<
+  Pick<
+    Selection,
+    | 'project_id'
+    | 'environment_id'
+    | 'version_id'
+    | 'follow_default'
+    | 'revision'
+    | 'access_revoked'
+    | 'resolved_version_id'
+  >
+>;
 
 export function isImageReference(value: string): boolean {
   return IMAGE_RE.test(value.trim());
 }
 
 /** A version a project may select: statically validated by the current validator. */
-export function eligible(version: EnvironmentVersion | undefined): boolean {
+export function eligible(version: VersionRow | undefined): boolean {
   return (
     version?.validation_status === 'static_validated' &&
     version.validator_version === VALIDATOR_VERSION
   );
 }
 
-export function versionLabel(version: EnvironmentVersion): string {
+export function versionLabel(version: VersionRow): string {
   const status = eligible(version)
     ? 'Statically validated'
     : 'Unavailable: pending build or obsolete policy';
@@ -83,7 +115,7 @@ export function draftFrom(saved: Selection | null): Draft {
 /** The version a save would make current: the environment's accepted default when following, else the chosen one. */
 export function targetVersionId(
   draft: Draft,
-  environment: DevEnvironment | undefined
+  environment: EnvironmentRow | undefined
 ): string | null {
   return draft.follow
     ? (environment?.accepted_default_version_id ?? null)
@@ -106,8 +138,8 @@ export function sameAsSaved(draft: Draft, saved: Selection | null): boolean {
 export function canSaveSelection(opts: {
   draft: Draft;
   saved: Selection | null;
-  environment: DevEnvironment | undefined;
-  versions: EnvironmentVersion[];
+  environment: EnvironmentRow | undefined;
+  versions: VersionRow[];
   busy: boolean;
 }): boolean {
   if (opts.busy || !opts.draft.environmentId || sameAsSaved(opts.draft, opts.saved)) return false;
@@ -128,8 +160,8 @@ export function selectionRequest(draft: Draft, saved: Selection | null) {
 /** Accepting makes a chosen version the environment's default, so it must be eligible and not already the default. */
 export function canAcceptDefault(opts: {
   draft: Draft;
-  environment: DevEnvironment | undefined;
-  versions: EnvironmentVersion[];
+  environment: EnvironmentRow | undefined;
+  versions: VersionRow[];
   busy: boolean;
 }): boolean {
   const { draft, environment, versions, busy } = opts;
@@ -141,14 +173,14 @@ export function canAcceptDefault(opts: {
 /** Following needs an eligible accepted default. Without one the owner must choose a version and accept it. */
 export function needsAcceptedDefault(
   draft: Draft,
-  environment: DevEnvironment | undefined,
-  versions: EnvironmentVersion[]
+  environment: EnvironmentRow | undefined,
+  versions: VersionRow[]
 ): boolean {
   if (!draft.follow || !draft.environmentId) return false;
   return !eligible(versions.find((v) => v.id === environment?.accepted_default_version_id));
 }
 
-export function savedLine(saved: Selection, environment: DevEnvironment | undefined): string {
+export function savedLine(saved: Selection, environment: EnvironmentRow | undefined): string {
   const name = environment?.name ?? saved.environment_id;
   const mode = saved.follow_default
     ? 'Follow accepted default'

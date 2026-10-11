@@ -10,7 +10,7 @@ A status word in its token colour: session status in the list and session page, 
 
 - Tones map to the terminal tokens: active `term-cyan`, attention `term-yellow`, ok `term-green`, bad `term-red`, muted `term-fg-muted` with `term-border`.
 - The border is the tone colour at half strength. Text is uppercase by CSS; the label in the DOM keeps its words.
-- On a filled row (open or hovered, `bg-accent`), the badge text takes `text-accent-foreground`. The label carries the status there, so the tone colour is not used as text on the fill.
+- On a filled row (open or hovered, `bg-accent`), the badge text takes `text-accent-foreground` and the tone border is dropped. The label carries the status there, so no tone colour is drawn on the fill.
 - Radius `rounded-none`. Spacing `px-sm py-xs`. Type `text-xs`, medium weight.
 
 ## States
@@ -49,5 +49,5 @@ An unknown status shows its own words in muted tone rather than failing the row.
 
 - Don't use a palette colour (red-500, green-600). Tokens only.
 - Don't use colour alone to show attention. The word is the signal.
-- Don't put a tone colour on a `bg-accent` fill. Use `text-accent-foreground`.
+- Don't put tone **text** on a `bg-accent` fill. Use `text-accent-foreground`, and drop the tone border there.
 - Don't introduce a fourth tone for "sending". The server reports the status it has.

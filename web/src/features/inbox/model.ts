@@ -4,6 +4,7 @@
  */
 import { ApiError } from '@/api';
 import type { components } from '@/api/schema.gen';
+import { httpsUrl } from '@/lib/url';
 
 type Schemas = components['schemas'];
 export type AttentionItem = Schemas['AttentionItem'];
@@ -136,13 +137,7 @@ export function priorityBorder(priority: string): string {
 
 /** A PR link is shown only for an https URL, so a provider-supplied string cannot point anywhere else. */
 export function prLink(item: QueueItem): string | null {
-  const url = item.context?.pr_url;
-  if (typeof url !== 'string') return null;
-  try {
-    return new URL(url).protocol === 'https:' ? url : null;
-  } catch {
-    return null;
-  }
+  return httpsUrl(item.context?.pr_url);
 }
 
 /** A free-text reply is offered for questions and plan reviews that are still open. */

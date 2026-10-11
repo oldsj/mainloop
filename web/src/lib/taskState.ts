@@ -17,6 +17,7 @@ import type {
   TaskStatus,
   TaskView
 } from './contract';
+import { httpsUrl } from './url';
 
 /** An observation older than this is flagged stale: the backend may have stopped refreshing it. */
 export const STALE_OBSERVATION_MS = 10 * 60 * 1000;
@@ -335,7 +336,7 @@ export function publicationFacts(
     ci,
     merge,
     publication,
-    prUrl: safeExternalUrl(p.pr_url),
+    prUrl: httpsUrl(p.pr_url),
     prHeadSha,
     ciHeadMismatch,
     observation: observationAge(p.observed_at, now)
@@ -345,17 +346,6 @@ export function publicationFacts(
 function humanize(value: string): string {
   const text = value.replaceAll('_', ' ');
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** https links only: a projection must not be able to inject `javascript:` or other schemes. */
-export function safeExternalUrl(value: string | null | undefined): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' ? url.toString() : null;
-  } catch {
-    return null;
-  }
 }
 
 export interface Workspace {

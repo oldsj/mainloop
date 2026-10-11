@@ -3,22 +3,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/components/ui/cn';
+import { markdownHref } from '@/lib/url';
 
 /**
  * Message text can come from agents, so it is never trusted:
  * - raw HTML is shown as text (no `rehype-raw`, no `dangerouslySetInnerHTML`), so `<file>` in
  *   prose stays visible;
- * - only http, https and mailto links work, and they open in a new tab with noopener;
- *   any other link keeps its words and loses its target;
+ * - only http, https and mailto links work (`markdownHref`), and they open in a new tab with
+ *   noopener; any other link keeps its words and loses its target;
  * - an image shows its alt text and never loads.
  */
-const SAFE_URL = /^(https?:|mailto:)/i;
-
-/** Applied to every link and image URL; an empty string removes the target. */
-export function safeUrl(url: string): string {
-  return SAFE_URL.test(url) ? url : '';
-}
-
 const components: Components = {
   a({ href, title, children }) {
     if (!href) return <>{children}</>;
@@ -84,7 +78,7 @@ export function Markdown({ children, className }: MarkdownProps) {
     <div className={cn('min-w-0 [overflow-wrap:anywhere]', className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        urlTransform={safeUrl}
+        urlTransform={markdownHref}
         components={components}
       >
         {children}

@@ -44,9 +44,10 @@ describe('links', () => {
     expect(secure).toHaveAttribute('href', 'https://example.test/a?b=1');
     expect(secure).toHaveAttribute('target', '_blank');
     expect(secure).toHaveAttribute('rel', 'noopener noreferrer');
+    // The URL parser's form, with the root path written out. It is the same link.
     expect(screen.getByRole('link', { name: 'plain' })).toHaveAttribute(
       'href',
-      'http://example.test'
+      'http://example.test/'
     );
   });
 

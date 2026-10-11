@@ -2,20 +2,27 @@ import { Link } from '@tanstack/react-router';
 import { LoaderCircle } from 'lucide-react';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { agentLabel } from '@/lib/agentLabel';
-import type { ProviderProfile, Session } from '@/lib/contract';
 import { statusLabel } from '@/lib/sessionStatus';
-import { nativeProviderFor, relativeTime, sessionTone, type WorkspaceLifecycle } from './model';
+import {
+  nativeProviderFor,
+  relativeTime,
+  sessionTone,
+  type ProviderFields,
+  type SessionRowFields,
+  type WorkspaceBadgeFields
+} from './model';
 import { WorkspaceLifecycleBadge } from './WorkspaceBadges';
 
 // Text on the `bg-accent` fill of the open row (`aria-current`) and of a hovered row. Muted and
 // status colours give way to accent-foreground there, so every word on the fill stays at 4.5:1.
+// A badge's tone border is dropped on the fill too, so no tone colour is drawn on it.
 const ON_FILL =
-  'group-hover:text-accent-foreground group-aria-[current=page]:text-accent-foreground';
+  'group-hover:text-accent-foreground group-aria-[current=page]:text-accent-foreground group-hover:border-transparent group-aria-[current=page]:border-transparent';
 
 export interface SessionRowProps {
-  session: Session;
-  workspace?: WorkspaceLifecycle;
-  providers: ProviderProfile[];
+  session: SessionRowFields;
+  workspace?: WorkspaceBadgeFields;
+  providers: ProviderFields[];
 }
 
 /**
@@ -35,8 +42,7 @@ export function SessionRow({ session, workspace, providers }: SessionRowProps) {
       to="/sessions/$id"
       params={{ id: session.id }}
       search={(prev) => ({ ...prev, tab: undefined })}
-      activeProps={{ className: 'bg-accent text-accent-foreground' }}
-      className="group gap-xs border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground p-md flex min-h-11 flex-col border"
+      className="group gap-xs border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground p-md flex min-h-11 flex-col border"
     >
       <div className="gap-sm flex items-center justify-between">
         <div className="gap-sm flex min-w-0 items-center">

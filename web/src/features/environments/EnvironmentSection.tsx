@@ -12,8 +12,6 @@ import {
   registrationNotice,
   savedLine,
   versionRowSchema,
-  type DevEnvironment,
-  type EnvironmentVersion,
   type RegisterDraft
 } from './model';
 import {
@@ -40,13 +38,13 @@ function saveFailure(error: unknown): string {
 export function EnvironmentSection({ projectId }: { projectId: string }) {
   const selection = useProjectSelection(projectId);
   const environmentList = useEnvironments();
-  const environments = keepValid<DevEnvironment>(environmentList.data, environmentRowSchema);
+  const environments = keepValid(environmentList.data, environmentRowSchema);
   const versionQueries = useEnvironmentVersions(environments.map((item) => item.id));
   const versionReads: Record<string, VersionRead> = {};
   environments.forEach((item, index) => {
     const query = versionQueries[index];
     versionReads[item.id] = {
-      versions: keepValid<EnvironmentVersion>(query?.data, versionRowSchema),
+      versions: keepValid(query?.data, versionRowSchema),
       ready: query?.isSuccess ?? false,
       failure: query?.isError
         ? `Couldn't ${query.data ? 'refresh' : 'load'} the versions for this environment. ${failureText(query.error)}`

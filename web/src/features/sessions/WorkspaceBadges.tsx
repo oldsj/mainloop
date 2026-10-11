@@ -1,6 +1,6 @@
 import { cn } from '@/components/ui/cn';
 import { StatusBadge } from '@/components/shared/status-badge';
-import type { WorkspaceLifecycle } from './model';
+import type { WorkspaceBadgeFields } from './model';
 import { publicationText, workspaceTone } from './model';
 
 /**
@@ -11,7 +11,7 @@ export function WorkspaceLifecycleBadge({
   workspace,
   className
 }: {
-  workspace: WorkspaceLifecycle;
+  workspace: WorkspaceBadgeFields;
   className?: string;
 }) {
   const state = workspace.observed_state;
@@ -31,7 +31,7 @@ export function WorkspacePublicationBadge({
   workspace,
   className
 }: {
-  workspace: WorkspaceLifecycle;
+  workspace: WorkspaceBadgeFields;
   className?: string;
 }) {
   return (

@@ -3,15 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { HITLMergeDetails } from '@/lib/contract';
 import { mergeContext } from '@/test/fixtures/hitl';
-import {
-  compareLinkFor,
-  isReviewable,
-  prLinkFor,
-  safeExternalHref,
-  safeGithubHref,
-  unavailableNotes,
-  viewProblem
-} from './evidence';
+import { compareLinkFor, isReviewable, prLinkFor, unavailableNotes, viewProblem } from './evidence';
 import { VerifiedMerge, type LoadMergeDetails } from './merge-review';
 import { hitlView } from '@/test/fixtures/hitl';
 
@@ -191,11 +183,6 @@ describe('links and evidence helpers', () => {
     draw(vi.fn(), { pr_url: 'javascript:alert(1)', compare_url: 'http://example.com/diff' });
     expect(screen.queryByRole('link', { name: 'Open PR' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Compare diff' })).not.toBeInTheDocument();
-    expect(safeExternalHref('https://github.com/o/r/pull/1')).toBe('https://github.com/o/r/pull/1');
-    expect(safeExternalHref('/relative')).toBeNull();
-    expect(safeGithubHref('https://evil.example/o/r/pull/1')).toBeNull();
-    expect(safeGithubHref('https://github.com.evil.example/o/r')).toBeNull();
-    expect(safeExternalHref(42)).toBeNull();
   });
 
   it('opens external links in a new tab without leaking the opener', () => {

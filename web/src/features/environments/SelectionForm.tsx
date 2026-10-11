@@ -9,9 +9,9 @@ import {
   selectionRequest,
   versionLabel,
   type Draft,
-  type DevEnvironment,
-  type EnvironmentVersion,
-  type Selection
+  type EnvironmentRow,
+  type Selection,
+  type VersionRow
 } from './model';
 
 export type SelectionBody = ReturnType<typeof selectionRequest>;
@@ -19,7 +19,7 @@ export type SelectionBody = ReturnType<typeof selectionRequest>;
 /** One environment's version read, as the draft's version choice needs it. */
 export interface VersionRead {
   /** The last loaded list. After a failed refresh it is the list from before the failure. */
-  versions: EnvironmentVersion[];
+  versions: VersionRow[];
   /** A fresh read has landed, so the list and anything derived from it can be trusted. */
   ready: boolean;
   /** Why the last read failed, in words for the owner. Null when it did not. */
@@ -30,7 +30,7 @@ export interface VersionRead {
 
 interface SelectionFormProps {
   saved: Selection | null;
-  environments: DevEnvironment[];
+  environments: EnvironmentRow[];
   reads: Record<string, VersionRead>;
   saving: boolean;
   saveError: string | null;

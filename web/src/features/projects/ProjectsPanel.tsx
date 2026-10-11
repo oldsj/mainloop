@@ -2,7 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Button } from '@/components/ui/button';
-import { safeExternalUrl } from '@/lib/taskState';
+import { httpsUrl } from '@/lib/url';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { AgentRadios } from './AgentRadios';
 import { CreateCheck } from './CreateCheck';
@@ -12,7 +12,7 @@ import {
   projectRowSchema,
   workspaceRequest,
   type AgentKind,
-  type Project
+  type ProjectRow
 } from './model';
 import { useCreateWorkspace, useProjects } from './queries';
 
@@ -23,7 +23,7 @@ export function ProjectsPanel() {
   const create = useCreateWorkspace();
   const uncertain = create.uncertain;
   const [open, setOpen] = useState(false);
-  const rows = keepValid<Project>(projects.data, projectRowSchema);
+  const rows = keepValid(projects.data, projectRowSchema);
 
   const submit = (target: { repo: string; branch: string; agentKind: AgentKind }) => {
     if (create.pending || uncertain) return;
@@ -109,7 +109,7 @@ export function ProjectsPanel() {
       {rows.length > 0 ? (
         <ul data-testid="projects-list" className="gap-sm grid md:grid-cols-2">
           {rows.map((project) => (
-            <ProjectRow key={project.id} project={project} />
+            <ProjectListRow key={project.id} project={project} />
           ))}
         </ul>
       ) : null}
@@ -117,8 +117,8 @@ export function ProjectsPanel() {
   );
 }
 
-function ProjectRow({ project }: { project: Project }) {
-  const avatar = safeExternalUrl(project.avatar_url);
+function ProjectListRow({ project }: { project: ProjectRow }) {
+  const avatar = httpsUrl(project.avatar_url);
   return (
     <li>
       <Link

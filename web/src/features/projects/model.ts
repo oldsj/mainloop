@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { ApiError, type components } from '@/api';
+import { contractEnum } from '@/lib/contractEnum';
 
 type Schemas = components['schemas'];
 export type MergePolicy = Schemas['MergePolicy'];
@@ -12,7 +13,7 @@ export type Project = Schemas['Project'];
 export type ProjectDetail = Schemas['ProjectDetail'];
 export type MergePolicyView = Schemas['MergePolicyView'];
 export type WorkspaceLifecycle = Schemas['WorkspaceLifecycle'];
-export type PullRequest = Schemas['ProjectPRSummary'];
+type PullRequest = Schemas['ProjectPRSummary'];
 export type Commit = Schemas['CommitSummary'];
 export type AgentKind = 'claude' | 'codex';
 
@@ -20,11 +21,47 @@ export type AgentKind = 'claude' | 'codex';
 export class ContractError extends Error {}
 
 const text = z.string();
+const MERGE_POLICIES = contractEnum<MergePolicy>()(['auto', 'approval']);
+const SESSION_STATUSES = contractEnum<Schemas['SessionStatus']>()([
+  'pending',
+  'active',
+  'idle',
+  'superseded',
+  'completed',
+  'failed',
+  'cancelled',
+  'waiting_on_user'
+]);
+const OBSERVED_STATES = contractEnum<Schemas['WorkspaceObservedState']>()([
+  'running',
+  'suspending',
+  'suspended',
+  'resuming',
+  'failed',
+  'unknown'
+]);
+const PUBLICATION_MODES = contractEnum<WorkspaceLifecycle['publication_mode']>()([
+  'read_only',
+  'branch'
+]);
+const PUBLICATION_REASONS = contractEnum<NonNullable<WorkspaceLifecycle['publication_reason']>>()([
+  'default_branch',
+  'protected_branch',
+  'missing_metadata',
+  'no_grant',
+  'disabled'
+]);
+const NATIVE_PROVIDERS = contractEnum<Schemas['ProviderProfile']['native_provider']>()([
+  'claude',
+  'codex'
+]);
 
 /*
  * Each schema checks every field the UI reads from that row, so a row that would break a read is
- * dropped and the rest still render. A field a schema does not check is not guaranteed by it, so
- * components read only the fields listed here. Kept rows keep their generated types.
+ * dropped and the rest still render. Each one is declared against the generated type it names, so
+ * a contract change that renames or retypes a checked field fails tsc here. A field a schema does
+ * not check is not guaranteed by it: a row's type is its schema's output, which lists only the
+ * checked fields, and components read only those.
  */
 export const projectRowSchema = z.object({
   id: z.string().min(1),
@@ -34,16 +71,34 @@ export const projectRowSchema = z.object({
   default_branch: z.string().min(1),
   avatar_url: text.nullable(),
   open_pr_count: z.number().int().nonnegative(),
-  merge_policy: z.enum(['auto', 'approval'])
-});
+  merge_policy: z.enum(MERGE_POLICIES)
+}) satisfies z.ZodType<
+  Pick<
+    Project,
+    | 'id'
+    | 'full_name'
+    | 'html_url'
+    | 'description'
+    | 'default_branch'
+    | 'avatar_url'
+    | 'open_pr_count'
+    | 'merge_policy'
+  >
+>;
+export type ProjectRow = z.output<typeof projectRowSchema>;
 
 /** The policy view is one object, not a list, so a bad one fails the section rather than being dropped. */
 export const mergePolicyViewSchema = z.object({
   writes_enabled: z.boolean(),
-  merge_policy: z.enum(['auto', 'approval']),
+  merge_policy: z.enum(MERGE_POLICIES),
   merge_policy_version: z.number().int(),
   protected_globs: z.array(text)
-});
+}) satisfies z.ZodType<
+  Pick<
+    MergePolicyView,
+    'writes_enabled' | 'merge_policy' | 'merge_policy_version' | 'protected_globs'
+  >
+>;
 
 export const pullRequestRowSchema = z.object({
   number: z.number().int(),
@@ -52,7 +107,10 @@ export const pullRequestRowSchema = z.object({
   created_at: text,
   url: text,
   is_mainloop: z.boolean()
-});
+}) satisfies z.ZodType<
+  Pick<PullRequest, 'number' | 'title' | 'author' | 'created_at' | 'url' | 'is_mainloop'>
+>;
+export type PullRequestRow = z.output<typeof pullRequestRowSchema>;
 
 export const commitRowSchema = z.object({
   sha: z.string().min(1),
@@ -60,18 +118,8 @@ export const commitRowSchema = z.object({
   author: text,
   date: text,
   url: text
-});
-
-const SESSION_STATUSES = [
-  'pending',
-  'active',
-  'idle',
-  'superseded',
-  'completed',
-  'failed',
-  'cancelled',
-  'waiting_on_user'
-] as const;
+}) satisfies z.ZodType<Commit>;
+export type CommitRow = z.output<typeof commitRowSchema>;
 
 /** Every session field the project's session rows read, so a row missing one is dropped. */
 export const sessionRowSchema = z.object({
@@ -85,32 +133,65 @@ export const sessionRowSchema = z.object({
   error: text.nullable(),
   repo_url: text.nullable(),
   parent_session_id: text.nullable()
-});
+}) satisfies z.ZodType<
+  Pick<
+    Schemas['Session'],
+    | 'id'
+    | 'title'
+    | 'status'
+    | 'needs_owner'
+    | 'created_at'
+    | 'agent_kind'
+    | 'topic'
+    | 'error'
+    | 'repo_url'
+    | 'parent_session_id'
+  >
+>;
+export type SessionRow = z.output<typeof sessionRowSchema>;
 
 /** The provider fields a session row reads to name its native provider. */
 export const providerRowSchema = z.object({
   id: z.string().min(1),
-  native_provider: z.enum(['claude', 'codex']),
+  native_provider: z.enum(NATIVE_PROVIDERS),
   aliases: z.array(text)
-});
+}) satisfies z.ZodType<Pick<Schemas['ProviderProfile'], 'id' | 'native_provider' | 'aliases'>>;
 
 /** Every field the workspace badges and the branch list read, so a row missing one is dropped. */
 export const workspaceRowSchema = z.object({
   workspace_id: z.string().min(1),
   session_id: z.string().min(1),
-  observed_state: text,
+  observed_state: z.enum(OBSERVED_STATES),
   detail: text.nullable(),
-  publication_mode: z.enum(['read_only', 'branch']),
-  publication_reason: text.nullable(),
+  publication_mode: z.enum(PUBLICATION_MODES),
+  publication_reason: z.enum(PUBLICATION_REASONS).nullable(),
   manifest: z.object({ repo_url: text, branch: text, agent_kind: text }),
   last_activity_at: text.nullable(),
   updated_at: text
-});
+}) satisfies z.ZodType<
+  Pick<
+    WorkspaceLifecycle,
+    | 'workspace_id'
+    | 'session_id'
+    | 'observed_state'
+    | 'detail'
+    | 'publication_mode'
+    | 'publication_reason'
+    | 'last_activity_at'
+    | 'updated_at'
+  > & {
+    manifest: Pick<Schemas['WorkspaceManifest'], 'repo_url' | 'branch' | 'agent_kind'>;
+  }
+>;
+export type WorkspaceRow = z.output<typeof workspaceRowSchema>;
 
-/** The rows that pass `schema`, in their original order. Anything else is dropped silently. */
-export function keepValid<T>(rows: unknown, schema: z.ZodType): T[] {
+/** The rows that pass `schema`, in their original order, typed as the schema's output. Anything else is dropped silently. */
+export function keepValid<T>(rows: unknown, schema: z.ZodType<T>): T[] {
   if (!Array.isArray(rows)) return [];
-  return rows.filter((row) => schema.safeParse(row).success) as T[];
+  return rows.flatMap((row: unknown) => {
+    const parsed = schema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /**

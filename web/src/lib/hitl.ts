@@ -1,4 +1,6 @@
 /** Display and response contracts. Only the server decides whether a request is answerable. */
+import { z } from 'zod';
+import type { components } from '@/api';
 import type {
   AskUserRequest,
   HITLQuestion,
@@ -10,143 +12,165 @@ import type {
   ToolApprovalRequest,
   VerifiedMergeContext
 } from './contract';
+import { contractEnum } from './contractEnum';
 
 /** A request as the server sends it: a tool approval or a question. parseHITL checks it. */
 export type HITLPayload = ToolApprovalRequest | AskUserRequest;
 
-type MergeCI = NonNullable<MergeSummary['ci']>;
-type MergeMapping = NonNullable<MergeSummary['mapping_evidence']>;
-type MergeReason = MergeSummary['approval_reasons'][number];
+type Schemas = components['schemas'];
 
-// Each check mirrors one generated type. A null passes only where the schema allows null.
+/*
+ * Each schema is declared against the generated type it names, so tsc fails when the contract drifts.
+ * The checks here are the ones the approver needs: bounded text, digests, unique tool ids and one
+ * nested tool per question. A null passes only where the generated type allows null.
+ */
 const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
-const text = (v: unknown): v is string => typeof v === 'string';
-const bounded = (v: unknown, max = 2048): v is string =>
-  typeof v === 'string' && v.length > 0 && v.length <= max;
-const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
-const positive = (v: unknown): v is number => count(v) && v > 0;
-const digest = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
-const sha = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
-const repo = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]+\/[\w.-]+$/.test(v);
-const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(text);
-const choiceList = (v: unknown): v is string[] =>
-  Array.isArray(v) && v.length <= 100 && v.every((c) => typeof c === 'string' && c.length <= 4096);
-const nullOr = <T>(check: (v: unknown) => v is T, v: unknown): v is T | null =>
-  v === null || check(v);
+const bounded = (max = 2048) => z.string().min(1).max(max);
+const count = z.number().int();
+const positive = count.positive();
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+const sha = z.string().regex(/^[a-f0-9]{40}$/);
+const repo = z.string().regex(/^[\w.-]+\/[\w.-]+$/);
+const choiceList = z.array(z.string().max(4096)).max(100);
 
-const isTool = (t: unknown): t is HITLTool =>
-  record(t) && bounded(t.id) && bounded(t.call_id) && bounded(t.name) && record(t.args);
-const isTools = (v: unknown): v is HITLTool[] =>
-  Array.isArray(v) &&
-  v.length > 0 &&
-  v.length <= 100 &&
-  v.every(isTool) &&
-  new Set(v.map((t) => t.id)).size === v.length;
-const isNested = (v: unknown): v is NestedHITLRequest =>
-  record(v) &&
-  text(v.subagent_name) &&
-  bounded(v.task_id) &&
-  bounded(v.context_id) &&
-  isTools(v.tools);
-const isQuestion = (q: unknown): q is HITLQuestion =>
-  record(q) &&
-  bounded(q.question, 8192) &&
-  typeof q.multiple === 'boolean' &&
-  nullOr(choiceList, q.choices);
-const isApproval = (v: unknown): v is ToolApprovalRequest =>
-  record(v) &&
-  v.type === 'tool_approval_request' &&
-  text(v.hint) &&
-  v.hint.length <= 4096 &&
-  isTools(v.tools) &&
-  nullOr(isNested, v.nested);
-const isAskUser = (v: unknown): v is AskUserRequest =>
-  record(v) &&
-  v.type === 'ask_user_request' &&
-  bounded(v.id) &&
-  Array.isArray(v.questions) &&
-  v.questions.length > 0 &&
-  v.questions.length <= 100 &&
-  v.questions.every(isQuestion) &&
-  (v.nested === null || (isNested(v.nested) && v.nested.tools.length === 1));
+const toolSchema = z.looseObject({
+  id: bounded(),
+  call_id: bounded(),
+  name: bounded(),
+  args: z.record(z.string(), z.unknown())
+}) satisfies z.ZodType<HITLTool>;
 
-const isReason = (v: unknown): v is MergeReason =>
-  record(v) &&
-  (v.type === 'project_policy' || (v.type === 'protected_path' && text(v.glob) && text(v.path)));
-const isCI = (v: unknown): v is MergeCI =>
-  record(v) &&
-  typeof v.complete === 'boolean' &&
-  nullOr(text, v.captured_at) &&
-  count(v.result_count) &&
-  count(v.passed_count) &&
-  count(v.failed_count) &&
-  count(v.pending_count) &&
-  typeof v.green_at_preparation === 'boolean' &&
-  digest(v.inventory_digest) &&
-  (v.ignored_suite_count === undefined || count(v.ignored_suite_count));
-const isMapping = (v: unknown): v is MergeMapping =>
-  record(v) &&
-  bounded(v.template_name) &&
-  (v.provider === 'claude' || v.provider === 'codex') &&
-  text(v.config_digest);
-const policy = (v: unknown): v is 'auto' | 'approval' => v === 'auto' || v === 'approval';
+// Tool ids key the decisions, so a repeated id would let one decision answer two calls.
+const toolsSchema = z
+  .array(toolSchema)
+  .min(1)
+  .max(100)
+  .refine(
+    (tools) => new Set(tools.map((t) => t.id)).size === tools.length,
+    'Tool ids must be unique'
+  );
+
+const nestedSchema = z.looseObject({
+  subagent_name: z.string(),
+  task_id: bounded(),
+  context_id: bounded(),
+  tools: toolsSchema
+}) satisfies z.ZodType<NestedHITLRequest>;
+
+const questionSchema = z.looseObject({
+  question: bounded(8192),
+  multiple: z.boolean(),
+  choices: choiceList.nullable()
+}) satisfies z.ZodType<HITLQuestion>;
+
+const approvalSchema = z.looseObject({
+  type: z.literal('tool_approval_request'),
+  hint: z.string().max(4096),
+  tools: toolsSchema,
+  nested: nestedSchema.nullable()
+}) satisfies z.ZodType<ToolApprovalRequest>;
+
+// A question's nested request names exactly one tool: the call the owner is answering for.
+const askUserSchema = z
+  .looseObject({
+    type: z.literal('ask_user_request'),
+    id: bounded(),
+    questions: z.array(questionSchema).min(1).max(100),
+    nested: nestedSchema.nullable()
+  })
+  .refine(
+    (v) => v.nested === null || v.nested.tools.length === 1,
+    'A nested request names one tool'
+  ) satisfies z.ZodType<AskUserRequest>;
+
+const payloadSchema = z.union([approvalSchema, askUserSchema]);
+
+const reasonSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.literal('project_policy') }),
+  z.looseObject({ type: z.literal('protected_path'), glob: z.string(), path: z.string() })
+]) satisfies z.ZodType<Schemas['MergeApprovalReason']>;
+
+const ciSchema = z.looseObject({
+  complete: z.boolean(),
+  captured_at: z.string().nullable(),
+  result_count: count,
+  passed_count: count,
+  failed_count: count,
+  pending_count: count,
+  green_at_preparation: z.boolean(),
+  inventory_digest: digest,
+  ignored_suite_count: count.optional()
+}) satisfies z.ZodType<Schemas['MergeCISummary']>;
+
+const mappingSchema = z.looseObject({
+  template_name: bounded(),
+  provider: z.enum(
+    contractEnum<Schemas['TemplateMappingEvidence']['provider']>()(['claude', 'codex'])
+  ),
+  config_digest: z.string()
+}) satisfies z.ZodType<Schemas['TemplateMappingEvidence']>;
+
 /** The shape the generated type allows. Evidence is judged separately by isEvidenceSummary. */
-const isSummary = (v: unknown): v is MergeSummary =>
-  record(v) &&
-  v.version === 1 &&
-  bounded(v.proposal_id) &&
-  nullOr(repo, v.repository) &&
-  nullOr(positive, v.pr_number) &&
-  nullOr(text, v.title) &&
-  text(v.description_excerpt) &&
-  typeof v.description_truncated === 'boolean' &&
-  nullOr(digest, v.description_digest) &&
-  nullOr(count, v.description_length) &&
-  nullOr(count, v.file_count) &&
-  nullOr(count, v.additions) &&
-  nullOr(count, v.deletions) &&
-  nullOr(digest, v.paths_digest) &&
-  strings(v.paths_preview) &&
-  typeof v.paths_preview_truncated === 'boolean' &&
-  strings(v.protected_matches) &&
-  Array.isArray(v.approval_reasons) &&
-  v.approval_reasons.every(isReason) &&
-  nullOr(policy, v.policy) &&
-  nullOr(count, v.policy_version) &&
-  nullOr(count, v.globs_version) &&
-  nullOr(bounded, v.head) &&
-  nullOr(sha, v.head_sha) &&
-  nullOr(bounded, v.base) &&
-  nullOr(sha, v.base_sha) &&
-  nullOr(isCI, v.ci) &&
-  nullOr(isMapping, v.mapping_evidence) &&
-  (v.availability === 'ready' || v.availability === 'unavailable') &&
-  strings(v.unavailable_reasons) &&
-  (v.merge_file_count === undefined || count(v.merge_file_count)) &&
-  (v.merge_only_file_count === undefined || count(v.merge_only_file_count)) &&
-  (v.merge_paths_digest === undefined || nullOr(digest, v.merge_paths_digest));
-const isContext = (v: unknown): v is VerifiedMergeContext =>
-  record(v) &&
-  nullOr(bounded, v.tool_id) &&
-  nullOr(bounded, v.proposal_id) &&
-  nullOr(isSummary, v.summary) &&
-  nullOr(digest, v.summary_digest) &&
-  (v.availability === 'ready' || v.availability === 'unavailable' || v.availability === 'stale') &&
-  nullOr(text, v.freshness_reason) &&
-  nullOr(text, v.details_url) &&
-  (v.pr_url === undefined || text(v.pr_url)) &&
-  (v.compare_url === undefined || text(v.compare_url)) &&
-  nullOr(repo, v.repository) &&
-  nullOr(positive, v.pr_number) &&
-  nullOr(bounded, v.head) &&
-  nullOr(sha, v.head_sha) &&
-  nullOr(bounded, v.base) &&
-  nullOr(sha, v.base_sha) &&
-  strings(v.protected_matches) &&
-  typeof v.stale === 'boolean' &&
-  nullOr(text, v.state) &&
-  nullOr(text, v.deadline);
+const summarySchema = z.looseObject({
+  version: z.literal(1),
+  proposal_id: bounded(),
+  repository: repo.nullable(),
+  pr_number: positive.nullable(),
+  title: z.string().nullable(),
+  description_excerpt: z.string(),
+  description_truncated: z.boolean(),
+  description_digest: digest.nullable(),
+  description_length: count.nullable(),
+  file_count: count.nullable(),
+  additions: count.nullable(),
+  deletions: count.nullable(),
+  paths_digest: digest.nullable(),
+  paths_preview: z.array(z.string()),
+  paths_preview_truncated: z.boolean(),
+  protected_matches: z.array(z.string()),
+  approval_reasons: z.array(reasonSchema),
+  policy: z
+    .enum(contractEnum<NonNullable<MergeSummary['policy']>>()(['auto', 'approval']))
+    .nullable(),
+  policy_version: count.nullable(),
+  globs_version: count.nullable(),
+  head: bounded().nullable(),
+  head_sha: sha.nullable(),
+  base: bounded().nullable(),
+  base_sha: sha.nullable(),
+  ci: ciSchema.nullable(),
+  mapping_evidence: mappingSchema.nullable(),
+  availability: z.enum(contractEnum<MergeSummary['availability']>()(['ready', 'unavailable'])),
+  unavailable_reasons: z.array(z.string()),
+  merge_file_count: count.optional(),
+  merge_only_file_count: count.optional(),
+  merge_paths_digest: digest.nullable().optional()
+}) satisfies z.ZodType<MergeSummary>;
+
+const contextSchema = z.looseObject({
+  tool_id: bounded().nullable(),
+  proposal_id: bounded().nullable(),
+  summary: summarySchema.nullable(),
+  summary_digest: digest.nullable(),
+  availability: z.enum(
+    contractEnum<VerifiedMergeContext['availability']>()(['ready', 'unavailable', 'stale'])
+  ),
+  freshness_reason: z.string().nullable(),
+  details_url: z.string().nullable(),
+  pr_url: z.string().optional(),
+  compare_url: z.string().optional(),
+  repository: repo.nullable(),
+  pr_number: positive.nullable(),
+  head: bounded().nullable(),
+  head_sha: sha.nullable(),
+  base: bounded().nullable(),
+  base_sha: sha.nullable(),
+  protected_matches: z.array(z.string()),
+  stale: z.boolean(),
+  state: z.string().nullable(),
+  deadline: z.string().nullable()
+}) satisfies z.ZodType<VerifiedMergeContext>;
 
 /**
  * Approval reads these summary fields. A null in any of them leaves the approver without proof.
@@ -205,20 +229,19 @@ export function mergeContexts(view: HITLView) {
     // A public name is only a hint to show an unavailable notice, never evidence.
     if (!matches.length && !tool.name.endsWith('merge_pull_request_with_approval')) return [];
     const v: unknown = matches.length === 1 ? matches[0] : null;
-    const facts = isContext(v) && isEvidence(v) ? v : null;
+    const parsed = contextSchema.safeParse(v);
+    const facts = parsed.success && isEvidence(parsed.data) ? parsed.data : null;
     return [{ toolId: tool.id, facts }];
   });
 }
 export function parseHITL(payload: unknown): HITLPayload | null {
-  if (!record(payload)) return null;
   try {
     if (new TextEncoder().encode(JSON.stringify(payload)).length > 131072) return null;
   } catch {
     return null;
   }
-  if (isApproval(payload)) return payload;
-  if (isAskUser(payload)) return payload;
-  return null;
+  const parsed = payloadSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
 }
 export function requestTools(p: HITLPayload): HITLTool[] {
   return p.type === 'tool_approval_request' ? (p.nested?.tools ?? p.tools) : [];

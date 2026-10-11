@@ -1,6 +1,7 @@
 /** Pure helpers for the merge evidence and the status line. Nothing here calls the backend. */
 import type { MergeSummary, VerifiedMergeContext, HITLView } from '@/lib/contract';
 import type { Tone } from '@/lib/taskState';
+import { githubUrl } from '@/lib/url';
 
 /** Facts that may back an Approve: ready, current, and carrying the digest the reviewer saw. */
 export type ReviewableFacts = VerifiedMergeContext & {
@@ -48,7 +49,7 @@ export function prLinkFor(
   repository: string | null,
   prNumber: number | null
 ): string | null {
-  const href = safeGithubHref(value);
+  const href = githubUrl(value);
   if (!href || !repository || prNumber === null) return null;
   const path = `/${repository}/pull/${prNumber}`;
   return new URL(href).pathname === path ? `https://github.com${path}` : null;
@@ -59,7 +60,7 @@ export function prLinkFor(
  * diff. Like the PR link, it is rebuilt from its path alone.
  */
 export function compareLinkFor(value: unknown, repository: string | null): string | null {
-  const href = safeGithubHref(value);
+  const href = githubUrl(value);
   if (!href || !repository) return null;
   const prefix = `/${repository}/compare/`;
   const { pathname } = new URL(href);
@@ -102,23 +103,6 @@ export function viewProblem(view: HITLView): string | null {
   if (!outer || typeof outer !== 'object') return 'the request has no session identity';
   if (payload === undefined || payload === null) return 'the request has no payload';
   return receiptProblem(view.response);
-}
-
-/** Only https links leave the app. A relative or script URL is dropped, not repaired. */
-export function safeExternalHref(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Pull request and compare links must be https on github.com; anything else is not a link. */
-export function safeGithubHref(value: unknown): string | null {
-  const href = safeExternalHref(value);
-  return href && new URL(href).hostname === 'github.com' ? href : null;
 }
 
 const NOTE_LIMIT = 500;

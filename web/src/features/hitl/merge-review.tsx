@@ -7,12 +7,12 @@ import type {
   VerifiedMergeContext
 } from '@/lib/contract';
 import { messageTime } from '@/lib/time';
+import { httpsUrl } from '@/lib/url';
 import {
   compareLinkFor,
   evidenceKey,
   isReviewable,
   prLinkFor,
-  safeExternalHref,
   type SummarizedFacts
 } from './evidence';
 
@@ -187,7 +187,7 @@ function FileItem({ file }: { file: MergeDetailItem }) {
 }
 
 function CheckItem({ item }: { item: MergeDetailItem }) {
-  const href = safeExternalHref(item.html_url ?? item.target_url);
+  const href = httpsUrl(item.html_url ?? item.target_url);
   return (
     <li className="gap-xs grid">
       <span>

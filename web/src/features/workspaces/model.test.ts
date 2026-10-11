@@ -5,7 +5,6 @@ import {
   canSuspend,
   declaredPorts,
   digestPrefix,
-  isHttpUrl,
   isWorkspace,
   lastActivity,
   lifecycleNotice,
@@ -30,16 +29,6 @@ describe('digestPrefix', () => {
     expect(digestPrefix('registry.example/x@sha256:XYZ')).toBeNull();
     expect(digestPrefix('registry.example/x@')).toBeNull();
     expect(digestPrefix('@@@')).toBeNull();
-  });
-});
-
-describe('isHttpUrl', () => {
-  it('accepts http and https only', () => {
-    expect(isHttpUrl('https://example.test/')).toBe(true);
-    expect(isHttpUrl('http://localhost:3000/')).toBe(true);
-    expect(isHttpUrl('javascript:alert(1)')).toBe(false);
-    expect(isHttpUrl('git@example.test:repo.git')).toBe(false);
-    expect(isHttpUrl('not a url')).toBe(false);
   });
 });
 

@@ -16,6 +16,38 @@ type StopTurnResult = components['schemas']['SessionStopTurnResponse'];
 
 export type NativeProvider = ProviderProfile['native_provider'];
 
+/**
+ * The fields the list row and its status words read. A project's session rows are checked against
+ * this same set, so a row that lacks one of them fails tsc rather than rendering blank.
+ */
+export type SessionRowFields = Pick<
+  Session,
+  | 'id'
+  | 'title'
+  | 'status'
+  | 'needs_owner'
+  | 'created_at'
+  | 'agent_kind'
+  | 'topic'
+  | 'error'
+  | 'repo_url'
+  | 'parent_session_id'
+>;
+
+/** The provider fields a session row reads to name its agent. */
+export type ProviderFields = Pick<ProviderProfile, 'id' | 'native_provider' | 'aliases'>;
+
+/** The workspace fields the badges and the session row read. */
+export type WorkspaceBadgeFields = Pick<
+  WorkspaceLifecycle,
+  | 'workspace_id'
+  | 'session_id'
+  | 'observed_state'
+  | 'detail'
+  | 'publication_mode'
+  | 'publication_reason'
+> & { manifest: Pick<WorkspaceLifecycle['manifest'], 'agent_kind'> };
+
 /** How often the identity strip re-reads native state, and only while a turn is in flight. */
 export const NATIVE_POLL_MS = 3_000;
 
@@ -36,7 +68,7 @@ export function visibleSessions(
 }
 
 /** Badge tone. A session waiting on the owner reads as attention, whatever its status. */
-export function sessionTone(session: Session): Tone {
+export function sessionTone(session: SessionRowFields): Tone {
   if (session.needs_owner && !isFinished(session)) return 'attention';
   return sessionStatusTone(session.status);
 }
@@ -65,7 +97,7 @@ export function sessionCounts(sessions: Session[]): {
  */
 export function nativeProviderFor(
   kind: string | null | undefined,
-  providers: ProviderProfile[] = []
+  providers: ProviderFields[] = []
 ): NativeProvider | null {
   if (!kind) return null;
   const profile = providers.find((item) => item.id === kind || item.aliases.includes(kind));
@@ -177,10 +209,10 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   return 'just now';
 }
 
-export function workspaceFor(
-  workspaces: WorkspaceLifecycle[],
+export function workspaceFor<T extends { session_id: string }>(
+  workspaces: T[],
   sessionId: string
-): WorkspaceLifecycle | undefined {
+): T | undefined {
   return workspaces.find((workspace) => workspace.session_id === sessionId);
 }
 
@@ -192,7 +224,9 @@ export function workspaceTone(state: WorkspaceLifecycle['observed_state']): Tone
   return 'attention';
 }
 
-export function publicationText(workspace: WorkspaceLifecycle): string {
+export function publicationText(
+  workspace: Pick<WorkspaceLifecycle, 'publication_mode' | 'publication_reason'>
+): string {
   if (workspace.publication_mode === 'branch') return 'Branch publication';
   const reason = workspace.publication_reason?.replaceAll('_', ' ') ?? 'no grant';
   return `Read only · ${reason}`;

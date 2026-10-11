@@ -4,7 +4,7 @@ import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { $api, connection } from '@/api';
-import type { EnvironmentVersion } from '@/features/environments/model';
+import type { VersionRow } from '@/features/environments/model';
 import {
   detailRead,
   policyRead,
@@ -443,7 +443,7 @@ describe('environment selection', () => {
       $api.queryOptions('get', '/environments/{environment_id}/versions', {
         params: { path: { environment_id: 'registered' } }
       }).queryKey
-    ) as EnvironmentVersion[] | undefined;
+    ) as VersionRow[] | undefined;
     expect(registeredVersions?.map((item) => item.id)).toEqual(['registered-version']);
   });
 

@@ -6,9 +6,12 @@
 import { z } from 'zod';
 import type { components } from '@/api';
 import type { LoadFailure, Notice } from '@/features/sessions/model';
+import { contractEnum } from '@/lib/contractEnum';
 import { messageTime } from '@/lib/time';
+import { httpUrl } from '@/lib/url';
 
-export type WorkspaceLifecycle = components['schemas']['WorkspaceLifecycle'];
+type Schemas = components['schemas'];
+export type WorkspaceLifecycle = Schemas['WorkspaceLifecycle'];
 export type ObservedState = WorkspaceLifecycle['observed_state'];
 export type WorkspaceAction = 'suspend' | 'resume' | 'refresh' | 'delete';
 
@@ -23,7 +26,19 @@ export const UNREADABLE =
 export const UNREADABLE_ACTION =
   'Mainloop accepted the action but sent a result this page cannot read. The action may have gone through. The page is re-reading the workspace.';
 
-const PublicationReason = z.enum([
+const OBSERVED_STATES = contractEnum<ObservedState>()([
+  'running',
+  'suspending',
+  'suspended',
+  'resuming',
+  'failed',
+  'unknown'
+]);
+const PUBLICATION_MODES = contractEnum<WorkspaceLifecycle['publication_mode']>()([
+  'read_only',
+  'branch'
+]);
+const PUBLICATION_REASONS = contractEnum<NonNullable<WorkspaceLifecycle['publication_reason']>>()([
   'default_branch',
   'protected_branch',
   'missing_metadata',
@@ -36,9 +51,9 @@ const PublicationReason = z.enum([
 const WorkspaceShape = z.looseObject({
   workspace_id: z.string(),
   session_id: z.string(),
-  publication_mode: z.enum(['read_only', 'branch']),
-  publication_reason: PublicationReason.nullable(),
-  observed_state: z.enum(['running', 'suspending', 'suspended', 'resuming', 'failed', 'unknown']),
+  publication_mode: z.enum(PUBLICATION_MODES),
+  publication_reason: z.enum(PUBLICATION_REASONS).nullable(),
+  observed_state: z.enum(OBSERVED_STATES),
   detail: z.string().nullable(),
   last_activity_at: z.string().nullable(),
   updated_at: z.string(),
@@ -48,14 +63,38 @@ const WorkspaceShape = z.looseObject({
     branch: z.string(),
     agent_kind: z.string(),
     dev: z.looseObject({
+      // Each port is checked by declaredPorts, one at a time, so a bad one drops alone.
       ports: z.array(z.unknown()),
       idle_timeout_minutes: z.number()
     }),
     development_environment: z.looseObject({ image: z.string(), platform: z.string() }).nullable()
   })
-});
+}) satisfies z.ZodType<
+  Pick<
+    WorkspaceLifecycle,
+    | 'workspace_id'
+    | 'session_id'
+    | 'publication_mode'
+    | 'publication_reason'
+    | 'observed_state'
+    | 'detail'
+    | 'last_activity_at'
+    | 'updated_at'
+  > & {
+    manifest: Pick<Schemas['WorkspaceManifest'], 'repo_url' | 'ref' | 'branch' | 'agent_kind'> & {
+      dev: Pick<Schemas['WorkspaceDevOutput'], 'idle_timeout_minutes'> & { ports: unknown[] };
+      development_environment: Pick<
+        NonNullable<Schemas['WorkspaceManifest']['development_environment']>,
+        'image' | 'platform'
+      > | null;
+    };
+  }
+>;
 
-/** A workspace the page can read. A malformed one is shown as an error, not as a half-filled page. */
+/**
+ * A workspace the page can read. A malformed one is shown as an error, not as a half-filled page.
+ * The check covers the fields above; the rest of the generated type is not checked here.
+ */
 export function isWorkspace(value: unknown): value is WorkspaceLifecycle {
   return WorkspaceShape.safeParse(value).success;
 }
@@ -73,16 +112,9 @@ export function digestPrefix(image: string): string | null {
   return DIGEST.test(digest) ? digest.slice(0, 19) : null;
 }
 
-export function isHttpUrl(value: string): boolean {
-  try {
-    const { protocol } = new URL(value);
-    return protocol === 'http:' || protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-const PortShape = z.looseObject({ name: z.string(), number: z.number().int() });
+const PortShape = z.looseObject({ name: z.string(), number: z.number().int() }) satisfies z.ZodType<
+  Pick<Schemas['WorkspacePort'], 'name' | 'number'>
+>;
 export type DeclaredPort = z.infer<typeof PortShape>;
 
 /** Manifest ports that can be read. A bad one is counted and left out; the rest still show. */
@@ -100,8 +132,8 @@ export function declaredPorts(list: unknown[]): { ports: DeclaredPort[]; dropped
 const PreviewShape = z.looseObject({
   port: z.number().int(),
   name: z.string(),
-  url: z.string().refine(isHttpUrl)
-});
+  url: z.string().refine((value) => httpUrl(value) !== null)
+}) satisfies z.ZodType<Pick<Schemas['WorkspacePreviewPort'], 'port' | 'name' | 'url'>>;
 
 export type PreviewLink = z.infer<typeof PreviewShape>;
 

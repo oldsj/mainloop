@@ -10,9 +10,8 @@ import type { components } from '@/api';
 import type { LoadFailure } from '@/features/sessions/model';
 import { agentLabel } from '@/lib/agentLabel';
 import type { HealthFilters } from '@/lib/contract';
+import { contractEnum } from '@/lib/contractEnum';
 import type { HealthSearch } from './search';
-
-export type Project = components['schemas']['Project'];
 
 export const COVERAGE_NOTE =
   'Totals use each task’s reported root-session usage. Product child tasks appear separately. Native child attribution, cache tokens, Codex usage and exact approval waits are unavailable.';
@@ -47,7 +46,15 @@ export function windowSummary(hours: number): string {
   return WINDOW_SUMMARY[hours] ?? 'last year';
 }
 
-// The fields the page reads. Other fields pass through untouched.
+type Schemas = components['schemas'];
+type HealthSessionFields = Pick<
+  Schemas['HealthSession'],
+  'session_id' | 'title' | 'provider' | 'attempt_id' | 'totals'
+>;
+type HealthViewFields = Pick<Schemas['HealthView'], 'hours' | 'partial' | 'retention'>;
+
+// The fields the page reads. Other fields pass through untouched. Each schema is declared against the
+// generated type it names, so a contract change that renames or retypes a checked field fails tsc.
 const Totals = z.looseObject({
   turns: z.number(),
   usage_observed_turns: z.number(),
@@ -57,8 +64,10 @@ const Totals = z.looseObject({
   failures: z.number().nullable(),
   repeated_failure_groups: z.number().nullable(),
   unresolved_calls: z.number(),
-  coverage: z.enum(['complete', 'partial', 'unknown'])
-});
+  coverage: z.enum(
+    contractEnum<Schemas['HealthTotals']['coverage']>()(['complete', 'partial', 'unknown'])
+  )
+}) satisfies z.ZodType<Schemas['HealthTotals']>;
 
 const SessionShape = z.looseObject({
   session_id: z.string().nullable(),
@@ -66,20 +75,20 @@ const SessionShape = z.looseObject({
   provider: z.string(),
   attempt_id: z.string().nullable(),
   totals: Totals
-});
+}) satisfies z.ZodType<HealthSessionFields>;
 
 const ReportShape = z.looseObject({
   id: z.string(),
   task_id: z.string(),
   attempt_id: z.string(),
-  outcome: z.enum(['blocked', 'failed'])
-});
+  outcome: z.enum(contractEnum<Schemas['HealthReport']['outcome']>()(['blocked', 'failed']))
+}) satisfies z.ZodType<Schemas['HealthReport']>;
 
 const ApprovalShape = z.looseObject({
   id: z.string(),
   runtime_session_id: z.string().nullable(),
   state: z.string().nullable()
-});
+}) satisfies z.ZodType<Schemas['HealthApproval']>;
 
 // A row's own fields. Its reports and approvals are checked one at a time (see readClaims), so one
 // bad claim costs that claim and not the row's failure totals.
@@ -92,7 +101,12 @@ const RowFields = z.looseObject({
   totals: Totals,
   gaps: z.array(z.string()),
   expected_receipts: z.number()
-});
+}) satisfies z.ZodType<
+  Pick<
+    Schemas['HealthRow'],
+    'id' | 'task_id' | 'project_id' | 'title' | 'totals' | 'gaps' | 'expected_receipts'
+  > & { sessions: HealthSessionFields[] }
+>;
 
 const RowShape = RowFields.extend({
   reports: z.array(z.unknown()),
@@ -104,7 +118,7 @@ const ViewShape = z.looseObject({
   hours: z.number(),
   partial: z.boolean(),
   retention: z.looseObject({ events_days: z.number(), summaries_days: z.number() })
-});
+}) satisfies z.ZodType<HealthViewFields & { rows: unknown[] }>;
 
 export type HealthTotals = z.infer<typeof Totals>;
 export type HealthSession = z.infer<typeof SessionShape>;
@@ -124,7 +138,7 @@ export interface HealthView {
   /** Rows whose id repeats an earlier row. The first is listed; these are not, and the page says so. */
   repeated: number;
   partial: boolean;
-  retention: { events_days: number; summaries_days: number };
+  retention: Schemas['HealthView']['retention'];
 }
 
 /** Each claim is read on its own. A bad one is counted and left out, and the rest of the row still shows. */
@@ -259,23 +273,39 @@ export function droppedObservationsText(count: number): string {
     : `${count} observations could not be read and are not listed.`;
 }
 
-// Observations: the fields the page shows. The event kind is the discriminator.
+// Observations: the fields the page shows. The event kind is the discriminator. Its payload is one of
+// the generated event variants, so the enums below come from those types.
+type HealthEvent = Schemas['HealthEvent'];
+type HealthToolFields = Pick<Schemas['HealthTool'], 'tool_class' | 'outcome' | 'category' | 'path'>;
+type EventPayload = Pick<HealthEvent, 'kind' | 'sequence' | 'source'> & { tool?: HealthToolFields };
+
 const ToolShape = z.looseObject({
-  tool_class: z.string(),
-  outcome: z.string(),
-  category: z.string(),
+  tool_class: z.enum(
+    contractEnum<Schemas['HealthTool']['tool_class']>()(['builtin', 'shell', 'mcp', 'other'])
+  ),
+  outcome: z.enum(
+    contractEnum<Schemas['HealthTool']['outcome']>()(['success', 'error', 'denied', 'unknown'])
+  ),
+  category: z.enum(
+    contractEnum<Schemas['HealthTool']['category']>()([
+      'none',
+      'tool_error',
+      'mcp_error',
+      'permission_denied'
+    ])
+  ),
   path: z.string().nullable()
-});
+}) satisfies z.ZodType<HealthToolFields>;
 
 const EventRowShape = z.looseObject({
   event_id: z.string(),
   payload: z.looseObject({
-    kind: z.enum(['turn', 'tool', 'usage']),
+    kind: z.enum(contractEnum<HealthEvent['kind']>()(['turn', 'tool', 'usage'])),
     sequence: z.number(),
-    source: z.string(),
+    source: z.enum(contractEnum<HealthEvent['source']>()(['claude_result_stream'])),
     tool: ToolShape.optional()
-  })
-});
+  }) satisfies z.ZodType<EventPayload>
+}) satisfies z.ZodType<Pick<Schemas['HealthEventRow'], 'event_id'> & { payload: EventPayload }>;
 
 const EventsShape = z.looseObject({
   events: z.array(z.unknown()),
@@ -363,7 +393,7 @@ export function withSelected(options: Choice[], selected: string, fallback: stri
   return [...options, { value: selected, label: fallback }];
 }
 
-export function projectChoices(projects: Project[]): Choice[] {
+export function projectChoices(projects: Pick<Schemas['Project'], 'id' | 'name'>[]): Choice[] {
   return unique(projects.map((project) => ({ value: project.id, label: project.name })));
 }
 

@@ -12,8 +12,7 @@ import {
   WorkspacePublicationBadge
 } from '@/features/sessions/WorkspaceBadges';
 import { agentLabel } from '@/lib/agentLabel';
-import type { ProviderProfile, Session } from '@/lib/contract';
-import { safeExternalUrl } from '@/lib/taskState';
+import { httpsUrl } from '@/lib/url';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { AgentRadios } from './AgentRadios';
 import { CreateCheck } from './CreateCheck';
@@ -32,9 +31,8 @@ import {
   workspaceRequest,
   workspaceRowSchema,
   type AgentKind,
-  type Commit,
-  type PullRequest,
-  type WorkspaceLifecycle
+  type CommitRow,
+  type PullRequestRow
 } from './model';
 import { useCreateWorkspace, useProjectDetail, useProviders, useWorkspaces } from './queries';
 
@@ -89,13 +87,13 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     );
   }
 
-  const avatar = safeExternalUrl(project.avatar_url);
-  const github = safeExternalUrl(project.html_url);
-  const pulls = keepValid<PullRequest>(data.open_prs, pullRequestRowSchema);
-  const commits = keepValid<Commit>(data.recent_commits, commitRowSchema);
-  const sessions = keepValid<Session>(data.sessions, sessionRowSchema);
-  const providerRows = keepValid<ProviderProfile>(providers.data, providerRowSchema);
-  const workspaceRows = keepValid<WorkspaceLifecycle>(workspaces.data, workspaceRowSchema);
+  const avatar = httpsUrl(project.avatar_url);
+  const github = httpsUrl(project.html_url);
+  const pulls = keepValid(data.open_prs, pullRequestRowSchema);
+  const commits = keepValid(data.recent_commits, commitRowSchema);
+  const sessions = keepValid(data.sessions, sessionRowSchema);
+  const providerRows = keepValid(providers.data, providerRowSchema);
+  const workspaceRows = keepValid(workspaces.data, workspaceRowSchema);
   const branchWorkspaces = workspaceRows.filter(
     (workspace) => workspace.manifest.repo_url === project.html_url
   );
@@ -299,8 +297,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   );
 }
 
-function PullRequestLine({ pr }: { pr: PullRequest }) {
-  const url = safeExternalUrl(pr.url);
+function PullRequestLine({ pr }: { pr: PullRequestRow }) {
+  const url = httpsUrl(pr.url);
   return (
     <li className="gap-xs flex flex-col text-sm">
       <div className="gap-sm flex flex-wrap items-center">
@@ -327,8 +325,8 @@ function PullRequestLine({ pr }: { pr: PullRequest }) {
   );
 }
 
-function CommitLine({ commit }: { commit: Commit }) {
-  const url = safeExternalUrl(commit.url);
+function CommitLine({ commit }: { commit: CommitRow }) {
+  const url = httpsUrl(commit.url);
   return (
     <li className="gap-xs flex flex-col text-sm">
       <span className="break-words">{commitTitle(commit.message)}</span>

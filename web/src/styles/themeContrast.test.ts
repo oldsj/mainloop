@@ -201,6 +201,11 @@ describe('pairs not checked on the selection fill', () => {
     keys.map((key): [string, string] => [theme, key])
   );
 
+  // Growth of the list must change this number in the same diff, so it shows up in review.
+  it('has exactly 37 entries', () => {
+    expect(excluded).toHaveLength(37);
+  });
+
   it.each(excluded)(
     '%s: %s is below 4.5:1 on selection, so the exclusion is needed',
     (theme, key) => {

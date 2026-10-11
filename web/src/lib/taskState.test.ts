@@ -24,7 +24,6 @@ import {
   publicationFacts,
   reasonLabel,
   reportLabel,
-  safeExternalUrl,
   statusLabel,
   switchBlockers,
   taskForApproval,
@@ -221,10 +220,12 @@ test('observation age is relative and goes stale', () => {
 });
 
 test('only https PR links are rendered as links', () => {
-  expect(safeExternalUrl('https://github.com/o/r/pull/1')).toBe('https://github.com/o/r/pull/1');
-  expect(safeExternalUrl('javascript:alert(1)')).toBe(null);
-  expect(safeExternalUrl('http://github.com/o/r/pull/1')).toBe(null);
-  expect(safeExternalUrl('not a url')).toBe(null);
+  expect(publicationFacts(projection({ pr_url: 'https://github.com/o/r/pull/1' }), NOW).prUrl).toBe(
+    'https://github.com/o/r/pull/1'
+  );
+  expect(publicationFacts(projection({ pr_url: 'http://github.com/o/r/pull/1' }), NOW).prUrl).toBe(
+    null
+  );
   expect(publicationFacts(projection({ pr_url: 'javascript:alert(1)' }), NOW).prUrl).toBe(null);
 });
 
