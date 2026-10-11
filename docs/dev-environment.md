@@ -424,8 +424,9 @@ settings accept only the configured namespace's two origins.
 gives `mainloop-dev:mainloop-backend` production's `mainloop-agent-tokens` Role, so it can
 create, read and delete its credential Secrets there. Only the API container writes them;
 the MCP and Git containers verify tokens against the database and need nothing more.
-The dev agents still cannot call Mainloop tools until the infrastructure repository adds
-mainloop-dev's MCP credential tuple and origin to kagent's service policy.
+kagent's service policy (infrastructure repository) accepts mainloop-dev's MCP credential
+tuple (`mainloop-dev-mcp-*`, origin `http://mainloop-mcp.mainloop-dev.svc.cluster.local`), so the
+dev agents can call Mainloop tools.
 
 Git through the dev proxies also needs a kagent change. kagent's service policy
 (`controlauth/policy.go` in the `oldsj/kagent` fork) accepts only production's Git origins,
