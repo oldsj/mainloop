@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/projects"
 )
 
 // fallback is nested one struct deeper than the domain APIs, so a method a domain defines is
@@ -25,6 +28,7 @@ type fallback struct {
 // (`type SessionsAPI = sessions.API`).
 type Server struct {
 	*HealthAPI
+	*projects.ProjectsAPI
 
 	fallback
 
@@ -38,6 +42,10 @@ type Deps struct {
 	Config *config.Config
 	Log    *slog.Logger
 	DB     Pinger
+	// Pool is the database the domains read and write.
+	Pool *pgxpool.Pool
+	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
+	GitHub projects.Remote
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -48,7 +56,11 @@ const maxBodyBytes = 4 << 20
 func New(d Deps) *Server {
 	return &Server{
 		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
-		deps:      d,
+		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
+			Pool: d.Pool, Remote: d.GitHub, OwnerID: d.Config.Identity.OwnerID,
+			PolicyWrites: d.Config.OwnerPolicyWritesEnabled, Log: d.Log,
+		}},
+		deps: d,
 	}
 }
 

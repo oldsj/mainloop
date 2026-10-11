@@ -22,6 +22,9 @@ func newMigrator(t *testing.T, url string) *db.Migrator {
 	return m
 }
 
+// mainloopTables is how many tables the migrations create in the mainloop schema; a new table raises it.
+const mainloopTables = 7
+
 func countTables(t *testing.T, d *testdb.DB) int {
 	t.Helper()
 	var n int
@@ -51,8 +54,8 @@ func TestMigrateUpFromEmpty(t *testing.T) {
 	if err != nil || n != len(before) {
 		t.Fatalf("Up = %d, %v; want %d", n, err, len(before))
 	}
-	if got := countTables(t, d); got != 6 {
-		t.Errorf("tables after up = %d, want 6", got)
+	if got := countTables(t, d); got != mainloopTables {
+		t.Errorf("tables after up = %d, want %d", got, mainloopTables)
 	}
 	after, err := m.Status(ctx)
 	if err != nil {
@@ -89,8 +92,8 @@ func TestMigrateResetRebuildsSchema(t *testing.T) {
 	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM topics`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("topics after reset = %d, err = %v", n, err)
 	}
-	if got := countTables(t, d); got != 6 {
-		t.Errorf("tables after reset = %d, want 6", got)
+	if got := countTables(t, d); got != mainloopTables {
+		t.Errorf("tables after reset = %d, want %d", got, mainloopTables)
 	}
 }
 
@@ -124,8 +127,8 @@ func TestMigrateConcurrentUp(t *testing.T) {
 					t.Fatalf("round %d: %v", round, err)
 				}
 			}
-			if got := countTables(t, d); got != 6 {
-				t.Fatalf("round %d: tables = %d, want 6", round, got)
+			if got := countTables(t, d); got != mainloopTables {
+				t.Fatalf("round %d: tables = %d, want %d", round, got, mainloopTables)
 			}
 		})
 	}
@@ -146,8 +149,8 @@ func TestMigrateResetWithUnknownAppliedVersion(t *testing.T) {
 	if err := m.Reset(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := countTables(t, d); got != 6 {
-		t.Errorf("tables after reset = %d, want 6 (stray table should be gone)", got)
+	if got := countTables(t, d); got != mainloopTables {
+		t.Errorf("tables after reset = %d, want %d (stray table should be gone)", got, mainloopTables)
 	}
 	var stray int
 	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 99999`).Scan(&stray); err != nil || stray != 0 {

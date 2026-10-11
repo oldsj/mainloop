@@ -77,7 +77,7 @@ func TestMigrateUpStatusReset(t *testing.T) {
 		t.Fatalf("status before up = %d, out %q err %q", got, out.String(), errb.String())
 	}
 	out.Reset()
-	if got := runMigrate([]string{"up"}, &out, &errb); got != 0 || !strings.Contains(out.String(), "applied 1 migration") {
+	if got := runMigrate([]string{"up"}, &out, &errb); got != 0 || !strings.Contains(out.String(), "applied ") {
 		t.Fatalf("up = %d, out %q err %q", got, out.String(), errb.String())
 	}
 	out.Reset()

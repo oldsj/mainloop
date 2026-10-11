@@ -239,7 +239,7 @@ func TestSecretsNeverPrint(t *testing.T) {
 		key    = "hmac-key-sentinel"
 		pem    = "pem-sentinel"
 	)
-	cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": key, "DB_PASSWORD": dbPass, "GITHUB_APP_PRIVATE_KEY": pem})
+	cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": key, "DB_PASSWORD": dbPass, "GITHUB_APP_ID": "123", "GITHUB_APP_PRIVATE_KEY": pem})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,5 +409,36 @@ func TestParseKagentChecksTheTokenFile(t *testing.T) {
 	_, err = ParseKagent(map[string]string{"KAGENT_REQUEST_TIMEOUT_SECONDS": "soon"})
 	if err == nil || !strings.Contains(err.Error(), "KAGENT_REQUEST_TIMEOUT_SECONDS") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestGitHubAppSettingsComeTogether(t *testing.T) {
+	base := map[string]string{"AGENT_TOKEN_KEY": "k"}
+	with := func(extra map[string]string) error {
+		vars := map[string]string{}
+		for k, v := range base {
+			vars[k] = v
+		}
+		for k, v := range extra {
+			vars[k] = v
+		}
+		_, err := Parse(vars)
+		return err
+	}
+	if err := with(nil); err != nil {
+		t.Fatalf("neither set: %v", err)
+	}
+	if err := with(map[string]string{"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "x"}); err != nil {
+		t.Fatalf("both set: %v", err)
+	}
+	for name, extra := range map[string]map[string]string{
+		"id only":  {"GITHUB_APP_ID": "1"},
+		"key only": {"GITHUB_APP_PRIVATE_KEY": "x"},
+		"blank id": {"GITHUB_APP_ID": "  ", "GITHUB_APP_PRIVATE_KEY": "x"},
+	} {
+		err := with(extra)
+		if err == nil || strings.Contains(err.Error(), "x\n") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

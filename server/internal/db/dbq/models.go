@@ -63,6 +63,16 @@ type Project struct {
 	LastUsedAt         time.Time
 }
 
+type ProjectMergePolicyAudit struct {
+	ID        int64
+	ProjectID string
+	OwnerID   string
+	OldPolicy string
+	NewPolicy string
+	Version   int64
+	CreatedAt time.Time
+}
+
 type Session struct {
 	ID          string
 	UserID      string

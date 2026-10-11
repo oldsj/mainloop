@@ -16,6 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
@@ -113,7 +114,14 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	deps := app.Deps{Config: cfg, Log: log, DB: pool}
+	deps := app.Deps{Config: cfg, Log: log, DB: pool, Pool: pool}
+	if cfg.GitHub.AppID != "" {
+		gh, err := github.NewApp(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
+		if err != nil {
+			return err
+		}
+		deps.GitHub = gh
+	}
 	handler, err := app.New(deps).Handler()
 	if err != nil {
 		return err

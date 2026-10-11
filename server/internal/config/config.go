@@ -204,6 +204,12 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.Identity.AgentTokenKey.Reveal()) == "" {
 		fail("AGENT_TOKEN_KEY must not be blank")
 	}
+	// The GitHub App is optional, but half of one is a mistake. The key itself is validated when
+	// the client is built at startup.
+	if hasID, hasKey := strings.TrimSpace(c.GitHub.AppID) != "", strings.TrimSpace(c.GitHub.AppPrivateKey.Reveal()) != ""; hasID != hasKey {
+		fail("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be set together")
+	}
+	c.GitHub.AppID = strings.TrimSpace(c.GitHub.AppID)
 	if !dnsLabel.MatchString(c.Namespace) {
 		fail("MAINLOOP_NAMESPACE must be a DNS label")
 	} else if strings.Contains(c.Namespace, "-mcp") || strings.Contains(c.Namespace, "-git") {
