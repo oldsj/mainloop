@@ -1,6 +1,7 @@
 import { delay, http, HttpResponse } from 'msw';
 import { API_URL } from '@/api/config';
 import type { components } from '@/api/schema.gen';
+import { createChatBackend } from '@/features/chat/handlers';
 
 type Schemas = components['schemas'];
 
@@ -45,5 +46,6 @@ export const handlers = [
   http.get(url('/attention'), () => HttpResponse.json(attention)),
   http.get(url('/activity'), () => HttpResponse.json(activity)),
   http.get(url('/projects'), () => HttpResponse.json(projects)),
-  http.get(url('/workspaces'), () => HttpResponse.json(workspaces))
+  http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
+  ...createChatBackend().handlers
 ];
