@@ -172,7 +172,9 @@ func TestACancelledSessionWithAFailedCreateIsSettledByReplay(t *testing.T) {
 		deadline := time.Now().Add(15 * time.Second)
 		stop := e.run()
 		defer stop()
-		for !e.createRequested(sid) {
+		// The durable marker precedes the native call. Wait for that first call as well, so its
+		// arrival during the sweep is not mistaken for a replay by the sweep.
+		for !e.createRequested(sid) || k.creates.Load() < 1 {
 			if time.Now().After(deadline) {
 				t.Fatal("never attempted")
 			}
