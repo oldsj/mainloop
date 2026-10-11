@@ -283,6 +283,8 @@ class TaskPRDescription(ContractModel):
     @model_validator(mode="after")
     def valid_description(self):
         TaskCheckout(branch=self.branch)
+        if "\x00" in self.excerpt:
+            raise ValueError("PR description excerpt contains NUL")
         encoded = self.excerpt.encode("utf-8")
         if len(encoded) > 16384 or self.truncated != (self.byte_length > 16384):
             raise ValueError("invalid PR description bound")

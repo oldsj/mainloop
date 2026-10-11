@@ -130,9 +130,23 @@ class TaskApplicationIntegrationTests(MergeFixture):
     async def test_failed_or_unavailable_pr_description_does_not_retain_prior_body(
         self,
     ):
+        from mainloop.mcp_app import invoke
+        from mainloop.runtime.agent_identity import token_for
+        from mainloop.runtime.agent_tools import AgentService
+
         await self.prepare()
+        agent = AgentService(PgStore(), [])
+        ctx = await agent.authenticate(token_for(self.sid))
         original = self.fake.pr["body"]
-        for failure in ("upstream", "malformed", "absent", "null", "head", "body"):
+        for failure in (
+            "upstream",
+            "malformed",
+            "nul",
+            "absent",
+            "null",
+            "head",
+            "body",
+        ):
             with self.subTest(failure=failure):
                 self.fake.pr["body"] = original
                 await self.refresh_pr_description()
@@ -141,6 +155,8 @@ class TaskApplicationIntegrationTests(MergeFixture):
                     self.fake.errors["/pulls/17"] = 503
                 elif failure == "malformed":
                     self.fake.pr["body"] = {"not": "text"}
+                elif failure == "nul":
+                    self.fake.pr["body"] = "Edited description\x00with NUL"
                 elif failure == "absent":
                     del self.fake.pr["body"]
                 elif failure == "null":
@@ -163,6 +179,11 @@ class TaskApplicationIntegrationTests(MergeFixture):
                         (await self.get(self.user)).json()["projection"][
                             "pr_description"
                         ]
+                    )
+                    native = await invoke(agent, ctx, "task_get", {"task_id": task.id})
+                    self.assertFalse(native.isError, native.content)
+                    self.assertIsNone(
+                        native.structuredContent["projection"]["pr_description"]
                     )
                     self.assertIsNotNone(value.observed_at)
                     self.assertNotEqual(task.status, "completed")

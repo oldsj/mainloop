@@ -188,6 +188,25 @@ class PublicationFactsTests(unittest.TestCase):
         self.assertEqual(value.pr_description.head_sha, "b" * 40)
         self.assertEqual(value.pr_description.excerpt, data["body"])
 
+    def test_description_rejects_nul_and_preserves_supported_text(self):
+        data = copy.deepcopy(GitHub().pr)
+        data["body"] = "Supported\né\t\rtext"
+        description = self.project(data).pr_description
+        self.assertEqual(description.excerpt, data["body"])
+        payload = description.model_dump()
+        for body in ("\x00", "Edited description\x00with NUL", "Trailing NUL\x00"):
+            with self.subTest(body=repr(body)):
+                source = body.encode("utf-8")
+                with self.assertRaisesRegex(ValidationError, "contains NUL"):
+                    TaskPRDescription.model_validate(
+                        {
+                            **payload,
+                            "excerpt": body,
+                            "byte_length": len(source),
+                            "digest": hashlib.sha256(source).hexdigest(),
+                        }
+                    )
+
     def test_description_rejects_malformed_stored_metadata(self):
         payload = self.project(GitHub().pr).pr_description.model_dump()
         for updates in (

@@ -90,6 +90,8 @@ branch, PR number, current attempt ID and exact head SHA, a UTF-8 `excerpt` of a
 `fetched_at` timestamp. The excerpt stops at a complete UTF-8 character; length and
 digest cover the original body, including text beyond the excerpt. An empty string is
 an observed empty description; a null or unavailable body returns null.
+An excerpt containing NUL is unavailable because JSONB cannot store it; supported
+text is preserved exactly.
 
 The description is editable, untrusted GitHub text. Reviewer markers and other text
 grant no approval, acceptance or merge authority. Failed or inconsistent observations
