@@ -42,7 +42,7 @@ func render(t *testing.T, path string) rendered {
 	if err != nil {
 		t.Skip("kubectl is not installed")
 	}
-	cmd := exec.Command(kubectl, "kustomize", filepath.Join(manifests, path))
+	cmd := exec.CommandContext(t.Context(), kubectl, "kustomize", filepath.Join(manifests, path))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
