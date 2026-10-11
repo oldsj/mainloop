@@ -27,6 +27,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
@@ -157,6 +158,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	healthSvc.Kagent = kc
 	healthSvc.Agents = svc
 	deps.Health = healthSvc
+	schedSvc := &schedules.Service{Pool: pool, Kagent: kc, OwnerID: cfg.Identity.OwnerID, Log: log}
+	deps.Schedules = schedSvc
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {
 		return err
@@ -165,6 +168,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// Sends wake a suspended workspace through the workspace service, and idle suspend reads the
 	// delivery ledger: no turn is interrupted, and a delivery counts as activity.
 	svc.Providers, svc.Waker = wsSvc.Providers, wsSvc
+	schedSvc.Providers = wsSvc.Providers
 	wsSvc.Deliveries = svc
 	handler, err := app.New(deps).Handler()
 	if err != nil {
@@ -197,6 +201,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(attn.Sweep())
 	runner.AddSweep(healthSvc.RecoverSweep())
 	runner.AddSweep(healthSvc.RetainSweep())
+	runner.AddSweep(schedSvc.Sweep())
 	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })

@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
@@ -49,6 +50,7 @@ type Server struct {
 	*hitl.API
 	*attention.AttentionAPI
 	*health.DataAPI
+	*schedules.SchedulesAPI
 
 	fallback
 
@@ -92,6 +94,9 @@ type Deps struct {
 	// Health serves orchestration health and the smoke ledger. Nil builds one over Pool with no
 	// kagent client: it serves what is stored and collects nothing.
 	Health *health.Service
+	// Schedules serves scheduled runs. Nil builds one over Pool with no kagent client: the routes
+	// answer 503 and nothing is adopted.
+	Schedules *schedules.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -124,6 +129,7 @@ func New(d Deps) *Server {
 		API:             hitl.NewAPI(hitlService(d)),
 		AttentionAPI:    attention.NewAPI(att),
 		DataAPI:         health.NewAPI(healthService(d)),
+		SchedulesAPI:    schedules.NewAPI(schedulesService(d)),
 		deps:            d,
 		initErr:         err,
 	}
@@ -186,6 +192,13 @@ func hitlService(d Deps) *hitl.Service {
 		return d.HITL
 	}
 	return hitl.NewService(d.Config, d.Pool, nil, d.Log)
+}
+
+func schedulesService(d Deps) *schedules.Service {
+	if d.Schedules != nil {
+		return d.Schedules
+	}
+	return &schedules.Service{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Log: d.Log}
 }
 
 func attentionService(d Deps) *attention.Service {

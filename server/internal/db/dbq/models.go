@@ -374,6 +374,31 @@ type ProjectProviderPreference struct {
 	Version   int64
 }
 
+type ScheduledRunLink struct {
+	ExecutionID       string
+	ScheduleID        string
+	KagentSessionID   *string
+	SessionID         *string
+	State             string
+	AttentionOpenedAt *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type ScheduledRunSchedule struct {
+	ScheduleID        string
+	OwnerID           string
+	AgentNamespace    string
+	AgentName         string
+	RequestID         *string
+	AdoptFrom         time.Time
+	CursorExecutionID string
+	DeletedAt         *time.Time
+	SettledAt         *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 type Session struct {
 	ID          string
 	UserID      string

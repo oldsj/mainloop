@@ -100,14 +100,22 @@ func notType[T error](t *testing.T, err error) {
 
 func TestProcedureNamesMatchTheForkDefinitions(t *testing.T) {
 	want := map[string]string{
-		kagent.ProcCreateSession:           "/kagent.api.v1alpha1.SessionService/CreateSession",
-		kagent.ProcPrepareSessionWorkspace: "/kagent.api.v1alpha1.SessionService/PrepareSessionWorkspace",
-		kagent.ProcGetSession:              "/kagent.api.v1alpha1.SessionService/GetSession",
-		kagent.ProcListSessions:            "/kagent.api.v1alpha1.SessionService/ListSessions",
-		kagent.ProcSuspendSession:          "/kagent.api.v1alpha1.SessionService/SuspendSession",
-		kagent.ProcResumeSession:           "/kagent.api.v1alpha1.SessionService/ResumeSession",
-		kagent.ProcDeleteSession:           "/kagent.api.v1alpha1.SessionService/DeleteSession",
-		kagent.ProcGetAgent:                "/kagent.api.v1alpha1.AgentService/GetAgent",
+		kagent.ProcCreateSession:              "/kagent.api.v1alpha1.SessionService/CreateSession",
+		kagent.ProcPrepareSessionWorkspace:    "/kagent.api.v1alpha1.SessionService/PrepareSessionWorkspace",
+		kagent.ProcGetSession:                 "/kagent.api.v1alpha1.SessionService/GetSession",
+		kagent.ProcListSessions:               "/kagent.api.v1alpha1.SessionService/ListSessions",
+		kagent.ProcSuspendSession:             "/kagent.api.v1alpha1.SessionService/SuspendSession",
+		kagent.ProcResumeSession:              "/kagent.api.v1alpha1.SessionService/ResumeSession",
+		kagent.ProcDeleteSession:              "/kagent.api.v1alpha1.SessionService/DeleteSession",
+		kagent.ProcGetAgent:                   "/kagent.api.v1alpha1.AgentService/GetAgent",
+		kagent.ProcCreateScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/CreateScheduledRun",
+		kagent.ProcGetScheduledRun:            "/kagent.api.v1alpha1.ScheduledRunService/GetScheduledRun",
+		kagent.ProcListScheduledRuns:          "/kagent.api.v1alpha1.ScheduledRunService/ListScheduledRuns",
+		kagent.ProcUpdateScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/UpdateScheduledRun",
+		kagent.ProcDeleteScheduledRun:         "/kagent.api.v1alpha1.ScheduledRunService/DeleteScheduledRun",
+		kagent.ProcTriggerScheduledRun:        "/kagent.api.v1alpha1.ScheduledRunService/TriggerScheduledRun",
+		kagent.ProcGetScheduledRunExecution:   "/kagent.api.v1alpha1.ScheduledRunService/GetScheduledRunExecution",
+		kagent.ProcListScheduledRunExecutions: "/kagent.api.v1alpha1.ScheduledRunService/ListScheduledRunExecutions",
 	}
 	for got, exact := range want {
 		if got != exact {

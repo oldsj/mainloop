@@ -21,8 +21,9 @@ import (
 
 // Procedure names, exactly as the fork's service definitions spell them.
 const (
-	sessionService = "/kagent.api.v1alpha1.SessionService/"
-	agentService   = "/kagent.api.v1alpha1.AgentService/"
+	sessionService      = "/kagent.api.v1alpha1.SessionService/"
+	agentService        = "/kagent.api.v1alpha1.AgentService/"
+	scheduledRunService = "/kagent.api.v1alpha1.ScheduledRunService/"
 
 	ProcCreateSession           = sessionService + "CreateSession"
 	ProcPrepareSessionWorkspace = sessionService + "PrepareSessionWorkspace"
@@ -32,6 +33,15 @@ const (
 	ProcResumeSession           = sessionService + "ResumeSession"
 	ProcDeleteSession           = sessionService + "DeleteSession"
 	ProcGetAgent                = agentService + "GetAgent"
+
+	ProcCreateScheduledRun         = scheduledRunService + "CreateScheduledRun"
+	ProcGetScheduledRun            = scheduledRunService + "GetScheduledRun"
+	ProcListScheduledRuns          = scheduledRunService + "ListScheduledRuns"
+	ProcUpdateScheduledRun         = scheduledRunService + "UpdateScheduledRun"
+	ProcDeleteScheduledRun         = scheduledRunService + "DeleteScheduledRun"
+	ProcTriggerScheduledRun        = scheduledRunService + "TriggerScheduledRun"
+	ProcGetScheduledRunExecution   = scheduledRunService + "GetScheduledRunExecution"
+	ProcListScheduledRunExecutions = scheduledRunService + "ListScheduledRunExecutions"
 )
 
 const (
@@ -93,6 +103,7 @@ type Client struct {
 	http       *http.Client
 	sessionCl  sessionClients
 	agentGet   *connect.Client[api.GetAgentRequest, api.GetAgentResponse]
+	scheduleCl scheduledRunClients
 	reqTimeout time.Duration
 	idle       time.Duration
 	budget     time.Duration
@@ -146,6 +157,7 @@ func New(cfg Config) (*Client, error) {
 		c.now = time.Now
 	}
 	c.sessionCl = newSessionClients(doer{c.http}, base)
+	c.scheduleCl = newScheduledRunClients(doer{c.http}, base)
 	c.agentGet = connect.NewClient[api.GetAgentRequest, api.GetAgentResponse](
 		doer{c.http}, base+ProcGetAgent, connect.WithGRPCWeb())
 	return c, nil

@@ -126,12 +126,17 @@ type Server struct {
 	taskSeq  int
 	sessSeq  int
 	creates  []*api.CreateSessionRequest
+	sched    scheduleStore
 
 	// The Tamper hooks edit a reply, to test the client's checks that a reply belongs to its request.
 	// Set them before the first request.
 	TamperSession func(proc string, s *api.Session)
 	TamperReceipt func(*api.WorkspacePreparationReceipt)
 	TamperAgent   func(*api.Agent)
+	// TamperSchedule edits a schedule in a ScheduledRunService reply, without changing the stored one.
+	TamperSchedule func(proc string, sc *api.ScheduledRun)
+	// TamperExecution edits the execution a TriggerScheduledRun reply carries.
+	TamperExecution func(*api.ScheduledRunExecution)
 	// TamperTask edits the task a CancelTask reply carries, without changing the stored task.
 	TamperTask func(proc string, t *a2a.Task)
 }
@@ -157,6 +162,7 @@ func New() *Server {
 	handle(kagent.ProcResumeSession, connect.NewUnaryHandler(kagent.ProcResumeSession, s.resume))
 	handle(kagent.ProcDeleteSession, connect.NewUnaryHandler(kagent.ProcDeleteSession, s.deleteSession))
 	handle(kagent.ProcGetAgent, connect.NewUnaryHandler(kagent.ProcGetAgent, s.getAgent))
+	s.registerSchedules(handle)
 	mux.HandleFunc("/agents/{ns}/{name}", s.a2a)
 	s.Server = httptest.NewServer(mux)
 	return s

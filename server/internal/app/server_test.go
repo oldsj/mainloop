@@ -82,7 +82,7 @@ func detail(t *testing.T, r result) any {
 
 func TestUnimplementedOperationReturns501WithErrorShape(t *testing.T) {
 	h := newHandler(t, nil, up())
-	for _, path := range []string{"/schedules", "/schedules/s1"} {
+	for _, path := range []string{"/orchestration-health", "/projects/p1/smoke-observations"} {
 		r := send(h, "GET", path, "", nil)
 		if r.status != http.StatusNotImplemented {
 			t.Fatalf("%s: status = %d, body %s", path, r.status, r.body)
@@ -175,7 +175,7 @@ func TestRequestValidation(t *testing.T) {
 		{"wrong method", "DELETE", "/health", "", 405, "Method Not Allowed"},
 		{"missing body", "POST", "/chat", "", 422, ""},
 		{"wrong body type", "POST", "/chat", `{"message": 5}`, 422, ""},
-		{"valid body reaches the 501 fallback", "POST", "/schedules", `{"request_id": "r1", "agent": {"namespace": "kagent", "name": "a1"}, "config": {"schedule": "0 * * * *", "prompt": "go"}}`, 501, "Not implemented"},
+		{"valid body reaches the handler", "POST", "/schedules", `{"request_id": "r1", "agent": {"namespace": "kagent", "name": "a1"}, "config": {"schedule": "0 * * * *", "prompt": "go"}}`, 503, "Scheduled runs are not available"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 	})
 	t.Run("frontend origin write passes", func(t *testing.T) {
 		r := send(h, "POST", "/schedules", `{"request_id":"r1","agent":{"namespace":"kagent","name":"a1"},"config":{"schedule":"0 * * * *","prompt":"go"}}`, map[string]string{"Origin": "https://mainloop.test"})
-		if r.status != 501 {
+		if r.status != 503 { // past the guards and the validator, to the schedules handler (no kagent here)
 			t.Fatalf("got %d %s", r.status, r.body)
 		}
 	})
@@ -232,10 +232,10 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 	})
 	t.Run("dev allows loopback host", func(t *testing.T) {
 		dev := newHandler(t, map[string]string{"DEV_MODE": "true"}, up())
-		if r := send(dev, "GET", "/schedules", "", map[string]string{"Host": "localhost:8000"}); r.status != 501 {
+		if r := send(dev, "GET", "/orchestration-health", "", map[string]string{"Host": "localhost:8000"}); r.status != 501 {
 			t.Fatalf("got %d", r.status)
 		}
-		if r := send(h, "GET", "/schedules", "", map[string]string{"Host": "localhost:8000"}); r.status != 404 {
+		if r := send(h, "GET", "/orchestration-health", "", map[string]string{"Host": "localhost:8000"}); r.status != 404 {
 			t.Fatalf("prod loopback got %d", r.status)
 		}
 	})
