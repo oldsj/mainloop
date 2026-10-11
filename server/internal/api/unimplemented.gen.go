@@ -169,8 +169,8 @@ func (Unimplemented) GetWorkspace(context.Context, GetWorkspaceRequestObject) (G
 	return nil, httpx.ErrNotImplemented
 }
 
-// GrantEnvironment is not implemented yet.
-func (Unimplemented) GrantEnvironment(context.Context, GrantEnvironmentRequestObject) (GrantEnvironmentResponseObject, error) {
+// GrantEnvironmentToProject is not implemented yet.
+func (Unimplemented) GrantEnvironmentToProject(context.Context, GrantEnvironmentToProjectRequestObject) (GrantEnvironmentToProjectResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
 }
 
@@ -279,8 +279,8 @@ func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTa
 	return nil, httpx.ErrNotImplemented
 }
 
-// RevokeEnvironment is not implemented yet.
-func (Unimplemented) RevokeEnvironment(context.Context, RevokeEnvironmentRequestObject) (RevokeEnvironmentResponseObject, error) {
+// RevokeEnvironmentFromProject is not implemented yet.
+func (Unimplemented) RevokeEnvironmentFromProject(context.Context, RevokeEnvironmentFromProjectRequestObject) (RevokeEnvironmentFromProjectResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
 }
 

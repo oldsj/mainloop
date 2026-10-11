@@ -7,6 +7,3 @@ generate:
   embedded-spec: true
 output-options:
   skip-prune: true
-  overlay:
-    path: overlay.yaml
-    strict: false

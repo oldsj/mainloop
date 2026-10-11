@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -22,6 +23,21 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for AskUserRequestType.
+const (
+	AskUserRequestTypeAskUserRequest AskUserRequestType = "ask_user_request"
+)
+
+// Valid indicates whether the value is a known member of the AskUserRequestType enum.
+func (e AskUserRequestType) Valid() bool {
+	switch e {
+	case AskUserRequestTypeAskUserRequest:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for AskUserResponseType.
 const (
@@ -104,18 +120,864 @@ func (e CapabilityState) Valid() bool {
 	}
 }
 
+// Defines values for DevEnvironmentSourceKind.
+const (
+	DevEnvironmentSourceKindDefinitionRepo  DevEnvironmentSourceKind = "definition_repo"
+	DevEnvironmentSourceKindOperatorDefault DevEnvironmentSourceKind = "operator_default"
+	DevEnvironmentSourceKindPrebuiltImage   DevEnvironmentSourceKind = "prebuilt_image"
+)
+
+// Valid indicates whether the value is a known member of the DevEnvironmentSourceKind enum.
+func (e DevEnvironmentSourceKind) Valid() bool {
+	switch e {
+	case DevEnvironmentSourceKindDefinitionRepo:
+		return true
+	case DevEnvironmentSourceKindOperatorDefault:
+		return true
+	case DevEnvironmentSourceKindPrebuiltImage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentVersionArchitecture.
+const (
+	EnvironmentVersionArchitectureAmd64 EnvironmentVersionArchitecture = "amd64"
+	EnvironmentVersionArchitectureArm64 EnvironmentVersionArchitecture = "arm64"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentVersionArchitecture enum.
+func (e EnvironmentVersionArchitecture) Valid() bool {
+	switch e {
+	case EnvironmentVersionArchitectureAmd64:
+		return true
+	case EnvironmentVersionArchitectureArm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentVersionBaseProvenance.
+const (
+	EnvironmentVersionBaseProvenanceSupplied EnvironmentVersionBaseProvenance = "supplied"
+	EnvironmentVersionBaseProvenanceUnknown  EnvironmentVersionBaseProvenance = "unknown"
+	EnvironmentVersionBaseProvenanceVerified EnvironmentVersionBaseProvenance = "verified"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentVersionBaseProvenance enum.
+func (e EnvironmentVersionBaseProvenance) Valid() bool {
+	switch e {
+	case EnvironmentVersionBaseProvenanceSupplied:
+		return true
+	case EnvironmentVersionBaseProvenanceUnknown:
+		return true
+	case EnvironmentVersionBaseProvenanceVerified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentVersionProvenanceKind.
+const (
+	MainloopBuilt EnvironmentVersionProvenanceKind = "mainloop_built"
+	Operator      EnvironmentVersionProvenanceKind = "operator"
+	UserPushed    EnvironmentVersionProvenanceKind = "user_pushed"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentVersionProvenanceKind enum.
+func (e EnvironmentVersionProvenanceKind) Valid() bool {
+	switch e {
+	case MainloopBuilt:
+		return true
+	case Operator:
+		return true
+	case UserPushed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentVersionValidationStatus.
+const (
+	PendingBuild    EnvironmentVersionValidationStatus = "pending_build"
+	StaticValidated EnvironmentVersionValidationStatus = "static_validated"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentVersionValidationStatus enum.
+func (e EnvironmentVersionValidationStatus) Valid() bool {
+	switch e {
+	case PendingBuild:
+		return true
+	case StaticValidated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventSessionMessageRole.
+const (
+	EventSessionMessageRoleAssistant EventSessionMessageRole = "assistant"
+)
+
+// Valid indicates whether the value is a known member of the EventSessionMessageRole enum.
+func (e EventSessionMessageRole) Valid() bool {
+	switch e {
+	case EventSessionMessageRoleAssistant:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GrantRequestPermission.
 const (
-	Derive GrantRequestPermission = "derive"
-	Use    GrantRequestPermission = "use"
+	GrantRequestPermissionDerive GrantRequestPermission = "derive"
+	GrantRequestPermissionUse    GrantRequestPermission = "use"
 )
 
 // Valid indicates whether the value is a known member of the GrantRequestPermission enum.
 func (e GrantRequestPermission) Valid() bool {
 	switch e {
-	case Derive:
+	case GrantRequestPermissionDerive:
 		return true
-	case Use:
+	case GrantRequestPermissionUse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HITLMergeDetailsSection.
+const (
+	HITLMergeDetailsSectionChecks      HITLMergeDetailsSection = "checks"
+	HITLMergeDetailsSectionDescription HITLMergeDetailsSection = "description"
+	HITLMergeDetailsSectionFiles       HITLMergeDetailsSection = "files"
+)
+
+// Valid indicates whether the value is a known member of the HITLMergeDetailsSection enum.
+func (e HITLMergeDetailsSection) Valid() bool {
+	switch e {
+	case HITLMergeDetailsSectionChecks:
+		return true
+	case HITLMergeDetailsSectionDescription:
+		return true
+	case HITLMergeDetailsSectionFiles:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HITLProjectionAvailability.
+const (
+	HITLProjectionAvailabilityAnswered    HITLProjectionAvailability = "answered"
+	HITLProjectionAvailabilityPending     HITLProjectionAvailability = "pending"
+	HITLProjectionAvailabilityStale       HITLProjectionAvailability = "stale"
+	HITLProjectionAvailabilityUnavailable HITLProjectionAvailability = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the HITLProjectionAvailability enum.
+func (e HITLProjectionAvailability) Valid() bool {
+	switch e {
+	case HITLProjectionAvailabilityAnswered:
+		return true
+	case HITLProjectionAvailabilityPending:
+		return true
+	case HITLProjectionAvailabilityStale:
+		return true
+	case HITLProjectionAvailabilityUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthReportOutcome.
+const (
+	HealthReportOutcomeBlocked HealthReportOutcome = "blocked"
+	HealthReportOutcomeFailed  HealthReportOutcome = "failed"
+)
+
+// Valid indicates whether the value is a known member of the HealthReportOutcome enum.
+func (e HealthReportOutcome) Valid() bool {
+	switch e {
+	case HealthReportOutcomeBlocked:
+		return true
+	case HealthReportOutcomeFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthResponseStatus.
+const (
+	Healthy HealthResponseStatus = "healthy"
+)
+
+// Valid indicates whether the value is a known member of the HealthResponseStatus enum.
+func (e HealthResponseStatus) Valid() bool {
+	switch e {
+	case Healthy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolAction.
+const (
+	HealthToolActionEdit   HealthToolAction = "edit"
+	HealthToolActionOther  HealthToolAction = "other"
+	HealthToolActionRead   HealthToolAction = "read"
+	HealthToolActionSearch HealthToolAction = "search"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolAction enum.
+func (e HealthToolAction) Valid() bool {
+	switch e {
+	case HealthToolActionEdit:
+		return true
+	case HealthToolActionOther:
+		return true
+	case HealthToolActionRead:
+		return true
+	case HealthToolActionSearch:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolCategory.
+const (
+	McpError         HealthToolCategory = "mcp_error"
+	None             HealthToolCategory = "none"
+	PermissionDenied HealthToolCategory = "permission_denied"
+	ToolError        HealthToolCategory = "tool_error"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolCategory enum.
+func (e HealthToolCategory) Valid() bool {
+	switch e {
+	case McpError:
+		return true
+	case None:
+		return true
+	case PermissionDenied:
+		return true
+	case ToolError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolOutcome.
+const (
+	HealthToolOutcomeDenied  HealthToolOutcome = "denied"
+	HealthToolOutcomeError   HealthToolOutcome = "error"
+	HealthToolOutcomeSuccess HealthToolOutcome = "success"
+	HealthToolOutcomeUnknown HealthToolOutcome = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolOutcome enum.
+func (e HealthToolOutcome) Valid() bool {
+	switch e {
+	case HealthToolOutcomeDenied:
+		return true
+	case HealthToolOutcomeError:
+		return true
+	case HealthToolOutcomeSuccess:
+		return true
+	case HealthToolOutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolPhase.
+const (
+	HealthToolPhaseFinished HealthToolPhase = "finished"
+	HealthToolPhaseStarted  HealthToolPhase = "started"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolPhase enum.
+func (e HealthToolPhase) Valid() bool {
+	switch e {
+	case HealthToolPhaseFinished:
+		return true
+	case HealthToolPhaseStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolToolClass.
+const (
+	HealthToolToolClassBuiltin HealthToolToolClass = "builtin"
+	HealthToolToolClassMcp     HealthToolToolClass = "mcp"
+	HealthToolToolClassOther   HealthToolToolClass = "other"
+	HealthToolToolClassShell   HealthToolToolClass = "shell"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolToolClass enum.
+func (e HealthToolToolClass) Valid() bool {
+	switch e {
+	case HealthToolToolClassBuiltin:
+		return true
+	case HealthToolToolClassMcp:
+		return true
+	case HealthToolToolClassOther:
+		return true
+	case HealthToolToolClassShell:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventKind.
+const (
+	Tool HealthToolEventKind = "tool"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventKind enum.
+func (e HealthToolEventKind) Valid() bool {
+	switch e {
+	case Tool:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventProvider.
+const (
+	HealthToolEventProviderClaude HealthToolEventProvider = "claude"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventProvider enum.
+func (e HealthToolEventProvider) Valid() bool {
+	switch e {
+	case HealthToolEventProviderClaude:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventSchemaVersion.
+const (
+	HealthToolEventSchemaVersionKagentDevorchestrationHealthv1 HealthToolEventSchemaVersion = "kagent.dev/orchestration-health/v1"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventSchemaVersion enum.
+func (e HealthToolEventSchemaVersion) Valid() bool {
+	switch e {
+	case HealthToolEventSchemaVersionKagentDevorchestrationHealthv1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventSource.
+const (
+	HealthToolEventSourceClaudeResultStream HealthToolEventSource = "claude_result_stream"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventSource enum.
+func (e HealthToolEventSource) Valid() bool {
+	switch e {
+	case HealthToolEventSourceClaudeResultStream:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventTimePrecision.
+const (
+	HealthToolEventTimePrecisionNanosecond HealthToolEventTimePrecision = "nanosecond"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventTimePrecision enum.
+func (e HealthToolEventTimePrecision) Valid() bool {
+	switch e {
+	case HealthToolEventTimePrecisionNanosecond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthToolEventTimeSource.
+const (
+	HealthToolEventTimeSourceAdapterObserved HealthToolEventTimeSource = "adapter_observed"
+)
+
+// Valid indicates whether the value is a known member of the HealthToolEventTimeSource enum.
+func (e HealthToolEventTimeSource) Valid() bool {
+	switch e {
+	case HealthToolEventTimeSourceAdapterObserved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTotalsCoverage.
+const (
+	HealthTotalsCoverageComplete HealthTotalsCoverage = "complete"
+	HealthTotalsCoveragePartial  HealthTotalsCoverage = "partial"
+	HealthTotalsCoverageUnknown  HealthTotalsCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthTotalsCoverage enum.
+func (e HealthTotalsCoverage) Valid() bool {
+	switch e {
+	case HealthTotalsCoverageComplete:
+		return true
+	case HealthTotalsCoveragePartial:
+		return true
+	case HealthTotalsCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnCoverage.
+const (
+	HealthTurnCoverageComplete HealthTurnCoverage = "complete"
+	HealthTurnCoveragePartial  HealthTurnCoverage = "partial"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnCoverage enum.
+func (e HealthTurnCoverage) Valid() bool {
+	switch e {
+	case HealthTurnCoverageComplete:
+		return true
+	case HealthTurnCoveragePartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnState.
+const (
+	HealthTurnStateFailed   HealthTurnState = "failed"
+	HealthTurnStateFinished HealthTurnState = "finished"
+	HealthTurnStateStarted  HealthTurnState = "started"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnState enum.
+func (e HealthTurnState) Valid() bool {
+	switch e {
+	case HealthTurnStateFailed:
+		return true
+	case HealthTurnStateFinished:
+		return true
+	case HealthTurnStateStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventKind.
+const (
+	HealthTurnEventKindTurn HealthTurnEventKind = "turn"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventKind enum.
+func (e HealthTurnEventKind) Valid() bool {
+	switch e {
+	case HealthTurnEventKindTurn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventProvider.
+const (
+	HealthTurnEventProviderClaude HealthTurnEventProvider = "claude"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventProvider enum.
+func (e HealthTurnEventProvider) Valid() bool {
+	switch e {
+	case HealthTurnEventProviderClaude:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventSchemaVersion.
+const (
+	HealthTurnEventSchemaVersionKagentDevorchestrationHealthv1 HealthTurnEventSchemaVersion = "kagent.dev/orchestration-health/v1"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventSchemaVersion enum.
+func (e HealthTurnEventSchemaVersion) Valid() bool {
+	switch e {
+	case HealthTurnEventSchemaVersionKagentDevorchestrationHealthv1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventSource.
+const (
+	HealthTurnEventSourceClaudeResultStream HealthTurnEventSource = "claude_result_stream"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventSource enum.
+func (e HealthTurnEventSource) Valid() bool {
+	switch e {
+	case HealthTurnEventSourceClaudeResultStream:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventTimePrecision.
+const (
+	HealthTurnEventTimePrecisionNanosecond HealthTurnEventTimePrecision = "nanosecond"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventTimePrecision enum.
+func (e HealthTurnEventTimePrecision) Valid() bool {
+	switch e {
+	case HealthTurnEventTimePrecisionNanosecond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnEventTimeSource.
+const (
+	HealthTurnEventTimeSourceAdapterObserved HealthTurnEventTimeSource = "adapter_observed"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnEventTimeSource enum.
+func (e HealthTurnEventTimeSource) Valid() bool {
+	switch e {
+	case HealthTurnEventTimeSourceAdapterObserved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnSummaryChildAttribution.
+const (
+	HealthTurnSummaryChildAttributionUnavailable HealthTurnSummaryChildAttribution = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnSummaryChildAttribution enum.
+func (e HealthTurnSummaryChildAttribution) Valid() bool {
+	switch e {
+	case HealthTurnSummaryChildAttributionUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnSummaryFrictionCoverage.
+const (
+	HealthTurnSummaryFrictionCoverageComplete HealthTurnSummaryFrictionCoverage = "complete"
+	HealthTurnSummaryFrictionCoveragePartial  HealthTurnSummaryFrictionCoverage = "partial"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnSummaryFrictionCoverage enum.
+func (e HealthTurnSummaryFrictionCoverage) Valid() bool {
+	switch e {
+	case HealthTurnSummaryFrictionCoverageComplete:
+		return true
+	case HealthTurnSummaryFrictionCoveragePartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnSummaryInclusion.
+const (
+	HealthTurnSummaryInclusionTreeInclusive HealthTurnSummaryInclusion = "tree_inclusive"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnSummaryInclusion enum.
+func (e HealthTurnSummaryInclusion) Valid() bool {
+	switch e {
+	case HealthTurnSummaryInclusionTreeInclusive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthTurnSummaryUsageCoverage.
+const (
+	HealthTurnSummaryUsageCoverageComplete HealthTurnSummaryUsageCoverage = "complete"
+	HealthTurnSummaryUsageCoveragePartial  HealthTurnSummaryUsageCoverage = "partial"
+	HealthTurnSummaryUsageCoverageUnknown  HealthTurnSummaryUsageCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthTurnSummaryUsageCoverage enum.
+func (e HealthTurnSummaryUsageCoverage) Valid() bool {
+	switch e {
+	case HealthTurnSummaryUsageCoverageComplete:
+		return true
+	case HealthTurnSummaryUsageCoveragePartial:
+		return true
+	case HealthTurnSummaryUsageCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageBasis.
+const (
+	TurnTotal HealthUsageBasis = "turn_total"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageBasis enum.
+func (e HealthUsageBasis) Valid() bool {
+	switch e {
+	case TurnTotal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageCoverage.
+const (
+	HealthUsageCoverageComplete HealthUsageCoverage = "complete"
+	HealthUsageCoveragePartial  HealthUsageCoverage = "partial"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageCoverage enum.
+func (e HealthUsageCoverage) Valid() bool {
+	switch e {
+	case HealthUsageCoverageComplete:
+		return true
+	case HealthUsageCoveragePartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageInclusion.
+const (
+	HealthUsageInclusionTreeInclusive HealthUsageInclusion = "tree_inclusive"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageInclusion enum.
+func (e HealthUsageInclusion) Valid() bool {
+	switch e {
+	case HealthUsageInclusionTreeInclusive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageScope.
+const (
+	HealthUsageScopeTurn HealthUsageScope = "turn"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageScope enum.
+func (e HealthUsageScope) Valid() bool {
+	switch e {
+	case HealthUsageScopeTurn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventKind.
+const (
+	Usage HealthUsageEventKind = "usage"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventKind enum.
+func (e HealthUsageEventKind) Valid() bool {
+	switch e {
+	case Usage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventProvider.
+const (
+	HealthUsageEventProviderClaude HealthUsageEventProvider = "claude"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventProvider enum.
+func (e HealthUsageEventProvider) Valid() bool {
+	switch e {
+	case HealthUsageEventProviderClaude:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventSchemaVersion.
+const (
+	HealthUsageEventSchemaVersionKagentDevorchestrationHealthv1 HealthUsageEventSchemaVersion = "kagent.dev/orchestration-health/v1"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventSchemaVersion enum.
+func (e HealthUsageEventSchemaVersion) Valid() bool {
+	switch e {
+	case HealthUsageEventSchemaVersionKagentDevorchestrationHealthv1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventSource.
+const (
+	HealthUsageEventSourceClaudeResultStream HealthUsageEventSource = "claude_result_stream"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventSource enum.
+func (e HealthUsageEventSource) Valid() bool {
+	switch e {
+	case HealthUsageEventSourceClaudeResultStream:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventTimePrecision.
+const (
+	HealthUsageEventTimePrecisionNanosecond HealthUsageEventTimePrecision = "nanosecond"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventTimePrecision enum.
+func (e HealthUsageEventTimePrecision) Valid() bool {
+	switch e {
+	case HealthUsageEventTimePrecisionNanosecond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthUsageEventTimeSource.
+const (
+	HealthUsageEventTimeSourceAdapterObserved HealthUsageEventTimeSource = "adapter_observed"
+)
+
+// Valid indicates whether the value is a known member of the HealthUsageEventTimeSource enum.
+func (e HealthUsageEventTimeSource) Valid() bool {
+	switch e {
+	case HealthUsageEventTimeSourceAdapterObserved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HealthViewUnsupported.
+const (
+	Cache                  HealthViewUnsupported = "cache"
+	CodexUsage             HealthViewUnsupported = "codex_usage"
+	ExactApprovalWait      HealthViewUnsupported = "exact_approval_wait"
+	NativeChildAttribution HealthViewUnsupported = "native_child_attribution"
+)
+
+// Valid indicates whether the value is a known member of the HealthViewUnsupported enum.
+func (e HealthViewUnsupported) Valid() bool {
+	switch e {
+	case Cache:
+		return true
+	case CodexUsage:
+		return true
+	case ExactApprovalWait:
+		return true
+	case NativeChildAttribution:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeApprovalProjectPolicyType.
+const (
+	ProjectPolicy MergeApprovalProjectPolicyType = "project_policy"
+)
+
+// Valid indicates whether the value is a known member of the MergeApprovalProjectPolicyType enum.
+func (e MergeApprovalProjectPolicyType) Valid() bool {
+	switch e {
+	case ProjectPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeApprovalProtectedPathType.
+const (
+	ProtectedPath MergeApprovalProtectedPathType = "protected_path"
+)
+
+// Valid indicates whether the value is a known member of the MergeApprovalProtectedPathType enum.
+func (e MergeApprovalProtectedPathType) Valid() bool {
+	switch e {
+	case ProtectedPath:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeDetailItemKind.
+const (
+	CheckRun      MergeDetailItemKind = "check_run"
+	CommitStatus  MergeDetailItemKind = "commit_status"
+	RequiredCheck MergeDetailItemKind = "required_check"
+	Suite         MergeDetailItemKind = "suite"
+)
+
+// Valid indicates whether the value is a known member of the MergeDetailItemKind enum.
+func (e MergeDetailItemKind) Valid() bool {
+	switch e {
+	case CheckRun:
+		return true
+	case CommitStatus:
+		return true
+	case RequiredCheck:
+		return true
+	case Suite:
 		return true
 	default:
 		return false
@@ -142,13 +1004,79 @@ func (e MergePolicy) Valid() bool {
 
 // Defines values for MergePolicyViewProtectedGlobsVersion.
 const (
-	N1 MergePolicyViewProtectedGlobsVersion = 1
+	MergePolicyViewProtectedGlobsVersionN1 MergePolicyViewProtectedGlobsVersion = 1
 )
 
 // Valid indicates whether the value is a known member of the MergePolicyViewProtectedGlobsVersion enum.
 func (e MergePolicyViewProtectedGlobsVersion) Valid() bool {
 	switch e {
-	case N1:
+	case MergePolicyViewProtectedGlobsVersionN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeReceiptKeyOperation.
+const (
+	MergeReceiptKeyOperationMainloopMergePullRequestWithApprovalV1 MergeReceiptKeyOperation = "mainloop.merge_pull_request_with_approval.v1"
+)
+
+// Valid indicates whether the value is a known member of the MergeReceiptKeyOperation enum.
+func (e MergeReceiptKeyOperation) Valid() bool {
+	switch e {
+	case MergeReceiptKeyOperationMainloopMergePullRequestWithApprovalV1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeSummaryAvailability.
+const (
+	MergeSummaryAvailabilityReady       MergeSummaryAvailability = "ready"
+	MergeSummaryAvailabilityUnavailable MergeSummaryAvailability = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MergeSummaryAvailability enum.
+func (e MergeSummaryAvailability) Valid() bool {
+	switch e {
+	case MergeSummaryAvailabilityReady:
+		return true
+	case MergeSummaryAvailabilityUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeSummaryPolicy.
+const (
+	MergeSummaryPolicyApproval MergeSummaryPolicy = "approval"
+	MergeSummaryPolicyAuto     MergeSummaryPolicy = "auto"
+)
+
+// Valid indicates whether the value is a known member of the MergeSummaryPolicy enum.
+func (e MergeSummaryPolicy) Valid() bool {
+	switch e {
+	case MergeSummaryPolicyApproval:
+		return true
+	case MergeSummaryPolicyAuto:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MergeSummaryVersion.
+const (
+	MergeSummaryVersionN1 MergeSummaryVersion = 1
+)
+
+// Valid indicates whether the value is a known member of the MergeSummaryVersion enum.
+func (e MergeSummaryVersion) Valid() bool {
+	switch e {
+	case MergeSummaryVersionN1:
 		return true
 	default:
 		return false
@@ -157,16 +1085,52 @@ func (e MergePolicyViewProtectedGlobsVersion) Valid() bool {
 
 // Defines values for MessageRole.
 const (
-	Assistant MessageRole = "assistant"
-	User      MessageRole = "user"
+	MessageRoleAssistant MessageRole = "assistant"
+	MessageRoleUser      MessageRole = "user"
 )
 
 // Valid indicates whether the value is a known member of the MessageRole enum.
 func (e MessageRole) Valid() bool {
 	switch e {
-	case Assistant:
+	case MessageRoleAssistant:
 		return true
-	case User:
+	case MessageRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageDeclarationManager.
+const (
+	Apk PackageDeclarationManager = "apk"
+	Apt PackageDeclarationManager = "apt"
+)
+
+// Valid indicates whether the value is a known member of the PackageDeclarationManager enum.
+func (e PackageDeclarationManager) Valid() bool {
+	switch e {
+	case Apk:
+		return true
+	case Apt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProjectEnvironmentGrantPermission.
+const (
+	ProjectEnvironmentGrantPermissionDerive ProjectEnvironmentGrantPermission = "derive"
+	ProjectEnvironmentGrantPermissionUse    ProjectEnvironmentGrantPermission = "use"
+)
+
+// Valid indicates whether the value is a known member of the ProjectEnvironmentGrantPermission enum.
+func (e ProjectEnvironmentGrantPermission) Valid() bool {
+	switch e {
+	case ProjectEnvironmentGrantPermissionDerive:
+		return true
+	case ProjectEnvironmentGrantPermissionUse:
 		return true
 	default:
 		return false
@@ -175,16 +1139,16 @@ func (e MessageRole) Valid() bool {
 
 // Defines values for ProviderProfileNativeProvider.
 const (
-	Claude ProviderProfileNativeProvider = "claude"
-	Codex  ProviderProfileNativeProvider = "codex"
+	ProviderProfileNativeProviderClaude ProviderProfileNativeProvider = "claude"
+	ProviderProfileNativeProviderCodex  ProviderProfileNativeProvider = "codex"
 )
 
 // Valid indicates whether the value is a known member of the ProviderProfileNativeProvider enum.
 func (e ProviderProfileNativeProvider) Valid() bool {
 	switch e {
-	case Claude:
+	case ProviderProfileNativeProviderClaude:
 		return true
-	case Codex:
+	case ProviderProfileNativeProviderCodex:
 		return true
 	default:
 		return false
@@ -299,18 +1263,48 @@ func (e QueueItemType) Valid() bool {
 	}
 }
 
+// Defines values for QueueRespondResponseMessage.
+const (
+	ResponseSent QueueRespondResponseMessage = "Response sent"
+)
+
+// Valid indicates whether the value is a known member of the QueueRespondResponseMessage enum.
+func (e QueueRespondResponseMessage) Valid() bool {
+	switch e {
+	case ResponseSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for QueueRespondResponseStatus.
+const (
+	QueueRespondResponseStatusOk QueueRespondResponseStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the QueueRespondResponseStatus enum.
+func (e QueueRespondResponseStatus) Valid() bool {
+	switch e {
+	case QueueRespondResponseStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RegisterEnvironmentArchitecture.
 const (
-	Amd64 RegisterEnvironmentArchitecture = "amd64"
-	Arm64 RegisterEnvironmentArchitecture = "arm64"
+	RegisterEnvironmentArchitectureAmd64 RegisterEnvironmentArchitecture = "amd64"
+	RegisterEnvironmentArchitectureArm64 RegisterEnvironmentArchitecture = "arm64"
 )
 
 // Valid indicates whether the value is a known member of the RegisterEnvironmentArchitecture enum.
 func (e RegisterEnvironmentArchitecture) Valid() bool {
 	switch e {
-	case Amd64:
+	case RegisterEnvironmentArchitectureAmd64:
 		return true
-	case Arm64:
+	case RegisterEnvironmentArchitectureArm64:
 		return true
 	default:
 		return false
@@ -319,16 +1313,88 @@ func (e RegisterEnvironmentArchitecture) Valid() bool {
 
 // Defines values for RegisterEnvironmentSourceKind.
 const (
-	DefinitionRepo RegisterEnvironmentSourceKind = "definition_repo"
-	PrebuiltImage  RegisterEnvironmentSourceKind = "prebuilt_image"
+	RegisterEnvironmentSourceKindDefinitionRepo RegisterEnvironmentSourceKind = "definition_repo"
+	RegisterEnvironmentSourceKindPrebuiltImage  RegisterEnvironmentSourceKind = "prebuilt_image"
 )
 
 // Valid indicates whether the value is a known member of the RegisterEnvironmentSourceKind enum.
 func (e RegisterEnvironmentSourceKind) Valid() bool {
 	switch e {
-	case DefinitionRepo:
+	case RegisterEnvironmentSourceKindDefinitionRepo:
 		return true
-	case PrebuiltImage:
+	case RegisterEnvironmentSourceKindPrebuiltImage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionArchiveResponseStatus.
+const (
+	Archived SessionArchiveResponseStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the SessionArchiveResponseStatus enum.
+func (e SessionArchiveResponseStatus) Valid() bool {
+	switch e {
+	case Archived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionCancelResponseAgent.
+const (
+	SessionCancelResponseAgentNotRunning SessionCancelResponseAgent = "not_running"
+	SessionCancelResponseAgentStopped    SessionCancelResponseAgent = "stopped"
+	SessionCancelResponseAgentUnknown    SessionCancelResponseAgent = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SessionCancelResponseAgent enum.
+func (e SessionCancelResponseAgent) Valid() bool {
+	switch e {
+	case SessionCancelResponseAgentNotRunning:
+		return true
+	case SessionCancelResponseAgentStopped:
+		return true
+	case SessionCancelResponseAgentUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionCancelResponseStatus.
+const (
+	SessionCancelResponseStatusCancelled SessionCancelResponseStatus = "cancelled"
+	SessionCancelResponseStatusCompleted SessionCancelResponseStatus = "completed"
+	SessionCancelResponseStatusFailed    SessionCancelResponseStatus = "failed"
+)
+
+// Valid indicates whether the value is a known member of the SessionCancelResponseStatus enum.
+func (e SessionCancelResponseStatus) Valid() bool {
+	switch e {
+	case SessionCancelResponseStatusCancelled:
+		return true
+	case SessionCancelResponseStatusCompleted:
+		return true
+	case SessionCancelResponseStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageResponseStatus.
+const (
+	SessionMessageResponseStatusOk SessionMessageResponseStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageResponseStatus enum.
+func (e SessionMessageResponseStatus) Valid() bool {
+	switch e {
+	case SessionMessageResponseStatusOk:
 		return true
 	default:
 		return false
@@ -377,18 +1443,666 @@ func (e SessionStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionStopTurnResponseStatus.
+const (
+	SessionStopTurnResponseStatusFinished   SessionStopTurnResponseStatus = "finished"
+	SessionStopTurnResponseStatusNoOpenTurn SessionStopTurnResponseStatus = "no_open_turn"
+	SessionStopTurnResponseStatusStopped    SessionStopTurnResponseStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the SessionStopTurnResponseStatus enum.
+func (e SessionStopTurnResponseStatus) Valid() bool {
+	switch e {
+	case SessionStopTurnResponseStatusFinished:
+		return true
+	case SessionStopTurnResponseStatusNoOpenTurn:
+		return true
+	case SessionStopTurnResponseStatusStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StatusOkStatus.
+const (
+	StatusOkStatusOk StatusOkStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the StatusOkStatus enum.
+func (e StatusOkStatus) Valid() bool {
+	switch e {
+	case StatusOkStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskMode.
+const (
+	TaskModeCode         TaskMode = "code"
+	TaskModeCoordination TaskMode = "coordination"
+)
+
+// Valid indicates whether the value is a known member of the TaskMode enum.
+func (e TaskMode) Valid() bool {
+	switch e {
+	case TaskModeCode:
+		return true
+	case TaskModeCoordination:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskReason.
+const (
+	TaskReasonApproval                TaskReason = "approval"
+	TaskReasonAwaitingChild           TaskReason = "awaiting_child"
+	TaskReasonCancelUnavailable       TaskReason = "cancel_unavailable"
+	TaskReasonCi                      TaskReason = "ci"
+	TaskReasonHandoff                 TaskReason = "handoff"
+	TaskReasonHandoffUnavailable      TaskReason = "handoff_unavailable"
+	TaskReasonOwnerDecision           TaskReason = "owner_decision"
+	TaskReasonProvisioningUnavailable TaskReason = "provisioning_unavailable"
+	TaskReasonPublication             TaskReason = "publication"
+	TaskReasonReconciliation          TaskReason = "reconciliation"
+)
+
+// Valid indicates whether the value is a known member of the TaskReason enum.
+func (e TaskReason) Valid() bool {
+	switch e {
+	case TaskReasonApproval:
+		return true
+	case TaskReasonAwaitingChild:
+		return true
+	case TaskReasonCancelUnavailable:
+		return true
+	case TaskReasonCi:
+		return true
+	case TaskReasonHandoff:
+		return true
+	case TaskReasonHandoffUnavailable:
+		return true
+	case TaskReasonOwnerDecision:
+		return true
+	case TaskReasonProvisioningUnavailable:
+		return true
+	case TaskReasonPublication:
+		return true
+	case TaskReasonReconciliation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskSelectionSource.
+const (
+	Explicit            TaskSelectionSource = "explicit"
+	Inherited           TaskSelectionSource = "inherited"
+	InstallationDefault TaskSelectionSource = "installation_default"
+	ProjectDefault      TaskSelectionSource = "project_default"
+)
+
+// Valid indicates whether the value is a known member of the TaskSelectionSource enum.
+func (e TaskSelectionSource) Valid() bool {
+	switch e {
+	case Explicit:
+		return true
+	case Inherited:
+		return true
+	case InstallationDefault:
+		return true
+	case ProjectDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskStatus.
+const (
+	TaskStatusBlocked   TaskStatus = "blocked"
+	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusQueued    TaskStatus = "queued"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusWaiting   TaskStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the TaskStatus enum.
+func (e TaskStatus) Valid() bool {
+	switch e {
+	case TaskStatusBlocked:
+		return true
+	case TaskStatusCancelled:
+		return true
+	case TaskStatusCompleted:
+		return true
+	case TaskStatusFailed:
+		return true
+	case TaskStatusQueued:
+		return true
+	case TaskStatusRunning:
+		return true
+	case TaskStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskArtifactKind.
+const (
+	Checkpoint                TaskArtifactKind = "checkpoint"
+	HandoffManifest           TaskArtifactKind = "handoff_manifest"
+	RetentionReceipt          TaskArtifactKind = "retention_receipt"
+	UnverifiedProviderSummary TaskArtifactKind = "unverified_provider_summary"
+)
+
+// Valid indicates whether the value is a known member of the TaskArtifactKind enum.
+func (e TaskArtifactKind) Valid() bool {
+	switch e {
+	case Checkpoint:
+		return true
+	case HandoffManifest:
+		return true
+	case RetentionReceipt:
+		return true
+	case UnverifiedProviderSummary:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskAttemptDepth.
+const (
+	TaskAttemptDepthN1 TaskAttemptDepth = 1
+	TaskAttemptDepthN2 TaskAttemptDepth = 2
+)
+
+// Valid indicates whether the value is a known member of the TaskAttemptDepth enum.
+func (e TaskAttemptDepth) Valid() bool {
+	switch e {
+	case TaskAttemptDepthN1:
+		return true
+	case TaskAttemptDepthN2:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskAttemptNativeProvider.
+const (
+	TaskAttemptNativeProviderClaude TaskAttemptNativeProvider = "claude"
+	TaskAttemptNativeProviderCodex  TaskAttemptNativeProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the TaskAttemptNativeProvider enum.
+func (e TaskAttemptNativeProvider) Valid() bool {
+	switch e {
+	case TaskAttemptNativeProviderClaude:
+		return true
+	case TaskAttemptNativeProviderCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskAttemptRole.
+const (
+	Child      TaskAttemptRole = "child"
+	Supervisor TaskAttemptRole = "supervisor"
+)
+
+// Valid indicates whether the value is a known member of the TaskAttemptRole enum.
+func (e TaskAttemptRole) Valid() bool {
+	switch e {
+	case Child:
+		return true
+	case Supervisor:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskAttemptState.
+const (
+	TaskAttemptStateActive     TaskAttemptState = "active"
+	TaskAttemptStateCancelled  TaskAttemptState = "cancelled"
+	TaskAttemptStateCompleted  TaskAttemptState = "completed"
+	TaskAttemptStateCreating   TaskAttemptState = "creating"
+	TaskAttemptStateDraining   TaskAttemptState = "draining"
+	TaskAttemptStateFailed     TaskAttemptState = "failed"
+	TaskAttemptStateFenced     TaskAttemptState = "fenced"
+	TaskAttemptStateSuperseded TaskAttemptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the TaskAttemptState enum.
+func (e TaskAttemptState) Valid() bool {
+	switch e {
+	case TaskAttemptStateActive:
+		return true
+	case TaskAttemptStateCancelled:
+		return true
+	case TaskAttemptStateCompleted:
+		return true
+	case TaskAttemptStateCreating:
+		return true
+	case TaskAttemptStateDraining:
+		return true
+	case TaskAttemptStateFailed:
+		return true
+	case TaskAttemptStateFenced:
+		return true
+	case TaskAttemptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCreateMode.
 const (
-	Code         TaskCreateMode = "code"
-	Coordination TaskCreateMode = "coordination"
+	TaskCreateModeCode         TaskCreateMode = "code"
+	TaskCreateModeCoordination TaskCreateMode = "coordination"
 )
 
 // Valid indicates whether the value is a known member of the TaskCreateMode enum.
 func (e TaskCreateMode) Valid() bool {
 	switch e {
-	case Code:
+	case TaskCreateModeCode:
 		return true
-	case Coordination:
+	case TaskCreateModeCoordination:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskEligibilityReason.
+const (
+	TaskEligibilityReasonApproval                TaskEligibilityReason = "approval"
+	TaskEligibilityReasonAwaitingChild           TaskEligibilityReason = "awaiting_child"
+	TaskEligibilityReasonCancelUnavailable       TaskEligibilityReason = "cancel_unavailable"
+	TaskEligibilityReasonCi                      TaskEligibilityReason = "ci"
+	TaskEligibilityReasonHandoff                 TaskEligibilityReason = "handoff"
+	TaskEligibilityReasonHandoffUnavailable      TaskEligibilityReason = "handoff_unavailable"
+	TaskEligibilityReasonOwnerDecision           TaskEligibilityReason = "owner_decision"
+	TaskEligibilityReasonProvisioningUnavailable TaskEligibilityReason = "provisioning_unavailable"
+	TaskEligibilityReasonPublication             TaskEligibilityReason = "publication"
+	TaskEligibilityReasonReconciliation          TaskEligibilityReason = "reconciliation"
+)
+
+// Valid indicates whether the value is a known member of the TaskEligibilityReason enum.
+func (e TaskEligibilityReason) Valid() bool {
+	switch e {
+	case TaskEligibilityReasonApproval:
+		return true
+	case TaskEligibilityReasonAwaitingChild:
+		return true
+	case TaskEligibilityReasonCancelUnavailable:
+		return true
+	case TaskEligibilityReasonCi:
+		return true
+	case TaskEligibilityReasonHandoff:
+		return true
+	case TaskEligibilityReasonHandoffUnavailable:
+		return true
+	case TaskEligibilityReasonOwnerDecision:
+		return true
+	case TaskEligibilityReasonProvisioningUnavailable:
+		return true
+	case TaskEligibilityReasonPublication:
+		return true
+	case TaskEligibilityReasonReconciliation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskOperationKind.
+const (
+	Cancel   TaskOperationKind = "cancel"
+	Create   TaskOperationKind = "create"
+	Reassign TaskOperationKind = "reassign"
+	Retry    TaskOperationKind = "retry"
+)
+
+// Valid indicates whether the value is a known member of the TaskOperationKind enum.
+func (e TaskOperationKind) Valid() bool {
+	switch e {
+	case Cancel:
+		return true
+	case Create:
+		return true
+	case Reassign:
+		return true
+	case Retry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskOperationLastConfirmedStep.
+const (
+	TaskOperationLastConfirmedStepBlocked            TaskOperationLastConfirmedStep = "blocked"
+	TaskOperationLastConfirmedStepCheckpointRequired TaskOperationLastConfirmedStep = "checkpoint_required"
+	TaskOperationLastConfirmedStepCheckpointVerified TaskOperationLastConfirmedStep = "checkpoint_verified"
+	TaskOperationLastConfirmedStepCompleted          TaskOperationLastConfirmedStep = "completed"
+	TaskOperationLastConfirmedStepDraining           TaskOperationLastConfirmedStep = "draining"
+	TaskOperationLastConfirmedStepRequested          TaskOperationLastConfirmedStep = "requested"
+	TaskOperationLastConfirmedStepSourceFenced       TaskOperationLastConfirmedStep = "source_fenced"
+	TaskOperationLastConfirmedStepSourceFencing      TaskOperationLastConfirmedStep = "source_fencing"
+	TaskOperationLastConfirmedStepTargetCreating     TaskOperationLastConfirmedStep = "target_creating"
+	TaskOperationLastConfirmedStepTargetReady        TaskOperationLastConfirmedStep = "target_ready"
+	TaskOperationLastConfirmedStepUncertain          TaskOperationLastConfirmedStep = "uncertain"
+)
+
+// Valid indicates whether the value is a known member of the TaskOperationLastConfirmedStep enum.
+func (e TaskOperationLastConfirmedStep) Valid() bool {
+	switch e {
+	case TaskOperationLastConfirmedStepBlocked:
+		return true
+	case TaskOperationLastConfirmedStepCheckpointRequired:
+		return true
+	case TaskOperationLastConfirmedStepCheckpointVerified:
+		return true
+	case TaskOperationLastConfirmedStepCompleted:
+		return true
+	case TaskOperationLastConfirmedStepDraining:
+		return true
+	case TaskOperationLastConfirmedStepRequested:
+		return true
+	case TaskOperationLastConfirmedStepSourceFenced:
+		return true
+	case TaskOperationLastConfirmedStepSourceFencing:
+		return true
+	case TaskOperationLastConfirmedStepTargetCreating:
+		return true
+	case TaskOperationLastConfirmedStepTargetReady:
+		return true
+	case TaskOperationLastConfirmedStepUncertain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskOperationReason.
+const (
+	TaskOperationReasonApproval                TaskOperationReason = "approval"
+	TaskOperationReasonAwaitingChild           TaskOperationReason = "awaiting_child"
+	TaskOperationReasonCancelUnavailable       TaskOperationReason = "cancel_unavailable"
+	TaskOperationReasonCi                      TaskOperationReason = "ci"
+	TaskOperationReasonHandoff                 TaskOperationReason = "handoff"
+	TaskOperationReasonHandoffUnavailable      TaskOperationReason = "handoff_unavailable"
+	TaskOperationReasonOwnerDecision           TaskOperationReason = "owner_decision"
+	TaskOperationReasonProvisioningUnavailable TaskOperationReason = "provisioning_unavailable"
+	TaskOperationReasonPublication             TaskOperationReason = "publication"
+	TaskOperationReasonReconciliation          TaskOperationReason = "reconciliation"
+)
+
+// Valid indicates whether the value is a known member of the TaskOperationReason enum.
+func (e TaskOperationReason) Valid() bool {
+	switch e {
+	case TaskOperationReasonApproval:
+		return true
+	case TaskOperationReasonAwaitingChild:
+		return true
+	case TaskOperationReasonCancelUnavailable:
+		return true
+	case TaskOperationReasonCi:
+		return true
+	case TaskOperationReasonHandoff:
+		return true
+	case TaskOperationReasonHandoffUnavailable:
+		return true
+	case TaskOperationReasonOwnerDecision:
+		return true
+	case TaskOperationReasonProvisioningUnavailable:
+		return true
+	case TaskOperationReasonPublication:
+		return true
+	case TaskOperationReasonReconciliation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskOperationState.
+const (
+	TaskOperationStateBlocked            TaskOperationState = "blocked"
+	TaskOperationStateCheckpointRequired TaskOperationState = "checkpoint_required"
+	TaskOperationStateCheckpointVerified TaskOperationState = "checkpoint_verified"
+	TaskOperationStateCompleted          TaskOperationState = "completed"
+	TaskOperationStateDraining           TaskOperationState = "draining"
+	TaskOperationStateRequested          TaskOperationState = "requested"
+	TaskOperationStateSourceFenced       TaskOperationState = "source_fenced"
+	TaskOperationStateSourceFencing      TaskOperationState = "source_fencing"
+	TaskOperationStateTargetCreating     TaskOperationState = "target_creating"
+	TaskOperationStateTargetReady        TaskOperationState = "target_ready"
+	TaskOperationStateUncertain          TaskOperationState = "uncertain"
+)
+
+// Valid indicates whether the value is a known member of the TaskOperationState enum.
+func (e TaskOperationState) Valid() bool {
+	switch e {
+	case TaskOperationStateBlocked:
+		return true
+	case TaskOperationStateCheckpointRequired:
+		return true
+	case TaskOperationStateCheckpointVerified:
+		return true
+	case TaskOperationStateCompleted:
+		return true
+	case TaskOperationStateDraining:
+		return true
+	case TaskOperationStateRequested:
+		return true
+	case TaskOperationStateSourceFenced:
+		return true
+	case TaskOperationStateSourceFencing:
+		return true
+	case TaskOperationStateTargetCreating:
+		return true
+	case TaskOperationStateTargetReady:
+		return true
+	case TaskOperationStateUncertain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskProjectionCiState.
+const (
+	TaskProjectionCiStateFailure TaskProjectionCiState = "failure"
+	TaskProjectionCiStatePending TaskProjectionCiState = "pending"
+	TaskProjectionCiStateSuccess TaskProjectionCiState = "success"
+	TaskProjectionCiStateUnknown TaskProjectionCiState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the TaskProjectionCiState enum.
+func (e TaskProjectionCiState) Valid() bool {
+	switch e {
+	case TaskProjectionCiStateFailure:
+		return true
+	case TaskProjectionCiStatePending:
+		return true
+	case TaskProjectionCiStateSuccess:
+		return true
+	case TaskProjectionCiStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskProjectionPrState.
+const (
+	TaskProjectionPrStateClosed  TaskProjectionPrState = "closed"
+	TaskProjectionPrStateMerged  TaskProjectionPrState = "merged"
+	TaskProjectionPrStateOpen    TaskProjectionPrState = "open"
+	TaskProjectionPrStateUnknown TaskProjectionPrState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the TaskProjectionPrState enum.
+func (e TaskProjectionPrState) Valid() bool {
+	switch e {
+	case TaskProjectionPrStateClosed:
+		return true
+	case TaskProjectionPrStateMerged:
+		return true
+	case TaskProjectionPrStateOpen:
+		return true
+	case TaskProjectionPrStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskReportOutcome.
+const (
+	TaskReportOutcomeBlocked   TaskReportOutcome = "blocked"
+	TaskReportOutcomeCompleted TaskReportOutcome = "completed"
+	TaskReportOutcomeFailed    TaskReportOutcome = "failed"
+	TaskReportOutcomeProgress  TaskReportOutcome = "progress"
+)
+
+// Valid indicates whether the value is a known member of the TaskReportOutcome enum.
+func (e TaskReportOutcome) Valid() bool {
+	switch e {
+	case TaskReportOutcomeBlocked:
+		return true
+	case TaskReportOutcomeCompleted:
+		return true
+	case TaskReportOutcomeFailed:
+		return true
+	case TaskReportOutcomeProgress:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdatedType.
+const (
+	TaskUpdatedTypeTaskUpdated TaskUpdatedType = "task:updated"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdatedType enum.
+func (e TaskUpdatedType) Valid() bool {
+	switch e {
+	case TaskUpdatedTypeTaskUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TemplateMappingEvidenceProvider.
+const (
+	TemplateMappingEvidenceProviderClaude TemplateMappingEvidenceProvider = "claude"
+	TemplateMappingEvidenceProviderCodex  TemplateMappingEvidenceProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the TemplateMappingEvidenceProvider enum.
+func (e TemplateMappingEvidenceProvider) Valid() bool {
+	switch e {
+	case TemplateMappingEvidenceProviderClaude:
+		return true
+	case TemplateMappingEvidenceProviderCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TemplateMergeConfigurationOperation.
+const (
+	TemplateMergeConfigurationOperationMainloopMergePullRequestWithApprovalV1 TemplateMergeConfigurationOperation = "mainloop.merge_pull_request_with_approval.v1"
+)
+
+// Valid indicates whether the value is a known member of the TemplateMergeConfigurationOperation enum.
+func (e TemplateMergeConfigurationOperation) Valid() bool {
+	switch e {
+	case TemplateMergeConfigurationOperationMainloopMergePullRequestWithApprovalV1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TemplateMergeConfigurationProvider.
+const (
+	TemplateMergeConfigurationProviderClaude TemplateMergeConfigurationProvider = "claude"
+	TemplateMergeConfigurationProviderCodex  TemplateMergeConfigurationProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the TemplateMergeConfigurationProvider enum.
+func (e TemplateMergeConfigurationProvider) Valid() bool {
+	switch e {
+	case TemplateMergeConfigurationProviderClaude:
+		return true
+	case TemplateMergeConfigurationProviderCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TemplateMergeConfigurationRequireApproval.
+const (
+	TemplateMergeConfigurationRequireApprovalTrue TemplateMergeConfigurationRequireApproval = true
+)
+
+// Valid indicates whether the value is a known member of the TemplateMergeConfigurationRequireApproval enum.
+func (e TemplateMergeConfigurationRequireApproval) Valid() bool {
+	switch e {
+	case TemplateMergeConfigurationRequireApprovalTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TemplateMergeConfigurationTool.
+const (
+	TemplateMergeConfigurationToolMergePullRequestWithApproval TemplateMergeConfigurationTool = "merge_pull_request_with_approval"
+)
+
+// Valid indicates whether the value is a known member of the TemplateMergeConfigurationTool enum.
+func (e TemplateMergeConfigurationTool) Valid() bool {
+	switch e {
+	case TemplateMergeConfigurationToolMergePullRequestWithApproval:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalRequestType.
+const (
+	ToolApprovalRequestTypeToolApprovalRequest ToolApprovalRequestType = "tool_approval_request"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalRequestType enum.
+func (e ToolApprovalRequestType) Valid() bool {
+	switch e {
+	case ToolApprovalRequestTypeToolApprovalRequest:
 		return true
 	default:
 		return false
@@ -404,6 +2118,141 @@ const (
 func (e ToolApprovalResponseType) Valid() bool {
 	switch e {
 	case ToolApprovalResponseTypeToolApprovalResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalResponseOutputType.
+const (
+	ToolApprovalResponseOutputTypeToolApprovalResponse ToolApprovalResponseOutputType = "tool_approval_response"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalResponseOutputType enum.
+func (e ToolApprovalResponseOutputType) Valid() bool {
+	switch e {
+	case ToolApprovalResponseOutputTypeToolApprovalResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TrustedToolMappingOperation.
+const (
+	TrustedToolMappingOperationMainloopMergePullRequestWithApprovalV1 TrustedToolMappingOperation = "mainloop.merge_pull_request_with_approval.v1"
+)
+
+// Valid indicates whether the value is a known member of the TrustedToolMappingOperation enum.
+func (e TrustedToolMappingOperation) Valid() bool {
+	switch e {
+	case TrustedToolMappingOperationMainloopMergePullRequestWithApprovalV1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TrustedToolMappingProvider.
+const (
+	TrustedToolMappingProviderClaude TrustedToolMappingProvider = "claude"
+	TrustedToolMappingProviderCodex  TrustedToolMappingProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the TrustedToolMappingProvider enum.
+func (e TrustedToolMappingProvider) Valid() bool {
+	switch e {
+	case TrustedToolMappingProviderClaude:
+		return true
+	case TrustedToolMappingProviderCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TrustedToolMappingRequireApproval.
+const (
+	TrustedToolMappingRequireApprovalTrue TrustedToolMappingRequireApproval = true
+)
+
+// Valid indicates whether the value is a known member of the TrustedToolMappingRequireApproval enum.
+func (e TrustedToolMappingRequireApproval) Valid() bool {
+	switch e {
+	case TrustedToolMappingRequireApprovalTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TrustedToolMappingTool.
+const (
+	TrustedToolMappingToolMergePullRequestWithApproval TrustedToolMappingTool = "merge_pull_request_with_approval"
+)
+
+// Valid indicates whether the value is a known member of the TrustedToolMappingTool enum.
+func (e TrustedToolMappingTool) Valid() bool {
+	switch e {
+	case TrustedToolMappingToolMergePullRequestWithApproval:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VerifiedAssociationEvidenceSource.
+const (
+	ControlPlaneCreation VerifiedAssociationEvidenceSource = "control_plane_creation"
+	GatewayContinuation  VerifiedAssociationEvidenceSource = "gateway_continuation"
+)
+
+// Valid indicates whether the value is a known member of the VerifiedAssociationEvidenceSource enum.
+func (e VerifiedAssociationEvidenceSource) Valid() bool {
+	switch e {
+	case ControlPlaneCreation:
+		return true
+	case GatewayContinuation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VerifiedLeafConfigurationProvider.
+const (
+	VerifiedLeafConfigurationProviderClaude VerifiedLeafConfigurationProvider = "claude"
+	VerifiedLeafConfigurationProviderCodex  VerifiedLeafConfigurationProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the VerifiedLeafConfigurationProvider enum.
+func (e VerifiedLeafConfigurationProvider) Valid() bool {
+	switch e {
+	case VerifiedLeafConfigurationProviderClaude:
+		return true
+	case VerifiedLeafConfigurationProviderCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VerifiedMergeContextAvailability.
+const (
+	VerifiedMergeContextAvailabilityReady       VerifiedMergeContextAvailability = "ready"
+	VerifiedMergeContextAvailabilityStale       VerifiedMergeContextAvailability = "stale"
+	VerifiedMergeContextAvailabilityUnavailable VerifiedMergeContextAvailability = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the VerifiedMergeContextAvailability enum.
+func (e VerifiedMergeContextAvailability) Valid() bool {
+	switch e {
+	case VerifiedMergeContextAvailabilityReady:
+		return true
+	case VerifiedMergeContextAvailabilityStale:
+		return true
+	case VerifiedMergeContextAvailabilityUnavailable:
 		return true
 	default:
 		return false
@@ -487,19 +2336,19 @@ func (e WorkspaceObservedState) Valid() bool {
 
 // Defines values for GetHITLMergeDetailsParamsSection.
 const (
-	Checks      GetHITLMergeDetailsParamsSection = "checks"
-	Description GetHITLMergeDetailsParamsSection = "description"
-	Files       GetHITLMergeDetailsParamsSection = "files"
+	GetHITLMergeDetailsParamsSectionChecks      GetHITLMergeDetailsParamsSection = "checks"
+	GetHITLMergeDetailsParamsSectionDescription GetHITLMergeDetailsParamsSection = "description"
+	GetHITLMergeDetailsParamsSectionFiles       GetHITLMergeDetailsParamsSection = "files"
 )
 
 // Valid indicates whether the value is a known member of the GetHITLMergeDetailsParamsSection enum.
 func (e GetHITLMergeDetailsParamsSection) Valid() bool {
 	switch e {
-	case Checks:
+	case GetHITLMergeDetailsParamsSectionChecks:
 		return true
-	case Description:
+	case GetHITLMergeDetailsParamsSectionDescription:
 		return true
-	case Files:
+	case GetHITLMergeDetailsParamsSectionFiles:
 		return true
 	default:
 		return false
@@ -510,7 +2359,7 @@ func (e GetHITLMergeDetailsParamsSection) Valid() bool {
 type ActivityItem struct {
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
-	Href      *string   `json:"href,omitempty"`
+	Href      *string   `json:"href"`
 	Id        string    `json:"id"`
 	Title     string    `json:"title"`
 }
@@ -519,6 +2368,18 @@ type ActivityItem struct {
 type AskUserAnswer struct {
 	Answer []string `json:"answer"`
 }
+
+// AskUserRequest defines model for AskUserRequest.
+type AskUserRequest struct {
+	Id                   string                 `json:"id"`
+	Nested               *NestedHITLRequest     `json:"nested"`
+	Questions            []HITLQuestion         `json:"questions"`
+	Type                 AskUserRequestType     `json:"type"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AskUserRequestType defines model for AskUserRequest.Type.
+type AskUserRequestType string
 
 // AskUserResponse defines model for AskUserResponse.
 type AskUserResponse struct {
@@ -536,9 +2397,9 @@ type AttentionItem struct {
 	Id         string            `json:"id"`
 	Kind       AttentionItemKind `json:"kind"`
 	Needed     string            `json:"needed"`
-	QueueItem  *QueueItem        `json:"queue_item,omitempty"`
-	SessionIds *[]string         `json:"session_ids,omitempty"`
-	TaskId     *string           `json:"task_id,omitempty"`
+	QueueItem  *QueueItem        `json:"queue_item"`
+	SessionIds []string          `json:"session_ids"`
+	TaskId     *string           `json:"task_id"`
 	Title      string            `json:"title"`
 }
 
@@ -547,18 +2408,41 @@ type AttentionItemKind string
 
 // AttentionSnapshot defines model for AttentionSnapshot.
 type AttentionSnapshot struct {
-	Count    *int             `json:"count,omitempty"`
-	Items    *[]AttentionItem `json:"items,omitempty"`
-	Sessions *[]Session       `json:"sessions,omitempty"`
+	Count    int             `json:"count"`
+	Items    []AttentionItem `json:"items"`
+	Sessions []Session       `json:"sessions"`
+}
+
+// CallSnapshot defines model for CallSnapshot.
+type CallSnapshot struct {
+	Approved        *bool                       `json:"approved"`
+	ArgumentsHash   string                      `json:"arguments_hash"`
+	CallId          *string                     `json:"call_id"`
+	Configuration   *CallSnapshot_Configuration `json:"configuration"`
+	Leaf            LeafIdentity                `json:"leaf"`
+	Mapping         *CallSnapshot_Mapping       `json:"mapping"`
+	MappingEvidence *TemplateMappingEvidence    `json:"mapping_evidence"`
+	MergeKey        *MergeReceiptKey            `json:"merge_key"`
+	ToolName        *string                     `json:"tool_name"`
+}
+
+// CallSnapshot_Configuration defines model for CallSnapshot.Configuration.
+type CallSnapshot_Configuration struct {
+	union json.RawMessage
+}
+
+// CallSnapshot_Mapping defines model for CallSnapshot.Mapping.
+type CallSnapshot_Mapping struct {
+	union json.RawMessage
 }
 
 // CapabilityResult defines model for CapabilityResult.
 type CapabilityResult struct {
-	Capability  string                 `json:"capability"`
-	Detail      *string                `json:"detail,omitempty"`
-	EvidenceRef *string                `json:"evidence_ref,omitempty"`
-	Scope       *CapabilityResultScope `json:"scope,omitempty"`
-	State       *CapabilityState       `json:"state,omitempty"`
+	Capability  string                `json:"capability"`
+	Detail      *string               `json:"detail"`
+	EvidenceRef *string               `json:"evidence_ref"`
+	Scope       CapabilityResultScope `json:"scope"`
+	State       CapabilityState       `json:"state"`
 }
 
 // CapabilityResultScope defines model for CapabilityResult.Scope.
@@ -579,10 +2463,10 @@ type ChatRequest struct {
 // ChatResponse Response model for chat interaction.
 type ChatResponse struct {
 	ConversationId    string   `json:"conversation_id"`
-	DeliveryMessageId *string  `json:"delivery_message_id,omitempty"`
-	Message           *Message `json:"message,omitempty"`
-	Pending           *bool    `json:"pending,omitempty"`
-	SpawnedSessionId  *string  `json:"spawned_session_id,omitempty"`
+	DeliveryMessageId *string  `json:"delivery_message_id"`
+	Message           *Message `json:"message"`
+	Pending           bool     `json:"pending"`
+	SpawnedSessionId  *string  `json:"spawned_session_id"`
 }
 
 // CommitSummary Summary of a commit.
@@ -594,28 +2478,39 @@ type CommitSummary struct {
 	Url     string    `json:"url"`
 }
 
+// ContinuationIdentity defines model for ContinuationIdentity.
+type ContinuationIdentity struct {
+	ContextId        string `json:"context_id"`
+	Endpoint         string `json:"endpoint"`
+	Gateway          string `json:"gateway"`
+	RequestHash      string `json:"request_hash"`
+	RuntimeSessionId string `json:"runtime_session_id"`
+	StatusMessageId  string `json:"status_message_id"`
+	TaskId           string `json:"task_id"`
+}
+
 // Conversation A conversation thread.
 type Conversation struct {
 	// CreatedAt Creation timestamp
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// Id Unique conversation ID
 	Id string `json:"id"`
 
 	// MessageCount Total message count for compaction threshold
-	MessageCount *int `json:"message_count,omitempty"`
+	MessageCount int `json:"message_count"`
 
 	// SummarizedThroughId ID of last message included in summary
-	SummarizedThroughId *string `json:"summarized_through_id,omitempty"`
+	SummarizedThroughId *string `json:"summarized_through_id"`
 
 	// Summary Compacted summary of older messages
-	Summary *string `json:"summary,omitempty"`
+	Summary *string `json:"summary"`
 
 	// Title Conversation title
-	Title *string `json:"title,omitempty"`
+	Title *string `json:"title"`
 
 	// UpdatedAt Last update timestamp
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// UserId Owner ID (the single configured owner)
 	UserId string `json:"user_id"`
@@ -625,7 +2520,7 @@ type Conversation struct {
 type ConversationResponse struct {
 	// Conversation A conversation thread.
 	Conversation Conversation `json:"conversation"`
-	Messages     *[]Message   `json:"messages,omitempty"`
+	Messages     []Message    `json:"messages"`
 }
 
 // CreateWorkspaceRequest defines model for CreateWorkspaceRequest.
@@ -641,11 +2536,121 @@ type CreateWorkspaceRequest struct {
 	Repo      *string       `json:"repo,omitempty"`
 }
 
+// DecisionReceipt defines model for DecisionReceipt.
+type DecisionReceipt struct {
+	ActionId          string                   `json:"action_id"`
+	Associations      []VerifiedAssociation    `json:"associations"`
+	Calls             []CallSnapshot           `json:"calls"`
+	OutboundMessageId string                   `json:"outbound_message_id"`
+	Outer             ContinuationIdentity     `json:"outer"`
+	OwnerId           string                   `json:"owner_id"`
+	Request           DecisionReceipt_Request  `json:"request"`
+	RequestHash       string                   `json:"request_hash"`
+	Response          DecisionReceipt_Response `json:"response"`
+}
+
+// DecisionReceipt_Request defines model for DecisionReceipt.Request.
+type DecisionReceipt_Request struct {
+	union json.RawMessage
+}
+
+// DecisionReceipt_Response defines model for DecisionReceipt.Response.
+type DecisionReceipt_Response struct {
+	union json.RawMessage
+}
+
 // DefinitionReference defines model for DefinitionReference.
 type DefinitionReference struct {
 	CommitSha  string `json:"commit_sha"`
 	Path       string `json:"path"`
 	Repository string `json:"repository"`
+}
+
+// DevEnvironment defines model for DevEnvironment.
+type DevEnvironment struct {
+	AcceptedDefaultVersionId *string                  `json:"accepted_default_version_id"`
+	Definition               *DefinitionReference     `json:"definition"`
+	Id                       string                   `json:"id"`
+	Name                     string                   `json:"name"`
+	OwnerId                  string                   `json:"owner_id"`
+	SourceKind               DevEnvironmentSourceKind `json:"source_kind"`
+	WatchedTag               *string                  `json:"watched_tag"`
+}
+
+// DevEnvironmentSourceKind defines model for DevEnvironment.SourceKind.
+type DevEnvironmentSourceKind string
+
+// EnvironmentVersion defines model for EnvironmentVersion.
+type EnvironmentVersion struct {
+	ApprovalReference      *string                            `json:"approval_reference"`
+	Architecture           *EnvironmentVersionArchitecture    `json:"architecture"`
+	BaseProvenance         EnvironmentVersionBaseProvenance   `json:"base_provenance"`
+	CapabilityProfile      map[string]string                  `json:"capability_profile"`
+	ConfigDigest           *string                            `json:"config_digest"`
+	DeclaredUser           *string                            `json:"declared_user"`
+	Definition             *DefinitionReference               `json:"definition"`
+	EnvironmentId          string                             `json:"environment_id"`
+	Id                     string                             `json:"id"`
+	IndexDigest            *string                            `json:"index_digest"`
+	PackageDeclaration     *PackageDeclaration                `json:"package_declaration"`
+	ParentVersionId        *string                            `json:"parent_version_id"`
+	PlatformManifestDigest *string                            `json:"platform_manifest_digest"`
+	ProvenanceKind         EnvironmentVersionProvenanceKind   `json:"provenance_kind"`
+	Registry               *string                            `json:"registry"`
+	Repository             *string                            `json:"repository"`
+	ValidationResult       map[string]string                  `json:"validation_result"`
+	ValidationStatus       EnvironmentVersionValidationStatus `json:"validation_status"`
+	ValidatorVersion       string                             `json:"validator_version"`
+}
+
+// EnvironmentVersionArchitecture defines model for EnvironmentVersion.Architecture.
+type EnvironmentVersionArchitecture string
+
+// EnvironmentVersionBaseProvenance defines model for EnvironmentVersion.BaseProvenance.
+type EnvironmentVersionBaseProvenance string
+
+// EnvironmentVersionProvenanceKind defines model for EnvironmentVersion.ProvenanceKind.
+type EnvironmentVersionProvenanceKind string
+
+// EnvironmentVersionValidationStatus defines model for EnvironmentVersion.ValidationStatus.
+type EnvironmentVersionValidationStatus string
+
+// EventConnected `connected`: first frame of every stream.
+type EventConnected struct {
+	// Timestamp UTC ISO-8601 without an offset.
+	Timestamp string `json:"timestamp"`
+	UserId    string `json:"user_id"`
+}
+
+// EventHeartbeat `heartbeat`: sent after 30 seconds without another event.
+type EventHeartbeat struct {
+	// Timestamp UTC ISO-8601 without an offset.
+	Timestamp string `json:"timestamp"`
+}
+
+// EventInboxUpdated `inbox:updated`: either field is omitted when unknown.
+type EventInboxUpdated struct {
+	ItemId      *string `json:"item_id,omitempty"`
+	UnreadCount *int    `json:"unread_count,omitempty"`
+}
+
+// EventSessionMessage `session:message`: a mirrored reply landed in a session conversation.
+type EventSessionMessage struct {
+	MessageId string                  `json:"message_id"`
+	Role      EventSessionMessageRole `json:"role"`
+	SessionId string                  `json:"session_id"`
+}
+
+// EventSessionMessageRole defines model for EventSessionMessage.Role.
+type EventSessionMessageRole string
+
+// EventTaskUpdated `task:updated`: names a change; read the task with getTask.
+type EventTaskUpdated = TaskUpdated
+
+// EventWorkspaceUpdated `workspace:updated`: the durable lifecycle projection.
+type EventWorkspaceUpdated struct {
+	// Workspace A workspace as last observed from kagent. Nothing here is stored except the manifest.
+	Workspace WorkspaceLifecycle `json:"workspace"`
 }
 
 // GrantRequest defines model for GrantRequest.
@@ -655,6 +2660,16 @@ type GrantRequest struct {
 
 // GrantRequestPermission defines model for GrantRequest.Permission.
 type GrantRequestPermission string
+
+// HITLContext Display context from the owned binding; empty when the session is unknown.
+type HITLContext struct {
+	ProjectId   *string `json:"project_id,omitempty"`
+	ProjectName *string `json:"project_name,omitempty"`
+	Provider    *string `json:"provider,omitempty"`
+	Role        *string `json:"role,omitempty"`
+	SessionId   *string `json:"session_id,omitempty"`
+	Title       *string `json:"title,omitempty"`
+}
 
 // HITLDecisionInput defines model for HITLDecisionInput.
 type HITLDecisionInput struct {
@@ -667,19 +2682,517 @@ type HITLDecisionInput_Response struct {
 	union json.RawMessage
 }
 
+// HITLMergeDetails One page of an immutable merge proposal. The JSON body is capped at 64 KiB; a larger one fails with 409.
+type HITLMergeDetails struct {
+	Base       *string `json:"base"`
+	BaseSha    *string `json:"base_sha"`
+	CapturedAt *string `json:"captured_at"`
+	Cursor     int     `json:"cursor"`
+
+	// Description description section only.
+	Description          *string `json:"description,omitempty"`
+	DescriptionDigest    *string `json:"description_digest,omitempty"`
+	DescriptionLength    *int    `json:"description_length,omitempty"`
+	DescriptionTruncated *bool   `json:"description_truncated,omitempty"`
+	Head                 *string `json:"head"`
+	HeadSha              *string `json:"head_sha"`
+
+	// Items files and checks sections only; at most 50 per page.
+	Items         *[]MergeDetailItem      `json:"items,omitempty"`
+	NextCursor    *string                 `json:"next_cursor"`
+	ProposalId    string                  `json:"proposal_id"`
+	RequestId     string                  `json:"request_id"`
+	Section       HITLMergeDetailsSection `json:"section"`
+	SummaryDigest string                  `json:"summary_digest"`
+	Truncated     bool                    `json:"truncated"`
+}
+
+// HITLMergeDetailsSection defines model for HITLMergeDetails.Section.
+type HITLMergeDetailsSection string
+
+// HITLObserverDiagnostic defines model for HITLObserverDiagnostic.
+type HITLObserverDiagnostic struct {
+	Detail           string    `json:"detail"`
+	ObservedAt       time.Time `json:"observed_at"`
+	RuntimeSessionId string    `json:"runtime_session_id"`
+}
+
+// HITLObserverStatus defines model for HITLObserverStatus.
+type HITLObserverStatus struct {
+	Diagnostics      []HITLObserverDiagnostic `json:"diagnostics"`
+	OldestTaskCheck  *time.Time               `json:"oldest_task_check"`
+	PendingTaskCount int                      `json:"pending_task_count"`
+}
+
+// HITLProjection defines model for HITLProjection.
+type HITLProjection struct {
+	Associations      []VerifiedAssociation      `json:"associations"`
+	Availability      HITLProjectionAvailability `json:"availability"`
+	Id                string                     `json:"id"`
+	Leaves            []LeafIdentity             `json:"leaves"`
+	Outer             ContinuationIdentity       `json:"outer"`
+	OwnerId           string                     `json:"owner_id"`
+	Payload           HITLProjection_Payload     `json:"payload"`
+	UnavailableReason *string                    `json:"unavailable_reason"`
+}
+
+// HITLProjectionAvailability defines model for HITLProjection.Availability.
+type HITLProjectionAvailability string
+
+// HITLProjection_Payload defines model for HITLProjection.Payload.
+type HITLProjection_Payload struct {
+	union json.RawMessage
+}
+
+// HITLQuestion defines model for HITLQuestion.
+type HITLQuestion struct {
+	Choices              *[]string              `json:"choices"`
+	Multiple             bool                   `json:"multiple"`
+	Question             string                 `json:"question"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// HITLTool defines model for HITLTool.
+type HITLTool struct {
+	Args                 map[string]JsonValue   `json:"args"`
+	CallId               string                 `json:"call_id"`
+	Id                   string                 `json:"id"`
+	Name                 string                 `json:"name"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// HITLView defines model for HITLView.
+type HITLView struct {
+	Answerable bool `json:"answerable"`
+
+	// Context Display context from the owned binding; empty when the session is unknown.
+	Context           HITLContext             `json:"context"`
+	Merge             *[]VerifiedMergeContext `json:"merge"`
+	Request           HITLProjection          `json:"request"`
+	Response          *DecisionReceipt        `json:"response"`
+	RouteRequestId    string                  `json:"route_request_id"`
+	TransportState    *string                 `json:"transport_state"`
+	UnavailableReason *string                 `json:"unavailable_reason"`
+	WritesEnabled     bool                    `json:"writes_enabled"`
+}
+
+// HTTPError FastAPI HTTPException body: `{detail: string}`.
+type HTTPError struct {
+	// Detail Human-readable error message.
+	Detail string `json:"detail"`
+}
+
 // HTTPValidationError defines model for HTTPValidationError.
 type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
+// HealthApproval defines model for HealthApproval.
+type HealthApproval struct {
+	Id               string  `json:"id"`
+	RuntimeSessionId *string `json:"runtime_session_id"`
+	State            *string `json:"state"`
+}
+
+// HealthEvent defines model for HealthEvent.
+type HealthEvent struct {
+	union json.RawMessage
+}
+
+// HealthEventRow defines model for HealthEventRow.
+type HealthEventRow struct {
+	AttemptId  *string     `json:"attempt_id"`
+	EventId    string      `json:"event_id"`
+	Payload    HealthEvent `json:"payload"`
+	ReceivedAt time.Time   `json:"received_at"`
+	TaskId     *string     `json:"task_id"`
+}
+
+// HealthEvents defines model for HealthEvents.
+type HealthEvents struct {
+	Events  []HealthEventRow `json:"events"`
+	Partial bool             `json:"partial"`
+}
+
+// HealthReport defines model for HealthReport.
+type HealthReport struct {
+	AttemptId string              `json:"attempt_id"`
+	Id        string              `json:"id"`
+	Outcome   HealthReportOutcome `json:"outcome"`
+	TaskId    string              `json:"task_id"`
+}
+
+// HealthReportOutcome defines model for HealthReport.Outcome.
+type HealthReportOutcome string
+
+// HealthResponse Liveness: `status` is always `healthy`; `database` is `ok` while the database answers.
+type HealthResponse struct {
+	Database string               `json:"database"`
+	Status   HealthResponseStatus `json:"status"`
+}
+
+// HealthResponseStatus defines model for HealthResponse.Status.
+type HealthResponseStatus string
+
+// HealthRow defines model for HealthRow.
+type HealthRow struct {
+	Approvals        []HealthApproval `json:"approvals"`
+	ExpectedReceipts int              `json:"expected_receipts"`
+	Gaps             []string         `json:"gaps"`
+	Id               string           `json:"id"`
+	ProjectId        *string          `json:"project_id"`
+	Reports          []HealthReport   `json:"reports"`
+	Sessions         []HealthSession  `json:"sessions"`
+	TaskId           *string          `json:"task_id"`
+	Title            *string          `json:"title"`
+	Totals           HealthTotals     `json:"totals"`
+	Turns            []HealthTurnRow  `json:"turns"`
+}
+
+// HealthSession Sessions without a task have task_title and title null; rows for tasks without a session omit title.
+type HealthSession struct {
+	AttemptId *string      `json:"attempt_id"`
+	ProjectId *string      `json:"project_id"`
+	Provider  string       `json:"provider"`
+	SessionId *string      `json:"session_id"`
+	TaskId    *string      `json:"task_id"`
+	TaskTitle *string      `json:"task_title,omitempty"`
+	Title     *string      `json:"title,omitempty"`
+	Totals    HealthTotals `json:"totals"`
+}
+
+// HealthTool defines model for HealthTool.
+type HealthTool struct {
+	Action       HealthToolAction    `json:"action"`
+	CallKey      string              `json:"call_key"`
+	Category     HealthToolCategory  `json:"category"`
+	OperationKey string              `json:"operation_key"`
+	Outcome      HealthToolOutcome   `json:"outcome"`
+	Path         *string             `json:"path"`
+	Phase        HealthToolPhase     `json:"phase"`
+	ToolClass    HealthToolToolClass `json:"tool_class"`
+}
+
+// HealthToolAction defines model for HealthTool.Action.
+type HealthToolAction string
+
+// HealthToolCategory defines model for HealthTool.Category.
+type HealthToolCategory string
+
+// HealthToolOutcome defines model for HealthTool.Outcome.
+type HealthToolOutcome string
+
+// HealthToolPhase defines model for HealthTool.Phase.
+type HealthToolPhase string
+
+// HealthToolToolClass defines model for HealthTool.ToolClass.
+type HealthToolToolClass string
+
+// HealthToolEvent defines model for HealthToolEvent.
+type HealthToolEvent struct {
+	A2aTaskId        string                       `json:"a2a_task_id"`
+	EventId          string                       `json:"event_id"`
+	Kind             HealthToolEventKind          `json:"kind"`
+	OccurredAt       time.Time                    `json:"occurred_at"`
+	ProducerEpoch    string                       `json:"producer_epoch"`
+	Provider         HealthToolEventProvider      `json:"provider"`
+	RuntimeSessionId string                       `json:"runtime_session_id"`
+	RuntimeVersion   string                       `json:"runtime_version"`
+	SchemaVersion    HealthToolEventSchemaVersion `json:"schema_version"`
+	Sequence         int                          `json:"sequence"`
+	Source           HealthToolEventSource        `json:"source"`
+	TimePrecision    HealthToolEventTimePrecision `json:"time_precision"`
+	TimeSource       HealthToolEventTimeSource    `json:"time_source"`
+	Tool             HealthTool                   `json:"tool"`
+	TurnKey          string                       `json:"turn_key"`
+}
+
+// HealthToolEventKind defines model for HealthToolEvent.Kind.
+type HealthToolEventKind string
+
+// HealthToolEventProvider defines model for HealthToolEvent.Provider.
+type HealthToolEventProvider string
+
+// HealthToolEventSchemaVersion defines model for HealthToolEvent.SchemaVersion.
+type HealthToolEventSchemaVersion string
+
+// HealthToolEventSource defines model for HealthToolEvent.Source.
+type HealthToolEventSource string
+
+// HealthToolEventTimePrecision defines model for HealthToolEvent.TimePrecision.
+type HealthToolEventTimePrecision string
+
+// HealthToolEventTimeSource defines model for HealthToolEvent.TimeSource.
+type HealthToolEventTimeSource string
+
+// HealthTotals defines model for HealthTotals.
+type HealthTotals struct {
+	Coverage              HealthTotalsCoverage `json:"coverage"`
+	Failures              *int                 `json:"failures"`
+	InputTokens           *int                 `json:"input_tokens"`
+	OutputTokens          *int                 `json:"output_tokens"`
+	RepeatedFailureGroups *int                 `json:"repeated_failure_groups"`
+	Turns                 int                  `json:"turns"`
+	UnresolvedCalls       int                  `json:"unresolved_calls"`
+	UsageCompleteTurns    int                  `json:"usage_complete_turns"`
+	UsageObservedTurns    int                  `json:"usage_observed_turns"`
+}
+
+// HealthTotalsCoverage defines model for HealthTotals.Coverage.
+type HealthTotalsCoverage string
+
+// HealthTurn defines model for HealthTurn.
+type HealthTurn struct {
+	Coverage HealthTurnCoverage `json:"coverage"`
+	State    HealthTurnState    `json:"state"`
+}
+
+// HealthTurnCoverage defines model for HealthTurn.Coverage.
+type HealthTurnCoverage string
+
+// HealthTurnState defines model for HealthTurn.State.
+type HealthTurnState string
+
+// HealthTurnEvent defines model for HealthTurnEvent.
+type HealthTurnEvent struct {
+	A2aTaskId        string                       `json:"a2a_task_id"`
+	EventId          string                       `json:"event_id"`
+	Kind             HealthTurnEventKind          `json:"kind"`
+	OccurredAt       time.Time                    `json:"occurred_at"`
+	ProducerEpoch    string                       `json:"producer_epoch"`
+	Provider         HealthTurnEventProvider      `json:"provider"`
+	RuntimeSessionId string                       `json:"runtime_session_id"`
+	RuntimeVersion   string                       `json:"runtime_version"`
+	SchemaVersion    HealthTurnEventSchemaVersion `json:"schema_version"`
+	Sequence         int                          `json:"sequence"`
+	Source           HealthTurnEventSource        `json:"source"`
+	TimePrecision    HealthTurnEventTimePrecision `json:"time_precision"`
+	TimeSource       HealthTurnEventTimeSource    `json:"time_source"`
+	Turn             HealthTurn                   `json:"turn"`
+	TurnKey          string                       `json:"turn_key"`
+}
+
+// HealthTurnEventKind defines model for HealthTurnEvent.Kind.
+type HealthTurnEventKind string
+
+// HealthTurnEventProvider defines model for HealthTurnEvent.Provider.
+type HealthTurnEventProvider string
+
+// HealthTurnEventSchemaVersion defines model for HealthTurnEvent.SchemaVersion.
+type HealthTurnEventSchemaVersion string
+
+// HealthTurnEventSource defines model for HealthTurnEvent.Source.
+type HealthTurnEventSource string
+
+// HealthTurnEventTimePrecision defines model for HealthTurnEvent.TimePrecision.
+type HealthTurnEventTimePrecision string
+
+// HealthTurnEventTimeSource defines model for HealthTurnEvent.TimeSource.
+type HealthTurnEventTimeSource string
+
+// HealthTurnRow A stored turn aggregate, as the database row.
+type HealthTurnRow struct {
+	A2aTaskId          string            `json:"a2a_task_id"`
+	AggregationVersion int               `json:"aggregation_version"`
+	AttemptId          *string           `json:"attempt_id"`
+	Frozen             bool              `json:"frozen"`
+	Gateway            string            `json:"gateway"`
+	OccurredAt         time.Time         `json:"occurred_at"`
+	OwnerId            string            `json:"owner_id"`
+	ProfileRevision    *string           `json:"profile_revision"`
+	ProjectId          *string           `json:"project_id"`
+	Provider           string            `json:"provider"`
+	RuntimeSessionId   string            `json:"runtime_session_id"`
+	SessionId          string            `json:"session_id"`
+	Summary            HealthTurnSummary `json:"summary"`
+	TaskId             *string           `json:"task_id"`
+	TurnKey            string            `json:"turn_key"`
+}
+
+// HealthTurnSummary defines model for HealthTurnSummary.
+type HealthTurnSummary struct {
+	Categories            map[string]int                    `json:"categories"`
+	ChildAttribution      HealthTurnSummaryChildAttribution `json:"child_attribution"`
+	Failures              int                               `json:"failures"`
+	FrictionCoverage      HealthTurnSummaryFrictionCoverage `json:"friction_coverage"`
+	Inclusion             HealthTurnSummaryInclusion        `json:"inclusion"`
+	InputTokens           *int                              `json:"input_tokens"`
+	OutputTokens          *int                              `json:"output_tokens"`
+	RepeatedFailureGroups int                               `json:"repeated_failure_groups"`
+	UnresolvedCalls       int                               `json:"unresolved_calls"`
+	UsageCoverage         HealthTurnSummaryUsageCoverage    `json:"usage_coverage"`
+}
+
+// HealthTurnSummaryChildAttribution defines model for HealthTurnSummary.ChildAttribution.
+type HealthTurnSummaryChildAttribution string
+
+// HealthTurnSummaryFrictionCoverage defines model for HealthTurnSummary.FrictionCoverage.
+type HealthTurnSummaryFrictionCoverage string
+
+// HealthTurnSummaryInclusion defines model for HealthTurnSummary.Inclusion.
+type HealthTurnSummaryInclusion string
+
+// HealthTurnSummaryUsageCoverage defines model for HealthTurnSummary.UsageCoverage.
+type HealthTurnSummaryUsageCoverage string
+
+// HealthUsage defines model for HealthUsage.
+type HealthUsage struct {
+	Basis        HealthUsageBasis     `json:"basis"`
+	Coverage     HealthUsageCoverage  `json:"coverage"`
+	Inclusion    HealthUsageInclusion `json:"inclusion"`
+	InputTokens  *int                 `json:"input_tokens"`
+	OutputTokens *int                 `json:"output_tokens"`
+	Revision     int                  `json:"revision"`
+	SampleKey    string               `json:"sample_key"`
+	Scope        HealthUsageScope     `json:"scope"`
+}
+
+// HealthUsageBasis defines model for HealthUsage.Basis.
+type HealthUsageBasis string
+
+// HealthUsageCoverage defines model for HealthUsage.Coverage.
+type HealthUsageCoverage string
+
+// HealthUsageInclusion defines model for HealthUsage.Inclusion.
+type HealthUsageInclusion string
+
+// HealthUsageScope defines model for HealthUsage.Scope.
+type HealthUsageScope string
+
+// HealthUsageEvent defines model for HealthUsageEvent.
+type HealthUsageEvent struct {
+	A2aTaskId        string                        `json:"a2a_task_id"`
+	EventId          string                        `json:"event_id"`
+	Kind             HealthUsageEventKind          `json:"kind"`
+	OccurredAt       time.Time                     `json:"occurred_at"`
+	ProducerEpoch    string                        `json:"producer_epoch"`
+	Provider         HealthUsageEventProvider      `json:"provider"`
+	RuntimeSessionId string                        `json:"runtime_session_id"`
+	RuntimeVersion   string                        `json:"runtime_version"`
+	SchemaVersion    HealthUsageEventSchemaVersion `json:"schema_version"`
+	Sequence         int                           `json:"sequence"`
+	Source           HealthUsageEventSource        `json:"source"`
+	TimePrecision    HealthUsageEventTimePrecision `json:"time_precision"`
+	TimeSource       HealthUsageEventTimeSource    `json:"time_source"`
+	TurnKey          string                        `json:"turn_key"`
+	Usage            HealthUsage                   `json:"usage"`
+}
+
+// HealthUsageEventKind defines model for HealthUsageEvent.Kind.
+type HealthUsageEventKind string
+
+// HealthUsageEventProvider defines model for HealthUsageEvent.Provider.
+type HealthUsageEventProvider string
+
+// HealthUsageEventSchemaVersion defines model for HealthUsageEvent.SchemaVersion.
+type HealthUsageEventSchemaVersion string
+
+// HealthUsageEventSource defines model for HealthUsageEvent.Source.
+type HealthUsageEventSource string
+
+// HealthUsageEventTimePrecision defines model for HealthUsageEvent.TimePrecision.
+type HealthUsageEventTimePrecision string
+
+// HealthUsageEventTimeSource defines model for HealthUsageEvent.TimeSource.
+type HealthUsageEventTimeSource string
+
+// HealthView defines model for HealthView.
+type HealthView struct {
+	Hours     int  `json:"hours"`
+	Partial   bool `json:"partial"`
+	Retention struct {
+		EventsDays    int `json:"events_days"`
+		SummariesDays int `json:"summaries_days"`
+	} `json:"retention"`
+	Rows        []HealthRow             `json:"rows"`
+	Unsupported []HealthViewUnsupported `json:"unsupported"`
+}
+
+// HealthViewUnsupported defines model for HealthView.Unsupported.
+type HealthViewUnsupported string
+
+// JsonValue defines model for JsonValue.
+type JsonValue = interface{}
+
+// LeafIdentity defines model for LeafIdentity.
+type LeafIdentity struct {
+	BindingId        *string `json:"binding_id"`
+	ContextId        string  `json:"context_id"`
+	Endpoint         string  `json:"endpoint"`
+	Gateway          string  `json:"gateway"`
+	OwnerId          string  `json:"owner_id"`
+	PendingRequestId string  `json:"pending_request_id"`
+	RequestHash      string  `json:"request_hash"`
+	RuntimeSessionId string  `json:"runtime_session_id"`
+	TaskId           string  `json:"task_id"`
+}
+
 // MainThreadInfo defines model for MainThreadInfo.
 type MainThreadInfo struct {
-	ConversationId *string                   `json:"conversation_id,omitempty"`
-	Mode           string                    `json:"mode"`
-	Native         *NativeSessionInfo        `json:"native,omitempty"`
-	SessionId      *string                   `json:"session_id,omitempty"`
-	Topics         *[]map[string]interface{} `json:"topics,omitempty"`
+	ConversationId *string            `json:"conversation_id"`
+	Mode           string             `json:"mode"`
+	Native         *NativeSessionInfo `json:"native"`
+	SessionId      *string            `json:"session_id"`
+	Topics         []TopicLine        `json:"topics"`
 }
+
+// MergeApprovalProjectPolicy defines model for MergeApprovalProjectPolicy.
+type MergeApprovalProjectPolicy struct {
+	Type MergeApprovalProjectPolicyType `json:"type"`
+}
+
+// MergeApprovalProjectPolicyType defines model for MergeApprovalProjectPolicy.Type.
+type MergeApprovalProjectPolicyType string
+
+// MergeApprovalProtectedPath defines model for MergeApprovalProtectedPath.
+type MergeApprovalProtectedPath struct {
+	Glob string                         `json:"glob"`
+	Path string                         `json:"path"`
+	Type MergeApprovalProtectedPathType `json:"type"`
+}
+
+// MergeApprovalProtectedPathType defines model for MergeApprovalProtectedPath.Type.
+type MergeApprovalProtectedPathType string
+
+// MergeApprovalReason defines model for MergeApprovalReason.
+type MergeApprovalReason struct {
+	union json.RawMessage
+}
+
+// MergeCISummary defines model for MergeCISummary.
+type MergeCISummary struct {
+	CapturedAt         *string `json:"captured_at"`
+	Complete           bool    `json:"complete"`
+	FailedCount        int     `json:"failed_count"`
+	GreenAtPreparation bool    `json:"green_at_preparation"`
+
+	// IgnoredSuiteCount Present only when the recorded CI facts list ignored suites.
+	IgnoredSuiteCount *int   `json:"ignored_suite_count,omitempty"`
+	InventoryDigest   string `json:"inventory_digest"`
+	PassedCount       int    `json:"passed_count"`
+	PendingCount      int    `json:"pending_count"`
+	ResultCount       int    `json:"result_count"`
+}
+
+// MergeDetailItem One changed file (files section) or CI record (checks section); the GitHub fields beyond these pass through.
+type MergeDetailItem struct {
+	Additions *int    `json:"additions,omitempty"`
+	AppId     *int    `json:"app_id,omitempty"`
+	Context   *string `json:"context,omitempty"`
+	Deletions *int    `json:"deletions,omitempty"`
+
+	// Filename files section.
+	Filename *string `json:"filename,omitempty"`
+
+	// Kind checks section only.
+	Kind                 *MergeDetailItemKind   `json:"kind,omitempty"`
+	PreviousFilename     *string                `json:"previous_filename,omitempty"`
+	Status               *string                `json:"status,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// MergeDetailItemKind checks section only.
+type MergeDetailItemKind string
 
 // MergePolicy defines model for MergePolicy.
 type MergePolicy string
@@ -692,15 +3205,72 @@ type MergePolicyUpdate struct {
 
 // MergePolicyView defines model for MergePolicyView.
 type MergePolicyView struct {
-	MergePolicy           MergePolicy                           `json:"merge_policy"`
-	MergePolicyVersion    int                                   `json:"merge_policy_version"`
-	ProtectedGlobs        *[]string                             `json:"protected_globs,omitempty"`
-	ProtectedGlobsVersion *MergePolicyViewProtectedGlobsVersion `json:"protected_globs_version,omitempty"`
-	WritesEnabled         *bool                                 `json:"writes_enabled,omitempty"`
+	MergePolicy           MergePolicy                          `json:"merge_policy"`
+	MergePolicyVersion    int                                  `json:"merge_policy_version"`
+	ProtectedGlobs        []string                             `json:"protected_globs"`
+	ProtectedGlobsVersion MergePolicyViewProtectedGlobsVersion `json:"protected_globs_version"`
+	WritesEnabled         bool                                 `json:"writes_enabled"`
 }
 
 // MergePolicyViewProtectedGlobsVersion defines model for MergePolicyView.ProtectedGlobsVersion.
 type MergePolicyViewProtectedGlobsVersion int
+
+// MergeReceiptKey defines model for MergeReceiptKey.
+type MergeReceiptKey struct {
+	InvocationRequestId  string                   `json:"invocation_request_id"`
+	LeafBindingId        string                   `json:"leaf_binding_id"`
+	LeafRuntimeSessionId string                   `json:"leaf_runtime_session_id"`
+	Operation            MergeReceiptKeyOperation `json:"operation"`
+	OwnerId              string                   `json:"owner_id"`
+	ProposalId           string                   `json:"proposal_id"`
+}
+
+// MergeReceiptKeyOperation defines model for MergeReceiptKey.Operation.
+type MergeReceiptKeyOperation string
+
+// MergeSummary Immutable proposal presentation. The three merge_* fields exist only on proposals that recorded merge-result files.
+type MergeSummary struct {
+	Additions             *int                     `json:"additions"`
+	ApprovalReasons       []MergeApprovalReason    `json:"approval_reasons"`
+	Availability          MergeSummaryAvailability `json:"availability"`
+	Base                  *string                  `json:"base"`
+	BaseSha               *string                  `json:"base_sha"`
+	Ci                    *MergeCISummary          `json:"ci"`
+	Deletions             *int                     `json:"deletions"`
+	DescriptionDigest     *string                  `json:"description_digest"`
+	DescriptionExcerpt    string                   `json:"description_excerpt"`
+	DescriptionLength     *int                     `json:"description_length"`
+	DescriptionTruncated  bool                     `json:"description_truncated"`
+	FileCount             *int                     `json:"file_count"`
+	GlobsVersion          *int                     `json:"globs_version"`
+	Head                  *string                  `json:"head"`
+	HeadSha               *string                  `json:"head_sha"`
+	MappingEvidence       *TemplateMappingEvidence `json:"mapping_evidence"`
+	MergeFileCount        *int                     `json:"merge_file_count,omitempty"`
+	MergeOnlyFileCount    *int                     `json:"merge_only_file_count,omitempty"`
+	MergePathsDigest      *string                  `json:"merge_paths_digest,omitempty"`
+	PathsDigest           *string                  `json:"paths_digest"`
+	PathsPreview          []string                 `json:"paths_preview"`
+	PathsPreviewTruncated bool                     `json:"paths_preview_truncated"`
+	Policy                *MergeSummaryPolicy      `json:"policy"`
+	PolicyVersion         *int                     `json:"policy_version"`
+	PrNumber              *int                     `json:"pr_number"`
+	ProposalId            string                   `json:"proposal_id"`
+	ProtectedMatches      []string                 `json:"protected_matches"`
+	Repository            *string                  `json:"repository"`
+	Title                 *string                  `json:"title"`
+	UnavailableReasons    []string                 `json:"unavailable_reasons"`
+	Version               MergeSummaryVersion      `json:"version"`
+}
+
+// MergeSummaryAvailability defines model for MergeSummary.Availability.
+type MergeSummaryAvailability string
+
+// MergeSummaryPolicy defines model for MergeSummary.Policy.
+type MergeSummaryPolicy string
+
+// MergeSummaryVersion defines model for MergeSummary.Version.
+type MergeSummaryVersion int
 
 // Message A single message in a conversation.
 type Message struct {
@@ -711,7 +3281,7 @@ type Message struct {
 	ConversationId string `json:"conversation_id"`
 
 	// CreatedAt Creation timestamp
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// Id Unique message ID
 	Id string `json:"id"`
@@ -725,46 +3295,85 @@ type MessageRole string
 
 // NativeDeliveryInfo Delivery ledger row for one message sent to a native agent.
 type NativeDeliveryInfo struct {
-	Detail      *string `json:"detail,omitempty"`
-	EvidenceRef *string `json:"evidence_ref,omitempty"`
+	Detail      *string `json:"detail"`
+	EvidenceRef *string `json:"evidence_ref"`
 	MessageId   string  `json:"message_id"`
-	Source      *string `json:"source,omitempty"`
+	Source      string  `json:"source"`
 
 	// State queued|recorded|sending|delivered|completed|uncertain|failed|cancelled
 	State  string  `json:"state"`
-	TaskId *string `json:"task_id,omitempty"`
+	TaskId *string `json:"task_id"`
 }
 
 // NativeSessionInfo Identity strip for a session bound to a native agent session in kagent.
 type NativeSessionInfo struct {
-	AgentName       string                `json:"agent_name"`
-	Deliveries      *[]NativeDeliveryInfo `json:"deliveries,omitempty"`
-	KagentSessionId *string               `json:"kagent_session_id,omitempty"`
-	Kind            string                `json:"kind"`
-	Model           *string               `json:"model,omitempty"`
-	Note            *string               `json:"note,omitempty"`
-	ParentSessionId *string               `json:"parent_session_id,omitempty"`
-	Role            *string               `json:"role,omitempty"`
-	SessionId       string                `json:"session_id"`
-	SessionState    *string               `json:"session_state,omitempty"`
-	Topic           *string               `json:"topic,omitempty"`
-	TurnInFlight    *bool                 `json:"turn_in_flight,omitempty"`
-	Turns           *int                  `json:"turns,omitempty"`
+	AgentName       string               `json:"agent_name"`
+	Deliveries      []NativeDeliveryInfo `json:"deliveries"`
+	KagentSessionId *string              `json:"kagent_session_id"`
+	Kind            string               `json:"kind"`
+	Model           *string              `json:"model"`
+	Note            *string              `json:"note"`
+	ParentSessionId *string              `json:"parent_session_id"`
+	Role            string               `json:"role"`
+	SessionId       string               `json:"session_id"`
+	SessionState    *string              `json:"session_state"`
+	Topic           *string              `json:"topic"`
+	TurnInFlight    bool                 `json:"turn_in_flight"`
+	Turns           int                  `json:"turns"`
+}
+
+// NestedHITLRequest defines model for NestedHITLRequest.
+type NestedHITLRequest struct {
+	ContextId            string                 `json:"context_id"`
+	SubagentName         string                 `json:"subagent_name"`
+	TaskId               string                 `json:"task_id"`
+	Tools                []HITLTool             `json:"tools"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OwnerDecision An unresolved report request, independent of native attention observations.
+type OwnerDecision struct {
+	Action    string `json:"action"`
+	AttemptId string `json:"attempt_id"`
+	ReportId  string `json:"report_id"`
+}
+
+// PackageDeclaration defines model for PackageDeclaration.
+type PackageDeclaration struct {
+	GeneratorVersion *string                   `json:"generator_version"`
+	Manager          PackageDeclarationManager `json:"manager"`
+	MetadataHashes   []string                  `json:"metadata_hashes"`
+	Packages         []PackageSpec             `json:"packages"`
+	PolicyId         string                    `json:"policy_id"`
+	PolicyVersion    int                       `json:"policy_version"`
+	ProjectId        *string                   `json:"project_id"`
+	Repositories     []string                  `json:"repositories"`
+	TaskId           *string                   `json:"task_id"`
+}
+
+// PackageDeclarationManager defines model for PackageDeclaration.Manager.
+type PackageDeclarationManager string
+
+// PackageSpec defines model for PackageSpec.
+type PackageSpec struct {
+	Name             string  `json:"name"`
+	RequestedVersion *string `json:"requested_version"`
+	ResolvedVersion  *string `json:"resolved_version"`
 }
 
 // Project A GitHub repository project tracked by the user.
 type Project struct {
 	// AvatarUrl Owner avatar URL
-	AvatarUrl *string `json:"avatar_url,omitempty"`
+	AvatarUrl *string `json:"avatar_url"`
 
 	// CreatedAt Creation timestamp
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// DefaultBranch Default branch
-	DefaultBranch *string `json:"default_branch,omitempty"`
+	DefaultBranch string `json:"default_branch"`
 
 	// Description Repo description
-	Description *string `json:"description,omitempty"`
+	Description *string `json:"description"`
 
 	// FullName owner/name
 	FullName string `json:"full_name"`
@@ -773,24 +3382,24 @@ type Project struct {
 	HtmlUrl string `json:"html_url"`
 
 	// Id Unique project ID
-	Id *string `json:"id,omitempty"`
+	Id string `json:"id"`
 
 	// LastUsedAt Last used timestamp
-	LastUsedAt         *time.Time   `json:"last_used_at,omitempty"`
-	MergePolicy        *MergePolicy `json:"merge_policy,omitempty"`
-	MergePolicyVersion *int         `json:"merge_policy_version,omitempty"`
+	LastUsedAt         time.Time   `json:"last_used_at"`
+	MergePolicy        MergePolicy `json:"merge_policy"`
+	MergePolicyVersion int         `json:"merge_policy_version"`
 
 	// MetadataUpdatedAt When GitHub data was refreshed
-	MetadataUpdatedAt *time.Time `json:"metadata_updated_at,omitempty"`
+	MetadataUpdatedAt *time.Time `json:"metadata_updated_at"`
 
 	// Name Repository name
 	Name string `json:"name"`
 
 	// OpenIssueCount Cached open issue count
-	OpenIssueCount *int `json:"open_issue_count,omitempty"`
+	OpenIssueCount int `json:"open_issue_count"`
 
 	// OpenPrCount Cached open PR count
-	OpenPrCount *int `json:"open_pr_count,omitempty"`
+	OpenPrCount int `json:"open_pr_count"`
 
 	// Owner GitHub owner/org
 	Owner string `json:"owner"`
@@ -807,6 +3416,27 @@ type ProjectDetail struct {
 	Project       Project         `json:"project"`
 	RecentCommits []CommitSummary `json:"recent_commits"`
 	Sessions      []Session       `json:"sessions"`
+}
+
+// ProjectEnvironmentGrant defines model for ProjectEnvironmentGrant.
+type ProjectEnvironmentGrant struct {
+	EnvironmentId string                            `json:"environment_id"`
+	Permission    ProjectEnvironmentGrantPermission `json:"permission"`
+	ProjectId     string                            `json:"project_id"`
+}
+
+// ProjectEnvironmentGrantPermission defines model for ProjectEnvironmentGrant.Permission.
+type ProjectEnvironmentGrantPermission string
+
+// ProjectEnvironmentSelection defines model for ProjectEnvironmentSelection.
+type ProjectEnvironmentSelection struct {
+	AccessRevoked     bool    `json:"access_revoked"`
+	EnvironmentId     string  `json:"environment_id"`
+	FollowDefault     bool    `json:"follow_default"`
+	ProjectId         string  `json:"project_id"`
+	ResolvedVersionId *string `json:"resolved_version_id"`
+	Revision          int     `json:"revision"`
+	VersionId         *string `json:"version_id"`
 }
 
 // ProjectImportRequest defines model for ProjectImportRequest.
@@ -826,6 +3456,13 @@ type ProjectPRSummary struct {
 	Url        string    `json:"url"`
 }
 
+// ProjectProviderPreference defines model for ProjectProviderPreference.
+type ProjectProviderPreference struct {
+	ProfileId *string `json:"profile_id"`
+	ProjectId string  `json:"project_id"`
+	Version   int     `json:"version"`
+}
+
 // ProjectProviderUpdate defines model for ProjectProviderUpdate.
 type ProjectProviderUpdate struct {
 	ExpectedVersion int     `json:"expected_version"`
@@ -840,15 +3477,15 @@ type ProviderAgentRef struct {
 
 // ProviderProfile defines model for ProviderProfile.
 type ProviderProfile struct {
-	Agents                map[string]ProviderAgentRef    `json:"agents"`
-	Aliases               *[]string                      `json:"aliases,omitempty"`
-	Capabilities          *[]CapabilityResult            `json:"capabilities,omitempty"`
-	ConfigurationRevision string                         `json:"configuration_revision"`
-	DisplayName           string                         `json:"display_name"`
-	Enabled               *bool                          `json:"enabled,omitempty"`
-	Id                    string                         `json:"id"`
-	NativeProvider        ProviderProfileNativeProvider  `json:"native_provider"`
-	RuntimeAdapter        *ProviderProfileRuntimeAdapter `json:"runtime_adapter,omitempty"`
+	Agents                map[string]ProviderAgentRef   `json:"agents"`
+	Aliases               []string                      `json:"aliases"`
+	Capabilities          []CapabilityResult            `json:"capabilities"`
+	ConfigurationRevision string                        `json:"configuration_revision"`
+	DisplayName           string                        `json:"display_name"`
+	Enabled               bool                          `json:"enabled"`
+	Id                    string                        `json:"id"`
+	NativeProvider        ProviderProfileNativeProvider `json:"native_provider"`
+	RuntimeAdapter        ProviderProfileRuntimeAdapter `json:"runtime_adapter"`
 }
 
 // ProviderProfileNativeProvider defines model for ProviderProfile.NativeProvider.
@@ -863,44 +3500,44 @@ type QueueItem struct {
 	Content string `json:"content"`
 
 	// Context Extra context
-	Context *map[string]interface{} `json:"context,omitempty"`
+	Context map[string]interface{} `json:"context"`
 
 	// CreatedAt Creation timestamp
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// ExpiresAt When this item expires
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	HitlRequestId *string    `json:"hitl_request_id,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+	HitlRequestId *string    `json:"hitl_request_id"`
 
 	// Id Unique item ID
-	Id *string `json:"id,omitempty"`
+	Id string `json:"id"`
 
-	// ItemType Types of items in the human queue.
+	// ItemType Type of queue item
 	ItemType QueueItemType `json:"item_type"`
 
 	// MainThreadId Parent main thread ID
 	MainThreadId string `json:"main_thread_id"`
 
 	// Options Predefined response options if any
-	Options *[]string `json:"options,omitempty"`
+	Options *[]string `json:"options"`
 
-	// Priority Priority levels for queue items.
-	Priority *QueueItemPriority `json:"priority,omitempty"`
+	// Priority Priority level
+	Priority QueueItemPriority `json:"priority"`
 
 	// ReadAt When item was read/acknowledged
-	ReadAt *time.Time `json:"read_at,omitempty"`
+	ReadAt *time.Time `json:"read_at"`
 
 	// RespondedAt Response timestamp
-	RespondedAt *time.Time `json:"responded_at,omitempty"`
+	RespondedAt *time.Time `json:"responded_at"`
 
 	// Response Human response
-	Response *string `json:"response,omitempty"`
+	Response *string `json:"response"`
 
 	// Status Item status
-	Status *QueueItemStatus `json:"status,omitempty"`
+	Status QueueItemStatus `json:"status"`
 
 	// TaskId Related worker task ID
-	TaskId *string `json:"task_id,omitempty"`
+	TaskId *string `json:"task_id"`
 
 	// Title Short title/summary
 	Title string `json:"title"`
@@ -927,6 +3564,18 @@ type QueueItemResponse struct {
 // QueueItemType Types of items in the human queue.
 type QueueItemType string
 
+// QueueRespondResponse defines model for QueueRespondResponse.
+type QueueRespondResponse struct {
+	Message QueueRespondResponseMessage `json:"message"`
+	Status  QueueRespondResponseStatus  `json:"status"`
+}
+
+// QueueRespondResponseMessage defines model for QueueRespondResponse.Message.
+type QueueRespondResponseMessage string
+
+// QueueRespondResponseStatus defines model for QueueRespondResponse.Status.
+type QueueRespondResponseStatus string
+
 // RefreshRequest defines model for RefreshRequest.
 type RefreshRequest struct {
 	VersionId string `json:"version_id"`
@@ -948,6 +3597,12 @@ type RegisterEnvironmentArchitecture string
 // RegisterEnvironmentSourceKind defines model for RegisterEnvironment.SourceKind.
 type RegisterEnvironmentSourceKind string
 
+// RegisteredEnvironment defines model for RegisteredEnvironment.
+type RegisteredEnvironment struct {
+	Environment DevEnvironment     `json:"environment"`
+	Version     EnvironmentVersion `json:"version"`
+}
+
 // SelectEnvironment defines model for SelectEnvironment.
 type SelectEnvironment struct {
 	EnvironmentId   string  `json:"environment_id"`
@@ -965,117 +3620,140 @@ type SelectEnvironment struct {
 // Both types have their own conversation and can notify the user when input is needed.
 type Session struct {
 	// AgentKind Native runtime kind from the session binding
-	AgentKind *string `json:"agent_kind,omitempty"`
+	AgentKind *string `json:"agent_kind"`
 
 	// AnchorMessageId Main thread message ID that triggered this session
-	AnchorMessageId *string `json:"anchor_message_id,omitempty"`
+	AnchorMessageId *string `json:"anchor_message_id"`
 
 	// ArchivedAt When the session was cleared from the list; kept for audit, never deleted
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ArchivedAt *time.Time `json:"archived_at"`
 
 	// BaseBranch Base ref; empty means the remote's default branch
-	BaseBranch *string `json:"base_branch,omitempty"`
+	BaseBranch string `json:"base_branch"`
 
 	// BranchName Branch to create/work on
-	BranchName *string `json:"branch_name,omitempty"`
+	BranchName *string `json:"branch_name"`
 
 	// Color Assigned color for inline display (hex or name)
-	Color *string `json:"color,omitempty"`
+	Color *string `json:"color"`
 
 	// CommitSha Final commit SHA
-	CommitSha *string `json:"commit_sha,omitempty"`
+	CommitSha *string `json:"commit_sha"`
 
 	// CompletedAt Completion timestamp
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at"`
 
 	// ConversationId Session's conversation ID
 	ConversationId string `json:"conversation_id"`
 
 	// CreatedAt Creation timestamp
-	CreatedAt *time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// Description What the session is for
 	Description string `json:"description"`
 
 	// Error Error message if failed
-	Error *string `json:"error,omitempty"`
+	Error *string `json:"error"`
 
 	// Id Unique session ID
-	Id *string `json:"id,omitempty"`
+	Id string `json:"id"`
 
 	// IssueEtag ETag for conditional polling
-	IssueEtag *string `json:"issue_etag,omitempty"`
+	IssueEtag *string `json:"issue_etag"`
 
 	// IssueLastModified Last-Modified for polling
-	IssueLastModified *time.Time `json:"issue_last_modified,omitempty"`
+	IssueLastModified *time.Time `json:"issue_last_modified"`
 
 	// IssueNumber Plan issue number
-	IssueNumber *int `json:"issue_number,omitempty"`
+	IssueNumber *int `json:"issue_number"`
 
 	// IssueUrl Plan issue URL
-	IssueUrl *string `json:"issue_url,omitempty"`
+	IssueUrl *string `json:"issue_url"`
 
 	// MainThreadId Parent main thread ID
 	MainThreadId string `json:"main_thread_id"`
 
 	// Model Claude model to use (haiku, sonnet, opus)
-	Model *string `json:"model,omitempty"`
+	Model *string `json:"model"`
 
 	// NeedsOwner Current owner attention projection
-	NeedsOwner *bool `json:"needs_owner,omitempty"`
+	NeedsOwner bool `json:"needs_owner"`
 
 	// ParentSessionId Parent session (delegation)
-	ParentSessionId *string `json:"parent_session_id,omitempty"`
+	ParentSessionId *string `json:"parent_session_id"`
 
 	// PrEtag ETag for conditional PR polling
-	PrEtag *string `json:"pr_etag,omitempty"`
+	PrEtag *string `json:"pr_etag"`
 
 	// PrLastModified Last-Modified for PR polling
-	PrLastModified *time.Time `json:"pr_last_modified,omitempty"`
+	PrLastModified *time.Time `json:"pr_last_modified"`
 
 	// PrNumber PR number
-	PrNumber *int `json:"pr_number,omitempty"`
+	PrNumber *int `json:"pr_number"`
 
 	// PrUrl Implementation PR URL
-	PrUrl *string `json:"pr_url,omitempty"`
+	PrUrl *string `json:"pr_url"`
 
 	// ProjectId Associated project ID
-	ProjectId *string `json:"project_id,omitempty"`
+	ProjectId *string `json:"project_id"`
 
 	// Prompt Initial prompt that started the session
 	Prompt string `json:"prompt"`
 
 	// RepoUrl GitHub repository URL
-	RepoUrl *string `json:"repo_url,omitempty"`
+	RepoUrl *string `json:"repo_url"`
 
 	// Result Session result data
-	Result *map[string]interface{} `json:"result,omitempty"`
+	Result *map[string]interface{} `json:"result"`
 
 	// StartedAt Start timestamp
-	StartedAt *time.Time `json:"started_at,omitempty"`
+	StartedAt *time.Time `json:"started_at"`
 
-	// Status Status of a session.
-	Status *SessionStatus `json:"status,omitempty"`
+	// Status Session status
+	Status SessionStatus `json:"status"`
 
 	// Summary Summary posted to main thread on completion
-	Summary *string `json:"summary,omitempty"`
+	Summary *string `json:"summary"`
 
 	// Title Short title for the session
 	Title string `json:"title"`
 
 	// Topic Topic this session works for
-	Topic *string `json:"topic,omitempty"`
+	Topic *string `json:"topic"`
 
 	// UserId Owner ID (the single configured owner)
 	UserId string `json:"user_id"`
 
 	// WorkerPodName K8s pod running this session
-	WorkerPodName *string `json:"worker_pod_name,omitempty"`
+	WorkerPodName *string `json:"worker_pod_name"`
 }
+
+// SessionArchiveResponse defines model for SessionArchiveResponse.
+type SessionArchiveResponse struct {
+	Status SessionArchiveResponseStatus `json:"status"`
+}
+
+// SessionArchiveResponseStatus defines model for SessionArchiveResponse.Status.
+type SessionArchiveResponseStatus string
+
+// SessionCancelResponse defines model for SessionCancelResponse.
+type SessionCancelResponse struct {
+	// Agent `not_running` when the session had already finished; otherwise the runtime outcome.
+	Agent SessionCancelResponseAgent `json:"agent"`
+
+	// Status Session status after the call; the unchanged status when it had already finished.
+	Status SessionCancelResponseStatus `json:"status"`
+}
+
+// SessionCancelResponseAgent `not_running` when the session had already finished; otherwise the runtime outcome.
+type SessionCancelResponseAgent string
+
+// SessionCancelResponseStatus Session status after the call; the unchanged status when it had already finished.
+type SessionCancelResponseStatus string
 
 // SessionConversationResponse Response for session conversation.
 type SessionConversationResponse struct {
-	Messages []interface{} `json:"messages"`
+	Messages []Message `json:"messages"`
 
 	// Session A background task that runs independently from the main thread.
 	//
@@ -1113,8 +3791,97 @@ type SessionMessageRequest struct {
 	Message string `json:"message"`
 }
 
+// SessionMessageResponse defines model for SessionMessageResponse.
+type SessionMessageResponse struct {
+	MessageId string                       `json:"message_id"`
+	Status    SessionMessageResponseStatus `json:"status"`
+}
+
+// SessionMessageResponseStatus defines model for SessionMessageResponse.Status.
+type SessionMessageResponseStatus string
+
 // SessionStatus Status of a session.
 type SessionStatus string
+
+// SessionStopTurnResponse defines model for SessionStopTurnResponse.
+type SessionStopTurnResponse struct {
+	Status SessionStopTurnResponseStatus `json:"status"`
+}
+
+// SessionStopTurnResponseStatus defines model for SessionStopTurnResponse.Status.
+type SessionStopTurnResponseStatus string
+
+// SmokeDelivery defines model for SmokeDelivery.
+type SmokeDelivery struct {
+	MessageId string `json:"message_id"`
+	State     string `json:"state"`
+}
+
+// SmokeObservations Sanitized ledger facts for an operator smoke run.
+type SmokeObservations struct {
+	CapacityHolders         []string        `json:"capacity_holders"`
+	Deliveries              []SmokeDelivery `json:"deliveries"`
+	DeliveriesBusy          bool            `json:"deliveries_busy"`
+	DeliveriesTruncated     bool            `json:"deliveries_truncated"`
+	GlobalCapacityAvailable bool            `json:"global_capacity_available"`
+	ParentCapacity          int             `json:"parent_capacity"`
+	PushConfirmed           bool            `json:"push_confirmed"`
+	Pushes                  []SmokePush     `json:"pushes"`
+	PushesTruncated         bool            `json:"pushes_truncated"`
+}
+
+// SmokePush defines model for SmokePush.
+type SmokePush struct {
+	Branch    string `json:"branch"`
+	RequestId string `json:"request_id"`
+	State     string `json:"state"`
+}
+
+// StatusOk Acknowledgement.
+type StatusOk struct {
+	Status StatusOkStatus `json:"status"`
+}
+
+// StatusOkStatus defines model for StatusOk.Status.
+type StatusOkStatus string
+
+// Task defines model for Task.
+type Task struct {
+	AcceptedEnvironment *WorkspaceEnvironment `json:"accepted_environment"`
+	AssignedProfileId   string                `json:"assigned_profile_id"`
+	Brief               string                `json:"brief"`
+	Checkout            *TaskCheckoutOutput   `json:"checkout"`
+	CreatedAt           time.Time             `json:"created_at"`
+	CreatorBindingId    *string               `json:"creator_binding_id"`
+	CurrentAttemptId    *string               `json:"current_attempt_id"`
+	Id                  string                `json:"id"`
+	Mode                TaskMode              `json:"mode"`
+	OwnerDecision       *OwnerDecision        `json:"owner_decision"`
+	OwnerId             string                `json:"owner_id"`
+	ParentTaskId        *string               `json:"parent_task_id"`
+	ProjectId           *string               `json:"project_id"`
+	ProviderConstraint  *string               `json:"provider_constraint"`
+	Reason              *TaskReason           `json:"reason"`
+	RootTaskId          string                `json:"root_task_id"`
+	SelectionSource     TaskSelectionSource   `json:"selection_source"`
+	Status              TaskStatus            `json:"status"`
+	Title               string                `json:"title"`
+	TopicId             *string               `json:"topic_id"`
+	UpdatedAt           time.Time             `json:"updated_at"`
+	Version             int                   `json:"version"`
+}
+
+// TaskMode defines model for Task.Mode.
+type TaskMode string
+
+// TaskReason defines model for Task.Reason.
+type TaskReason string
+
+// TaskSelectionSource defines model for Task.SelectionSource.
+type TaskSelectionSource string
+
+// TaskStatus defines model for Task.Status.
+type TaskStatus string
 
 // TaskAction defines model for TaskAction.
 type TaskAction struct {
@@ -1123,11 +3890,87 @@ type TaskAction struct {
 	RequestId         string  `json:"request_id"`
 }
 
+// TaskArtifact defines model for TaskArtifact.
+type TaskArtifact struct {
+	Id          string                 `json:"id"`
+	Kind        TaskArtifactKind       `json:"kind"`
+	OperationId string                 `json:"operation_id"`
+	Payload     map[string]interface{} `json:"payload"`
+	Sha256      string                 `json:"sha256"`
+}
+
+// TaskArtifactKind defines model for TaskArtifact.Kind.
+type TaskArtifactKind string
+
+// TaskAttempt defines model for TaskAttempt.
+type TaskAttempt struct {
+	AgentRef              ProviderAgentRef          `json:"agent_ref"`
+	ArchivedAt            *time.Time                `json:"archived_at"`
+	BindingId             *string                   `json:"binding_id"`
+	BriefDeliveryId       *string                   `json:"brief_delivery_id"`
+	CheckpointRef         *string                   `json:"checkpoint_ref"`
+	ConfigurationRevision string                    `json:"configuration_revision"`
+	CreatedAt             time.Time                 `json:"created_at"`
+	Depth                 TaskAttemptDepth          `json:"depth"`
+	Environment           *WorkspaceEnvironment     `json:"environment"`
+	EvidenceRefs          []string                  `json:"evidence_refs"`
+	Id                    string                    `json:"id"`
+	InitialRef            *string                   `json:"initial_ref"`
+	ManifestRef           *string                   `json:"manifest_ref"`
+	NativeDeletedAt       *time.Time                `json:"native_deleted_at"`
+	NativeProvider        TaskAttemptNativeProvider `json:"native_provider"`
+	Number                int                       `json:"number"`
+	PredecessorId         *string                   `json:"predecessor_id"`
+	ProfileId             string                    `json:"profile_id"`
+	ResultRef             *string                   `json:"result_ref"`
+	RetentionHold         *string                   `json:"retention_hold"`
+	Role                  TaskAttemptRole           `json:"role"`
+	SessionId             *string                   `json:"session_id"`
+	State                 TaskAttemptState          `json:"state"`
+	SuccessorId           *string                   `json:"successor_id"`
+	SupersededAt          *time.Time                `json:"superseded_at"`
+	TaskId                string                    `json:"task_id"`
+	UpdatedAt             time.Time                 `json:"updated_at"`
+	WorkspaceId           *string                   `json:"workspace_id"`
+	WriterGeneration      *int                      `json:"writer_generation"`
+}
+
+// TaskAttemptDepth defines model for TaskAttempt.Depth.
+type TaskAttemptDepth int
+
+// TaskAttemptNativeProvider defines model for TaskAttempt.NativeProvider.
+type TaskAttemptNativeProvider string
+
+// TaskAttemptRole defines model for TaskAttempt.Role.
+type TaskAttemptRole string
+
+// TaskAttemptState defines model for TaskAttempt.State.
+type TaskAttemptState string
+
+// TaskCapacityHolder defines model for TaskCapacityHolder.
+type TaskCapacityHolder struct {
+	AttemptState     string  `json:"attempt_state"`
+	CurrentAttemptId *string `json:"current_attempt_id"`
+	HeldAttemptId    string  `json:"held_attempt_id"`
+	Reason           *string `json:"reason"`
+	Status           string  `json:"status"`
+	TaskId           string  `json:"task_id"`
+	Title            *string `json:"title"`
+	Version          int     `json:"version"`
+}
+
 // TaskCheckout defines model for TaskCheckout.
 type TaskCheckout struct {
 	Branch string  `json:"branch"`
 	Depth  *int    `json:"depth,omitempty"`
 	Ref    *string `json:"ref,omitempty"`
+}
+
+// TaskCheckoutOutput defines model for TaskCheckoutOutput.
+type TaskCheckoutOutput struct {
+	Branch string `json:"branch"`
+	Depth  int    `json:"depth"`
+	Ref    string `json:"ref"`
 }
 
 // TaskCreate defines model for TaskCreate.
@@ -1145,6 +3988,107 @@ type TaskCreate struct {
 // TaskCreateMode defines model for TaskCreate.Mode.
 type TaskCreateMode string
 
+// TaskEligibility defines model for TaskEligibility.
+type TaskEligibility struct {
+	Available bool                   `json:"available"`
+	Reason    *TaskEligibilityReason `json:"reason"`
+}
+
+// TaskEligibilityReason defines model for TaskEligibility.Reason.
+type TaskEligibilityReason string
+
+// TaskError Task route error body: `{detail: {reason, ...}}`. Raised as TaskError in the store.
+type TaskError struct {
+	// Detail Task error payload. `reason` is always present; some reasons add detail fields.
+	Detail TaskErrorDetail `json:"detail"`
+}
+
+// TaskErrorDetail Task error payload. `reason` is always present; some reasons add detail fields.
+type TaskErrorDetail struct {
+	// HeldTasks parent_capacity only: tasks holding the capacity.
+	HeldTasks *[]TaskCapacityHolder `json:"held_tasks,omitempty"`
+
+	// Limit parent_capacity only.
+	Limit *int `json:"limit,omitempty"`
+
+	// Reason Stable machine code, for example stale_task_attempt.
+	Reason string `json:"reason"`
+
+	// Recovery parent_capacity only: how to free capacity.
+	Recovery             *string                `json:"recovery,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// TaskIdentity defines model for TaskIdentity.
+type TaskIdentity struct {
+	ContextId        string `json:"context_id"`
+	Endpoint         string `json:"endpoint"`
+	Gateway          string `json:"gateway"`
+	RuntimeSessionId string `json:"runtime_session_id"`
+	TaskId           string `json:"task_id"`
+}
+
+// TaskOperation defines model for TaskOperation.
+type TaskOperation struct {
+	AttemptId         *string                        `json:"attempt_id"`
+	CheckpointRef     *string                        `json:"checkpoint_ref"`
+	CreatedAt         time.Time                      `json:"created_at"`
+	Id                string                         `json:"id"`
+	Kind              TaskOperationKind              `json:"kind"`
+	LastConfirmedStep TaskOperationLastConfirmedStep `json:"last_confirmed_step"`
+	ManifestRef       *string                        `json:"manifest_ref"`
+	OwnerId           string                         `json:"owner_id"`
+	PrincipalKey      string                         `json:"principal_key"`
+	Reason            *TaskOperationReason           `json:"reason"`
+	RequestDigest     string                         `json:"request_digest"`
+	RequestId         string                         `json:"request_id"`
+	RequestPayload    map[string]interface{}         `json:"request_payload"`
+	SourceAttemptId   *string                        `json:"source_attempt_id"`
+	State             TaskOperationState             `json:"state"`
+	TargetAttemptId   *string                        `json:"target_attempt_id"`
+	TaskId            *string                        `json:"task_id"`
+	UpdatedAt         time.Time                      `json:"updated_at"`
+}
+
+// TaskOperationKind defines model for TaskOperation.Kind.
+type TaskOperationKind string
+
+// TaskOperationLastConfirmedStep defines model for TaskOperation.LastConfirmedStep.
+type TaskOperationLastConfirmedStep string
+
+// TaskOperationReason defines model for TaskOperation.Reason.
+type TaskOperationReason string
+
+// TaskOperationState defines model for TaskOperation.State.
+type TaskOperationState string
+
+// TaskProjection defines model for TaskProjection.
+type TaskProjection struct {
+	AgentActivity        *string               `json:"agent_activity"`
+	Branch               *string               `json:"branch"`
+	CiHeadSha            *string               `json:"ci_head_sha"`
+	CiState              TaskProjectionCiState `json:"ci_state"`
+	DeliveryState        *string               `json:"delivery_state"`
+	EnvironmentVersionId *string               `json:"environment_version_id"`
+	MergeProposalId      *string               `json:"merge_proposal_id"`
+	MergeState           *string               `json:"merge_state"`
+	ObservedAt           *time.Time            `json:"observed_at"`
+	PendingApprovalIds   []string              `json:"pending_approval_ids"`
+	PrHeadSha            *string               `json:"pr_head_sha"`
+	PrNumber             *int                  `json:"pr_number"`
+	PrState              TaskProjectionPrState `json:"pr_state"`
+	PrUrl                *string               `json:"pr_url"`
+	PublicationState     *string               `json:"publication_state"`
+	Repository           *string               `json:"repository"`
+	WorkspaceHealth      *string               `json:"workspace_health"`
+}
+
+// TaskProjectionCiState defines model for TaskProjection.CiState.
+type TaskProjectionCiState string
+
+// TaskProjectionPrState defines model for TaskProjection.PrState.
+type TaskProjectionPrState string
+
 // TaskReassign defines model for TaskReassign.
 type TaskReassign struct {
 	ExpectedAttemptId *string `json:"expected_attempt_id"`
@@ -1153,12 +4097,104 @@ type TaskReassign struct {
 	TargetProfileId   string  `json:"target_profile_id"`
 }
 
+// TaskReport defines model for TaskReport.
+type TaskReport struct {
+	AttemptId    string            `json:"attempt_id"`
+	EvidenceRefs []string          `json:"evidence_refs"`
+	Outcome      TaskReportOutcome `json:"outcome"`
+	OwnerAction  *string           `json:"owner_action"`
+	RequestId    string            `json:"request_id"`
+	Summary      string            `json:"summary"`
+	TaskId       string            `json:"task_id"`
+}
+
+// TaskReportOutcome defines model for TaskReport.Outcome.
+type TaskReportOutcome string
+
+// TaskUpdated defines model for TaskUpdated.
+type TaskUpdated struct {
+	AttemptId    *string         `json:"attempt_id"`
+	EventId      string          `json:"event_id"`
+	OccurredAt   time.Time       `json:"occurred_at"`
+	ParentTaskId *string         `json:"parent_task_id"`
+	RootTaskId   string          `json:"root_task_id"`
+	TaskId       string          `json:"task_id"`
+	Type         TaskUpdatedType `json:"type"`
+	Version      int             `json:"version"`
+}
+
+// TaskUpdatedType defines model for TaskUpdated.Type.
+type TaskUpdatedType string
+
+// TaskView defines model for TaskView.
+type TaskView struct {
+	Actions    map[string]TaskEligibility `json:"actions"`
+	Artifacts  []TaskArtifact             `json:"artifacts"`
+	Attempts   []TaskAttempt              `json:"attempts"`
+	Operations []TaskOperation            `json:"operations"`
+	Projection TaskProjection             `json:"projection"`
+	Reports    []TaskReport               `json:"reports"`
+	Task       Task                       `json:"task"`
+}
+
+// TemplateMappingEvidence Server-computed reference included in an approval proposal snapshot.
+type TemplateMappingEvidence struct {
+	ConfigDigest string                          `json:"config_digest"`
+	Provider     TemplateMappingEvidenceProvider `json:"provider"`
+	TemplateName string                          `json:"template_name"`
+}
+
+// TemplateMappingEvidenceProvider defines model for TemplateMappingEvidence.Provider.
+type TemplateMappingEvidenceProvider string
+
+// TemplateMergeConfiguration One operator-reviewed protected mapping for a named AgentTemplate/provider.
+type TemplateMergeConfiguration struct {
+	CompiledAlias   string                                    `json:"compiled_alias"`
+	Endpoint        string                                    `json:"endpoint"`
+	Operation       TemplateMergeConfigurationOperation       `json:"operation"`
+	Provider        TemplateMergeConfigurationProvider        `json:"provider"`
+	RequireApproval TemplateMergeConfigurationRequireApproval `json:"require_approval"`
+	TemplateName    string                                    `json:"template_name"`
+	Tool            TemplateMergeConfigurationTool            `json:"tool"`
+}
+
+// TemplateMergeConfigurationOperation defines model for TemplateMergeConfiguration.Operation.
+type TemplateMergeConfigurationOperation string
+
+// TemplateMergeConfigurationProvider defines model for TemplateMergeConfiguration.Provider.
+type TemplateMergeConfigurationProvider string
+
+// TemplateMergeConfigurationRequireApproval defines model for TemplateMergeConfiguration.RequireApproval.
+type TemplateMergeConfigurationRequireApproval bool
+
+// TemplateMergeConfigurationTool defines model for TemplateMergeConfiguration.Tool.
+type TemplateMergeConfigurationTool string
+
 // ToolApproval defines model for ToolApproval.
 type ToolApproval struct {
 	Approved        bool    `json:"approved"`
 	Id              string  `json:"id"`
 	RejectionReason *string `json:"rejection_reason,omitempty"`
 }
+
+// ToolApprovalOutput defines model for ToolApprovalOutput.
+type ToolApprovalOutput struct {
+	Approved        bool    `json:"approved"`
+	Id              string  `json:"id"`
+	RejectionReason *string `json:"rejection_reason"`
+}
+
+// ToolApprovalRequest defines model for ToolApprovalRequest.
+type ToolApprovalRequest struct {
+	Hint                 string                  `json:"hint"`
+	Nested               *NestedHITLRequest      `json:"nested"`
+	Tools                []HITLTool              `json:"tools"`
+	Type                 ToolApprovalRequestType `json:"type"`
+	AdditionalProperties map[string]interface{}  `json:"-"`
+}
+
+// ToolApprovalRequestType defines model for ToolApprovalRequest.Type.
+type ToolApprovalRequestType string
 
 // ToolApprovalResponse defines model for ToolApprovalResponse.
 type ToolApprovalResponse struct {
@@ -1169,6 +4205,49 @@ type ToolApprovalResponse struct {
 
 // ToolApprovalResponseType defines model for ToolApprovalResponse.Type.
 type ToolApprovalResponseType string
+
+// ToolApprovalResponseOutput defines model for ToolApprovalResponseOutput.
+type ToolApprovalResponseOutput struct {
+	Approvals       []ToolApprovalOutput           `json:"approvals"`
+	ReviewedContext map[string]string              `json:"reviewed_context"`
+	Type            ToolApprovalResponseOutputType `json:"type"`
+}
+
+// ToolApprovalResponseOutputType defines model for ToolApprovalResponseOutput.Type.
+type ToolApprovalResponseOutputType string
+
+// TopicLine defines model for TopicLine.
+type TopicLine struct {
+	Name string `json:"name"`
+
+	// Pending Open pending records in the topic.
+	Pending    int    `json:"pending"`
+	StatusLine string `json:"status_line"`
+}
+
+// TrustedToolMapping Retained decoder for immutable receipts written before template mappings.
+type TrustedToolMapping struct {
+	CompiledAlias    string                            `json:"compiled_alias"`
+	Endpoint         string                            `json:"endpoint"`
+	Operation        TrustedToolMappingOperation       `json:"operation"`
+	PreparedRevision string                            `json:"prepared_revision"`
+	Provider         TrustedToolMappingProvider        `json:"provider"`
+	RemoteServerId   string                            `json:"remote_server_id"`
+	RequireApproval  TrustedToolMappingRequireApproval `json:"require_approval"`
+	Tool             TrustedToolMappingTool            `json:"tool"`
+}
+
+// TrustedToolMappingOperation defines model for TrustedToolMapping.Operation.
+type TrustedToolMappingOperation string
+
+// TrustedToolMappingProvider defines model for TrustedToolMapping.Provider.
+type TrustedToolMappingProvider string
+
+// TrustedToolMappingRequireApproval defines model for TrustedToolMapping.RequireApproval.
+type TrustedToolMappingRequireApproval bool
+
+// TrustedToolMappingTool defines model for TrustedToolMapping.Tool.
+type TrustedToolMappingTool string
 
 // ValidationError defines model for ValidationError.
 type ValidationError struct {
@@ -1188,10 +4267,68 @@ type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
 
+// VerifiedAssociation defines model for VerifiedAssociation.
+type VerifiedAssociation struct {
+	EvidenceReference string                            `json:"evidence_reference"`
+	EvidenceSource    VerifiedAssociationEvidenceSource `json:"evidence_source"`
+	Leaf              TaskIdentity                      `json:"leaf"`
+	Outer             TaskIdentity                      `json:"outer"`
+	OwnerId           string                            `json:"owner_id"`
+}
+
+// VerifiedAssociationEvidenceSource defines model for VerifiedAssociation.EvidenceSource.
+type VerifiedAssociationEvidenceSource string
+
+// VerifiedLeafConfiguration Retained decoder for immutable per-session receipts; never accepted as config.
+type VerifiedLeafConfiguration struct {
+	BindingId         string                            `json:"binding_id"`
+	EvidenceReference string                            `json:"evidence_reference"`
+	Mappings          []TrustedToolMapping              `json:"mappings"`
+	OwnerId           string                            `json:"owner_id"`
+	PreparedRevision  string                            `json:"prepared_revision"`
+	Provider          VerifiedLeafConfigurationProvider `json:"provider"`
+	RuntimeSessionId  string                            `json:"runtime_session_id"`
+}
+
+// VerifiedLeafConfigurationProvider defines model for VerifiedLeafConfiguration.Provider.
+type VerifiedLeafConfigurationProvider string
+
+// VerifiedMergeContext Server-resolved merge context for one native tool call. pr_url and compare_url appear only when the repository, number, head and base are well formed.
+type VerifiedMergeContext struct {
+	Availability     VerifiedMergeContextAvailability `json:"availability"`
+	Base             *string                          `json:"base"`
+	BaseSha          *string                          `json:"base_sha"`
+	CompareUrl       *string                          `json:"compare_url,omitempty"`
+	Deadline         *string                          `json:"deadline"`
+	DetailsUrl       *string                          `json:"details_url"`
+	FreshnessReason  *string                          `json:"freshness_reason"`
+	Head             *string                          `json:"head"`
+	HeadSha          *string                          `json:"head_sha"`
+	PrNumber         *int                             `json:"pr_number"`
+	PrUrl            *string                          `json:"pr_url,omitempty"`
+	ProposalId       *string                          `json:"proposal_id"`
+	ProtectedMatches []string                         `json:"protected_matches"`
+	Repository       *string                          `json:"repository"`
+	Stale            bool                             `json:"stale"`
+	State            *string                          `json:"state"`
+	Summary          *MergeSummary                    `json:"summary"`
+	SummaryDigest    *string                          `json:"summary_digest"`
+	ToolId           *string                          `json:"tool_id"`
+}
+
+// VerifiedMergeContextAvailability defines model for VerifiedMergeContext.Availability.
+type VerifiedMergeContextAvailability string
+
 // WorkspaceDev Dev server settings: which ports the preview URL may reach, and when to idle out.
 type WorkspaceDev struct {
 	IdleTimeoutMinutes *int             `json:"idle_timeout_minutes,omitempty"`
 	Ports              *[]WorkspacePort `json:"ports,omitempty"`
+}
+
+// WorkspaceDevOutput Dev server settings: which ports the preview URL may reach, and when to idle out.
+type WorkspaceDevOutput struct {
+	IdleTimeoutMinutes int             `json:"idle_timeout_minutes"`
+	Ports              []WorkspacePort `json:"ports"`
 }
 
 // WorkspaceEnvironment defines model for WorkspaceEnvironment.
@@ -1205,8 +4342,8 @@ type WorkspaceEnvironment struct {
 
 // WorkspaceLifecycle A workspace as last observed from kagent. Nothing here is stored except the manifest.
 type WorkspaceLifecycle struct {
-	Detail         *string    `json:"detail,omitempty"`
-	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	Detail         *string    `json:"detail"`
+	LastActivityAt *time.Time `json:"last_activity_at"`
 
 	// Manifest What kagent clones into the harness (``repo_url``/``ref``/``branch``/``depth``), which
 	// agent runs there, and the dev server settings.
@@ -1215,8 +4352,8 @@ type WorkspaceLifecycle struct {
 	// unchanged if the Session is replaced.
 	Manifest          WorkspaceManifest                    `json:"manifest"`
 	ObservedState     WorkspaceObservedState               `json:"observed_state"`
-	PublicationMode   *WorkspaceLifecyclePublicationMode   `json:"publication_mode,omitempty"`
-	PublicationReason *WorkspaceLifecyclePublicationReason `json:"publication_reason,omitempty"`
+	PublicationMode   WorkspaceLifecyclePublicationMode    `json:"publication_mode"`
+	PublicationReason *WorkspaceLifecyclePublicationReason `json:"publication_reason"`
 	SessionId         string                               `json:"session_id"`
 	UpdatedAt         time.Time                            `json:"updated_at"`
 	WorkspaceId       string                               `json:"workspace_id"`
@@ -1234,14 +4371,14 @@ type WorkspaceLifecyclePublicationReason string
 // The repository fields are the Session's “workspace“. They are stored once and resent
 // unchanged if the Session is replaced.
 type WorkspaceManifest struct {
-	AgentKind *string `json:"agent_kind,omitempty"`
-	Branch    string  `json:"branch"`
-	Depth     *int    `json:"depth,omitempty"`
+	AgentKind string `json:"agent_kind"`
+	Branch    string `json:"branch"`
+	Depth     int    `json:"depth"`
 
 	// Dev Dev server settings: which ports the preview URL may reach, and when to idle out.
-	Dev                    *WorkspaceDev         `json:"dev,omitempty"`
-	DevelopmentEnvironment *WorkspaceEnvironment `json:"development_environment,omitempty"`
-	Ref                    *string               `json:"ref,omitempty"`
+	Dev                    WorkspaceDevOutput    `json:"dev"`
+	DevelopmentEnvironment *WorkspaceEnvironment `json:"development_environment"`
+	Ref                    string                `json:"ref"`
 	RepoUrl                string                `json:"repo_url"`
 }
 
@@ -1252,6 +4389,33 @@ type WorkspaceObservedState string
 type WorkspacePort struct {
 	Name   string `json:"name"`
 	Number int    `json:"number"`
+}
+
+// WorkspacePortsResponse defines model for WorkspacePortsResponse.
+type WorkspacePortsResponse struct {
+	Ports []WorkspacePreviewPort `json:"ports"`
+}
+
+// WorkspacePreviewPort defines model for WorkspacePreviewPort.
+type WorkspacePreviewPort struct {
+	Name string `json:"name"`
+	Port int    `json:"port"`
+	Url  string `json:"url"`
+}
+
+// RegisterEnvironment422JSONResponseBody defines parameters for RegisterEnvironment.
+type RegisterEnvironment422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// AcceptEnvironmentDefault422JSONResponseBody defines parameters for AcceptEnvironmentDefault.
+type AcceptEnvironmentDefault422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// RefreshEnvironment422JSONResponseBody defines parameters for RefreshEnvironment.
+type RefreshEnvironment422JSONResponseBody struct {
+	union json.RawMessage
 }
 
 // GetHITLMergeDetailsParams defines parameters for GetHITLMergeDetails.
@@ -1285,6 +4449,31 @@ type ListProjectsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// GetProjectDefaultProvider404JSONResponseBody defines parameters for GetProjectDefaultProvider.
+type GetProjectDefaultProvider404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// UpdateProjectDefaultProvider403JSONResponseBody defines parameters for UpdateProjectDefaultProvider.
+type UpdateProjectDefaultProvider403JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// UpdateProjectDefaultProvider404JSONResponseBody defines parameters for UpdateProjectDefaultProvider.
+type UpdateProjectDefaultProvider404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// UpdateProjectDefaultProvider422JSONResponseBody defines parameters for UpdateProjectDefaultProvider.
+type UpdateProjectDefaultProvider422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// SelectProjectEnvironment422JSONResponseBody defines parameters for SelectProjectEnvironment.
+type SelectProjectEnvironment422JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // GetProjectSmokeObservationsParams defines parameters for GetProjectSmokeObservations.
 type GetProjectSmokeObservationsParams struct {
 	Branch *string `form:"branch,omitempty" json:"branch,omitempty"`
@@ -1295,10 +4484,105 @@ type ListSessionsParams struct {
 	Status *string `form:"status,omitempty" json:"status,omitempty"`
 }
 
+// CreateSession422JSONResponseBody defines parameters for CreateSession.
+type CreateSession422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// GetTaskOperation404JSONResponseBody defines parameters for GetTaskOperation.
+type GetTaskOperation404JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // ListTasksParams defines parameters for ListTasks.
 type ListTasksParams struct {
 	ProjectId    *string `form:"project_id,omitempty" json:"project_id,omitempty"`
 	ParentTaskId *string `form:"parent_task_id,omitempty" json:"parent_task_id,omitempty"`
+}
+
+// CreateTask403JSONResponseBody defines parameters for CreateTask.
+type CreateTask403JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CreateTask404JSONResponseBody defines parameters for CreateTask.
+type CreateTask404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CreateTask422JSONResponseBody defines parameters for CreateTask.
+type CreateTask422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// GetTask404JSONResponseBody defines parameters for GetTask.
+type GetTask404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CancelTask403JSONResponseBody defines parameters for CancelTask.
+type CancelTask403JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CancelTask404JSONResponseBody defines parameters for CancelTask.
+type CancelTask404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CancelTask422JSONResponseBody defines parameters for CancelTask.
+type CancelTask422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// ReassignTask403JSONResponseBody defines parameters for ReassignTask.
+type ReassignTask403JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// ReassignTask404JSONResponseBody defines parameters for ReassignTask.
+type ReassignTask404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// ReassignTask422JSONResponseBody defines parameters for ReassignTask.
+type ReassignTask422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// RetryTask403JSONResponseBody defines parameters for RetryTask.
+type RetryTask403JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// RetryTask404JSONResponseBody defines parameters for RetryTask.
+type RetryTask404JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// RetryTask422JSONResponseBody defines parameters for RetryTask.
+type RetryTask422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// CreateWorkspace422JSONResponseBody defines parameters for CreateWorkspace.
+type CreateWorkspace422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// RefreshWorkspace422JSONResponseBody defines parameters for RefreshWorkspace.
+type RefreshWorkspace422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// ResumeWorkspace422JSONResponseBody defines parameters for ResumeWorkspace.
+type ResumeWorkspace422JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// SuspendWorkspace422JSONResponseBody defines parameters for SuspendWorkspace.
+type SuspendWorkspace422JSONResponseBody struct {
+	union json.RawMessage
 }
 
 // SendMessageJSONRequestBody defines body for SendMessage for application/json ContentType.
@@ -1310,8 +4594,8 @@ type RegisterEnvironmentJSONRequestBody = RegisterEnvironment
 // AcceptEnvironmentDefaultJSONRequestBody defines body for AcceptEnvironmentDefault for application/json ContentType.
 type AcceptEnvironmentDefaultJSONRequestBody = RefreshRequest
 
-// GrantEnvironmentJSONRequestBody defines body for GrantEnvironment for application/json ContentType.
-type GrantEnvironmentJSONRequestBody = GrantRequest
+// GrantEnvironmentToProjectJSONRequestBody defines body for GrantEnvironmentToProject for application/json ContentType.
+type GrantEnvironmentToProjectJSONRequestBody = GrantRequest
 
 // RefreshEnvironmentJSONRequestBody defines body for RefreshEnvironment for application/json ContentType.
 type RefreshEnvironmentJSONRequestBody = RefreshRequest
@@ -1354,6 +4638,1136 @@ type RetryTaskJSONRequestBody = TaskAction
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
+
+// Getter for additional properties for AskUserRequest. Returns the specified
+// element and whether it was found
+func (a AskUserRequest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for AskUserRequest
+func (a *AskUserRequest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for AskUserRequest to handle AdditionalProperties
+func (a *AskUserRequest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["nested"]; found {
+		err = json.Unmarshal(raw, &a.Nested)
+		if err != nil {
+			return fmt.Errorf("error reading 'nested': %w", err)
+		}
+		delete(object, "nested")
+	}
+
+	if raw, found := object["questions"]; found {
+		err = json.Unmarshal(raw, &a.Questions)
+		if err != nil {
+			return fmt.Errorf("error reading 'questions': %w", err)
+		}
+		delete(object, "questions")
+	}
+
+	if raw, found := object["type"]; found {
+		err = json.Unmarshal(raw, &a.Type)
+		if err != nil {
+			return fmt.Errorf("error reading 'type': %w", err)
+		}
+		delete(object, "type")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for AskUserRequest to handle AdditionalProperties
+func (a AskUserRequest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["nested"], err = json.Marshal(a.Nested)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'nested': %w", err)
+	}
+
+	if a.Questions != nil {
+		object["questions"], err = json.Marshal(a.Questions)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'questions': %w", err)
+		}
+	}
+
+	object["type"], err = json.Marshal(a.Type)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'type': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for HITLQuestion. Returns the specified
+// element and whether it was found
+func (a HITLQuestion) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for HITLQuestion
+func (a *HITLQuestion) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for HITLQuestion to handle AdditionalProperties
+func (a *HITLQuestion) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["choices"]; found {
+		err = json.Unmarshal(raw, &a.Choices)
+		if err != nil {
+			return fmt.Errorf("error reading 'choices': %w", err)
+		}
+		delete(object, "choices")
+	}
+
+	if raw, found := object["multiple"]; found {
+		err = json.Unmarshal(raw, &a.Multiple)
+		if err != nil {
+			return fmt.Errorf("error reading 'multiple': %w", err)
+		}
+		delete(object, "multiple")
+	}
+
+	if raw, found := object["question"]; found {
+		err = json.Unmarshal(raw, &a.Question)
+		if err != nil {
+			return fmt.Errorf("error reading 'question': %w", err)
+		}
+		delete(object, "question")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for HITLQuestion to handle AdditionalProperties
+func (a HITLQuestion) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["choices"], err = json.Marshal(a.Choices)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'choices': %w", err)
+	}
+
+	object["multiple"], err = json.Marshal(a.Multiple)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'multiple': %w", err)
+	}
+
+	object["question"], err = json.Marshal(a.Question)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'question': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for HITLTool. Returns the specified
+// element and whether it was found
+func (a HITLTool) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for HITLTool
+func (a *HITLTool) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for HITLTool to handle AdditionalProperties
+func (a *HITLTool) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["args"]; found {
+		err = json.Unmarshal(raw, &a.Args)
+		if err != nil {
+			return fmt.Errorf("error reading 'args': %w", err)
+		}
+		delete(object, "args")
+	}
+
+	if raw, found := object["call_id"]; found {
+		err = json.Unmarshal(raw, &a.CallId)
+		if err != nil {
+			return fmt.Errorf("error reading 'call_id': %w", err)
+		}
+		delete(object, "call_id")
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for HITLTool to handle AdditionalProperties
+func (a HITLTool) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Args != nil {
+		object["args"], err = json.Marshal(a.Args)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'args': %w", err)
+		}
+	}
+
+	object["call_id"], err = json.Marshal(a.CallId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'call_id': %w", err)
+	}
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["name"], err = json.Marshal(a.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for MergeDetailItem. Returns the specified
+// element and whether it was found
+func (a MergeDetailItem) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for MergeDetailItem
+func (a *MergeDetailItem) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for MergeDetailItem to handle AdditionalProperties
+func (a *MergeDetailItem) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["additions"]; found {
+		err = json.Unmarshal(raw, &a.Additions)
+		if err != nil {
+			return fmt.Errorf("error reading 'additions': %w", err)
+		}
+		delete(object, "additions")
+	}
+
+	if raw, found := object["app_id"]; found {
+		err = json.Unmarshal(raw, &a.AppId)
+		if err != nil {
+			return fmt.Errorf("error reading 'app_id': %w", err)
+		}
+		delete(object, "app_id")
+	}
+
+	if raw, found := object["context"]; found {
+		err = json.Unmarshal(raw, &a.Context)
+		if err != nil {
+			return fmt.Errorf("error reading 'context': %w", err)
+		}
+		delete(object, "context")
+	}
+
+	if raw, found := object["deletions"]; found {
+		err = json.Unmarshal(raw, &a.Deletions)
+		if err != nil {
+			return fmt.Errorf("error reading 'deletions': %w", err)
+		}
+		delete(object, "deletions")
+	}
+
+	if raw, found := object["filename"]; found {
+		err = json.Unmarshal(raw, &a.Filename)
+		if err != nil {
+			return fmt.Errorf("error reading 'filename': %w", err)
+		}
+		delete(object, "filename")
+	}
+
+	if raw, found := object["kind"]; found {
+		err = json.Unmarshal(raw, &a.Kind)
+		if err != nil {
+			return fmt.Errorf("error reading 'kind': %w", err)
+		}
+		delete(object, "kind")
+	}
+
+	if raw, found := object["previous_filename"]; found {
+		err = json.Unmarshal(raw, &a.PreviousFilename)
+		if err != nil {
+			return fmt.Errorf("error reading 'previous_filename': %w", err)
+		}
+		delete(object, "previous_filename")
+	}
+
+	if raw, found := object["status"]; found {
+		err = json.Unmarshal(raw, &a.Status)
+		if err != nil {
+			return fmt.Errorf("error reading 'status': %w", err)
+		}
+		delete(object, "status")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for MergeDetailItem to handle AdditionalProperties
+func (a MergeDetailItem) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Additions != nil {
+		object["additions"], err = json.Marshal(a.Additions)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'additions': %w", err)
+		}
+	}
+
+	if a.AppId != nil {
+		object["app_id"], err = json.Marshal(a.AppId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'app_id': %w", err)
+		}
+	}
+
+	if a.Context != nil {
+		object["context"], err = json.Marshal(a.Context)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'context': %w", err)
+		}
+	}
+
+	if a.Deletions != nil {
+		object["deletions"], err = json.Marshal(a.Deletions)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'deletions': %w", err)
+		}
+	}
+
+	if a.Filename != nil {
+		object["filename"], err = json.Marshal(a.Filename)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'filename': %w", err)
+		}
+	}
+
+	if a.Kind != nil {
+		object["kind"], err = json.Marshal(a.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'kind': %w", err)
+		}
+	}
+
+	if a.PreviousFilename != nil {
+		object["previous_filename"], err = json.Marshal(a.PreviousFilename)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'previous_filename': %w", err)
+		}
+	}
+
+	if a.Status != nil {
+		object["status"], err = json.Marshal(a.Status)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'status': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for NestedHITLRequest. Returns the specified
+// element and whether it was found
+func (a NestedHITLRequest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for NestedHITLRequest
+func (a *NestedHITLRequest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for NestedHITLRequest to handle AdditionalProperties
+func (a *NestedHITLRequest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["context_id"]; found {
+		err = json.Unmarshal(raw, &a.ContextId)
+		if err != nil {
+			return fmt.Errorf("error reading 'context_id': %w", err)
+		}
+		delete(object, "context_id")
+	}
+
+	if raw, found := object["subagent_name"]; found {
+		err = json.Unmarshal(raw, &a.SubagentName)
+		if err != nil {
+			return fmt.Errorf("error reading 'subagent_name': %w", err)
+		}
+		delete(object, "subagent_name")
+	}
+
+	if raw, found := object["task_id"]; found {
+		err = json.Unmarshal(raw, &a.TaskId)
+		if err != nil {
+			return fmt.Errorf("error reading 'task_id': %w", err)
+		}
+		delete(object, "task_id")
+	}
+
+	if raw, found := object["tools"]; found {
+		err = json.Unmarshal(raw, &a.Tools)
+		if err != nil {
+			return fmt.Errorf("error reading 'tools': %w", err)
+		}
+		delete(object, "tools")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for NestedHITLRequest to handle AdditionalProperties
+func (a NestedHITLRequest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["context_id"], err = json.Marshal(a.ContextId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'context_id': %w", err)
+	}
+
+	object["subagent_name"], err = json.Marshal(a.SubagentName)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'subagent_name': %w", err)
+	}
+
+	object["task_id"], err = json.Marshal(a.TaskId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'task_id': %w", err)
+	}
+
+	if a.Tools != nil {
+		object["tools"], err = json.Marshal(a.Tools)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tools': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TaskErrorDetail. Returns the specified
+// element and whether it was found
+func (a TaskErrorDetail) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TaskErrorDetail
+func (a *TaskErrorDetail) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TaskErrorDetail to handle AdditionalProperties
+func (a *TaskErrorDetail) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["held_tasks"]; found {
+		err = json.Unmarshal(raw, &a.HeldTasks)
+		if err != nil {
+			return fmt.Errorf("error reading 'held_tasks': %w", err)
+		}
+		delete(object, "held_tasks")
+	}
+
+	if raw, found := object["limit"]; found {
+		err = json.Unmarshal(raw, &a.Limit)
+		if err != nil {
+			return fmt.Errorf("error reading 'limit': %w", err)
+		}
+		delete(object, "limit")
+	}
+
+	if raw, found := object["reason"]; found {
+		err = json.Unmarshal(raw, &a.Reason)
+		if err != nil {
+			return fmt.Errorf("error reading 'reason': %w", err)
+		}
+		delete(object, "reason")
+	}
+
+	if raw, found := object["recovery"]; found {
+		err = json.Unmarshal(raw, &a.Recovery)
+		if err != nil {
+			return fmt.Errorf("error reading 'recovery': %w", err)
+		}
+		delete(object, "recovery")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TaskErrorDetail to handle AdditionalProperties
+func (a TaskErrorDetail) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.HeldTasks != nil {
+		object["held_tasks"], err = json.Marshal(a.HeldTasks)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'held_tasks': %w", err)
+		}
+	}
+
+	if a.Limit != nil {
+		object["limit"], err = json.Marshal(a.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'limit': %w", err)
+		}
+	}
+
+	object["reason"], err = json.Marshal(a.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'reason': %w", err)
+	}
+
+	if a.Recovery != nil {
+		object["recovery"], err = json.Marshal(a.Recovery)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'recovery': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ToolApprovalRequest. Returns the specified
+// element and whether it was found
+func (a ToolApprovalRequest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ToolApprovalRequest
+func (a *ToolApprovalRequest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ToolApprovalRequest to handle AdditionalProperties
+func (a *ToolApprovalRequest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["hint"]; found {
+		err = json.Unmarshal(raw, &a.Hint)
+		if err != nil {
+			return fmt.Errorf("error reading 'hint': %w", err)
+		}
+		delete(object, "hint")
+	}
+
+	if raw, found := object["nested"]; found {
+		err = json.Unmarshal(raw, &a.Nested)
+		if err != nil {
+			return fmt.Errorf("error reading 'nested': %w", err)
+		}
+		delete(object, "nested")
+	}
+
+	if raw, found := object["tools"]; found {
+		err = json.Unmarshal(raw, &a.Tools)
+		if err != nil {
+			return fmt.Errorf("error reading 'tools': %w", err)
+		}
+		delete(object, "tools")
+	}
+
+	if raw, found := object["type"]; found {
+		err = json.Unmarshal(raw, &a.Type)
+		if err != nil {
+			return fmt.Errorf("error reading 'type': %w", err)
+		}
+		delete(object, "type")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ToolApprovalRequest to handle AdditionalProperties
+func (a ToolApprovalRequest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["hint"], err = json.Marshal(a.Hint)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'hint': %w", err)
+	}
+
+	object["nested"], err = json.Marshal(a.Nested)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'nested': %w", err)
+	}
+
+	if a.Tools != nil {
+		object["tools"], err = json.Marshal(a.Tools)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'tools': %w", err)
+		}
+	}
+
+	object["type"], err = json.Marshal(a.Type)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'type': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// AsTemplateMergeConfiguration returns the union data inside the CallSnapshot_Configuration as a TemplateMergeConfiguration
+func (t CallSnapshot_Configuration) AsTemplateMergeConfiguration() (TemplateMergeConfiguration, error) {
+	var body TemplateMergeConfiguration
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTemplateMergeConfiguration overwrites any union data inside the CallSnapshot_Configuration as the provided TemplateMergeConfiguration
+func (t *CallSnapshot_Configuration) FromTemplateMergeConfiguration(v TemplateMergeConfiguration) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTemplateMergeConfiguration performs a merge with any union data inside the CallSnapshot_Configuration, using the provided TemplateMergeConfiguration
+func (t *CallSnapshot_Configuration) MergeTemplateMergeConfiguration(v TemplateMergeConfiguration) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsVerifiedLeafConfiguration returns the union data inside the CallSnapshot_Configuration as a VerifiedLeafConfiguration
+func (t CallSnapshot_Configuration) AsVerifiedLeafConfiguration() (VerifiedLeafConfiguration, error) {
+	var body VerifiedLeafConfiguration
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromVerifiedLeafConfiguration overwrites any union data inside the CallSnapshot_Configuration as the provided VerifiedLeafConfiguration
+func (t *CallSnapshot_Configuration) FromVerifiedLeafConfiguration(v VerifiedLeafConfiguration) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeVerifiedLeafConfiguration performs a merge with any union data inside the CallSnapshot_Configuration, using the provided VerifiedLeafConfiguration
+func (t *CallSnapshot_Configuration) MergeVerifiedLeafConfiguration(v VerifiedLeafConfiguration) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CallSnapshot_Configuration) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CallSnapshot_Configuration) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTemplateMergeConfiguration returns the union data inside the CallSnapshot_Mapping as a TemplateMergeConfiguration
+func (t CallSnapshot_Mapping) AsTemplateMergeConfiguration() (TemplateMergeConfiguration, error) {
+	var body TemplateMergeConfiguration
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTemplateMergeConfiguration overwrites any union data inside the CallSnapshot_Mapping as the provided TemplateMergeConfiguration
+func (t *CallSnapshot_Mapping) FromTemplateMergeConfiguration(v TemplateMergeConfiguration) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTemplateMergeConfiguration performs a merge with any union data inside the CallSnapshot_Mapping, using the provided TemplateMergeConfiguration
+func (t *CallSnapshot_Mapping) MergeTemplateMergeConfiguration(v TemplateMergeConfiguration) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTrustedToolMapping returns the union data inside the CallSnapshot_Mapping as a TrustedToolMapping
+func (t CallSnapshot_Mapping) AsTrustedToolMapping() (TrustedToolMapping, error) {
+	var body TrustedToolMapping
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTrustedToolMapping overwrites any union data inside the CallSnapshot_Mapping as the provided TrustedToolMapping
+func (t *CallSnapshot_Mapping) FromTrustedToolMapping(v TrustedToolMapping) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTrustedToolMapping performs a merge with any union data inside the CallSnapshot_Mapping, using the provided TrustedToolMapping
+func (t *CallSnapshot_Mapping) MergeTrustedToolMapping(v TrustedToolMapping) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CallSnapshot_Mapping) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CallSnapshot_Mapping) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsToolApprovalRequest returns the union data inside the DecisionReceipt_Request as a ToolApprovalRequest
+func (t DecisionReceipt_Request) AsToolApprovalRequest() (ToolApprovalRequest, error) {
+	var body ToolApprovalRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromToolApprovalRequest overwrites any union data inside the DecisionReceipt_Request as the provided ToolApprovalRequest
+func (t *DecisionReceipt_Request) FromToolApprovalRequest(v ToolApprovalRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_request"}`))
+	t.union = b
+	return err
+}
+
+// MergeToolApprovalRequest performs a merge with any union data inside the DecisionReceipt_Request, using the provided ToolApprovalRequest
+func (t *DecisionReceipt_Request) MergeToolApprovalRequest(v ToolApprovalRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_request"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAskUserRequest returns the union data inside the DecisionReceipt_Request as a AskUserRequest
+func (t DecisionReceipt_Request) AsAskUserRequest() (AskUserRequest, error) {
+	var body AskUserRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAskUserRequest overwrites any union data inside the DecisionReceipt_Request as the provided AskUserRequest
+func (t *DecisionReceipt_Request) FromAskUserRequest(v AskUserRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_request"}`))
+	t.union = b
+	return err
+}
+
+// MergeAskUserRequest performs a merge with any union data inside the DecisionReceipt_Request, using the provided AskUserRequest
+func (t *DecisionReceipt_Request) MergeAskUserRequest(v AskUserRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_request"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t DecisionReceipt_Request) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t DecisionReceipt_Request) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "ask_user_request":
+		return t.AsAskUserRequest()
+	case "tool_approval_request":
+		return t.AsToolApprovalRequest()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t DecisionReceipt_Request) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *DecisionReceipt_Request) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsToolApprovalResponseOutput returns the union data inside the DecisionReceipt_Response as a ToolApprovalResponseOutput
+func (t DecisionReceipt_Response) AsToolApprovalResponseOutput() (ToolApprovalResponseOutput, error) {
+	var body ToolApprovalResponseOutput
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromToolApprovalResponseOutput overwrites any union data inside the DecisionReceipt_Response as the provided ToolApprovalResponseOutput
+func (t *DecisionReceipt_Response) FromToolApprovalResponseOutput(v ToolApprovalResponseOutput) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_response"}`))
+	t.union = b
+	return err
+}
+
+// MergeToolApprovalResponseOutput performs a merge with any union data inside the DecisionReceipt_Response, using the provided ToolApprovalResponseOutput
+func (t *DecisionReceipt_Response) MergeToolApprovalResponseOutput(v ToolApprovalResponseOutput) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_response"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAskUserResponse returns the union data inside the DecisionReceipt_Response as a AskUserResponse
+func (t DecisionReceipt_Response) AsAskUserResponse() (AskUserResponse, error) {
+	var body AskUserResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAskUserResponse overwrites any union data inside the DecisionReceipt_Response as the provided AskUserResponse
+func (t *DecisionReceipt_Response) FromAskUserResponse(v AskUserResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_response"}`))
+	t.union = b
+	return err
+}
+
+// MergeAskUserResponse performs a merge with any union data inside the DecisionReceipt_Response, using the provided AskUserResponse
+func (t *DecisionReceipt_Response) MergeAskUserResponse(v AskUserResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_response"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t DecisionReceipt_Response) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t DecisionReceipt_Response) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "ask_user_response":
+		return t.AsAskUserResponse()
+	case "tool_approval_response":
+		return t.AsToolApprovalResponseOutput()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t DecisionReceipt_Response) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *DecisionReceipt_Response) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsToolApprovalResponse returns the union data inside the HITLDecisionInput_Response as a ToolApprovalResponse
 func (t HITLDecisionInput_Response) AsToolApprovalResponse() (ToolApprovalResponse, error) {
@@ -1456,6 +5870,345 @@ func (t *HITLDecisionInput_Response) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsToolApprovalRequest returns the union data inside the HITLProjection_Payload as a ToolApprovalRequest
+func (t HITLProjection_Payload) AsToolApprovalRequest() (ToolApprovalRequest, error) {
+	var body ToolApprovalRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromToolApprovalRequest overwrites any union data inside the HITLProjection_Payload as the provided ToolApprovalRequest
+func (t *HITLProjection_Payload) FromToolApprovalRequest(v ToolApprovalRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_request"}`))
+	t.union = b
+	return err
+}
+
+// MergeToolApprovalRequest performs a merge with any union data inside the HITLProjection_Payload, using the provided ToolApprovalRequest
+func (t *HITLProjection_Payload) MergeToolApprovalRequest(v ToolApprovalRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"tool_approval_request"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAskUserRequest returns the union data inside the HITLProjection_Payload as a AskUserRequest
+func (t HITLProjection_Payload) AsAskUserRequest() (AskUserRequest, error) {
+	var body AskUserRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAskUserRequest overwrites any union data inside the HITLProjection_Payload as the provided AskUserRequest
+func (t *HITLProjection_Payload) FromAskUserRequest(v AskUserRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_request"}`))
+	t.union = b
+	return err
+}
+
+// MergeAskUserRequest performs a merge with any union data inside the HITLProjection_Payload, using the provided AskUserRequest
+func (t *HITLProjection_Payload) MergeAskUserRequest(v AskUserRequest) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"ask_user_request"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t HITLProjection_Payload) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t HITLProjection_Payload) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "ask_user_request":
+		return t.AsAskUserRequest()
+	case "tool_approval_request":
+		return t.AsToolApprovalRequest()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t HITLProjection_Payload) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *HITLProjection_Payload) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHealthTurnEvent returns the union data inside the HealthEvent as a HealthTurnEvent
+func (t HealthEvent) AsHealthTurnEvent() (HealthTurnEvent, error) {
+	var body HealthTurnEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHealthTurnEvent overwrites any union data inside the HealthEvent as the provided HealthTurnEvent
+func (t *HealthEvent) FromHealthTurnEvent(v HealthTurnEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"turn"}`))
+	t.union = b
+	return err
+}
+
+// MergeHealthTurnEvent performs a merge with any union data inside the HealthEvent, using the provided HealthTurnEvent
+func (t *HealthEvent) MergeHealthTurnEvent(v HealthTurnEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"turn"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHealthToolEvent returns the union data inside the HealthEvent as a HealthToolEvent
+func (t HealthEvent) AsHealthToolEvent() (HealthToolEvent, error) {
+	var body HealthToolEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHealthToolEvent overwrites any union data inside the HealthEvent as the provided HealthToolEvent
+func (t *HealthEvent) FromHealthToolEvent(v HealthToolEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"tool"}`))
+	t.union = b
+	return err
+}
+
+// MergeHealthToolEvent performs a merge with any union data inside the HealthEvent, using the provided HealthToolEvent
+func (t *HealthEvent) MergeHealthToolEvent(v HealthToolEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"tool"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHealthUsageEvent returns the union data inside the HealthEvent as a HealthUsageEvent
+func (t HealthEvent) AsHealthUsageEvent() (HealthUsageEvent, error) {
+	var body HealthUsageEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHealthUsageEvent overwrites any union data inside the HealthEvent as the provided HealthUsageEvent
+func (t *HealthEvent) FromHealthUsageEvent(v HealthUsageEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"usage"}`))
+	t.union = b
+	return err
+}
+
+// MergeHealthUsageEvent performs a merge with any union data inside the HealthEvent, using the provided HealthUsageEvent
+func (t *HealthEvent) MergeHealthUsageEvent(v HealthUsageEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"kind":"usage"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t HealthEvent) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"kind"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t HealthEvent) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "tool":
+		return t.AsHealthToolEvent()
+	case "turn":
+		return t.AsHealthTurnEvent()
+	case "usage":
+		return t.AsHealthUsageEvent()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t HealthEvent) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *HealthEvent) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMergeApprovalProjectPolicy returns the union data inside the MergeApprovalReason as a MergeApprovalProjectPolicy
+func (t MergeApprovalReason) AsMergeApprovalProjectPolicy() (MergeApprovalProjectPolicy, error) {
+	var body MergeApprovalProjectPolicy
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMergeApprovalProjectPolicy overwrites any union data inside the MergeApprovalReason as the provided MergeApprovalProjectPolicy
+func (t *MergeApprovalReason) FromMergeApprovalProjectPolicy(v MergeApprovalProjectPolicy) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"project_policy"}`))
+	t.union = b
+	return err
+}
+
+// MergeMergeApprovalProjectPolicy performs a merge with any union data inside the MergeApprovalReason, using the provided MergeApprovalProjectPolicy
+func (t *MergeApprovalReason) MergeMergeApprovalProjectPolicy(v MergeApprovalProjectPolicy) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"project_policy"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMergeApprovalProtectedPath returns the union data inside the MergeApprovalReason as a MergeApprovalProtectedPath
+func (t MergeApprovalReason) AsMergeApprovalProtectedPath() (MergeApprovalProtectedPath, error) {
+	var body MergeApprovalProtectedPath
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMergeApprovalProtectedPath overwrites any union data inside the MergeApprovalReason as the provided MergeApprovalProtectedPath
+func (t *MergeApprovalReason) FromMergeApprovalProtectedPath(v MergeApprovalProtectedPath) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"protected_path"}`))
+	t.union = b
+	return err
+}
+
+// MergeMergeApprovalProtectedPath performs a merge with any union data inside the MergeApprovalReason, using the provided MergeApprovalProtectedPath
+func (t *MergeApprovalReason) MergeMergeApprovalProtectedPath(v MergeApprovalProtectedPath) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"protected_path"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t MergeApprovalReason) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t MergeApprovalReason) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "project_policy":
+		return t.AsMergeApprovalProjectPolicy()
+	case "protected_path":
+		return t.AsMergeApprovalProtectedPath()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t MergeApprovalReason) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *MergeApprovalReason) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // AsValidationErrorLoc0 returns the union data inside the ValidationError_Loc_Item as a ValidationErrorLoc0
 func (t ValidationError_Loc_Item) AsValidationErrorLoc0() (ValidationErrorLoc0, error) {
 	var body ValidationErrorLoc0
@@ -1518,6 +6271,1680 @@ func (t *ValidationError_Loc_Item) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsHTTPValidationError returns the union data inside the RegisterEnvironment422JSONResponseBody as a HTTPValidationError
+func (t RegisterEnvironment422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the RegisterEnvironment422JSONResponseBody as the provided HTTPValidationError
+func (t *RegisterEnvironment422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the RegisterEnvironment422JSONResponseBody, using the provided HTTPValidationError
+func (t *RegisterEnvironment422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the RegisterEnvironment422JSONResponseBody as a HTTPError
+func (t RegisterEnvironment422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the RegisterEnvironment422JSONResponseBody as the provided HTTPError
+func (t *RegisterEnvironment422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the RegisterEnvironment422JSONResponseBody, using the provided HTTPError
+func (t *RegisterEnvironment422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RegisterEnvironment422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RegisterEnvironment422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the AcceptEnvironmentDefault422JSONResponseBody as a HTTPValidationError
+func (t AcceptEnvironmentDefault422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the AcceptEnvironmentDefault422JSONResponseBody as the provided HTTPValidationError
+func (t *AcceptEnvironmentDefault422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the AcceptEnvironmentDefault422JSONResponseBody, using the provided HTTPValidationError
+func (t *AcceptEnvironmentDefault422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the AcceptEnvironmentDefault422JSONResponseBody as a HTTPError
+func (t AcceptEnvironmentDefault422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the AcceptEnvironmentDefault422JSONResponseBody as the provided HTTPError
+func (t *AcceptEnvironmentDefault422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the AcceptEnvironmentDefault422JSONResponseBody, using the provided HTTPError
+func (t *AcceptEnvironmentDefault422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t AcceptEnvironmentDefault422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *AcceptEnvironmentDefault422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the RefreshEnvironment422JSONResponseBody as a HTTPValidationError
+func (t RefreshEnvironment422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the RefreshEnvironment422JSONResponseBody as the provided HTTPValidationError
+func (t *RefreshEnvironment422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the RefreshEnvironment422JSONResponseBody, using the provided HTTPValidationError
+func (t *RefreshEnvironment422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the RefreshEnvironment422JSONResponseBody as a HTTPError
+func (t RefreshEnvironment422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the RefreshEnvironment422JSONResponseBody as the provided HTTPError
+func (t *RefreshEnvironment422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the RefreshEnvironment422JSONResponseBody, using the provided HTTPError
+func (t *RefreshEnvironment422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RefreshEnvironment422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RefreshEnvironment422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the GetProjectDefaultProvider404JSONResponseBody as a TaskError
+func (t GetProjectDefaultProvider404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the GetProjectDefaultProvider404JSONResponseBody as the provided TaskError
+func (t *GetProjectDefaultProvider404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the GetProjectDefaultProvider404JSONResponseBody, using the provided TaskError
+func (t *GetProjectDefaultProvider404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the GetProjectDefaultProvider404JSONResponseBody as a HTTPError
+func (t GetProjectDefaultProvider404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the GetProjectDefaultProvider404JSONResponseBody as the provided HTTPError
+func (t *GetProjectDefaultProvider404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the GetProjectDefaultProvider404JSONResponseBody, using the provided HTTPError
+func (t *GetProjectDefaultProvider404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t GetProjectDefaultProvider404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *GetProjectDefaultProvider404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the UpdateProjectDefaultProvider403JSONResponseBody as a TaskError
+func (t UpdateProjectDefaultProvider403JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the UpdateProjectDefaultProvider403JSONResponseBody as the provided TaskError
+func (t *UpdateProjectDefaultProvider403JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the UpdateProjectDefaultProvider403JSONResponseBody, using the provided TaskError
+func (t *UpdateProjectDefaultProvider403JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the UpdateProjectDefaultProvider403JSONResponseBody as a HTTPError
+func (t UpdateProjectDefaultProvider403JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the UpdateProjectDefaultProvider403JSONResponseBody as the provided HTTPError
+func (t *UpdateProjectDefaultProvider403JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the UpdateProjectDefaultProvider403JSONResponseBody, using the provided HTTPError
+func (t *UpdateProjectDefaultProvider403JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t UpdateProjectDefaultProvider403JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *UpdateProjectDefaultProvider403JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the UpdateProjectDefaultProvider404JSONResponseBody as a TaskError
+func (t UpdateProjectDefaultProvider404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the UpdateProjectDefaultProvider404JSONResponseBody as the provided TaskError
+func (t *UpdateProjectDefaultProvider404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the UpdateProjectDefaultProvider404JSONResponseBody, using the provided TaskError
+func (t *UpdateProjectDefaultProvider404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the UpdateProjectDefaultProvider404JSONResponseBody as a HTTPError
+func (t UpdateProjectDefaultProvider404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the UpdateProjectDefaultProvider404JSONResponseBody as the provided HTTPError
+func (t *UpdateProjectDefaultProvider404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the UpdateProjectDefaultProvider404JSONResponseBody, using the provided HTTPError
+func (t *UpdateProjectDefaultProvider404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t UpdateProjectDefaultProvider404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *UpdateProjectDefaultProvider404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the UpdateProjectDefaultProvider422JSONResponseBody as a HTTPValidationError
+func (t UpdateProjectDefaultProvider422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the UpdateProjectDefaultProvider422JSONResponseBody as the provided HTTPValidationError
+func (t *UpdateProjectDefaultProvider422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the UpdateProjectDefaultProvider422JSONResponseBody, using the provided HTTPValidationError
+func (t *UpdateProjectDefaultProvider422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the UpdateProjectDefaultProvider422JSONResponseBody as a HTTPError
+func (t UpdateProjectDefaultProvider422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the UpdateProjectDefaultProvider422JSONResponseBody as the provided HTTPError
+func (t *UpdateProjectDefaultProvider422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the UpdateProjectDefaultProvider422JSONResponseBody, using the provided HTTPError
+func (t *UpdateProjectDefaultProvider422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t UpdateProjectDefaultProvider422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *UpdateProjectDefaultProvider422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the SelectProjectEnvironment422JSONResponseBody as a HTTPValidationError
+func (t SelectProjectEnvironment422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the SelectProjectEnvironment422JSONResponseBody as the provided HTTPValidationError
+func (t *SelectProjectEnvironment422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the SelectProjectEnvironment422JSONResponseBody, using the provided HTTPValidationError
+func (t *SelectProjectEnvironment422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the SelectProjectEnvironment422JSONResponseBody as a HTTPError
+func (t SelectProjectEnvironment422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the SelectProjectEnvironment422JSONResponseBody as the provided HTTPError
+func (t *SelectProjectEnvironment422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the SelectProjectEnvironment422JSONResponseBody, using the provided HTTPError
+func (t *SelectProjectEnvironment422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SelectProjectEnvironment422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SelectProjectEnvironment422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the CreateSession422JSONResponseBody as a HTTPValidationError
+func (t CreateSession422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the CreateSession422JSONResponseBody as the provided HTTPValidationError
+func (t *CreateSession422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the CreateSession422JSONResponseBody, using the provided HTTPValidationError
+func (t *CreateSession422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CreateSession422JSONResponseBody as a HTTPError
+func (t CreateSession422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CreateSession422JSONResponseBody as the provided HTTPError
+func (t *CreateSession422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CreateSession422JSONResponseBody, using the provided HTTPError
+func (t *CreateSession422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateSession422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateSession422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the GetTaskOperation404JSONResponseBody as a TaskError
+func (t GetTaskOperation404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the GetTaskOperation404JSONResponseBody as the provided TaskError
+func (t *GetTaskOperation404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the GetTaskOperation404JSONResponseBody, using the provided TaskError
+func (t *GetTaskOperation404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the GetTaskOperation404JSONResponseBody as a HTTPError
+func (t GetTaskOperation404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the GetTaskOperation404JSONResponseBody as the provided HTTPError
+func (t *GetTaskOperation404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the GetTaskOperation404JSONResponseBody, using the provided HTTPError
+func (t *GetTaskOperation404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t GetTaskOperation404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *GetTaskOperation404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the CreateTask403JSONResponseBody as a TaskError
+func (t CreateTask403JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CreateTask403JSONResponseBody as the provided TaskError
+func (t *CreateTask403JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CreateTask403JSONResponseBody, using the provided TaskError
+func (t *CreateTask403JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CreateTask403JSONResponseBody as a HTTPError
+func (t CreateTask403JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CreateTask403JSONResponseBody as the provided HTTPError
+func (t *CreateTask403JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CreateTask403JSONResponseBody, using the provided HTTPError
+func (t *CreateTask403JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateTask403JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateTask403JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the CreateTask404JSONResponseBody as a TaskError
+func (t CreateTask404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CreateTask404JSONResponseBody as the provided TaskError
+func (t *CreateTask404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CreateTask404JSONResponseBody, using the provided TaskError
+func (t *CreateTask404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CreateTask404JSONResponseBody as a HTTPError
+func (t CreateTask404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CreateTask404JSONResponseBody as the provided HTTPError
+func (t *CreateTask404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CreateTask404JSONResponseBody, using the provided HTTPError
+func (t *CreateTask404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateTask404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateTask404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the CreateTask422JSONResponseBody as a HTTPValidationError
+func (t CreateTask422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the CreateTask422JSONResponseBody as the provided HTTPValidationError
+func (t *CreateTask422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the CreateTask422JSONResponseBody, using the provided HTTPValidationError
+func (t *CreateTask422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTaskError returns the union data inside the CreateTask422JSONResponseBody as a TaskError
+func (t CreateTask422JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CreateTask422JSONResponseBody as the provided TaskError
+func (t *CreateTask422JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CreateTask422JSONResponseBody, using the provided TaskError
+func (t *CreateTask422JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateTask422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateTask422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the GetTask404JSONResponseBody as a TaskError
+func (t GetTask404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the GetTask404JSONResponseBody as the provided TaskError
+func (t *GetTask404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the GetTask404JSONResponseBody, using the provided TaskError
+func (t *GetTask404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the GetTask404JSONResponseBody as a HTTPError
+func (t GetTask404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the GetTask404JSONResponseBody as the provided HTTPError
+func (t *GetTask404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the GetTask404JSONResponseBody, using the provided HTTPError
+func (t *GetTask404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t GetTask404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *GetTask404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the CancelTask403JSONResponseBody as a TaskError
+func (t CancelTask403JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CancelTask403JSONResponseBody as the provided TaskError
+func (t *CancelTask403JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CancelTask403JSONResponseBody, using the provided TaskError
+func (t *CancelTask403JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CancelTask403JSONResponseBody as a HTTPError
+func (t CancelTask403JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CancelTask403JSONResponseBody as the provided HTTPError
+func (t *CancelTask403JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CancelTask403JSONResponseBody, using the provided HTTPError
+func (t *CancelTask403JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CancelTask403JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CancelTask403JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the CancelTask404JSONResponseBody as a TaskError
+func (t CancelTask404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CancelTask404JSONResponseBody as the provided TaskError
+func (t *CancelTask404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CancelTask404JSONResponseBody, using the provided TaskError
+func (t *CancelTask404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CancelTask404JSONResponseBody as a HTTPError
+func (t CancelTask404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CancelTask404JSONResponseBody as the provided HTTPError
+func (t *CancelTask404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CancelTask404JSONResponseBody, using the provided HTTPError
+func (t *CancelTask404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CancelTask404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CancelTask404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the CancelTask422JSONResponseBody as a HTTPValidationError
+func (t CancelTask422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the CancelTask422JSONResponseBody as the provided HTTPValidationError
+func (t *CancelTask422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the CancelTask422JSONResponseBody, using the provided HTTPValidationError
+func (t *CancelTask422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTaskError returns the union data inside the CancelTask422JSONResponseBody as a TaskError
+func (t CancelTask422JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the CancelTask422JSONResponseBody as the provided TaskError
+func (t *CancelTask422JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the CancelTask422JSONResponseBody, using the provided TaskError
+func (t *CancelTask422JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CancelTask422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CancelTask422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the ReassignTask403JSONResponseBody as a TaskError
+func (t ReassignTask403JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the ReassignTask403JSONResponseBody as the provided TaskError
+func (t *ReassignTask403JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the ReassignTask403JSONResponseBody, using the provided TaskError
+func (t *ReassignTask403JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the ReassignTask403JSONResponseBody as a HTTPError
+func (t ReassignTask403JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the ReassignTask403JSONResponseBody as the provided HTTPError
+func (t *ReassignTask403JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the ReassignTask403JSONResponseBody, using the provided HTTPError
+func (t *ReassignTask403JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ReassignTask403JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ReassignTask403JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the ReassignTask404JSONResponseBody as a TaskError
+func (t ReassignTask404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the ReassignTask404JSONResponseBody as the provided TaskError
+func (t *ReassignTask404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the ReassignTask404JSONResponseBody, using the provided TaskError
+func (t *ReassignTask404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the ReassignTask404JSONResponseBody as a HTTPError
+func (t ReassignTask404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the ReassignTask404JSONResponseBody as the provided HTTPError
+func (t *ReassignTask404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the ReassignTask404JSONResponseBody, using the provided HTTPError
+func (t *ReassignTask404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ReassignTask404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ReassignTask404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the ReassignTask422JSONResponseBody as a HTTPValidationError
+func (t ReassignTask422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the ReassignTask422JSONResponseBody as the provided HTTPValidationError
+func (t *ReassignTask422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the ReassignTask422JSONResponseBody, using the provided HTTPValidationError
+func (t *ReassignTask422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTaskError returns the union data inside the ReassignTask422JSONResponseBody as a TaskError
+func (t ReassignTask422JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the ReassignTask422JSONResponseBody as the provided TaskError
+func (t *ReassignTask422JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the ReassignTask422JSONResponseBody, using the provided TaskError
+func (t *ReassignTask422JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ReassignTask422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ReassignTask422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the RetryTask403JSONResponseBody as a TaskError
+func (t RetryTask403JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the RetryTask403JSONResponseBody as the provided TaskError
+func (t *RetryTask403JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the RetryTask403JSONResponseBody, using the provided TaskError
+func (t *RetryTask403JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the RetryTask403JSONResponseBody as a HTTPError
+func (t RetryTask403JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the RetryTask403JSONResponseBody as the provided HTTPError
+func (t *RetryTask403JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the RetryTask403JSONResponseBody, using the provided HTTPError
+func (t *RetryTask403JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RetryTask403JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RetryTask403JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTaskError returns the union data inside the RetryTask404JSONResponseBody as a TaskError
+func (t RetryTask404JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the RetryTask404JSONResponseBody as the provided TaskError
+func (t *RetryTask404JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the RetryTask404JSONResponseBody, using the provided TaskError
+func (t *RetryTask404JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the RetryTask404JSONResponseBody as a HTTPError
+func (t RetryTask404JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the RetryTask404JSONResponseBody as the provided HTTPError
+func (t *RetryTask404JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the RetryTask404JSONResponseBody, using the provided HTTPError
+func (t *RetryTask404JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RetryTask404JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RetryTask404JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the RetryTask422JSONResponseBody as a HTTPValidationError
+func (t RetryTask422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the RetryTask422JSONResponseBody as the provided HTTPValidationError
+func (t *RetryTask422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the RetryTask422JSONResponseBody, using the provided HTTPValidationError
+func (t *RetryTask422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTaskError returns the union data inside the RetryTask422JSONResponseBody as a TaskError
+func (t RetryTask422JSONResponseBody) AsTaskError() (TaskError, error) {
+	var body TaskError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTaskError overwrites any union data inside the RetryTask422JSONResponseBody as the provided TaskError
+func (t *RetryTask422JSONResponseBody) FromTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTaskError performs a merge with any union data inside the RetryTask422JSONResponseBody, using the provided TaskError
+func (t *RetryTask422JSONResponseBody) MergeTaskError(v TaskError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RetryTask422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RetryTask422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the CreateWorkspace422JSONResponseBody as a HTTPValidationError
+func (t CreateWorkspace422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the CreateWorkspace422JSONResponseBody as the provided HTTPValidationError
+func (t *CreateWorkspace422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the CreateWorkspace422JSONResponseBody, using the provided HTTPValidationError
+func (t *CreateWorkspace422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the CreateWorkspace422JSONResponseBody as a HTTPError
+func (t CreateWorkspace422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the CreateWorkspace422JSONResponseBody as the provided HTTPError
+func (t *CreateWorkspace422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the CreateWorkspace422JSONResponseBody, using the provided HTTPError
+func (t *CreateWorkspace422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateWorkspace422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateWorkspace422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the RefreshWorkspace422JSONResponseBody as a HTTPValidationError
+func (t RefreshWorkspace422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the RefreshWorkspace422JSONResponseBody as the provided HTTPValidationError
+func (t *RefreshWorkspace422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the RefreshWorkspace422JSONResponseBody, using the provided HTTPValidationError
+func (t *RefreshWorkspace422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the RefreshWorkspace422JSONResponseBody as a HTTPError
+func (t RefreshWorkspace422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the RefreshWorkspace422JSONResponseBody as the provided HTTPError
+func (t *RefreshWorkspace422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the RefreshWorkspace422JSONResponseBody, using the provided HTTPError
+func (t *RefreshWorkspace422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RefreshWorkspace422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RefreshWorkspace422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the ResumeWorkspace422JSONResponseBody as a HTTPValidationError
+func (t ResumeWorkspace422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the ResumeWorkspace422JSONResponseBody as the provided HTTPValidationError
+func (t *ResumeWorkspace422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the ResumeWorkspace422JSONResponseBody, using the provided HTTPValidationError
+func (t *ResumeWorkspace422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the ResumeWorkspace422JSONResponseBody as a HTTPError
+func (t ResumeWorkspace422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the ResumeWorkspace422JSONResponseBody as the provided HTTPError
+func (t *ResumeWorkspace422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the ResumeWorkspace422JSONResponseBody, using the provided HTTPError
+func (t *ResumeWorkspace422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ResumeWorkspace422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ResumeWorkspace422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsHTTPValidationError returns the union data inside the SuspendWorkspace422JSONResponseBody as a HTTPValidationError
+func (t SuspendWorkspace422JSONResponseBody) AsHTTPValidationError() (HTTPValidationError, error) {
+	var body HTTPValidationError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPValidationError overwrites any union data inside the SuspendWorkspace422JSONResponseBody as the provided HTTPValidationError
+func (t *SuspendWorkspace422JSONResponseBody) FromHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPValidationError performs a merge with any union data inside the SuspendWorkspace422JSONResponseBody, using the provided HTTPValidationError
+func (t *SuspendWorkspace422JSONResponseBody) MergeHTTPValidationError(v HTTPValidationError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsHTTPError returns the union data inside the SuspendWorkspace422JSONResponseBody as a HTTPError
+func (t SuspendWorkspace422JSONResponseBody) AsHTTPError() (HTTPError, error) {
+	var body HTTPError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromHTTPError overwrites any union data inside the SuspendWorkspace422JSONResponseBody as the provided HTTPError
+func (t *SuspendWorkspace422JSONResponseBody) FromHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeHTTPError performs a merge with any union data inside the SuspendWorkspace422JSONResponseBody, using the provided HTTPError
+func (t *SuspendWorkspace422JSONResponseBody) MergeHTTPError(v HTTPError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SuspendWorkspace422JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SuspendWorkspace422JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListActivity Owner Activity
@@ -1544,12 +7971,12 @@ type ServerInterface interface {
 	// AcceptEnvironmentDefault Set Default
 	// (PUT /environments/{environment_id}/default)
 	AcceptEnvironmentDefault(w http.ResponseWriter, r *http.Request, environmentId string)
-	// RevokeEnvironment Revoke
+	// RevokeEnvironmentFromProject Revoke
 	// (DELETE /environments/{environment_id}/grants/{project_id})
-	RevokeEnvironment(w http.ResponseWriter, r *http.Request, environmentId string, projectId string)
-	// GrantEnvironment Grant
+	RevokeEnvironmentFromProject(w http.ResponseWriter, r *http.Request, environmentId string, projectId string)
+	// GrantEnvironmentToProject Grant
 	// (PUT /environments/{environment_id}/grants/{project_id})
-	GrantEnvironment(w http.ResponseWriter, r *http.Request, environmentId string, projectId string)
+	GrantEnvironmentToProject(w http.ResponseWriter, r *http.Request, environmentId string, projectId string)
 	// RefreshEnvironment Refresh Tag
 	// (POST /environments/{environment_id}/refresh)
 	RefreshEnvironment(w http.ResponseWriter, r *http.Request, environmentId string)
@@ -1862,8 +8289,8 @@ func (siw *ServerInterfaceWrapper) AcceptEnvironmentDefault(w http.ResponseWrite
 	handler.ServeHTTP(w, r)
 }
 
-// RevokeEnvironment operation middleware
-func (siw *ServerInterfaceWrapper) RevokeEnvironment(w http.ResponseWriter, r *http.Request) {
+// RevokeEnvironmentFromProject operation middleware
+func (siw *ServerInterfaceWrapper) RevokeEnvironmentFromProject(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -1887,7 +8314,7 @@ func (siw *ServerInterfaceWrapper) RevokeEnvironment(w http.ResponseWriter, r *h
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.RevokeEnvironment(w, r, environmentId, projectId)
+		siw.Handler.RevokeEnvironmentFromProject(w, r, environmentId, projectId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1897,8 +8324,8 @@ func (siw *ServerInterfaceWrapper) RevokeEnvironment(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
-// GrantEnvironment operation middleware
-func (siw *ServerInterfaceWrapper) GrantEnvironment(w http.ResponseWriter, r *http.Request) {
+// GrantEnvironmentToProject operation middleware
+func (siw *ServerInterfaceWrapper) GrantEnvironmentToProject(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -1922,7 +8349,7 @@ func (siw *ServerInterfaceWrapper) GrantEnvironment(w http.ResponseWriter, r *ht
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GrantEnvironment(w, r, environmentId, projectId)
+		siw.Handler.GrantEnvironmentToProject(w, r, environmentId, projectId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3468,8 +9895,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments", wrapper.RegisterEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{environment_id}", wrapper.GetEnvironment)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{environment_id}/default", wrapper.AcceptEnvironmentDefault)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{environment_id}/grants/{project_id}", wrapper.RevokeEnvironment)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{environment_id}/grants/{project_id}", wrapper.GrantEnvironment)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{environment_id}/grants/{project_id}", wrapper.RevokeEnvironmentFromProject)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{environment_id}/grants/{project_id}", wrapper.GrantEnvironmentToProject)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{environment_id}/refresh", wrapper.RefreshEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{environment_id}/versions", wrapper.ListEnvironmentVersions)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{environment_id}/versions/{version_id}", wrapper.GetEnvironmentVersion)
@@ -3546,6 +9973,20 @@ func (response ListActivity200JSONResponse) VisitListActivityResponse(w http.Res
 	return err
 }
 
+type ListActivity404JSONResponse HTTPError
+
+func (response ListActivity404JSONResponse) VisitListActivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetAttentionRequestObject struct {
 }
 
@@ -3563,6 +10004,20 @@ func (response GetAttention200JSONResponse) VisitGetAttentionResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAttention404JSONResponse HTTPError
+
+func (response GetAttention404JSONResponse) VisitGetAttentionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3585,6 +10040,48 @@ func (response SendMessage200JSONResponse) VisitSendMessageResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendMessage403JSONResponse HTTPError
+
+func (response SendMessage403JSONResponse) VisitSendMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendMessage404JSONResponse HTTPError
+
+func (response SendMessage404JSONResponse) VisitSendMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendMessage409JSONResponse HTTPError
+
+func (response SendMessage409JSONResponse) VisitSendMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3625,6 +10122,20 @@ func (response GetConversation200JSONResponse) VisitGetConversationResponse(w ht
 	return err
 }
 
+type GetConversation404JSONResponse HTTPError
+
+func (response GetConversation404JSONResponse) VisitGetConversationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetConversation422JSONResponse HTTPValidationError
 
 func (response GetConversation422JSONResponse) VisitGetConversationResponse(w http.ResponseWriter) error {
@@ -3646,7 +10157,7 @@ type ListEnvironmentsResponseObject interface {
 	VisitListEnvironmentsResponse(w http.ResponseWriter) error
 }
 
-type ListEnvironments200JSONResponse json.RawMessage
+type ListEnvironments200JSONResponse []DevEnvironment
 
 func (response ListEnvironments200JSONResponse) VisitListEnvironmentsResponse(w http.ResponseWriter) error {
 
@@ -3660,6 +10171,20 @@ func (response ListEnvironments200JSONResponse) VisitListEnvironmentsResponse(w 
 	return err
 }
 
+type ListEnvironments404JSONResponse HTTPError
+
+func (response ListEnvironments404JSONResponse) VisitListEnvironmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RegisterEnvironmentRequestObject struct {
 	Body *RegisterEnvironmentJSONRequestBody
 }
@@ -3668,7 +10193,7 @@ type RegisterEnvironmentResponseObject interface {
 	VisitRegisterEnvironmentResponse(w http.ResponseWriter) error
 }
 
-type RegisterEnvironment201JSONResponse json.RawMessage
+type RegisterEnvironment201JSONResponse RegisteredEnvironment
 
 func (response RegisterEnvironment201JSONResponse) VisitRegisterEnvironmentResponse(w http.ResponseWriter) error {
 
@@ -3682,12 +10207,40 @@ func (response RegisterEnvironment201JSONResponse) VisitRegisterEnvironmentRespo
 	return err
 }
 
-type RegisterEnvironment422JSONResponse HTTPValidationError
+type RegisterEnvironment403JSONResponse HTTPError
+
+func (response RegisterEnvironment403JSONResponse) VisitRegisterEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterEnvironment404JSONResponse HTTPError
+
+func (response RegisterEnvironment404JSONResponse) VisitRegisterEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterEnvironment422JSONResponse = RegisterEnvironment422JSONResponseBody
 
 func (response RegisterEnvironment422JSONResponse) VisitRegisterEnvironmentResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -3704,7 +10257,7 @@ type GetEnvironmentResponseObject interface {
 	VisitGetEnvironmentResponse(w http.ResponseWriter) error
 }
 
-type GetEnvironment200JSONResponse json.RawMessage
+type GetEnvironment200JSONResponse DevEnvironment
 
 func (response GetEnvironment200JSONResponse) VisitGetEnvironmentResponse(w http.ResponseWriter) error {
 
@@ -3714,6 +10267,20 @@ func (response GetEnvironment200JSONResponse) VisitGetEnvironmentResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironment404JSONResponse HTTPError
+
+func (response GetEnvironment404JSONResponse) VisitGetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3741,7 +10308,7 @@ type AcceptEnvironmentDefaultResponseObject interface {
 	VisitAcceptEnvironmentDefaultResponse(w http.ResponseWriter) error
 }
 
-type AcceptEnvironmentDefault200JSONResponse json.RawMessage
+type AcceptEnvironmentDefault200JSONResponse DevEnvironment
 
 func (response AcceptEnvironmentDefault200JSONResponse) VisitAcceptEnvironmentDefaultResponse(w http.ResponseWriter) error {
 
@@ -3755,12 +10322,40 @@ func (response AcceptEnvironmentDefault200JSONResponse) VisitAcceptEnvironmentDe
 	return err
 }
 
-type AcceptEnvironmentDefault422JSONResponse HTTPValidationError
+type AcceptEnvironmentDefault403JSONResponse HTTPError
+
+func (response AcceptEnvironmentDefault403JSONResponse) VisitAcceptEnvironmentDefaultResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptEnvironmentDefault404JSONResponse HTTPError
+
+func (response AcceptEnvironmentDefault404JSONResponse) VisitAcceptEnvironmentDefaultResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptEnvironmentDefault422JSONResponse = AcceptEnvironmentDefault422JSONResponseBody
 
 func (response AcceptEnvironmentDefault422JSONResponse) VisitAcceptEnvironmentDefaultResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -3769,26 +10364,54 @@ func (response AcceptEnvironmentDefault422JSONResponse) VisitAcceptEnvironmentDe
 	return err
 }
 
-type RevokeEnvironmentRequestObject struct {
+type RevokeEnvironmentFromProjectRequestObject struct {
 	EnvironmentId string `json:"environment_id"`
 	ProjectId     string `json:"project_id"`
 }
 
-type RevokeEnvironmentResponseObject interface {
-	VisitRevokeEnvironmentResponse(w http.ResponseWriter) error
+type RevokeEnvironmentFromProjectResponseObject interface {
+	VisitRevokeEnvironmentFromProjectResponse(w http.ResponseWriter) error
 }
 
-type RevokeEnvironment204Response struct {
+type RevokeEnvironmentFromProject204Response struct {
 }
 
-func (response RevokeEnvironment204Response) VisitRevokeEnvironmentResponse(w http.ResponseWriter) error {
+func (response RevokeEnvironmentFromProject204Response) VisitRevokeEnvironmentFromProjectResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
 }
 
-type RevokeEnvironment422JSONResponse HTTPValidationError
+type RevokeEnvironmentFromProject403JSONResponse HTTPError
 
-func (response RevokeEnvironment422JSONResponse) VisitRevokeEnvironmentResponse(w http.ResponseWriter) error {
+func (response RevokeEnvironmentFromProject403JSONResponse) VisitRevokeEnvironmentFromProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeEnvironmentFromProject404JSONResponse HTTPError
+
+func (response RevokeEnvironmentFromProject404JSONResponse) VisitRevokeEnvironmentFromProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeEnvironmentFromProject422JSONResponse HTTPValidationError
+
+func (response RevokeEnvironmentFromProject422JSONResponse) VisitRevokeEnvironmentFromProjectResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3800,19 +10423,19 @@ func (response RevokeEnvironment422JSONResponse) VisitRevokeEnvironmentResponse(
 	return err
 }
 
-type GrantEnvironmentRequestObject struct {
+type GrantEnvironmentToProjectRequestObject struct {
 	EnvironmentId string `json:"environment_id"`
 	ProjectId     string `json:"project_id"`
-	Body          *GrantEnvironmentJSONRequestBody
+	Body          *GrantEnvironmentToProjectJSONRequestBody
 }
 
-type GrantEnvironmentResponseObject interface {
-	VisitGrantEnvironmentResponse(w http.ResponseWriter) error
+type GrantEnvironmentToProjectResponseObject interface {
+	VisitGrantEnvironmentToProjectResponse(w http.ResponseWriter) error
 }
 
-type GrantEnvironment200JSONResponse json.RawMessage
+type GrantEnvironmentToProject200JSONResponse ProjectEnvironmentGrant
 
-func (response GrantEnvironment200JSONResponse) VisitGrantEnvironmentResponse(w http.ResponseWriter) error {
+func (response GrantEnvironmentToProject200JSONResponse) VisitGrantEnvironmentToProjectResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3824,9 +10447,37 @@ func (response GrantEnvironment200JSONResponse) VisitGrantEnvironmentResponse(w 
 	return err
 }
 
-type GrantEnvironment422JSONResponse HTTPValidationError
+type GrantEnvironmentToProject403JSONResponse HTTPError
 
-func (response GrantEnvironment422JSONResponse) VisitGrantEnvironmentResponse(w http.ResponseWriter) error {
+func (response GrantEnvironmentToProject403JSONResponse) VisitGrantEnvironmentToProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GrantEnvironmentToProject404JSONResponse HTTPError
+
+func (response GrantEnvironmentToProject404JSONResponse) VisitGrantEnvironmentToProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GrantEnvironmentToProject422JSONResponse HTTPValidationError
+
+func (response GrantEnvironmentToProject422JSONResponse) VisitGrantEnvironmentToProjectResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3847,7 +10498,7 @@ type RefreshEnvironmentResponseObject interface {
 	VisitRefreshEnvironmentResponse(w http.ResponseWriter) error
 }
 
-type RefreshEnvironment201JSONResponse json.RawMessage
+type RefreshEnvironment201JSONResponse EnvironmentVersion
 
 func (response RefreshEnvironment201JSONResponse) VisitRefreshEnvironmentResponse(w http.ResponseWriter) error {
 
@@ -3861,12 +10512,40 @@ func (response RefreshEnvironment201JSONResponse) VisitRefreshEnvironmentRespons
 	return err
 }
 
-type RefreshEnvironment422JSONResponse HTTPValidationError
+type RefreshEnvironment403JSONResponse HTTPError
+
+func (response RefreshEnvironment403JSONResponse) VisitRefreshEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshEnvironment404JSONResponse HTTPError
+
+func (response RefreshEnvironment404JSONResponse) VisitRefreshEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshEnvironment422JSONResponse = RefreshEnvironment422JSONResponseBody
 
 func (response RefreshEnvironment422JSONResponse) VisitRefreshEnvironmentResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -3883,7 +10562,7 @@ type ListEnvironmentVersionsResponseObject interface {
 	VisitListEnvironmentVersionsResponse(w http.ResponseWriter) error
 }
 
-type ListEnvironmentVersions200JSONResponse json.RawMessage
+type ListEnvironmentVersions200JSONResponse []EnvironmentVersion
 
 func (response ListEnvironmentVersions200JSONResponse) VisitListEnvironmentVersionsResponse(w http.ResponseWriter) error {
 
@@ -3893,6 +10572,20 @@ func (response ListEnvironmentVersions200JSONResponse) VisitListEnvironmentVersi
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentVersions404JSONResponse HTTPError
+
+func (response ListEnvironmentVersions404JSONResponse) VisitListEnvironmentVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3920,7 +10613,7 @@ type GetEnvironmentVersionResponseObject interface {
 	VisitGetEnvironmentVersionResponse(w http.ResponseWriter) error
 }
 
-type GetEnvironmentVersion200JSONResponse json.RawMessage
+type GetEnvironmentVersion200JSONResponse EnvironmentVersion
 
 func (response GetEnvironmentVersion200JSONResponse) VisitGetEnvironmentVersionResponse(w http.ResponseWriter) error {
 
@@ -3930,6 +10623,20 @@ func (response GetEnvironmentVersion200JSONResponse) VisitGetEnvironmentVersionR
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentVersion404JSONResponse HTTPError
+
+func (response GetEnvironmentVersion404JSONResponse) VisitGetEnvironmentVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3955,16 +10662,59 @@ type GetEventsResponseObject interface {
 	VisitGetEventsResponse(w http.ResponseWriter) error
 }
 
-type GetEvents200JSONResponse json.RawMessage
+type GetEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
 
-func (response GetEvents200JSONResponse) VisitGetEventsResponse(w http.ResponseWriter) error {
+func (response GetEvents200TexteventStreamResponse) VisitGetEventsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type GetEvents404JSONResponse HTTPError
+
+func (response GetEvents404JSONResponse) VisitGetEventsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3976,7 +10726,7 @@ type GetHealthResponseObject interface {
 	VisitGetHealthResponse(w http.ResponseWriter) error
 }
 
-type GetHealth200JSONResponse json.RawMessage
+type GetHealth200JSONResponse HealthResponse
 
 func (response GetHealth200JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
 
@@ -3990,6 +10740,20 @@ func (response GetHealth200JSONResponse) VisitGetHealthResponse(w http.ResponseW
 	return err
 }
 
+type GetHealth503JSONResponse HTTPError
+
+func (response GetHealth503JSONResponse) VisitGetHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetHITLObserverStatusRequestObject struct {
 }
 
@@ -3997,7 +10761,7 @@ type GetHITLObserverStatusResponseObject interface {
 	VisitGetHITLObserverStatusResponse(w http.ResponseWriter) error
 }
 
-type GetHITLObserverStatus200JSONResponse json.RawMessage
+type GetHITLObserverStatus200JSONResponse HITLObserverStatus
 
 func (response GetHITLObserverStatus200JSONResponse) VisitGetHITLObserverStatusResponse(w http.ResponseWriter) error {
 
@@ -4011,6 +10775,20 @@ func (response GetHITLObserverStatus200JSONResponse) VisitGetHITLObserverStatusR
 	return err
 }
 
+type GetHITLObserverStatus404JSONResponse HTTPError
+
+func (response GetHITLObserverStatus404JSONResponse) VisitGetHITLObserverStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetHITLRequestObject struct {
 	RequestId string `json:"request_id"`
 }
@@ -4019,7 +10797,7 @@ type GetHITLResponseObject interface {
 	VisitGetHITLResponse(w http.ResponseWriter) error
 }
 
-type GetHITL200JSONResponse json.RawMessage
+type GetHITL200JSONResponse HITLView
 
 func (response GetHITL200JSONResponse) VisitGetHITLResponse(w http.ResponseWriter) error {
 
@@ -4029,6 +10807,20 @@ func (response GetHITL200JSONResponse) VisitGetHITLResponse(w http.ResponseWrite
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHITL404JSONResponse HTTPError
+
+func (response GetHITL404JSONResponse) VisitGetHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4057,7 +10849,7 @@ type GetHITLMergeDetailsResponseObject interface {
 	VisitGetHITLMergeDetailsResponse(w http.ResponseWriter) error
 }
 
-type GetHITLMergeDetails200JSONResponse json.RawMessage
+type GetHITLMergeDetails200JSONResponse HITLMergeDetails
 
 func (response GetHITLMergeDetails200JSONResponse) VisitGetHITLMergeDetailsResponse(w http.ResponseWriter) error {
 
@@ -4067,6 +10859,34 @@ func (response GetHITLMergeDetails200JSONResponse) VisitGetHITLMergeDetailsRespo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHITLMergeDetails404JSONResponse HTTPError
+
+func (response GetHITLMergeDetails404JSONResponse) VisitGetHITLMergeDetailsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetHITLMergeDetails409JSONResponse HTTPError
+
+func (response GetHITLMergeDetails409JSONResponse) VisitGetHITLMergeDetailsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4094,7 +10914,7 @@ type RespondHITLResponseObject interface {
 	VisitRespondHITLResponse(w http.ResponseWriter) error
 }
 
-type RespondHITL200JSONResponse json.RawMessage
+type RespondHITL200JSONResponse HITLView
 
 func (response RespondHITL200JSONResponse) VisitRespondHITLResponse(w http.ResponseWriter) error {
 
@@ -4104,6 +10924,48 @@ func (response RespondHITL200JSONResponse) VisitRespondHITLResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondHITL403JSONResponse HTTPError
+
+func (response RespondHITL403JSONResponse) VisitRespondHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondHITL404JSONResponse HTTPError
+
+func (response RespondHITL404JSONResponse) VisitRespondHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondHITL409JSONResponse HTTPError
+
+func (response RespondHITL409JSONResponse) VisitRespondHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4118,6 +10980,20 @@ func (response RespondHITL422JSONResponse) VisitRespondHITLResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondHITL503JSONResponse HTTPError
+
+func (response RespondHITL503JSONResponse) VisitRespondHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4143,6 +11019,20 @@ func (response GetMainThread200JSONResponse) VisitGetMainThreadResponse(w http.R
 	return err
 }
 
+type GetMainThread404JSONResponse HTTPError
+
+func (response GetMainThread404JSONResponse) VisitGetMainThreadResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type OrchestrationHealthRequestObject struct {
 	Params OrchestrationHealthParams
 }
@@ -4151,7 +11041,7 @@ type OrchestrationHealthResponseObject interface {
 	VisitOrchestrationHealthResponse(w http.ResponseWriter) error
 }
 
-type OrchestrationHealth200JSONResponse json.RawMessage
+type OrchestrationHealth200JSONResponse HealthView
 
 func (response OrchestrationHealth200JSONResponse) VisitOrchestrationHealthResponse(w http.ResponseWriter) error {
 
@@ -4161,6 +11051,20 @@ func (response OrchestrationHealth200JSONResponse) VisitOrchestrationHealthRespo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OrchestrationHealth404JSONResponse HTTPError
+
+func (response OrchestrationHealth404JSONResponse) VisitOrchestrationHealthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4187,7 +11091,7 @@ type HealthEventsResponseObject interface {
 	VisitHealthEventsResponse(w http.ResponseWriter) error
 }
 
-type HealthEvents200JSONResponse json.RawMessage
+type HealthEvents200JSONResponse HealthEvents
 
 func (response HealthEvents200JSONResponse) VisitHealthEventsResponse(w http.ResponseWriter) error {
 
@@ -4197,6 +11101,20 @@ func (response HealthEvents200JSONResponse) VisitHealthEventsResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HealthEvents404JSONResponse HTTPError
+
+func (response HealthEvents404JSONResponse) VisitHealthEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4237,6 +11155,20 @@ func (response ListProjects200JSONResponse) VisitListProjectsResponse(w http.Res
 	return err
 }
 
+type ListProjects404JSONResponse HTTPError
+
+func (response ListProjects404JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListProjects422JSONResponse HTTPValidationError
 
 func (response ListProjects422JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
@@ -4269,6 +11201,48 @@ func (response ImportProject201JSONResponse) VisitImportProjectResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportProject400JSONResponse HTTPError
+
+func (response ImportProject400JSONResponse) VisitImportProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportProject403JSONResponse HTTPError
+
+func (response ImportProject403JSONResponse) VisitImportProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportProject404JSONResponse HTTPError
+
+func (response ImportProject404JSONResponse) VisitImportProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4309,6 +11283,20 @@ func (response GetProject200JSONResponse) VisitGetProjectResponse(w http.Respons
 	return err
 }
 
+type GetProject404JSONResponse HTTPError
+
+func (response GetProject404JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProject422JSONResponse HTTPValidationError
 
 func (response GetProject422JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
@@ -4331,7 +11319,7 @@ type GetProjectDefaultProviderResponseObject interface {
 	VisitGetProjectDefaultProviderResponse(w http.ResponseWriter) error
 }
 
-type GetProjectDefaultProvider200JSONResponse json.RawMessage
+type GetProjectDefaultProvider200JSONResponse ProjectProviderPreference
 
 func (response GetProjectDefaultProvider200JSONResponse) VisitGetProjectDefaultProviderResponse(w http.ResponseWriter) error {
 
@@ -4341,6 +11329,34 @@ func (response GetProjectDefaultProvider200JSONResponse) VisitGetProjectDefaultP
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectDefaultProvider403JSONResponse TaskError
+
+func (response GetProjectDefaultProvider403JSONResponse) VisitGetProjectDefaultProviderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectDefaultProvider404JSONResponse = GetProjectDefaultProvider404JSONResponseBody
+
+func (response GetProjectDefaultProvider404JSONResponse) VisitGetProjectDefaultProviderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4368,7 +11384,7 @@ type UpdateProjectDefaultProviderResponseObject interface {
 	VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error
 }
 
-type UpdateProjectDefaultProvider200JSONResponse json.RawMessage
+type UpdateProjectDefaultProvider200JSONResponse ProjectProviderPreference
 
 func (response UpdateProjectDefaultProvider200JSONResponse) VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error {
 
@@ -4382,12 +11398,54 @@ func (response UpdateProjectDefaultProvider200JSONResponse) VisitUpdateProjectDe
 	return err
 }
 
-type UpdateProjectDefaultProvider422JSONResponse HTTPValidationError
+type UpdateProjectDefaultProvider403JSONResponse = UpdateProjectDefaultProvider403JSONResponseBody
+
+func (response UpdateProjectDefaultProvider403JSONResponse) VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProjectDefaultProvider404JSONResponse = UpdateProjectDefaultProvider404JSONResponseBody
+
+func (response UpdateProjectDefaultProvider404JSONResponse) VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProjectDefaultProvider409JSONResponse TaskError
+
+func (response UpdateProjectDefaultProvider409JSONResponse) VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProjectDefaultProvider422JSONResponse = UpdateProjectDefaultProvider422JSONResponseBody
 
 func (response UpdateProjectDefaultProvider422JSONResponse) VisitUpdateProjectDefaultProviderResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -4418,6 +11476,20 @@ func (response GetProjectDetail200JSONResponse) VisitGetProjectDetailResponse(w 
 	return err
 }
 
+type GetProjectDetail404JSONResponse HTTPError
+
+func (response GetProjectDetail404JSONResponse) VisitGetProjectDetailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProjectDetail422JSONResponse HTTPValidationError
 
 func (response GetProjectDetail422JSONResponse) VisitGetProjectDetailResponse(w http.ResponseWriter) error {
@@ -4440,7 +11512,7 @@ type GetProjectEnvironmentResponseObject interface {
 	VisitGetProjectEnvironmentResponse(w http.ResponseWriter) error
 }
 
-type GetProjectEnvironment200JSONResponse json.RawMessage
+type GetProjectEnvironment200JSONResponse ProjectEnvironmentSelection
 
 func (response GetProjectEnvironment200JSONResponse) VisitGetProjectEnvironmentResponse(w http.ResponseWriter) error {
 
@@ -4450,6 +11522,28 @@ func (response GetProjectEnvironment200JSONResponse) VisitGetProjectEnvironmentR
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectEnvironment204Response struct {
+}
+
+func (response GetProjectEnvironment204Response) VisitGetProjectEnvironmentResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type GetProjectEnvironment404JSONResponse HTTPError
+
+func (response GetProjectEnvironment404JSONResponse) VisitGetProjectEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4477,7 +11571,7 @@ type SelectProjectEnvironmentResponseObject interface {
 	VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error
 }
 
-type SelectProjectEnvironment200JSONResponse json.RawMessage
+type SelectProjectEnvironment200JSONResponse ProjectEnvironmentSelection
 
 func (response SelectProjectEnvironment200JSONResponse) VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error {
 
@@ -4491,12 +11585,54 @@ func (response SelectProjectEnvironment200JSONResponse) VisitSelectProjectEnviro
 	return err
 }
 
-type SelectProjectEnvironment422JSONResponse HTTPValidationError
+type SelectProjectEnvironment403JSONResponse HTTPError
+
+func (response SelectProjectEnvironment403JSONResponse) VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SelectProjectEnvironment404JSONResponse HTTPError
+
+func (response SelectProjectEnvironment404JSONResponse) VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SelectProjectEnvironment409JSONResponse HTTPError
+
+func (response SelectProjectEnvironment409JSONResponse) VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SelectProjectEnvironment422JSONResponse = SelectProjectEnvironment422JSONResponseBody
 
 func (response SelectProjectEnvironment422JSONResponse) VisitSelectProjectEnvironmentResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -4523,6 +11659,20 @@ func (response GetMergePolicy200JSONResponse) VisitGetMergePolicyResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMergePolicy404JSONResponse HTTPError
+
+func (response GetMergePolicy404JSONResponse) VisitGetMergePolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4564,6 +11714,48 @@ func (response UpdateMergePolicy200JSONResponse) VisitUpdateMergePolicyResponse(
 	return err
 }
 
+type UpdateMergePolicy403JSONResponse HTTPError
+
+func (response UpdateMergePolicy403JSONResponse) VisitUpdateMergePolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateMergePolicy404JSONResponse HTTPError
+
+func (response UpdateMergePolicy404JSONResponse) VisitUpdateMergePolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateMergePolicy409JSONResponse HTTPError
+
+func (response UpdateMergePolicy409JSONResponse) VisitUpdateMergePolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type UpdateMergePolicy422JSONResponse HTTPValidationError
 
 func (response UpdateMergePolicy422JSONResponse) VisitUpdateMergePolicyResponse(w http.ResponseWriter) error {
@@ -4578,6 +11770,20 @@ func (response UpdateMergePolicy422JSONResponse) VisitUpdateMergePolicyResponse(
 	return err
 }
 
+type UpdateMergePolicy503JSONResponse HTTPError
+
+func (response UpdateMergePolicy503JSONResponse) VisitUpdateMergePolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProjectSmokeObservationsRequestObject struct {
 	ProjectId string `json:"project_id"`
 	Params    GetProjectSmokeObservationsParams
@@ -4587,7 +11793,7 @@ type GetProjectSmokeObservationsResponseObject interface {
 	VisitGetProjectSmokeObservationsResponse(w http.ResponseWriter) error
 }
 
-type GetProjectSmokeObservations200JSONResponse json.RawMessage
+type GetProjectSmokeObservations200JSONResponse SmokeObservations
 
 func (response GetProjectSmokeObservations200JSONResponse) VisitGetProjectSmokeObservationsResponse(w http.ResponseWriter) error {
 
@@ -4597,6 +11803,20 @@ func (response GetProjectSmokeObservations200JSONResponse) VisitGetProjectSmokeO
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectSmokeObservations404JSONResponse HTTPError
+
+func (response GetProjectSmokeObservations404JSONResponse) VisitGetProjectSmokeObservationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4636,6 +11856,20 @@ func (response ListProviders200JSONResponse) VisitListProvidersResponse(w http.R
 	return err
 }
 
+type ListProviders404JSONResponse HTTPError
+
+func (response ListProviders404JSONResponse) VisitListProvidersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DismissQueueDiagnosticRequestObject struct {
 	ItemId string `json:"item_id"`
 }
@@ -4644,7 +11878,7 @@ type DismissQueueDiagnosticResponseObject interface {
 	VisitDismissQueueDiagnosticResponse(w http.ResponseWriter) error
 }
 
-type DismissQueueDiagnostic200JSONResponse json.RawMessage
+type DismissQueueDiagnostic200JSONResponse StatusOk
 
 func (response DismissQueueDiagnostic200JSONResponse) VisitDismissQueueDiagnosticResponse(w http.ResponseWriter) error {
 
@@ -4654,6 +11888,48 @@ func (response DismissQueueDiagnostic200JSONResponse) VisitDismissQueueDiagnosti
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DismissQueueDiagnostic403JSONResponse HTTPError
+
+func (response DismissQueueDiagnostic403JSONResponse) VisitDismissQueueDiagnosticResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DismissQueueDiagnostic404JSONResponse HTTPError
+
+func (response DismissQueueDiagnostic404JSONResponse) VisitDismissQueueDiagnosticResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DismissQueueDiagnostic409JSONResponse HTTPError
+
+func (response DismissQueueDiagnostic409JSONResponse) VisitDismissQueueDiagnosticResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4681,7 +11957,7 @@ type RespondToQueueItemResponseObject interface {
 	VisitRespondToQueueItemResponse(w http.ResponseWriter) error
 }
 
-type RespondToQueueItem200JSONResponse json.RawMessage
+type RespondToQueueItem200JSONResponse QueueRespondResponse
 
 func (response RespondToQueueItem200JSONResponse) VisitRespondToQueueItemResponse(w http.ResponseWriter) error {
 
@@ -4691,6 +11967,48 @@ func (response RespondToQueueItem200JSONResponse) VisitRespondToQueueItemRespons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondToQueueItem403JSONResponse HTTPError
+
+func (response RespondToQueueItem403JSONResponse) VisitRespondToQueueItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondToQueueItem404JSONResponse HTTPError
+
+func (response RespondToQueueItem404JSONResponse) VisitRespondToQueueItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RespondToQueueItem409JSONResponse HTTPError
+
+func (response RespondToQueueItem409JSONResponse) VisitRespondToQueueItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4731,6 +12049,20 @@ func (response ListSessions200JSONResponse) VisitListSessionsResponse(w http.Res
 	return err
 }
 
+type ListSessions404JSONResponse HTTPError
+
+func (response ListSessions404JSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListSessions422JSONResponse HTTPValidationError
 
 func (response ListSessions422JSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
@@ -4767,12 +12099,40 @@ func (response CreateSession200JSONResponse) VisitCreateSessionResponse(w http.R
 	return err
 }
 
-type CreateSession422JSONResponse HTTPValidationError
+type CreateSession403JSONResponse HTTPError
+
+func (response CreateSession403JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession404JSONResponse HTTPError
+
+func (response CreateSession404JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSession422JSONResponse = CreateSession422JSONResponseBody
 
 func (response CreateSession422JSONResponse) VisitCreateSessionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -4803,6 +12163,20 @@ func (response GetSession200JSONResponse) VisitGetSessionResponse(w http.Respons
 	return err
 }
 
+type GetSession404JSONResponse HTTPError
+
+func (response GetSession404JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSession422JSONResponse HTTPValidationError
 
 func (response GetSession422JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
@@ -4825,7 +12199,7 @@ type ArchiveSessionResponseObject interface {
 	VisitArchiveSessionResponse(w http.ResponseWriter) error
 }
 
-type ArchiveSession200JSONResponse json.RawMessage
+type ArchiveSession200JSONResponse SessionArchiveResponse
 
 func (response ArchiveSession200JSONResponse) VisitArchiveSessionResponse(w http.ResponseWriter) error {
 
@@ -4835,6 +12209,48 @@ func (response ArchiveSession200JSONResponse) VisitArchiveSessionResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ArchiveSession403JSONResponse HTTPError
+
+func (response ArchiveSession403JSONResponse) VisitArchiveSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ArchiveSession404JSONResponse HTTPError
+
+func (response ArchiveSession404JSONResponse) VisitArchiveSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ArchiveSession409JSONResponse HTTPError
+
+func (response ArchiveSession409JSONResponse) VisitArchiveSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4861,7 +12277,7 @@ type CancelSessionResponseObject interface {
 	VisitCancelSessionResponse(w http.ResponseWriter) error
 }
 
-type CancelSession200JSONResponse json.RawMessage
+type CancelSession200JSONResponse SessionCancelResponse
 
 func (response CancelSession200JSONResponse) VisitCancelSessionResponse(w http.ResponseWriter) error {
 
@@ -4871,6 +12287,48 @@ func (response CancelSession200JSONResponse) VisitCancelSessionResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelSession403JSONResponse HTTPError
+
+func (response CancelSession403JSONResponse) VisitCancelSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelSession404JSONResponse HTTPError
+
+func (response CancelSession404JSONResponse) VisitCancelSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelSession409JSONResponse HTTPError
+
+func (response CancelSession409JSONResponse) VisitCancelSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4911,6 +12369,20 @@ func (response GetSessionConversation200JSONResponse) VisitGetSessionConversatio
 	return err
 }
 
+type GetSessionConversation404JSONResponse HTTPError
+
+func (response GetSessionConversation404JSONResponse) VisitGetSessionConversationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSessionConversation422JSONResponse HTTPValidationError
 
 func (response GetSessionConversation422JSONResponse) VisitGetSessionConversationResponse(w http.ResponseWriter) error {
@@ -4933,7 +12405,7 @@ type ListSessionHITLResponseObject interface {
 	VisitListSessionHITLResponse(w http.ResponseWriter) error
 }
 
-type ListSessionHITL200JSONResponse json.RawMessage
+type ListSessionHITL200JSONResponse []string
 
 func (response ListSessionHITL200JSONResponse) VisitListSessionHITLResponse(w http.ResponseWriter) error {
 
@@ -4943,6 +12415,20 @@ func (response ListSessionHITL200JSONResponse) VisitListSessionHITLResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSessionHITL404JSONResponse HTTPError
+
+func (response ListSessionHITL404JSONResponse) VisitListSessionHITLResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4970,7 +12456,7 @@ type SendSessionMessageResponseObject interface {
 	VisitSendSessionMessageResponse(w http.ResponseWriter) error
 }
 
-type SendSessionMessage200JSONResponse json.RawMessage
+type SendSessionMessage200JSONResponse SessionMessageResponse
 
 func (response SendSessionMessage200JSONResponse) VisitSendSessionMessageResponse(w http.ResponseWriter) error {
 
@@ -4980,6 +12466,48 @@ func (response SendSessionMessage200JSONResponse) VisitSendSessionMessageRespons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendSessionMessage403JSONResponse HTTPError
+
+func (response SendSessionMessage403JSONResponse) VisitSendSessionMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendSessionMessage404JSONResponse HTTPError
+
+func (response SendSessionMessage404JSONResponse) VisitSendSessionMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SendSessionMessage409JSONResponse HTTPError
+
+func (response SendSessionMessage409JSONResponse) VisitSendSessionMessageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5020,6 +12548,20 @@ func (response GetSessionNative200JSONResponse) VisitGetSessionNativeResponse(w 
 	return err
 }
 
+type GetSessionNative404JSONResponse HTTPError
+
+func (response GetSessionNative404JSONResponse) VisitGetSessionNativeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSessionNative422JSONResponse HTTPValidationError
 
 func (response GetSessionNative422JSONResponse) VisitGetSessionNativeResponse(w http.ResponseWriter) error {
@@ -5042,7 +12584,7 @@ type StopTurnResponseObject interface {
 	VisitStopTurnResponse(w http.ResponseWriter) error
 }
 
-type StopTurn200JSONResponse json.RawMessage
+type StopTurn200JSONResponse SessionStopTurnResponse
 
 func (response StopTurn200JSONResponse) VisitStopTurnResponse(w http.ResponseWriter) error {
 
@@ -5052,6 +12594,48 @@ func (response StopTurn200JSONResponse) VisitStopTurnResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopTurn403JSONResponse HTTPError
+
+func (response StopTurn403JSONResponse) VisitStopTurnResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopTurn404JSONResponse HTTPError
+
+func (response StopTurn404JSONResponse) VisitStopTurnResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopTurn409JSONResponse HTTPError
+
+func (response StopTurn409JSONResponse) VisitStopTurnResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5070,6 +12654,20 @@ func (response StopTurn422JSONResponse) VisitStopTurnResponse(w http.ResponseWri
 	return err
 }
 
+type StopTurn502JSONResponse HTTPError
+
+func (response StopTurn502JSONResponse) VisitStopTurnResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetTaskOperationRequestObject struct {
 	OperationId string `json:"operation_id"`
 }
@@ -5078,7 +12676,7 @@ type GetTaskOperationResponseObject interface {
 	VisitGetTaskOperationResponse(w http.ResponseWriter) error
 }
 
-type GetTaskOperation200JSONResponse json.RawMessage
+type GetTaskOperation200JSONResponse TaskOperation
 
 func (response GetTaskOperation200JSONResponse) VisitGetTaskOperationResponse(w http.ResponseWriter) error {
 
@@ -5088,6 +12686,34 @@ func (response GetTaskOperation200JSONResponse) VisitGetTaskOperationResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTaskOperation403JSONResponse TaskError
+
+func (response GetTaskOperation403JSONResponse) VisitGetTaskOperationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTaskOperation404JSONResponse = GetTaskOperation404JSONResponseBody
+
+func (response GetTaskOperation404JSONResponse) VisitGetTaskOperationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5114,7 +12740,7 @@ type ListTasksResponseObject interface {
 	VisitListTasksResponse(w http.ResponseWriter) error
 }
 
-type ListTasks200JSONResponse json.RawMessage
+type ListTasks200JSONResponse []TaskView
 
 func (response ListTasks200JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
 
@@ -5124,6 +12750,34 @@ func (response ListTasks200JSONResponse) VisitListTasksResponse(w http.ResponseW
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasks403JSONResponse TaskError
+
+func (response ListTasks403JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasks404JSONResponse HTTPError
+
+func (response ListTasks404JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5150,7 +12804,7 @@ type CreateTaskResponseObject interface {
 	VisitCreateTaskResponse(w http.ResponseWriter) error
 }
 
-type CreateTask202JSONResponse json.RawMessage
+type CreateTask202JSONResponse TaskOperation
 
 func (response CreateTask202JSONResponse) VisitCreateTaskResponse(w http.ResponseWriter) error {
 
@@ -5164,12 +12818,54 @@ func (response CreateTask202JSONResponse) VisitCreateTaskResponse(w http.Respons
 	return err
 }
 
-type CreateTask422JSONResponse HTTPValidationError
+type CreateTask403JSONResponse = CreateTask403JSONResponseBody
+
+func (response CreateTask403JSONResponse) VisitCreateTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTask404JSONResponse = CreateTask404JSONResponseBody
+
+func (response CreateTask404JSONResponse) VisitCreateTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTask409JSONResponse TaskError
+
+func (response CreateTask409JSONResponse) VisitCreateTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTask422JSONResponse = CreateTask422JSONResponseBody
 
 func (response CreateTask422JSONResponse) VisitCreateTaskResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -5186,7 +12882,7 @@ type GetTaskResponseObject interface {
 	VisitGetTaskResponse(w http.ResponseWriter) error
 }
 
-type GetTask200JSONResponse json.RawMessage
+type GetTask200JSONResponse TaskView
 
 func (response GetTask200JSONResponse) VisitGetTaskResponse(w http.ResponseWriter) error {
 
@@ -5196,6 +12892,34 @@ func (response GetTask200JSONResponse) VisitGetTaskResponse(w http.ResponseWrite
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTask403JSONResponse TaskError
+
+func (response GetTask403JSONResponse) VisitGetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTask404JSONResponse = GetTask404JSONResponseBody
+
+func (response GetTask404JSONResponse) VisitGetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5223,7 +12947,7 @@ type CancelTaskResponseObject interface {
 	VisitCancelTaskResponse(w http.ResponseWriter) error
 }
 
-type CancelTask202JSONResponse json.RawMessage
+type CancelTask202JSONResponse TaskOperation
 
 func (response CancelTask202JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
 
@@ -5237,12 +12961,54 @@ func (response CancelTask202JSONResponse) VisitCancelTaskResponse(w http.Respons
 	return err
 }
 
-type CancelTask422JSONResponse HTTPValidationError
+type CancelTask403JSONResponse = CancelTask403JSONResponseBody
+
+func (response CancelTask403JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask404JSONResponse = CancelTask404JSONResponseBody
+
+func (response CancelTask404JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask409JSONResponse TaskError
+
+func (response CancelTask409JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelTask422JSONResponse = CancelTask422JSONResponseBody
 
 func (response CancelTask422JSONResponse) VisitCancelTaskResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -5260,7 +13026,7 @@ type ReassignTaskResponseObject interface {
 	VisitReassignTaskResponse(w http.ResponseWriter) error
 }
 
-type ReassignTask202JSONResponse json.RawMessage
+type ReassignTask202JSONResponse TaskOperation
 
 func (response ReassignTask202JSONResponse) VisitReassignTaskResponse(w http.ResponseWriter) error {
 
@@ -5274,12 +13040,54 @@ func (response ReassignTask202JSONResponse) VisitReassignTaskResponse(w http.Res
 	return err
 }
 
-type ReassignTask422JSONResponse HTTPValidationError
+type ReassignTask403JSONResponse = ReassignTask403JSONResponseBody
+
+func (response ReassignTask403JSONResponse) VisitReassignTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReassignTask404JSONResponse = ReassignTask404JSONResponseBody
+
+func (response ReassignTask404JSONResponse) VisitReassignTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReassignTask409JSONResponse TaskError
+
+func (response ReassignTask409JSONResponse) VisitReassignTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReassignTask422JSONResponse = ReassignTask422JSONResponseBody
 
 func (response ReassignTask422JSONResponse) VisitReassignTaskResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -5297,7 +13105,7 @@ type RetryTaskResponseObject interface {
 	VisitRetryTaskResponse(w http.ResponseWriter) error
 }
 
-type RetryTask202JSONResponse json.RawMessage
+type RetryTask202JSONResponse TaskOperation
 
 func (response RetryTask202JSONResponse) VisitRetryTaskResponse(w http.ResponseWriter) error {
 
@@ -5311,12 +13119,54 @@ func (response RetryTask202JSONResponse) VisitRetryTaskResponse(w http.ResponseW
 	return err
 }
 
-type RetryTask422JSONResponse HTTPValidationError
+type RetryTask403JSONResponse = RetryTask403JSONResponseBody
+
+func (response RetryTask403JSONResponse) VisitRetryTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTask404JSONResponse = RetryTask404JSONResponseBody
+
+func (response RetryTask404JSONResponse) VisitRetryTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTask409JSONResponse TaskError
+
+func (response RetryTask409JSONResponse) VisitRetryTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryTask422JSONResponse = RetryTask422JSONResponseBody
 
 func (response RetryTask422JSONResponse) VisitRetryTaskResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -5346,6 +13196,20 @@ func (response ListWorkspaces200JSONResponse) VisitListWorkspacesResponse(w http
 	return err
 }
 
+type ListWorkspaces404JSONResponse HTTPError
+
+func (response ListWorkspaces404JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateWorkspaceRequestObject struct {
 	Body *CreateWorkspaceJSONRequestBody
 }
@@ -5368,16 +13232,72 @@ func (response CreateWorkspace201JSONResponse) VisitCreateWorkspaceResponse(w ht
 	return err
 }
 
-type CreateWorkspace422JSONResponse HTTPValidationError
+type CreateWorkspace403JSONResponse HTTPError
 
-func (response CreateWorkspace422JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+func (response CreateWorkspace403JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWorkspace404JSONResponse HTTPError
+
+func (response CreateWorkspace404JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWorkspace409JSONResponse HTTPError
+
+func (response CreateWorkspace409JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWorkspace422JSONResponse = CreateWorkspace422JSONResponseBody
+
+func (response CreateWorkspace422JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateWorkspace502JSONResponse HTTPError
+
+func (response CreateWorkspace502JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5398,6 +13318,48 @@ func (response DeleteWorkspace204Response) VisitDeleteWorkspaceResponse(w http.R
 	return nil
 }
 
+type DeleteWorkspace403JSONResponse HTTPError
+
+func (response DeleteWorkspace403JSONResponse) VisitDeleteWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteWorkspace404JSONResponse HTTPError
+
+func (response DeleteWorkspace404JSONResponse) VisitDeleteWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteWorkspace409JSONResponse HTTPError
+
+func (response DeleteWorkspace409JSONResponse) VisitDeleteWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeleteWorkspace422JSONResponse HTTPValidationError
 
 func (response DeleteWorkspace422JSONResponse) VisitDeleteWorkspaceResponse(w http.ResponseWriter) error {
@@ -5408,6 +13370,20 @@ func (response DeleteWorkspace422JSONResponse) VisitDeleteWorkspaceResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteWorkspace502JSONResponse HTTPError
+
+func (response DeleteWorkspace502JSONResponse) VisitDeleteWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5434,6 +13410,20 @@ func (response GetWorkspace200JSONResponse) VisitGetWorkspaceResponse(w http.Res
 	return err
 }
 
+type GetWorkspace404JSONResponse HTTPError
+
+func (response GetWorkspace404JSONResponse) VisitGetWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetWorkspace422JSONResponse HTTPValidationError
 
 func (response GetWorkspace422JSONResponse) VisitGetWorkspaceResponse(w http.ResponseWriter) error {
@@ -5456,7 +13446,7 @@ type ListWorkspacePreviewPortsResponseObject interface {
 	VisitListWorkspacePreviewPortsResponse(w http.ResponseWriter) error
 }
 
-type ListWorkspacePreviewPorts200JSONResponse json.RawMessage
+type ListWorkspacePreviewPorts200JSONResponse WorkspacePortsResponse
 
 func (response ListWorkspacePreviewPorts200JSONResponse) VisitListWorkspacePreviewPortsResponse(w http.ResponseWriter) error {
 
@@ -5466,6 +13456,20 @@ func (response ListWorkspacePreviewPorts200JSONResponse) VisitListWorkspacePrevi
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListWorkspacePreviewPorts404JSONResponse HTTPError
+
+func (response ListWorkspacePreviewPorts404JSONResponse) VisitListWorkspacePreviewPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5506,16 +13510,72 @@ func (response RefreshWorkspace200JSONResponse) VisitRefreshWorkspaceResponse(w 
 	return err
 }
 
-type RefreshWorkspace422JSONResponse HTTPValidationError
+type RefreshWorkspace403JSONResponse HTTPError
 
-func (response RefreshWorkspace422JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
+func (response RefreshWorkspace403JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshWorkspace404JSONResponse HTTPError
+
+func (response RefreshWorkspace404JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshWorkspace409JSONResponse HTTPError
+
+func (response RefreshWorkspace409JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshWorkspace422JSONResponse = RefreshWorkspace422JSONResponseBody
+
+func (response RefreshWorkspace422JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefreshWorkspace502JSONResponse HTTPError
+
+func (response RefreshWorkspace502JSONResponse) VisitRefreshWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5542,16 +13602,72 @@ func (response ResumeWorkspace200JSONResponse) VisitResumeWorkspaceResponse(w ht
 	return err
 }
 
-type ResumeWorkspace422JSONResponse HTTPValidationError
+type ResumeWorkspace403JSONResponse HTTPError
 
-func (response ResumeWorkspace422JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
+func (response ResumeWorkspace403JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeWorkspace404JSONResponse HTTPError
+
+func (response ResumeWorkspace404JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeWorkspace409JSONResponse HTTPError
+
+func (response ResumeWorkspace409JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeWorkspace422JSONResponse = ResumeWorkspace422JSONResponseBody
+
+func (response ResumeWorkspace422JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeWorkspace502JSONResponse HTTPError
+
+func (response ResumeWorkspace502JSONResponse) VisitResumeWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5578,16 +13694,72 @@ func (response SuspendWorkspace200JSONResponse) VisitSuspendWorkspaceResponse(w 
 	return err
 }
 
-type SuspendWorkspace422JSONResponse HTTPValidationError
+type SuspendWorkspace403JSONResponse HTTPError
 
-func (response SuspendWorkspace422JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
+func (response SuspendWorkspace403JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendWorkspace404JSONResponse HTTPError
+
+func (response SuspendWorkspace404JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendWorkspace409JSONResponse HTTPError
+
+func (response SuspendWorkspace409JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendWorkspace422JSONResponse = SuspendWorkspace422JSONResponseBody
+
+func (response SuspendWorkspace422JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.union); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendWorkspace502JSONResponse HTTPError
+
+func (response SuspendWorkspace502JSONResponse) VisitSuspendWorkspaceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5618,12 +13790,12 @@ type StrictServerInterface interface {
 	// AcceptEnvironmentDefault Set Default
 	// (PUT /environments/{environment_id}/default)
 	AcceptEnvironmentDefault(ctx context.Context, request AcceptEnvironmentDefaultRequestObject) (AcceptEnvironmentDefaultResponseObject, error)
-	// RevokeEnvironment Revoke
+	// RevokeEnvironmentFromProject Revoke
 	// (DELETE /environments/{environment_id}/grants/{project_id})
-	RevokeEnvironment(ctx context.Context, request RevokeEnvironmentRequestObject) (RevokeEnvironmentResponseObject, error)
-	// GrantEnvironment Grant
+	RevokeEnvironmentFromProject(ctx context.Context, request RevokeEnvironmentFromProjectRequestObject) (RevokeEnvironmentFromProjectResponseObject, error)
+	// GrantEnvironmentToProject Grant
 	// (PUT /environments/{environment_id}/grants/{project_id})
-	GrantEnvironment(ctx context.Context, request GrantEnvironmentRequestObject) (GrantEnvironmentResponseObject, error)
+	GrantEnvironmentToProject(ctx context.Context, request GrantEnvironmentToProjectRequestObject) (GrantEnvironmentToProjectResponseObject, error)
 	// RefreshEnvironment Refresh Tag
 	// (POST /environments/{environment_id}/refresh)
 	RefreshEnvironment(ctx context.Context, request RefreshEnvironmentRequestObject) (RefreshEnvironmentResponseObject, error)
@@ -6037,26 +14209,26 @@ func (sh *strictHandler) AcceptEnvironmentDefault(w http.ResponseWriter, r *http
 	}
 }
 
-// RevokeEnvironment operation middleware
-func (sh *strictHandler) RevokeEnvironment(w http.ResponseWriter, r *http.Request, environmentId string, projectId string) {
-	var request RevokeEnvironmentRequestObject
+// RevokeEnvironmentFromProject operation middleware
+func (sh *strictHandler) RevokeEnvironmentFromProject(w http.ResponseWriter, r *http.Request, environmentId string, projectId string) {
+	var request RevokeEnvironmentFromProjectRequestObject
 
 	request.EnvironmentId = environmentId
 	request.ProjectId = projectId
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.RevokeEnvironment(ctx, request.(RevokeEnvironmentRequestObject))
+		return sh.ssi.RevokeEnvironmentFromProject(ctx, request.(RevokeEnvironmentFromProjectRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "RevokeEnvironment")
+		handler = middleware(handler, "RevokeEnvironmentFromProject")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(RevokeEnvironmentResponseObject); ok {
-		if err := validResponse.VisitRevokeEnvironmentResponse(w); err != nil {
+	} else if validResponse, ok := response.(RevokeEnvironmentFromProjectResponseObject); ok {
+		if err := validResponse.VisitRevokeEnvironmentFromProjectResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -6064,14 +14236,14 @@ func (sh *strictHandler) RevokeEnvironment(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// GrantEnvironment operation middleware
-func (sh *strictHandler) GrantEnvironment(w http.ResponseWriter, r *http.Request, environmentId string, projectId string) {
-	var request GrantEnvironmentRequestObject
+// GrantEnvironmentToProject operation middleware
+func (sh *strictHandler) GrantEnvironmentToProject(w http.ResponseWriter, r *http.Request, environmentId string, projectId string) {
+	var request GrantEnvironmentToProjectRequestObject
 
 	request.EnvironmentId = environmentId
 	request.ProjectId = projectId
 
-	var body GrantEnvironmentJSONRequestBody
+	var body GrantEnvironmentToProjectJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -6079,18 +14251,18 @@ func (sh *strictHandler) GrantEnvironment(w http.ResponseWriter, r *http.Request
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GrantEnvironment(ctx, request.(GrantEnvironmentRequestObject))
+		return sh.ssi.GrantEnvironmentToProject(ctx, request.(GrantEnvironmentToProjectRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GrantEnvironment")
+		handler = middleware(handler, "GrantEnvironmentToProject")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GrantEnvironmentResponseObject); ok {
-		if err := validResponse.VisitGrantEnvironmentResponse(w); err != nil {
+	} else if validResponse, ok := response.(GrantEnvironmentToProjectResponseObject); ok {
+		if err := validResponse.VisitGrantEnvironmentToProjectResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7511,166 +15683,345 @@ func (sh *strictHandler) SuspendWorkspace(w http.ResponseWriter, r *http.Request
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"HNRfNZcG6YfLh/87AA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
