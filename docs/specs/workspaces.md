@@ -20,6 +20,8 @@ built; nothing here has been measured against a live kagent.
 
 ### Implemented
 
+- MCP credential (G6c): before `CreateSession` the create publishes the workspace's MCP credential (role `agent`, grant `workspace`) and sends its reference with the request; a delete that replays the create sends the same reference and issues nothing. Delete and the drop of a refused create revoke the credential in the same transaction that removes the rows. If the credential cannot be issued because the Secret name is still owed a delete, the create retries; if the binding has ended, the create is rejected. With no Secret store (outside a cluster) the workspace is created without a credential and a warning is logged.
+
 - Every lifecycle change is a durable `workspace_ops` row (`create`, `suspend`, `resume`,
   `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
   and an idempotency key. One operation is open per workspace; asking for the kind that is

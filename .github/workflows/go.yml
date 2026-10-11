@@ -6,12 +6,20 @@ on:
     paths:
       - server/**
       - api/**
+      - backend/src/mainloop/mcp_app.py
+      - backend/src/mainloop/runtime/policy.py
+      - models/**
+      - scripts/export-mcp-tools.py
       - .github/workflows/go.yml
   push:
     branches: [main, go-react]
     paths:
       - server/**
       - api/**
+      - backend/src/mainloop/mcp_app.py
+      - backend/src/mainloop/runtime/policy.py
+      - models/**
+      - scripts/export-mcp-tools.py
       - .github/workflows/go.yml
 
 concurrency:

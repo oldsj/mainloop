@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -56,6 +57,9 @@ type Service struct {
 	Log        *slog.Logger
 	OwnerID    string
 	Deliveries Deliveries
+	// Credentials publishes a workspace agent's MCP credential before its Session is created and
+	// revokes it with the workspace. Nil creates Sessions without MCP tools.
+	Credentials *agentauth.Credentials
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.

@@ -132,21 +132,26 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		}
 		deps.GitHub = gh
 	}
-	wsSvc, err := workspaces.New(cfg, pool, log)
-	if err != nil {
-		return err
-	}
-	deps.Workspaces = wsSvc
+	// The one credential service of this process is built first: the workspace and session services
+	// publish an agent's MCP credential before creating its kagent Session and revoke it when the
+	// agent ends.
 	creds, err := newCredentials(cfg, pool, log)
 	if err != nil {
 		return err
 	}
 	deps.Credentials = creds
+	wsSvc, err := workspaces.New(cfg, pool, log)
+	if err != nil {
+		return err
+	}
+	wsSvc.Credentials = creds
+	deps.Workspaces = wsSvc
 	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {
 		return err
 	}
 	svc := sessions.NewService(cfg, pool, kc, log)
+	svc.Credentials = creds
 	deps.Sessions = svc
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {

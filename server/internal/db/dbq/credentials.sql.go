@@ -97,6 +97,24 @@ func (q *Queries) GetMCPActor(ctx context.Context, tokenHash string) (GetMCPActo
 	return i, err
 }
 
+const lockSessionForCredential = `-- name: LockSessionForCredential :one
+SELECT status, archived_at FROM sessions WHERE id = $1 FOR SHARE
+`
+
+type LockSessionForCredentialRow struct {
+	Status     dbstate.SessionStatus
+	ArchivedAt *time.Time
+}
+
+// The session behind a binding, locked FOR SHARE so a state change that ends it (which updates
+// the row) waits for the credential plan to commit, and a plan that comes after it sees the end.
+func (q *Queries) LockSessionForCredential(ctx context.Context, id string) (LockSessionForCredentialRow, error) {
+	row := q.db.QueryRow(ctx, lockSessionForCredential, id)
+	var i LockSessionForCredentialRow
+	err := row.Scan(&i.Status, &i.ArchivedAt)
+	return i, err
+}
+
 const revokeBindingCredentials = `-- name: RevokeBindingCredentials :many
 UPDATE credentials
 SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at = now()
@@ -108,6 +126,55 @@ RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, crea
 // binding's rows change; other bindings' credentials are untouched.
 func (q *Queries) RevokeBindingCredentials(ctx context.Context, bindingID string) ([]Credential, error) {
 	rows, err := q.db.Query(ctx, revokeBindingCredentials, bindingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Credential{}
+	for rows.Next() {
+		var i Credential
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.BindingID,
+			&i.TokenHash,
+			&i.SecretName,
+			&i.SecretUID,
+			&i.State,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RevokedAt,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokeEndedSessionCredentials = `-- name: RevokeEndedSessionCredentials :many
+UPDATE credentials AS c
+SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at = now()
+FROM sessions AS s
+WHERE s.id = c.binding_id
+    AND c.state IN ('planned', 'published')
+    AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled'))
+RETURNING c.id, c.kind, c.binding_id, c.token_hash, c.secret_name, c.secret_uid, c.state, c.created_at, c.updated_at, c.revoked_at, c.attempts, c.next_attempt_at, c.lease_owner, c.lease_until
+`
+
+// Live credentials of sessions that can no longer act (archived, or completed, failed or
+// cancelled). Whatever ended them revokes in its own transaction; this takes what slipped past
+// (a path that did not, or a credential that was planned just before). The predicate is the
+// authenticator's: superseded, idle and waiting sessions keep their credentials.
+func (q *Queries) RevokeEndedSessionCredentials(ctx context.Context) ([]Credential, error) {
+	rows, err := q.db.Query(ctx, revokeEndedSessionCredentials)
 	if err != nil {
 		return nil, err
 	}

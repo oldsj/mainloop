@@ -39,6 +39,9 @@ var (
 	// ErrRevoked means the credential was revoked while it was being published. The Secret this
 	// call created has been deleted again.
 	ErrRevoked = errors.New("agentauth: credential was revoked while being published")
+	// ErrBindingEnded means the binding's session is archived or finished, so it can no longer
+	// act and no credential is issued for it.
+	ErrBindingEnded = errors.New("agentauth: the binding's session has ended")
 )
 
 // Credentials issues and revokes the bearer credentials of agent bindings.
@@ -95,15 +98,25 @@ func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.
 		return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: deref(row.SecretUID)}, nil
 	}
 	token := Token(c.Key, row.ID)
-	uid, err := c.Secrets.Create(ctx, row.SecretName, purpose(kind), token)
+	cctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
+	uid, err := c.Secrets.Create(cctx, row.SecretName, purpose(kind), token)
 	if err != nil {
 		return Issued{}, fmt.Errorf("agentauth: publish %s: %w", row.SecretName, err)
 	}
 	if _, err := dbq.New(c.Pool).MarkCredentialPublished(ctx, dbq.MarkCredentialPublishedParams{ID: row.ID, SecretUID: &uid}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Not planned any more: a concurrent Issue published it, or it was revoked.
-			if cur, gerr := dbq.New(c.Pool).GetCredential(ctx, row.ID); gerr == nil && cur.State == dbstate.CredentialPublished && deref(cur.SecretUID) == uid {
+			cur, gerr := dbq.New(c.Pool).GetCredential(ctx, row.ID)
+			if gerr != nil {
+				// The row's state is unknown, so the Secret is left for the cleanup and stray sweeps.
+				return Issued{}, fmt.Errorf("agentauth: read credential %s after a publish miss: %w", row.ID, gerr)
+			}
+			if cur.State == dbstate.CredentialPublished && deref(cur.SecretUID) == uid {
 				return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: uid}, nil
+			}
+			if cur.State != dbstate.CredentialRevoked && cur.State != dbstate.CredentialDeleted {
+				return Issued{}, fmt.Errorf("agentauth: credential %s is %s after a publish miss", row.ID, cur.State)
 			}
 			// Revoked: cleanup may already have marked the row deleted without seeing this
 			// Secret, so nothing else will remove it. The UID precondition keeps a newer Secret
@@ -128,6 +141,16 @@ func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.C
 		}
 		if kind == dbstate.CredentialMCP && !ValidPair(b.Role, b.MCPGrantKind) {
 			return ErrInvalidGrant
+		}
+		// The session row is locked FOR SHARE until this transaction commits: whatever ends the
+		// session updates that row, so it either waits for this plan (and then revokes it in its own
+		// transaction) or has committed already and is seen here.
+		sess, err := q.LockSessionForCredential(ctx, bindingID)
+		if err != nil {
+			return fmt.Errorf("agentauth: read session: %w", err)
+		}
+		if sess.ArchivedAt != nil || stale(sess.Status) {
+			return ErrBindingEnded
 		}
 		if live, err := q.GetLiveCredential(ctx, dbq.GetLiveCredentialParams{BindingID: bindingID, Kind: kind}); err == nil {
 			row = live
@@ -195,6 +218,13 @@ func CleanupTable() reconcile.Table {
 	return reconcile.NewTable("credentials", string(dbstate.CredentialRevoked))
 }
 
+// createTimeout bounds the Secret create inside Issue. Cleanup relies on it: a revoked credential
+// with no recorded UID may still have a create in flight until this long after its row was made.
+const createTimeout = 30 * time.Second
+
+// lookupGrace is how long past a credential row's creation a missing Secret may still appear.
+const lookupGrace = createTimeout + 15*time.Second
+
 // stalePlanned is how long a planned credential may wait for its publish before it is revoked
 // and its Secret looked up by name.
 const stalePlanned = 10 * time.Minute
@@ -209,7 +239,7 @@ func (c *Credentials) Register(r *reconcile.Runner) {
 }
 
 // RevokeStrays revokes credentials that nothing else will: a planned row whose publish never
-// finished, and a live row whose binding is gone.
+// finished, a live row whose binding is gone, and a live row whose session has ended.
 func (c *Credentials) RevokeStrays(ctx context.Context) error {
 	q := dbq.New(c.Pool)
 	age := stalePlanned.Seconds()
@@ -221,8 +251,12 @@ func (c *Credentials) RevokeStrays(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("agentauth: revoke orphaned credentials: %w", err)
 	}
-	if n := len(planned) + len(orphans); n > 0 && c.Log != nil {
-		c.Log.InfoContext(ctx, "revoked stray credentials", "stale_planned", len(planned), "orphaned", len(orphans))
+	ended, err := q.RevokeEndedSessionCredentials(ctx)
+	if err != nil {
+		return fmt.Errorf("agentauth: revoke credentials of ended sessions: %w", err)
+	}
+	if n := len(planned) + len(orphans) + len(ended); n > 0 && c.Log != nil {
+		c.Log.InfoContext(ctx, "revoked stray credentials", "stale_planned", len(planned), "orphaned", len(orphans), "ended_sessions", len(ended))
 	}
 	return nil
 }
@@ -245,6 +279,11 @@ func (c *Credentials) cleanup(ctx context.Context, claim reconcile.Claim) (recon
 			return reconcile.Retry(), err
 		}
 		if !found {
+			// An Issue whose create is still in flight may yet land the Secret; wait out its deadline
+			// before calling the name free.
+			if wait := time.Until(row.CreatedAt.Add(lookupGrace)); wait > 0 {
+				return reconcile.RetryAfter(min(wait, time.Minute)), nil
+			}
 			return reconcile.Done(string(dbstate.CredentialDeleted)), nil
 		}
 	}

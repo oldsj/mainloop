@@ -375,6 +375,12 @@ func (c *Config) AllowedMCPHosts() map[string]bool {
 	return hostSet([]string{"mainloop-mcp." + c.Namespace + ".svc.cluster.local"})
 }
 
+// MCPOrigin is the in-cluster URL agents reach the MCP server at: the instance's Service name over
+// plain HTTP, which is also the origin the credential Secrets are bound to.
+func (c *Config) MCPOrigin() string {
+	return c.ServiceOrigin("mainloop-mcp")
+}
+
 // splitHosts splits a comma-separated host list and drops blank entries.
 func splitHosts(list string) []string {
 	var out []string

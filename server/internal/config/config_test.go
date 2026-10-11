@@ -523,3 +523,17 @@ func TestInCluster(t *testing.T) {
 		t.Error("not InCluster with KUBERNETES_SERVICE_HOST")
 	}
 }
+
+func TestMCPOrigin(t *testing.T) {
+	cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_NAMESPACE": "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.MCPOrigin(), "http://mainloop-mcp.team.svc.cluster.local"; got != want {
+		t.Errorf("MCPOrigin = %q, want %q", got, want)
+	}
+	// The origin's host is one the MCP listener accepts by default.
+	if !cfg.AllowedMCPHosts()["mainloop-mcp.team.svc.cluster.local"] {
+		t.Error("the origin's host is not served")
+	}
+}

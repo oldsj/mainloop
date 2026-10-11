@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -186,6 +187,9 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 			}
 		}
 		if res.purge {
+			if _, err := agentauth.RevokeInTx(ctx, q, w.ID); err != nil {
+				return false, err
+			}
 			if _, err := q.DeleteSession(ctx, w.ID); err != nil {
 				return false, err
 			}
@@ -259,6 +263,10 @@ func classify(err error) (permanent bool, reason string) {
 	var ou *kagent.OutcomeUnknown
 	var uc *unconfirmed
 	switch {
+	case errors.Is(err, agentauth.ErrBindingEnded), errors.Is(err, agentauth.ErrInvalidGrant):
+		return true, "the workspace's agent credential cannot be issued"
+	case errors.Is(err, agentauth.ErrCleanupPending), errors.Is(err, agentauth.ErrRevoked):
+		return false, "the workspace's previous agent credential is still being cleaned up"
 	case errors.As(err, &cfg):
 		return true, "kagent refused Mainloop's credentials"
 	case errors.As(err, &se):
@@ -350,7 +358,15 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 	if w.KagentSessionID != nil {
 		return result{state: dbstate.OpSucceeded, sess: s.observe(ctx, w.sessionID())}
 	}
-	sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
+	// The agent's MCP credential is published first, outside any transaction. Issue is idempotent,
+	// so a retried create sends the same reference.
+	req := w.createRequest()
+	creds, err := s.Credentials.SessionCredentials(ctx, w.ID, s.Config.MCPOrigin())
+	if err != nil {
+		return result{err: err}
+	}
+	req.Credentials = creds
+	sess, err := s.Kagent.CreateSession(ctx, req)
 	if err != nil {
 		return result{err: err}
 	}
@@ -480,7 +496,14 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		}
 		// A create may have reached kagent without the reply being recorded. The idempotent
 		// create returns that Session, so the delete removes it rather than leaking it.
-		sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
+		// The replay carries the credential the original create did, if it is still live; it makes none.
+		req := w.createRequest()
+		creds, cerr := s.Credentials.SessionReference(ctx, w.ID, s.Config.MCPOrigin())
+		if cerr != nil {
+			return result{err: &transient{cerr}}
+		}
+		req.Credentials = creds
+		sess, err := s.Kagent.CreateSession(ctx, req)
 		if replayFoundNoSession(err) {
 			// No Session holds the request id, or the orphan sweep reclaims it if a kagent-side
 			// change made this replay refuse a request an earlier attempt had accepted.

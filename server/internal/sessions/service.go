@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -160,8 +161,13 @@ type Service struct {
 	Providers *providers.Registry
 	// Waker, when set, readies a workspace session's runtime before each send.
 	Waker Waker
-	Log   *slog.Logger
-	Opts  Options
+	// Credentials publishes the MCP credential of a binding that needs one before its kagent Session
+	// is created, and revokes it when the session ends. Nil creates sessions without MCP tools.
+	Credentials *agentauth.Credentials
+	// MCPOrigin is where those credentials are valid: the MCP Service's in-cluster URL.
+	MCPOrigin string
+	Log       *slog.Logger
+	Opts      Options
 }
 
 func (s *Service) opts() Options { return s.Opts.withDefaults() }
@@ -224,7 +230,7 @@ func (s *Service) ensureMain(ctx context.Context, tx pgx.Tx) (dbq.GetMainBinding
 		return row, fmt.Errorf("create main session: %w", err)
 	}
 	if _, err := q.CreateAgentBinding(ctx, dbq.CreateAgentBindingParams{
-		SessionID: id, Kind: "claude", Role: dbstate.RoleMain, MCPGrantKind: dbstate.GrantNone,
+		SessionID: id, Kind: "claude", Role: dbstate.RoleMain, MCPGrantKind: dbstate.GrantCoordination,
 	}); err != nil {
 		return row, fmt.Errorf("create main binding: %w", err)
 	}
@@ -402,7 +408,8 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
-		Agent: kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
-		Opts:  OptionsFrom(cfg.Sessions),
+		Agent:     kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
+		Opts:      OptionsFrom(cfg.Sessions),
+		MCPOrigin: cfg.MCPOrigin(),
 	}
 }

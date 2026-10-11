@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -376,6 +377,10 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		} else if err != nil {
 			return nil, fmt.Errorf("cancel session: %w", err)
 		}
+		// The agent can no longer reach MCP; the Secret is deleted after this commits.
+		if _, err := agentauth.RevokeInTx(ctx, q, sessionID); err != nil {
+			return nil, err
+		}
 		return drafts, nil
 	})
 	if err != nil && !errors.Is(err, errFinishedMeanwhile) {
@@ -447,7 +452,16 @@ func (s *Service) Archive(ctx context.Context, sessionID string) error {
 	if !finishedStatus(row.Status) {
 		return conflict("This session is still running or waiting; cancel it first.")
 	}
-	n, err := q.ArchiveFinishedSession(ctx, sessionID)
+	var n int64
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		tq := dbq.New(tx)
+		var err error
+		if n, err = tq.ArchiveFinishedSession(ctx, sessionID); err != nil || n == 0 {
+			return err
+		}
+		_, err = agentauth.RevokeInTx(ctx, tq, sessionID)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("archive session: %w", err)
 	}

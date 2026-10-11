@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -259,6 +260,13 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	if dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
 		name = sessionName(t.d.SessionTitle)
 	}
+	// The binding's MCP credential is published first, outside any transaction, and referenced on
+	// the create. Issue is idempotent, so a retried or replayed create reuses it. It runs before the
+	// request is recorded so a failure here leaves no create marker behind.
+	creds, err := t.mcpCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Record the request before the call: from now on the binding may own a Session whose id is not
 	// stored, which the orphan sweep must not delete.
 	id, owner, attempts := t.fence()
@@ -268,9 +276,10 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 		return nil, fmt.Errorf("record the create request: %w", err)
 	}
 	sess, err := t.s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
-		Agent:     &kagentapi.ResourceReference{Namespace: t.agent.Namespace, Name: t.agent.Name},
-		RequestId: reqID,
-		Name:      name,
+		Agent:       &kagentapi.ResourceReference{Namespace: t.agent.Namespace, Name: t.agent.Name},
+		RequestId:   reqID,
+		Name:        name,
+		Credentials: creds,
 	})
 	if err != nil {
 		return nil, err
@@ -403,6 +412,15 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 			t.s.log().WarnContext(ctx, "delivery is waiting for its workspace's kagent session",
 				"message_id", t.c.ID, "workspace", *t.d.WorkspaceID, "age", age.Round(time.Second))
 			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
+		}
+		if errors.Is(err, agentauth.ErrCleanupPending) || errors.Is(err, agentauth.ErrRevoked) {
+			// The binding's previous credential Secret is still being deleted, or a revoke landed
+			// mid-publish. Both clear on their own, so this waits without using up an attempt.
+			t.s.log().WarnContext(ctx, "delivery is waiting for its MCP credential", "message_id", t.c.ID, "error", err)
+			return reconcile.RetryAfter(t.s.opts().UncertainRecheck), nil
+		}
+		if errors.Is(err, agentauth.ErrBindingEnded) || errors.Is(err, agentauth.ErrInvalidGrant) {
+			return t.settle(ctx, dbstate.DeliveryFailed, "not sent: "+err.Error(), nil, false)
 		}
 		var cfg *kagent.ConfigError
 		if errors.As(err, &cfg) || errors.Is(err, errWorkspaceSessionGone) || t.c.Attempts >= createAttempts {
@@ -883,4 +901,14 @@ func replyText(task *a2a.Task) string {
 		}
 	}
 	return statusText(task)
+}
+
+// mcpCredentials publishes the MCP credential of the delivery's binding when its role and grant
+// call for one (the main thread; workspace sessions get theirs from the workspace service). A
+// binding with none, or a process with no credential service, creates a Session without MCP.
+func (t *turn) mcpCredentials(ctx context.Context) ([]*kagentapi.SessionCredential, error) {
+	if !agentauth.ValidPair(dbstate.BindingRole(t.d.BindingRole), dbstate.MCPGrantKind(t.d.BindingGrant)) {
+		return nil, nil
+	}
+	return t.s.Credentials.SessionCredentials(ctx, t.d.SessionID, t.s.MCPOrigin)
 }

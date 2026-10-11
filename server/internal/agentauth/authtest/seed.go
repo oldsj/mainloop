@@ -86,15 +86,9 @@ func (e *Env) Seed(t testing.TB, a Agent) Seeded {
 	}); err != nil {
 		t.Fatalf("seed binding: %v", err)
 	}
-	if _, err := e.Pool.Exec(ctx, `UPDATE sessions SET status = $2 WHERE id = $1`, id, string(a.Status)); err != nil {
-		t.Fatalf("seed status: %v", err)
-	}
-	if a.Archived {
-		if _, err := q.ArchiveSession(ctx, id); err != nil {
-			t.Fatalf("seed archive: %v", err)
-		}
-	}
 	out := Seeded{SessionID: id, UserID: a.User}
+	// The credential is issued while the session is live, as in production; a session that ends
+	// afterwards keeps its row until something revokes it.
 	if agentauth.ValidPair(a.Role, a.Grant) {
 		issued, err := e.Creds.Issue(ctx, id, dbstate.CredentialMCP)
 		if err != nil {
@@ -102,6 +96,14 @@ func (e *Env) Seed(t testing.TB, a Agent) Seeded {
 		}
 		out.CredentialID = issued.CredentialID
 		out.Token = agentauth.Token(Key, issued.CredentialID)
+	}
+	if _, err := e.Pool.Exec(ctx, `UPDATE sessions SET status = $2 WHERE id = $1`, id, string(a.Status)); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+	if a.Archived {
+		if _, err := q.ArchiveSession(ctx, id); err != nil {
+			t.Fatalf("seed archive: %v", err)
+		}
 	}
 	return out
 }

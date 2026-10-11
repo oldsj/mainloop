@@ -110,6 +110,7 @@ type Server struct {
 	tasks    map[a2a.TaskID]*a2a.Task
 	taskSeq  int
 	sessSeq  int
+	creates  []*api.CreateSessionRequest
 
 	// The Tamper hooks edit a reply, to test the client's checks that a reply belongs to its request.
 	// Set them before the first request.
@@ -288,6 +289,7 @@ func (s *Server) createSession(
 	m := req.Msg
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.creates = append(s.creates, proto.CloneOf(m))
 	if id, ok := s.byReq[m.GetRequestId()]; ok && m.GetRequestId() != "" {
 		prev, live := s.sessions[id]
 		if !live {
@@ -722,4 +724,16 @@ func ctxDone(r *http.Request) <-chan struct{} {
 		return nil
 	}
 	return r.Context().Done()
+}
+
+// CreateRequests returns a copy of every CreateSession request the fake has received, in order,
+// including replays and refused ones.
+func (s *Server) CreateRequests() []*api.CreateSessionRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*api.CreateSessionRequest, len(s.creates))
+	for i, m := range s.creates {
+		out[i] = proto.CloneOf(m)
+	}
+	return out
 }

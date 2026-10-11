@@ -75,7 +75,8 @@ LIMIT 1;
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
        d.kagent_session_id AS sent_kagent_session_id,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
-       b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role, s.user_id, s.title AS session_title,
+       b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
+       coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id, w.agent_namespace AS workspace_agent_namespace,
        w.agent_name AS workspace_agent_name,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content

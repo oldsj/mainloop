@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -511,6 +512,9 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 			return nil, nil
 		}
 		if _, err := q.GetOpenWorkspaceOp(ctx, id); !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		if _, err := agentauth.RevokeInTx(ctx, q, id); err != nil {
 			return nil, err
 		}
 		if _, err := q.DeleteSession(ctx, id); err != nil {

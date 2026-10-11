@@ -50,3 +50,21 @@ RETURNING *;
 
 -- name: SetBindingGrant :one
 UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING *;
+
+-- name: LockSessionForCredential :one
+-- The session behind a binding, locked FOR SHARE so a state change that ends it (which updates
+-- the row) waits for the credential plan to commit, and a plan that comes after it sees the end.
+SELECT status, archived_at FROM sessions WHERE id = $1 FOR SHARE;
+
+-- name: RevokeEndedSessionCredentials :many
+-- Live credentials of sessions that can no longer act (archived, or completed, failed or
+-- cancelled). Whatever ended them revokes in its own transaction; this takes what slipped past
+-- (a path that did not, or a credential that was planned just before). The predicate is the
+-- authenticator's: superseded, idle and waiting sessions keep their credentials.
+UPDATE credentials AS c
+SET state = 'revoked', revoked_at = now(), updated_at = now(), next_attempt_at = now()
+FROM sessions AS s
+WHERE s.id = c.binding_id
+    AND c.state IN ('planned', 'published')
+    AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled'))
+RETURNING c.*;
