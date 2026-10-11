@@ -161,6 +161,11 @@ func (s *Service) insertOp(ctx context.Context, q *dbq.Queries, workspaceID stri
 		if _, err := q.CancelOpenWorkspaceOps(ctx, workspaceID); err != nil {
 			return dbq.WorkspaceOp{}, err
 		}
+		// Push authority ends with the durable delete intent, in the same transaction: a delayed or
+		// failing native delete must not leave a window for a new upstream push.
+		if err := revokePush(ctx, q, workspaceID); err != nil {
+			return dbq.WorkspaceOp{}, err
+		}
 	}
 	open, err := q.GetOpenWorkspaceOp(ctx, workspaceID)
 	switch {

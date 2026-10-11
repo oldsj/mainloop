@@ -37,7 +37,9 @@ CREATE TABLE git_push_grants (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     revoked_at timestamptz,
-    CHECK (state = 'planned' OR credential_id IS NOT NULL),
+    -- A grant may be revoked before its credential is linked (enrollment interrupted); only a
+    -- published grant needs the credential.
+    CHECK (state <> 'published' OR credential_id IS NOT NULL),
     CHECK ((state = 'revoked') = (revoked_at IS NOT NULL))
 );
 

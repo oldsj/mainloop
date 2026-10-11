@@ -250,6 +250,7 @@ JOIN workspace_writer_claims c ON c.owner_id = w.user_id AND c.repository = e.re
 WHERE w.id = $1 AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
     AND NOT EXISTS (SELECT 1 FROM workspace_push_reservations r WHERE r.workspace_id = w.id
         AND (r.state = 'revoked' OR (r.state = 'planned' AND r.expires_at <= clock_timestamp())))
+    AND NOT EXISTS (SELECT 1 FROM workspace_ops o WHERE o.workspace_id = w.id AND o.kind = 'delete')
     AND b.kagent_deleted_at IS NULL AND b.kagent_session_id IS NOT NULL
     AND b.mcp_grant_kind = 'workspace' AND b.role IN ('agent', 'supervisor', 'child')
     AND ((b.role = 'agent' AND c.binding_id = w.id AND c.attempt_id IS NULL)
