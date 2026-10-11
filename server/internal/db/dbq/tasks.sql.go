@@ -18,7 +18,7 @@ UPDATE task_operations
 SET state = $1, last_confirmed_step = $2, reason = $3,
     attempt_id = coalesce($4, attempt_id),
     target_attempt_id = coalesce($5, target_attempt_id),
-    updated_at = now()
+    lease_owner = NULL, lease_until = NULL, next_attempt_at = now(), updated_at = now()
 WHERE id = $6 AND lease_owner = $7 AND attempts = $8
 RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
@@ -71,6 +71,24 @@ func (q *Queries) AdvanceTaskOperation(ctx context.Context, arg AdvanceTaskOpera
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const appendAttemptEvidence = `-- name: AppendAttemptEvidence :exec
+UPDATE task_attempts
+SET evidence_refs = CASE WHEN cardinality(evidence_refs) >= 64 OR $2::text = ANY (evidence_refs)
+                         THEN evidence_refs ELSE array_append(evidence_refs, $2::text) END,
+    updated_at = now()
+WHERE id = $1
+`
+
+type AppendAttemptEvidenceParams struct {
+	ID      string
+	Column2 string
+}
+
+func (q *Queries) AppendAttemptEvidence(ctx context.Context, arg AppendAttemptEvidenceParams) error {
+	_, err := q.db.Exec(ctx, appendAttemptEvidence, arg.ID, arg.Column2)
+	return err
 }
 
 const attachAttemptSession = `-- name: AttachAttemptSession :one
@@ -127,6 +145,18 @@ func (q *Queries) AttachAttemptSession(ctx context.Context, arg AttachAttemptSes
 	return i, err
 }
 
+const blockCreateOpsForAttempt = `-- name: BlockCreateOpsForAttempt :exec
+UPDATE task_operations
+SET state = 'blocked', reason = NULL, lease_owner = NULL, lease_until = NULL, updated_at = now()
+WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating', 'target_ready')
+`
+
+// An attempt that has ended no longer needs its create request driven further.
+func (q *Queries) BlockCreateOpsForAttempt(ctx context.Context, targetAttemptID *string) error {
+	_, err := q.db.Exec(ctx, blockCreateOpsForAttempt, targetAttemptID)
+	return err
+}
+
 const blockRequestedCreateOps = `-- name: BlockRequestedCreateOps :exec
 UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
 WHERE task_id = $1 AND kind = 'create' AND state = 'requested'
@@ -179,23 +209,6 @@ WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
 
 func (q *Queries) CountGlobalCapacity(ctx context.Context, ownerID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countGlobalCapacity, ownerID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countLiveChildTasks = `-- name: CountLiveChildTasks :one
-SELECT count(*) FROM tasks
-WHERE owner_id = $1 AND parent_task_id = $2 AND status NOT IN ('completed', 'failed', 'cancelled')
-`
-
-type CountLiveChildTasksParams struct {
-	OwnerID      string
-	ParentTaskID *string
-}
-
-func (q *Queries) CountLiveChildTasks(ctx context.Context, arg CountLiveChildTasksParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countLiveChildTasks, arg.OwnerID, arg.ParentTaskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -315,6 +328,28 @@ func (q *Queries) GetAttemptPrincipal(ctx context.Context, bindingID *string) (G
 	return i, err
 }
 
+const getBindingKagentSession = `-- name: GetBindingKagentSession :one
+SELECT kagent_session_id FROM agent_bindings WHERE session_id = $1
+`
+
+func (q *Queries) GetBindingKagentSession(ctx context.Context, sessionID string) (*string, error) {
+	row := q.db.QueryRow(ctx, getBindingKagentSession, sessionID)
+	var kagent_session_id *string
+	err := row.Scan(&kagent_session_id)
+	return kagent_session_id, err
+}
+
+const getProjectFullName = `-- name: GetProjectFullName :one
+SELECT full_name FROM projects WHERE id = $1
+`
+
+func (q *Queries) GetProjectFullName(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getProjectFullName, id)
+	var full_name string
+	err := row.Scan(&full_name)
+	return full_name, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE id = $1 AND owner_id = $2
 `
@@ -404,6 +439,98 @@ func (q *Queries) GetTaskAttempt(ctx context.Context, id string) (TaskAttempt, e
 		&i.ArchivedAt,
 		&i.NativeDeletedAt,
 		&i.RetentionHold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTaskByID = `-- name: GetTaskByID :one
+
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE id = $1
+`
+
+// Internal lookups for the reconcile handlers, which know a row id and not the caller.
+func (q *Queries) GetTaskByID(ctx context.Context, id string) (Task, error) {
+	row := q.db.QueryRow(ctx, getTaskByID, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTaskByIDForUpdate = `-- name: GetTaskByIDForUpdate :one
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetTaskByIDForUpdate(ctx context.Context, id string) (Task, error) {
+	row := q.db.QueryRow(ctx, getTaskByIDForUpdate, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -682,6 +809,17 @@ func (q *Queries) GetTaskWriterClaim(ctx context.Context, attemptID *string) (Wo
 		&i.FencedAt,
 	)
 	return i, err
+}
+
+const getWorkspaceEnvironment = `-- name: GetWorkspaceEnvironment :one
+SELECT environment FROM workspaces WHERE id = $1
+`
+
+func (q *Queries) GetWorkspaceEnvironment(ctx context.Context, id string) (json.RawMessage, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceEnvironment, id)
+	var environment json.RawMessage
+	err := row.Scan(&environment)
+	return environment, err
 }
 
 const hasCompletedReport = `-- name: HasCompletedReport :one
@@ -1077,6 +1215,113 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 	return items, nil
 }
 
+const listChildTasksForUpdate = `-- name: ListChildTasksForUpdate :many
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE
+`
+
+// Child tasks in id order, locked. Settling a supervisor takes its task, then these, then its
+// attempt: tasks before attempts everywhere.
+func (q *Queries) ListChildTasksForUpdate(ctx context.Context, parentTaskID *string) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listChildTasksForUpdate, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Task{}
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.TopicID,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.CreatorBindingID,
+			&i.Title,
+			&i.Brief,
+			&i.Mode,
+			&i.AssignedProfileID,
+			&i.SelectionSource,
+			&i.ProviderConstraint,
+			&i.AcceptedEnvironment,
+			&i.Status,
+			&i.Reason,
+			&i.DecisionAttemptID,
+			&i.DecisionReportID,
+			&i.DecisionAction,
+			&i.CurrentAttemptID,
+			&i.Version,
+			&i.CheckoutBranch,
+			&i.CheckoutRef,
+			&i.CheckoutDepth,
+			&i.PrNumber,
+			&i.PrUrl,
+			&i.PrHeadSha,
+			&i.PrState,
+			&i.CiState,
+			&i.CiHeadSha,
+			&i.ProjectedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenOperationsForSource = `-- name: ListOpenOperationsForSource :many
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE source_attempt_id = $1 AND state NOT IN ('completed', 'blocked')
+`
+
+func (q *Queries) ListOpenOperationsForSource(ctx context.Context, sourceAttemptID *string) ([]TaskOperation, error) {
+	rows, err := q.db.Query(ctx, listOpenOperationsForSource, sourceAttemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskOperation{}
+	for rows.Next() {
+		var i TaskOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.PrincipalKey,
+			&i.RequestID,
+			&i.RequestDigest,
+			&i.RequestPayload,
+			&i.Kind,
+			&i.TaskID,
+			&i.AttemptID,
+			&i.State,
+			&i.LastConfirmedStep,
+			&i.SourceAttemptID,
+			&i.TargetAttemptID,
+			&i.CheckpointRef,
+			&i.ManifestRef,
+			&i.Reason,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectionCandidates = `-- name: ListProjectionCandidates :many
 
 SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, p.full_name AS project_full_name
@@ -1181,6 +1426,34 @@ func (q *Queries) ListProjectionCandidates(ctx context.Context, arg ListProjecti
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReconcilingCoordinationTasks = `-- name: ListReconcilingCoordinationTasks :many
+SELECT id FROM tasks
+WHERE mode = 'coordination' AND status = 'waiting' AND reason = 'reconciliation'
+ORDER BY updated_at, id
+LIMIT $1
+`
+
+// Coordination tasks whose supervisor reported completion and that wait for reconciliation.
+func (q *Queries) ListReconcilingCoordinationTasks(ctx context.Context, limit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, listReconcilingCoordinationTasks, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1471,7 +1744,8 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 const listUnsettledAttempts = `-- name: ListUnsettledAttempts :many
 SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.created_at, a.updated_at FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
-WHERE (a.state IN ('draining', 'fenced') OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
+WHERE (a.state IN ('draining', 'fenced')
+       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
   AND a.updated_at < now() - make_interval(secs => $2::float8)
 ORDER BY a.updated_at, a.id
 LIMIT $1
@@ -1483,7 +1757,8 @@ type ListUnsettledAttemptsParams struct {
 }
 
 // Attempts that still hold a runtime although their task has ended, and attempts stuck draining or
-// fenced: the settle sweep finishes them.
+// fenced: the settle sweep finishes them. The idle gate keeps it from racing a handler that is
+// still working on the attempt.
 func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAttemptsParams) ([]TaskAttempt, error) {
 	rows, err := q.db.Query(ctx, listUnsettledAttempts, arg.Limit, arg.IdleSeconds)
 	if err != nil {
@@ -1534,6 +1809,28 @@ func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAt
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockParentCurrentAttemptShared = `-- name: LockParentCurrentAttemptShared :one
+SELECT a.id, a.state, t.status AS task_status
+FROM tasks t JOIN task_attempts a ON a.id = t.current_attempt_id
+WHERE t.id = $1
+FOR SHARE OF a
+`
+
+type LockParentCurrentAttemptSharedRow struct {
+	ID         string
+	State      dbstate.AttemptState
+	TaskStatus dbstate.TaskStatus
+}
+
+// A child's report also holds the parent's current attempt, so the parent cannot be drained
+// between the check and the commit. Returns no row when the parent has no current attempt.
+func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string) (LockParentCurrentAttemptSharedRow, error) {
+	row := q.db.QueryRow(ctx, lockParentCurrentAttemptShared, id)
+	var i LockParentCurrentAttemptSharedRow
+	err := row.Scan(&i.ID, &i.State, &i.TaskStatus)
+	return i, err
 }
 
 const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
@@ -1746,7 +2043,8 @@ func (q *Queries) ReleaseTaskWriter(ctx context.Context, arg ReleaseTaskWriterPa
 
 const resendTaskEventDelivery = `-- name: ResendTaskEventDelivery :one
 UPDATE task_event_deliveries
-SET delivery_id = $1, state = 'pending', sends = sends + 1, updated_at = now()
+SET delivery_id = $1, state = 'pending', sends = sends + 1, updated_at = now(),
+    lease_owner = NULL, lease_until = NULL
 WHERE id = $2 AND lease_owner = $3 AND attempts = $4
 RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
 `
@@ -1809,6 +2107,20 @@ type SetAttemptResultParams struct {
 
 func (q *Queries) SetAttemptResult(ctx context.Context, arg SetAttemptResultParams) error {
 	_, err := q.db.Exec(ctx, setAttemptResult, arg.ID, arg.ResultRef)
+	return err
+}
+
+const setAttemptWriterGeneration = `-- name: SetAttemptWriterGeneration :exec
+UPDATE task_attempts SET writer_generation = $2, updated_at = now() WHERE id = $1 AND writer_generation IS NULL
+`
+
+type SetAttemptWriterGenerationParams struct {
+	ID               string
+	WriterGeneration *int32
+}
+
+func (q *Queries) SetAttemptWriterGeneration(ctx context.Context, arg SetAttemptWriterGenerationParams) error {
+	_, err := q.db.Exec(ctx, setAttemptWriterGeneration, arg.ID, arg.WriterGeneration)
 	return err
 }
 
@@ -2255,4 +2567,15 @@ func (q *Queries) UpdateTaskState(ctx context.Context, arg UpdateTaskStateParams
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const workspaceExists = `-- name: WorkspaceExists :one
+SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = $1)
+`
+
+func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) {
+	row := q.db.QueryRow(ctx, workspaceExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

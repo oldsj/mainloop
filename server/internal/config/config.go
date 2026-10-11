@@ -108,6 +108,10 @@ type Tasks struct {
 	MaxChildrenPerParent     int     `env:"TASK_MAX_CHILDREN_PER_PARENT" envDefault:"3"`
 	MaxChildrenGlobal        int     `env:"TASK_MAX_CHILDREN_GLOBAL" envDefault:"6"`
 	ReconcileInterval        Seconds `env:"TASK_RECONCILE_SECONDS" envDefault:"5"`
+	// ProvisionWindow is how long a new attempt may wait for its workspace before it is aborted.
+	ProvisionWindow Seconds `env:"TASK_PROVISION_WINDOW_SECONDS" envDefault:"900"`
+	// ProjectionEvery is how often the GitHub observation of code tasks runs.
+	ProjectionEvery Seconds `env:"TASK_PROJECTION_SECONDS" envDefault:"60"`
 }
 
 // Workspaces tunes workspace lifecycle loops.

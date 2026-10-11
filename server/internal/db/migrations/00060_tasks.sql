@@ -216,7 +216,7 @@ WHERE state NOT IN ('completed', 'blocked');
 -- The reconcile loop claims operations in these states. An uncertain one is claimed too: its
 -- handler looks at what exists before it does anything.
 CREATE INDEX task_operations_claim ON task_operations (next_attempt_at, id)
-WHERE state IN ('requested', 'draining', 'source_fencing', 'source_fenced', 'target_creating', 'target_ready', 'uncertain');
+WHERE state IN ('requested', 'draining', 'source_fencing', 'source_fenced', 'target_creating', 'target_ready');
 
 -- Immutable checkpoint, manifest and summary content. Bounded canonical JSON that Mainloop
 -- produced, never a transcript or a credential.

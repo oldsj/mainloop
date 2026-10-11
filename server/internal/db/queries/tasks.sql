@@ -32,10 +32,6 @@ ORDER BY created_at, id;
 -- name: ListChildTasks :many
 SELECT * FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id;
 
--- name: CountLiveChildTasks :one
-SELECT count(*) FROM tasks
-WHERE owner_id = $1 AND parent_task_id = $2 AND status NOT IN ('completed', 'failed', 'cancelled');
-
 -- Move a task to a new status. The version check makes a concurrent writer lose: no row back
 -- means the task changed. The owner decision is set or cleared with the status.
 -- name: UpdateTaskState :one
@@ -155,6 +151,12 @@ UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND ver
 UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
 WHERE task_id = $1 AND kind = 'create' AND state = 'requested';
 
+-- An attempt that has ended no longer needs its create request driven further.
+-- name: BlockCreateOpsForAttempt :exec
+UPDATE task_operations
+SET state = 'blocked', reason = NULL, lease_owner = NULL, lease_until = NULL, updated_at = now()
+WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating', 'target_ready');
+
 -- Provisioning and settlement. The attempt, the task's pointer to it and the writer claim change
 -- in one transaction under the task row lock.
 
@@ -193,10 +195,12 @@ RETURNING *;
 
 -- name: ListUnsettledAttempts :many
 -- Attempts that still hold a runtime although their task has ended, and attempts stuck draining or
--- fenced: the settle sweep finishes them.
+-- fenced: the settle sweep finishes them. The idle gate keeps it from racing a handler that is
+-- still working on the attempt.
 SELECT a.* FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
-WHERE (a.state IN ('draining', 'fenced') OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
+WHERE (a.state IN ('draining', 'fenced')
+       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
   AND a.updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
 ORDER BY a.updated_at, a.id
 LIMIT $1;
@@ -255,7 +259,7 @@ UPDATE task_operations
 SET state = sqlc.arg(state), last_confirmed_step = sqlc.arg(step), reason = sqlc.narg(reason),
     attempt_id = coalesce(sqlc.narg(attempt_id), attempt_id),
     target_attempt_id = coalesce(sqlc.narg(target_attempt_id), target_attempt_id),
-    updated_at = now()
+    lease_owner = NULL, lease_until = NULL, next_attempt_at = now(), updated_at = now()
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
 RETURNING *;
 
@@ -291,7 +295,8 @@ RETURNING *;
 -- A message the ledger gave up on is recorded again under a new id.
 -- name: ResendTaskEventDelivery :one
 UPDATE task_event_deliveries
-SET delivery_id = sqlc.arg(delivery_id), state = 'pending', sends = sends + 1, updated_at = now()
+SET delivery_id = sqlc.arg(delivery_id), state = 'pending', sends = sends + 1, updated_at = now(),
+    lease_owner = NULL, lease_until = NULL
 WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
 RETURNING *;
 
@@ -335,3 +340,56 @@ LIMIT 1;
 
 -- name: SetBindingRole :one
 UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING *;
+
+-- Internal lookups for the reconcile handlers, which know a row id and not the caller.
+
+-- name: GetTaskByID :one
+SELECT * FROM tasks WHERE id = $1;
+
+-- name: GetTaskByIDForUpdate :one
+SELECT * FROM tasks WHERE id = $1 FOR UPDATE;
+
+-- Child tasks in id order, locked. Settling a supervisor takes its task, then these, then its
+-- attempt: tasks before attempts everywhere.
+-- name: ListChildTasksForUpdate :many
+SELECT * FROM tasks WHERE parent_task_id = $1 ORDER BY id FOR UPDATE;
+
+-- name: SetAttemptWriterGeneration :exec
+UPDATE task_attempts SET writer_generation = $2, updated_at = now() WHERE id = $1 AND writer_generation IS NULL;
+
+-- name: AppendAttemptEvidence :exec
+UPDATE task_attempts
+SET evidence_refs = CASE WHEN cardinality(evidence_refs) >= 64 OR $2::text = ANY (evidence_refs)
+                         THEN evidence_refs ELSE array_append(evidence_refs, $2::text) END,
+    updated_at = now()
+WHERE id = $1;
+
+-- A child's report also holds the parent's current attempt, so the parent cannot be drained
+-- between the check and the commit. Returns no row when the parent has no current attempt.
+-- name: LockParentCurrentAttemptShared :one
+SELECT a.id, a.state, t.status AS task_status
+FROM tasks t JOIN task_attempts a ON a.id = t.current_attempt_id
+WHERE t.id = $1
+FOR SHARE OF a;
+
+-- name: GetBindingKagentSession :one
+SELECT kagent_session_id FROM agent_bindings WHERE session_id = $1;
+
+-- name: WorkspaceExists :one
+SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = $1);
+
+-- name: GetProjectFullName :one
+SELECT full_name FROM projects WHERE id = $1;
+
+-- name: ListOpenOperationsForSource :many
+SELECT * FROM task_operations WHERE source_attempt_id = $1 AND state NOT IN ('completed', 'blocked');
+
+-- name: GetWorkspaceEnvironment :one
+SELECT environment FROM workspaces WHERE id = $1;
+
+-- Coordination tasks whose supervisor reported completion and that wait for reconciliation.
+-- name: ListReconcilingCoordinationTasks :many
+SELECT id FROM tasks
+WHERE mode = 'coordination' AND status = 'waiting' AND reason = 'reconciliation'
+ORDER BY updated_at, id
+LIMIT $1;

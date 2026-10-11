@@ -110,6 +110,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Kagent.RequestTimeout.Duration() != 30*time.Second || cfg.Workspaces.CreateRetryWindow.Duration() != 600*time.Second {
 		t.Errorf("durations: %v %v", cfg.Kagent.RequestTimeout, cfg.Workspaces.CreateRetryWindow)
 	}
+	if cfg.Tasks.ProvisionWindow.Duration() != 900*time.Second || cfg.Tasks.ProjectionEvery.Duration() != 60*time.Second {
+		t.Errorf("task provisioning defaults: %+v", cfg.Tasks)
+	}
 	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" {
 		t.Errorf("tasks/platform defaults: %+v", cfg.Tasks)
 	}
@@ -177,6 +180,8 @@ func TestInvalidValues(t *testing.T) {
 		{"non-numeric port", base("DB_PORT", "abc"), "DB_PORT"},
 		{"zero children", base("TASK_MAX_CHILDREN_PER_PARENT", "0"), "TASK_MAX_CHILDREN"},
 		{"bad seconds", base("TASK_RECONCILE_SECONDS", "0"), "TASK_RECONCILE_SECONDS"},
+		{"zero provision window", base("TASK_PROVISION_WINDOW_SECONDS", "0"), "TASK_PROVISION_WINDOW_SECONDS"},
+		{"negative projection period", base("TASK_PROJECTION_SECONDS", "-5"), "TASK_PROJECTION_SECONDS"},
 		{"negative seconds", base("KAGENT_REQUEST_TIMEOUT_SECONDS", "-1"), "KAGENT_REQUEST_TIMEOUT_SECONDS"},
 		{"nan seconds", base("TASK_RECONCILE_SECONDS", "NaN"), "TASK_RECONCILE_SECONDS"},
 		{"inf seconds", base("TASK_RECONCILE_SECONDS", "Inf"), "TASK_RECONCILE_SECONDS"},
