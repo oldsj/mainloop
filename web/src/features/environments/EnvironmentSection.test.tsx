@@ -32,7 +32,8 @@ import {
   selectionRead,
   selectionWrite,
   serveEnvironments,
-  versionsRead
+  versionsRead,
+  versionsReadWith
 } from './test/handlers';
 
 // The section makes several reads at once, and past the limiter's burst they queue. See fastReads.ts.
@@ -543,5 +544,124 @@ describe('environment selection', () => {
     await within(versionSelect).findByRole('option', { name: /^v1 ·/ });
     expect(within(versionSelect).getAllByRole('option')).toHaveLength(2);
     expect(screen.queryByRole('option', { name: /v-bad/ })).not.toBeInTheDocument();
+  });
+
+  it('an unreadable version list says so with a retry, and does not claim there is no accepted default', async () => {
+    let versionReads = 0;
+    server.use(
+      environmentsRead([environment({ accepted_default_version_id: 'v1' })]),
+      versionsReadWith(() => {
+        versionReads += 1;
+        return versionReads === 1
+          ? HttpResponse.json({ detail: 'Version list is unavailable' }, { status: 500 })
+          : HttpResponse.json([version({ id: 'v1' })]);
+      }),
+      savedSelection(null)
+    );
+    const user = userEvent.setup();
+    renderSection();
+
+    await chooseEnvironment(user, 'env');
+    const follow = screen.getByRole('checkbox', { name: /Follow this environment/ });
+    await user.click(follow);
+    expect(follow).toBeChecked();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't load the versions for this environment.");
+    expect(alert).toHaveTextContent('Version list is unavailable');
+    // Without a readable list, the warning cannot say whether an accepted default exists.
+    expect(
+      screen.queryByText(/An accepted current-policy version is required/)
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry loading versions' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(versionReads).toBe(2);
+    expect(
+      screen.queryByText(/An accepted current-policy version is required/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('an uncertain registration is announced once', async () => {
+    server.use(
+      ...serveEnvironments(),
+      registerWrite(() => HttpResponse.error())
+    );
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByText('Register a public image'));
+    await user.type(screen.getByLabelText('Name'), 'Public tools');
+    await user.type(screen.getByLabelText('Image'), IMAGE);
+    await user.click(screen.getByRole('button', { name: 'Register and validate image' }));
+    await screen.findByText(/Registration reply was not confirmed/);
+
+    const announced = screen
+      .getAllByRole('alert')
+      .filter((node) => /Registration reply was not confirmed/.test(node.textContent ?? ''));
+    expect(announced).toHaveLength(1);
+  });
+
+  it('a successful registration clears the form and collapses it', async () => {
+    let posts = 0;
+    server.use(
+      ...serveEnvironments(),
+      registerWrite(() => {
+        posts += 1;
+        return HttpResponse.json({
+          environment: environment({
+            id: 'registered',
+            name: 'Public image',
+            accepted_default_version_id: null
+          }),
+          version: version({ id: 'registered-version', environment_id: 'registered' })
+        });
+      })
+    );
+    const user = userEvent.setup();
+    renderSection();
+
+    const toggle = await screen.findByText('Register a public image');
+    await user.click(toggle);
+    await user.type(screen.getByLabelText('Name'), 'Public image');
+    await user.type(screen.getByLabelText('Image'), IMAGE);
+    await user.click(screen.getByRole('button', { name: 'Register and validate image' }));
+
+    expect(await screen.findByText(/^Registered Public image:/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+    expect(screen.getByLabelText('Image')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Register and validate image' })).toBeDisabled();
+    // RegisterForm is remounted after a registration, so the collapsed <details> is a new element.
+    expect(screen.getByText('Register a public image').closest('details')).not.toHaveAttribute(
+      'open'
+    );
+    expect(posts).toBe(1);
+  });
+
+  it('a failed registration clears the success notice from an earlier save', async () => {
+    server.use(
+      ...serveEnvironments(),
+      selectionWrite(async ({ request }) => HttpResponse.json(savedFrom(await bodyOf(request), 1))),
+      registerWrite(() => HttpResponse.json({ detail: 'Image is not public' }, { status: 400 }))
+    );
+    const user = userEvent.setup();
+    renderSection();
+
+    await chooseEnvironment(user, 'env');
+    await chooseVersion(user, 'v1');
+    await user.click(screen.getByRole('button', { name: 'Save selection' }));
+    expect(
+      await screen.findByText('Environment selection saved for new sessions.')
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByText('Register a public image'));
+    await user.type(screen.getByLabelText('Name'), 'Public tools');
+    await user.type(screen.getByLabelText('Image'), IMAGE);
+    await user.click(screen.getByRole('button', { name: 'Register and validate image' }));
+
+    expect(await screen.findByText('Image is not public')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Environment selection saved for new sessions.')
+    ).not.toBeInTheDocument();
   });
 });

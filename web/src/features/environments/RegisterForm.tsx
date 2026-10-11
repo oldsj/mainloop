@@ -72,12 +72,16 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
         </label>
 
         {uncertain ? (
-          <p className="text-term-yellow text-sm">
+          <p role="alert" className="text-term-yellow text-sm">
             Registration reply was not confirmed. Refresh the list and reconcile it before
             registering again.
           </p>
         ) : null}
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="text-destructive text-sm">
+            {error}
+          </p>
+        ) : null}
 
         <Button type="submit" disabled={!ready}>
           {busy ? 'Registering…' : 'Register and validate image'}

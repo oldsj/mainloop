@@ -23,6 +23,10 @@ export const versionsRead = (byEnvironment: Record<string, VersionFixture[]>) =>
     HttpResponse.json(byEnvironment[String(params.environment_id)] ?? [])
   );
 
+/** A version read with a resolver of its own: a failure, or a list that changes between reads. */
+export const versionsReadWith = (resolve: HttpResponseResolver) =>
+  http.get(url('/environments/:environment_id/versions'), resolve);
+
 /** The saved selection. A resolver returns 200 with the body, or 204 for "none saved", which has no body. */
 export const selectionRead = (resolve: HttpResponseResolver) =>
   http.get(url('/projects/:project_id/environment'), resolve);

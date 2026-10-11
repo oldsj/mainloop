@@ -4,7 +4,7 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Button } from '@/components/ui/button';
 import { failureText, keepValid } from '@/features/projects/model';
 import { RegisterForm } from './RegisterForm';
-import { SelectionForm, type SelectionBody } from './SelectionForm';
+import { SelectionForm, type SelectionBody, type VersionRead } from './SelectionForm';
 import {
   conflictText,
   environmentRowSchema,
@@ -42,12 +42,18 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
   const environmentList = useEnvironments();
   const environments = keepValid<DevEnvironment>(environmentList.data, environmentRowSchema);
   const versionQueries = useEnvironmentVersions(environments.map((item) => item.id));
-  const versions: Record<string, EnvironmentVersion[]> = {};
+  const versionReads: Record<string, VersionRead> = {};
   environments.forEach((item, index) => {
-    versions[item.id] = keepValid<EnvironmentVersion>(
-      versionQueries[index]?.data,
-      versionRowSchema
-    );
+    const query = versionQueries[index];
+    versionReads[item.id] = {
+      versions: keepValid<EnvironmentVersion>(query?.data, versionRowSchema),
+      ready: query?.isSuccess ?? false,
+      failure: query?.isError
+        ? `Couldn't ${query.data ? 'refresh' : 'load'} the versions for this environment. ${failureText(query.error)}`
+        : null,
+      loading: query?.isFetching ?? false,
+      retry: () => void query?.refetch()
+    };
   });
 
   const select = useSelectProjectEnvironment(projectId);
@@ -55,19 +61,26 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
   const refresh = useRefreshEnvironments();
   const [uncertain, setUncertain] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Bumping this remounts the registration form, so a registered draft is not left to submit again.
+  const [registrationForm, setRegistrationForm] = useState(0);
   const register = useRegisterEnvironment({
-    onRegistered: (result) => setNotice(registrationNotice(result)),
+    onRegistered: (result) => {
+      setNotice(registrationNotice(result));
+      setRegistrationForm((value) => value + 1);
+    },
     onUncertain: () => setUncertain(true)
   });
 
   const saved = selection.data?.selection ?? null;
   const savedEnvironment = environments.find((item) => item.id === saved?.environment_id);
 
+  // A failed write clears the notice from an earlier success, so the screen never shows both.
   const save = (body: SelectionBody) => {
     select.mutate(
       { params: { path: { project_id: projectId } }, body },
       {
-        onSuccess: () => setNotice('Environment selection saved for new sessions.')
+        onSuccess: () => setNotice('Environment selection saved for new sessions.'),
+        onError: () => setNotice(null)
       }
     );
   };
@@ -82,13 +95,14 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
         onSuccess: () =>
           setNotice(
             'Accepted default updated. Projects following this environment use it for new sessions.'
-          )
+          ),
+        onError: () => setNotice(null)
       }
     );
   };
 
   const submitRegistration = (draft: RegisterDraft) => {
-    register.mutate({ body: registerRequest(draft) });
+    register.mutate({ body: registerRequest(draft) }, { onError: () => setNotice(null) });
   };
 
   // An uncertain reply already says what to do, so its raw error is not repeated under the form.
@@ -176,7 +190,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
         <SelectionForm
           saved={saved}
           environments={environments}
-          versions={versions}
+          reads={versionReads}
           saving={select.isPending}
           saveError={select.error ? saveFailure(select.error) : null}
           accepting={accept.isPending}
@@ -193,6 +207,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       ) : null}
 
       <RegisterForm
+        key={registrationForm}
         busy={register.isPending}
         uncertain={uncertain}
         error={registerError}

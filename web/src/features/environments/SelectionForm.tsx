@@ -16,10 +16,22 @@ import {
 
 export type SelectionBody = ReturnType<typeof selectionRequest>;
 
+/** One environment's version read, as the draft's version choice needs it. */
+export interface VersionRead {
+  /** The last loaded list. After a failed refresh it is the list from before the failure. */
+  versions: EnvironmentVersion[];
+  /** A fresh read has landed, so the list and anything derived from it can be trusted. */
+  ready: boolean;
+  /** Why the last read failed, in words for the owner. Null when it did not. */
+  failure: string | null;
+  loading: boolean;
+  retry: () => void;
+}
+
 interface SelectionFormProps {
   saved: Selection | null;
   environments: DevEnvironment[];
-  versions: Record<string, EnvironmentVersion[]>;
+  reads: Record<string, VersionRead>;
   saving: boolean;
   saveError: string | null;
   accepting: boolean;
@@ -36,7 +48,7 @@ interface SelectionFormProps {
 export function SelectionForm({
   saved,
   environments,
-  versions,
+  reads,
   saving,
   saveError,
   accepting,
@@ -46,7 +58,8 @@ export function SelectionForm({
 }: SelectionFormProps) {
   const [draft, setDraft] = useState<Draft>(() => draftFrom(saved));
   const environment = environments.find((item) => item.id === draft.environmentId);
-  const candidates = draft.environmentId ? (versions[draft.environmentId] ?? []) : [];
+  const read = draft.environmentId ? reads[draft.environmentId] : undefined;
+  const candidates = read?.versions ?? [];
   const canSave = canSaveSelection({
     draft,
     saved,
@@ -107,7 +120,8 @@ export function SelectionForm({
             defaults also apply to new sessions.
           </p>
         ) : null}
-        {needsAcceptedDefault(draft, environment, candidates) ? (
+        {/* Until a fresh read lands, an empty list would wrongly read as "no accepted default". */}
+        {read?.ready && needsAcceptedDefault(draft, environment, candidates) ? (
           <p className="text-term-yellow text-sm">
             An accepted current-policy version is required. Uncheck follow-default, choose a
             validated version, then accept it below.
@@ -131,6 +145,24 @@ export function SelectionForm({
             ))}
           </select>
         </label>
+        {read?.loading && !read.ready && !read.failure ? (
+          <p role="status" className="text-muted-foreground text-xs">
+            Loading versions…
+          </p>
+        ) : null}
+        {read?.failure ? (
+          <div role="alert" className="gap-xs flex flex-col text-sm">
+            <p className="text-destructive">
+              {read.failure}
+              {candidates.length > 0 ? ' Showing the last loaded versions.' : ''}
+            </p>
+            <div>
+              <Button type="button" variant="outline" onClick={read.retry} disabled={read.loading}>
+                Retry loading versions
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </fieldset>
 
       {!draft.follow &&
@@ -148,11 +180,19 @@ export function SelectionForm({
           <p className="text-muted-foreground text-xs">
             This changes the default for every project following this environment.
           </p>
-          {acceptError ? <p className="text-destructive text-sm">{acceptError}</p> : null}
+          {acceptError ? (
+            <p role="alert" className="text-destructive text-sm">
+              {acceptError}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      {saveError ? <p className="text-destructive text-sm">{saveError}</p> : null}
+      {saveError ? (
+        <p role="alert" className="text-destructive text-sm">
+          {saveError}
+        </p>
+      ) : null}
       <Button type="submit" disabled={!canSave}>
         {saving ? 'Saving…' : 'Save selection'}
       </Button>
