@@ -52,7 +52,7 @@ func (q *Queries) EventFloor(ctx context.Context) (int64, error) {
 
 const insertEvent = `-- name: InsertEvent :one
 WITH lock AS MATERIALIZED (
-    SELECT pg_advisory_xact_lock(hashtextextended($4::text, 0)) AS locked
+    SELECT pg_advisory_xact_lock(hashtextextended('mainloop:events-outbox', 0)) AS locked
 )
 INSERT INTO events (user_id, type, payload)
 SELECT $1::text, $2::text, $3::jsonb FROM lock
@@ -60,10 +60,9 @@ RETURNING id, created_at
 `
 
 type InsertEventParams struct {
-	UserID   string
-	Type     string
-	Payload  json.RawMessage
-	LockName string
+	UserID  string
+	Type    string
+	Payload json.RawMessage
 }
 
 type InsertEventRow struct {
@@ -72,14 +71,10 @@ type InsertEventRow struct {
 }
 
 // The outbox lock is taken inside the statement, before the identity value is drawn, so no caller
-// can insert out of commit order. Same key as db.XactLock(lock_name).
+// can insert out of commit order. The key is a literal so no caller can pass the wrong one; it is the
+// name "mainloop:events-outbox" hashed as db.XactLock does.
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (InsertEventRow, error) {
-	row := q.db.QueryRow(ctx, insertEvent,
-		arg.UserID,
-		arg.Type,
-		arg.Payload,
-		arg.LockName,
-	)
+	row := q.db.QueryRow(ctx, insertEvent, arg.UserID, arg.Type, arg.Payload)
 	var i InsertEventRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err

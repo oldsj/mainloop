@@ -247,3 +247,9 @@ func errorDetails(data json.RawMessage) []errorDetail {
 	}
 	return nil
 }
+
+// emptyArg is the definite failure of a call that was never made because an identifier was
+// empty; a blank id would otherwise ask kagent about nothing in particular.
+func emptyArg(op, what string) *SessionError {
+	return &SessionError{Op: op, Code: connect.CodeInvalidArgument, Detail: what + " is empty"}
+}

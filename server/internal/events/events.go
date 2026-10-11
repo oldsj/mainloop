@@ -19,8 +19,6 @@ import (
 // the event id; readers do not trust it and re-read the table.
 const Channel = "mainloop_events"
 
-const lockName = "mainloop:events-outbox"
-
 // Type is a stored SSE event name. `connected` and `heartbeat` are frames of one stream and are
 // never stored.
 type Type string
@@ -72,7 +70,7 @@ func Publish(ctx context.Context, tx pgx.Tx, userID string, typ Type, payload an
 	}
 	q := dbq.New(tx)
 	// The insert takes the outbox lock itself, before the id is drawn.
-	row, err := q.InsertEvent(ctx, dbq.InsertEventParams{UserID: userID, Type: string(typ), Payload: body, LockName: lockName})
+	row, err := q.InsertEvent(ctx, dbq.InsertEventParams{UserID: userID, Type: string(typ), Payload: body})
 	if err != nil {
 		return 0, fmt.Errorf("events: publish %s: %w", typ, err)
 	}

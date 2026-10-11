@@ -187,6 +187,9 @@ func unary[Req, Res any](
 
 // GetAgent reads one Agent.
 func (c *Client) GetAgent(ctx context.Context, ref AgentRef) (*api.Agent, error) {
+	if ref.Namespace == "" || ref.Name == "" {
+		return nil, emptyArg("AgentService GetAgent", "agent namespace and name")
+	}
 	resp, err := unary(ctx, c, "AgentService GetAgent", c.agentGet, &api.GetAgentRequest{Ref: ref.proto()})
 	if err != nil {
 		return nil, err

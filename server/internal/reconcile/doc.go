@@ -41,8 +41,10 @@
 //	CREATE INDEX <table>_claim ON <table> (next_attempt_at, id)
 //	    WHERE state IN ('pending', 'retrying');   -- the non-final states
 //
-// The predicate must list the same states as the [Table]'s claimable states. The test table in
-// reconcile_test.go carries a worked example.
+// The claim query lists the states as literals, so the planner can match it to the index under any
+// plan mode (a bound parameter would defeat a generic plan). The index predicate must list the same
+// states as the [Table]'s claimable states. The test table in reconcile_test.go carries a worked
+// example.
 //
 // # Uncertain outcomes
 //

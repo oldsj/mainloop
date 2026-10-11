@@ -296,6 +296,10 @@ func TestPublishWakesSourceThroughTheNotifier(t *testing.T) {
 	h := events.NewHub(quiet(), 16)
 	n := reconcile.NewNotifier(d.Pool, quiet())
 	wake := n.Subscribe(events.Channel)
+	// A second subscriber of the same channel is the probe. Its first wake is the notifier's
+	// catch-up after LISTEN; its second can only come from a pg_notify, so waiting for it proves
+	// the notification path reaches the notifier before the source (poll: 1 h) is asked to deliver.
+	probe := n.Subscribe(events.Channel)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = n.Run(ctx) })
@@ -303,9 +307,18 @@ func TestPublishWakesSourceThroughTheNotifier(t *testing.T) {
 	defer func() { stop(); cancel(); wg.Wait() }()
 	waitReady(t, h)
 	sub, _ := h.Subscribe("u")
-	// The notifier may still be connecting; LISTEN's own catch-up wake covers anything before it.
+	select {
+	case <-probe:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the notifier never subscribed")
+	}
 
 	id := publish(t, d, "u", events.TypeSessionMessage, map[string]string{"session_id": "s"})
+	select {
+	case <-probe:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Publish did not notify the channel")
+	}
 	if ev := recv(t, sub, 5*time.Second); ev.ID != id || ev.Type != events.TypeSessionMessage {
 		t.Errorf("event = %+v", ev)
 	}

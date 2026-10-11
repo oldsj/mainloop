@@ -101,7 +101,8 @@ func (a *EventsAPI) GetEvents(ctx context.Context, req api.GetEventsRequestObjec
 	// subscription, and one dispatched before it is committed and so visible to the reads below.
 	sub, err := a.hub.Subscribe(a.userID)
 	if err != nil {
-		// Not ready (the outbox reader is starting) or closed (shutting down): EventSource retries.
+		// Not ready (the outbox reader is starting) or closed (shutting down). Clients retry with
+		// backoff; native EventSource does not retry a 503.
 		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
 	}
 	lastEventID := ""

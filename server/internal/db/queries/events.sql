@@ -1,8 +1,9 @@
 -- name: InsertEvent :one
 -- The outbox lock is taken inside the statement, before the identity value is drawn, so no caller
--- can insert out of commit order. Same key as db.XactLock(lock_name).
+-- can insert out of commit order. The key is a literal so no caller can pass the wrong one; it is the
+-- name "mainloop:events-outbox" hashed as db.XactLock does.
 WITH lock AS MATERIALIZED (
-    SELECT pg_advisory_xact_lock(hashtextextended(@lock_name::text, 0)) AS locked
+    SELECT pg_advisory_xact_lock(hashtextextended('mainloop:events-outbox', 0)) AS locked
 )
 INSERT INTO events (user_id, type, payload)
 SELECT @user_id::text, @type::text, @payload::jsonb FROM lock

@@ -458,3 +458,17 @@ func TestReplacedTokenFileIsReadEvenWithTheSameSizeAndMtime(t *testing.T) {
 		t.Fatalf("Authorization %q", got)
 	}
 }
+
+// An empty id or ref is a caller bug: it fails at once and makes no request.
+func TestEmptyIdentifiersAreRefusedWithoutARequest(t *testing.T) {
+	c, srv, _ := setup(t)
+	_, err := c.GetSession(ctx, "")
+	mustBe[*kagent.SessionError](t, err)
+	_, err = c.GetAgent(ctx, kagent.AgentRef{})
+	mustBe[*kagent.SessionError](t, err)
+	_, err = c.GetAgent(ctx, kagent.AgentRef{Namespace: "kagent"})
+	mustBe[*kagent.SessionError](t, err)
+	if n := len(srv.Requests()); n != 0 {
+		t.Fatalf("%d requests reached kagent", n)
+	}
+}

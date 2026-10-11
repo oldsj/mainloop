@@ -54,7 +54,8 @@ running, the stream ends and the next attempt starts fresh.
   stops reading entirely is cut off by a 15-second write deadline.
 - On server shutdown every stream ends at once and new streams get `503`, so graceful shutdown
   does not wait out open connections. New streams also get `503` while the server is starting,
-  until the outbox reader has its starting position; the browser retries.
+  until the outbox reader has its starting position; clients retry with backoff (native
+  EventSource does not retry a 503).
 
 ## Background work
 

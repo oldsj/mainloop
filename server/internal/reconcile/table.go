@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -26,14 +27,16 @@ type Querier interface {
 // Table names a domain table of intent rows (see the package comment for its columns) and the
 // states in which a row is up for work.
 type Table struct {
-	name      string
-	claimable []string
+	name string
+	// states is the claimable states as a quoted SQL list. They are spliced in as literals, like the
+	// name, so the planner can match the claim query to the partial claim index in any plan mode.
+	states string
 }
 
 var identPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // NewTable describes an intent table. The name is unqualified (the search_path is the mainloop
-// schema) and must be a plain lower-case identifier; it panics otherwise, since the name is
+// schema) and and each state must be a plain lower-case identifier; it panics otherwise, since both are
 // spliced into SQL and a bad one is a programming error.
 func NewTable(name string, claimable ...string) Table {
 	if !identPattern.MatchString(name) {
@@ -42,7 +45,14 @@ func NewTable(name string, claimable ...string) Table {
 	if len(claimable) == 0 {
 		panic("reconcile: a table needs at least one claimable state")
 	}
-	return Table{name: name, claimable: claimable}
+	states := make([]string, len(claimable))
+	for i, s := range claimable {
+		if !identPattern.MatchString(s) {
+			panic(fmt.Sprintf("reconcile: invalid claimable state %q", s))
+		}
+		states[i] = "'" + s + "'"
+	}
+	return Table{name: name, states: strings.Join(states, ", ")}
 }
 
 // Name is the table name.
@@ -71,14 +81,14 @@ UPDATE `+t.name+`
 SET lease_owner = $1, lease_until = now() + make_interval(secs => $2::float8), attempts = attempts + 1
 WHERE id IN (
     SELECT id FROM `+t.name+`
-    WHERE state = ANY($3::text[]) AND next_attempt_at <= now()
+    WHERE state IN (`+t.states+`) AND next_attempt_at <= now()
       AND (lease_until IS NULL OR lease_until <= now())
     ORDER BY next_attempt_at, id
-    LIMIT $4
+    LIMIT $3
     FOR UPDATE SKIP LOCKED)
   AND (lease_until IS NULL OR lease_until <= now())
 RETURNING id, state, attempts, lease_until`,
-		owner, lease.Seconds(), t.claimable, limit)
+		owner, lease.Seconds(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: claim %s: %w", t.name, err)
 	}

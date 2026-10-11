@@ -98,6 +98,9 @@ func sessionOf(op, id string, s *api.Session) (*api.Session, error) {
 // GetSession reads one Session.
 func (c *Client) GetSession(ctx context.Context, id string) (*api.Session, error) {
 	const op = "SessionService GetSession"
+	if id == "" {
+		return nil, emptyArg(op, "session id")
+	}
 	resp, err := unary(ctx, c, op, c.sessionCl.get, &api.GetSessionRequest{SessionId: id})
 	if err != nil {
 		return nil, err

@@ -39,7 +39,8 @@ func NewHub(log *slog.Logger, buffer int) *Hub {
 
 // MarkReady lets subscribers in. The [Source] calls it once it has its cursor: an event committed
 // before that is neither dispatched nor replayed to a stream that connected earlier, so streams
-// are refused (503, and the browser retries) until then.
+// are refused until then (503; clients retry with backoff, native EventSource does not retry a
+// 503).
 func (h *Hub) MarkReady() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
