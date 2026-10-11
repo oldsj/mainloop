@@ -1,0 +1,71 @@
+# Design tokens
+
+This folder holds Mainloop's visual source of truth. Values are defined once, in `tokens.json`, and everything else is generated from it.
+
+## Workflow
+
+1. **Edit `tokens.json`** (W3C Design Tokens format). It is the only place a value is defined.
+2. **Run the build** from the repository root: `node web/design/build.ts`. It needs Node 24 and no installs.
+3. **Commit `tokens.json` and the generated files together.**
+4. **The app and the design artifact read the output.**
+
+The build writes two things:
+
+- `web/src/styles/theme.css`: the Tailwind v4 `@theme` block, and one variable set per theme. The new app imports it.
+- `web/design/system/`: the files for the published Claude Design System artifact (`README.md`, resolved `tokens.json`, and `guidelines/`). Do not edit it by hand.
+
+## Components use tokens only
+
+Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border`, `text-sm`, `p-md` and `rounded-none`.
+
+Do not put these in a component:
+
+- hex colours, `rgb()` or `oklch()` values;
+- pixel or rem values for spacing, type or radius;
+- Tailwind palette names such as `neutral-50` or `red-500`.
+
+If a component needs a value that does not exist, change `tokens.json` first, then rebuild.
+
+## Themes
+
+Five themes are defined: `eighties` (the default), `dracula`, `nord`, `gruvbox` and `tokyo-night`.
+
+- The default theme lives on `:root`. Other themes use `[data-theme="<name>"]`, set on `<html>`, the same element as `:root`.
+- Each theme defines its terminal palette (`term-*`). The shadcn-style semantic names (`background`, `primary`, `muted`, and so on) are redeclared in every theme as `var(--term-*)` aliases. That is what lets a theme switch change every colour at once.
+
+To add a theme, add `color.theme.<name>` with every `term` and `semantic` key. The build fails if any key is missing. Then add the theme to the app's theme list, which is outside this folder.
+
+## Adding or changing a token
+
+- Put the token under the matching group. Use `{group.path}` to alias another token.
+- Aliases must point to a token of the same type.
+- Colours are 6-digit hex. Lengths include a unit (`0.25rem`). Durations include a unit (`200ms`).
+- Values are DTCG strings with units, not the 2025.10 object form.
+
+## What the build checks
+
+The build exits `1` and writes nothing if any of these fail:
+
+- `tokens.json` parses as JSON;
+- every token has `$value` and a known `$type` (`color`, `dimension`, `duration`, `fontFamily` or `cubicBezier`);
+- every alias resolves, to a token of the same type, with no cycles;
+- every colour and length is well formed;
+- every theme has the full set of `term` and `semantic` keys;
+- `web/design/components/` exists and holds guideline files.
+
+## Determinism
+
+The output has no timestamps and keeps a fixed order. Running the build twice leaves the tree unchanged. The generated files are already in the format `trunk fmt` would produce, so formatting does not change them.
+
+CI regeneration and a diff check are planned but not yet in place.
+
+## Component guidelines
+
+`components/` holds one guideline per product component: composer, message, delivery receipt, attention card, HITL card, session summary, evidence link and workspace action. Each covers purpose, states (empty, loading, stale, error, offline), keyboard and screen-reader behaviour, 44 px touch targets, and do and don't. The build copies them into `system/guidelines/`.
+
+The behaviour comes from the specs in [`docs/specs/`](../../docs/specs/). Where a guideline adds a rule the specs do not state, it says "proposed".
+
+## Open items
+
+- Some tokens are proposed and not yet in `packages/ui`: the `motion.duration` values `fast` and `base`, the `motion.easing` value `standard`, and the focus ring width and offset. Their `$description` says so.
+- Font weights and `max-width` are not tokenised. The old `max-width` values had no effect in the current app.

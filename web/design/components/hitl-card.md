@@ -1,0 +1,52 @@
+# HITL card
+
+Source: `docs/specs/chat.md` (Native structured input), `docs/specs/inbox.md`.
+
+## Purpose
+
+The structured input card for a native agent's request: tool-call approvals and questions. The same card appears in the inbox and in chat, and both use the same response route.
+
+## Tokens
+
+- Card `bg-card` with `border-border`. Decision buttons: approve on `bg-primary`, reject as a secondary button (`bg-secondary`).
+- Recorded answer uses `text-muted-foreground`. Errors use `text-destructive`.
+- Radius `rounded-none`.
+
+## Decisions
+
+- **Tool batch:** every call needs an explicit approve or reject. A batch cannot be submitted with a call left undecided.
+- **Rejection reason:** optional text. Claude includes it in the denial message. Codex saves it, but its runtime only receives the rejection, so the card must not say the reason reached the agent for Codex.
+- **Question:** single choice, multiple choice, or free text when there are no choices.
+
+## States
+
+- **Pending:** controls enabled.
+- **Submitting:** controls disabled; the submitted choice stays visible.
+- **Recorded:** a recorded answer disables further decisions and shows what was chosen.
+- **Unconfirmed:** the submission has no receipt yet. The card stays locked until the outcome is observed. Show "Awaiting confirmation".
+- **Stale:** the request was replaced. Show the new request in its own card with fresh controls. The old card is read-only.
+- **Unavailable:** the continuation cannot run, or writes are off on the server. Say so on the card; do not show enabled controls.
+- **Loading and error:** show the request title and a retry control. Refreshing reads status only and never resubmits a decision.
+
+The card refreshes while it is mounted and visible, about every four seconds.
+
+## Keyboard and screen reader
+
+- Each call's approve and reject are two buttons with names that include the call name.
+- Choices are a radio group (single) or a checkbox group (multiple). Free text has a label.
+- After a decision is recorded, move the announcement to "Answered" with a polite live region. Do not move focus away from the card.
+
+## Touch
+
+- Every approve, reject and choice control is at least 44 px tall.
+
+## Do
+
+- Keep the tool name and its arguments visible before the decision. Show arguments as escaped text.
+- Use the dedicated response route for decisions. Never send an answer through the chat composer.
+
+## Don't
+
+- Don't auto-approve, or pre-select a choice.
+- Don't render agent-supplied fields as HTML or Markdown.
+- Don't replay a decision on refresh. Read the status instead.
