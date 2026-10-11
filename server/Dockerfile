@@ -1,7 +1,7 @@
 # trunk-ignore-all(trivy/DS-0026): Kubernetes probes /health; the image has no HTTP client for a HEALTHCHECK
 # checkov:skip=CKV_DOCKER_2: Kubernetes probes /health; the image has no HTTP client to run a HEALTHCHECK
 # Build context is this directory: docker build --target prod server
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 FROM golang:${GO_VERSION}-bookworm AS build
 WORKDIR /src
