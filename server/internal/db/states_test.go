@@ -146,6 +146,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(api.TaskProjectionCiStatePending), string(api.TaskProjectionCiStateSuccess),
 			string(api.TaskProjectionCiStateFailure), string(api.TaskProjectionCiStateUnknown))},
 		{"session_messages", "role", strs(string(api.MessageRoleUser), string(api.MessageRoleAssistant))},
+		{"sessions", "agent_cancel_outcome", strs(
+			string(api.SessionCancelResponseAgentStopped), string(api.SessionCancelResponseAgentNotRunning),
+			string(api.SessionCancelResponseAgentUnknown))},
 	}
 	// Every enumerated CHECK in the schema needs a case above, so a new state column cannot be
 	// added without constants that are held to it.

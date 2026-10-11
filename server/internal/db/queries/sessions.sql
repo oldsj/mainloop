@@ -13,10 +13,11 @@ ORDER BY b.created_at
 LIMIT 1;
 
 -- name: GetOwnedSessionBinding :one
--- A session's binding, with the Agent its workspace was created on (NULL for a session that has no
--- workspace).
+-- Prefer an adopted binding's stored Agent, otherwise the Agent its workspace was created on.
 SELECT b.*, s.user_id, s.title, s.status AS session_status, s.archived_at,
-       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 LEFT JOIN workspaces w ON w.id = b.session_id
@@ -77,8 +78,9 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
-       w.id AS workspace_id, w.agent_namespace AS workspace_agent_namespace,
-       w.agent_name AS workspace_agent_name,
+       w.id AS workspace_id,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
@@ -288,9 +290,26 @@ SELECT count(*) FROM sessions WHERE user_id = $1;
 -- The cancelled status is final (RefreshSessionStatus leaves it alone). Nothing changes once the
 -- session is finished.
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now())
+SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown'
 WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id;
+
+-- name: RecordSessionCancelOutcome :exec
+UPDATE sessions SET agent_cancel_outcome = $2
+WHERE id = $1 AND status = 'cancelled' AND agent_cancel_outcome = 'unknown';
+
+-- name: ListSessionKagentContexts :many
+-- Include replaced contexts: a delivery may still have native work on an older Session.
+SELECT kagent_session_id::text FROM agent_bindings
+WHERE agent_bindings.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
+UNION
+SELECT kagent_session_id::text FROM deliveries
+WHERE deliveries.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> '';
+
+-- name: SetBindingAgentRef :exec
+UPDATE agent_bindings
+SET kagent_agent_namespace = $2, kagent_agent_name = $3, updated_at = now()
+WHERE session_id = $1;
 
 -- name: ArchiveFinishedSession :execrows
 UPDATE sessions SET archived_at = coalesce(archived_at, now())

@@ -338,6 +338,11 @@ func (s *Service) createSession(
 	}); err != nil {
 		return "", err
 	}
+	if err := q.SetBindingAgentRef(ctx, dbq.SetBindingAgentRefParams{
+		SessionID: id, KagentAgentNamespace: &row.AgentNamespace, KagentAgentName: &row.AgentName,
+	}); err != nil {
+		return "", err
+	}
 	if _, err := q.SetBindingKagentSession(ctx, dbq.SetBindingKagentSessionParams{
 		SessionID: id, KagentSessionID: &ks,
 	}); err != nil {
@@ -347,9 +352,8 @@ func (s *Service) createSession(
 }
 
 // bindingFor picks the provider kind and role whose Agent is the schedule's, because that pair is
-// how the rest of the server finds the Agent that runs a session without a workspace. A schedule on
-// an Agent no profile names gets a kind no profile has; observers then report that they cannot tell
-// which Agent runs it, instead of guessing.
+// how the session is labelled. Routing uses the binding's stored Agent, including when no profile
+// names that Agent.
 func (s *Service) bindingFor(namespace, name string) (string, dbstate.BindingRole) {
 	if s.Providers != nil {
 		for _, role := range []dbstate.BindingRole{dbstate.RoleAgent, dbstate.RoleChild, dbstate.RoleSupervisor} {

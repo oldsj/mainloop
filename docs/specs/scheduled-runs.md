@@ -78,10 +78,20 @@ the binding, the item and `schedule:updated` are written in one transaction.
 - The link keeps `session_id` after the session is deleted, and the session is never made again.
   The executions list still shows the id.
 
-## Known gaps
+## Native session control (implemented)
 
-- Cancelling an adopted session in Mainloop does not cancel the kagent run behind it.
-- The binding of an adopted session carries no Agent reference, so `ResolveAgent` cannot resolve a
-  scheduled session's Agent.
+- The binding stores the schedule's Agent namespace and name independently of provider profiles.
+  Session control, HITL observation and follow-up delivery prefer that reference, including for an
+  Agent no profile names. Adoption writes no Session-create marker and does not add an Agent to
+  `kagent_agents` or an unresolved create to `CountUnresolvedBindings`.
+- Cancelling an adopted session commits its cancelled status and an `unknown` agent outcome before
+  calling kagent. It lists all native tasks in the session's bound and previously used contexts and
+  cancels non-final ones, including a scheduled turn with no Mainloop delivery. No database lock or
+  transaction spans those calls.
+- `agent` is `stopped` after a confirmed native cancel, `not_running` when no native task remains
+  running, or `unknown` when a listing, cancel or in-flight send cannot be confirmed. Cancel replies
+  must identify the requested task and context and report a terminal state. The outcome is stored;
+  repeated cancellation returns it without repeating the remote action.
 
-Both are queued to the sessions work.
+These paths have fake-kagent and scratch PostgreSQL regression evidence, including HITL adoption
+and a follow-up through the delivery loop. Live kagent behavior has not been measured.

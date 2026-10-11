@@ -103,10 +103,10 @@ func runningTask(id, contextID, messageID, partial string) *a2a.Task {
 // openTurn starts a turn that stays open: the task is working and the stream never ends.
 func (e *env) openTurn(sessionID, text string) (messageID string) {
 	e.t.Helper()
-	task := runningTask("t-open", "", "", "half of the answ")
+	id := uuid.NewString()
+	task := runningTask("t-open", e.bindingKsid(sessionID), id, "half of the answ")
 	e.srv.AddTask(task)
 	e.srv.Script(kagenttest.Emit{Event: task}, kagenttest.Hang{})
-	id := uuid.NewString()
 	if _, err := e.svc.SendTo(context.Background(), sessionID, id, text); err != nil {
 		e.t.Fatalf("send: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestCancelEndsTheSessionAndStopsItsTask(t *testing.T) {
 	// Cancelling again changes nothing and calls nothing.
 	n := e.srv.Count("CancelTask")
 	again, err := e.svc.Cancel(ctx, id)
-	if err != nil || again.Agent != sessions.AgentNotRunning || again.Status != dbstate.SessionCancelled || e.srv.Count("CancelTask") != n {
+	if err != nil || again.Agent != sessions.AgentStopped || again.Status != dbstate.SessionCancelled || e.srv.Count("CancelTask") != n {
 		t.Fatalf("second cancel %+v %v", again, err)
 	}
 }
@@ -574,6 +574,10 @@ func TestCancelReportsUnknownWhenKagentDoesNotConfirm(t *testing.T) {
 	// It is not retried: the session is cancelled either way.
 	if e.srv.Count("CancelTask") != 1 {
 		t.Fatalf("%d cancels", e.srv.Count("CancelTask"))
+	}
+	again, err := e.svc.Cancel(ctx, id)
+	if err != nil || again.Agent != sessions.AgentUnknown || e.srv.Count("CancelTask") != 1 {
+		t.Fatalf("second cancel %+v %v", again, err)
 	}
 }
 

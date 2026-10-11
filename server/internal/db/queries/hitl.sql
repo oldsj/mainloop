@@ -9,7 +9,8 @@
 -- to resolve the Agent that runs each.
 -- name: ListHITLBindingsToAdopt :many
 SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
-       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 LEFT JOIN workspaces w ON w.id = b.session_id

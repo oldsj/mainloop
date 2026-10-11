@@ -74,10 +74,9 @@ func (s *Service) ownedBinding(ctx context.Context, sessionID string) (dbq.GetOw
 	return b, nil
 }
 
-// bindingAgentOf is the kagent Agent that runs a session: the one its workspace was created on,
-// else the one its provider and role name.
+// bindingAgentOf prefers the stored Agent, then the workspace, main configuration or provider.
 func (s *Service) bindingAgentOf(b dbq.GetOwnedSessionBindingRow) (kagent.AgentRef, error) {
-	return s.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
+	return s.ResolveAgent(&b.ResolvedAgentNamespace, &b.ResolvedAgentName, &b.Kind, b.Role)
 }
 
 // kagentSessionOf is the kagent Session a delivery was sent to, else the binding's.
@@ -302,7 +301,8 @@ type CancelResult struct {
 }
 
 // Cancel ends a session: it sets the final cancelled status, closes its open deliveries and then
-// cancels the tasks they started. The status is written first and is sticky, so no later delivery
+// cancels non-final native tasks, including those started outside the delivery ledger. The status
+// and an unknown agent outcome are written first and are sticky, so no later delivery
 // brings the session back and no message is taken. A cancel kagent does not confirm is reported as
 // unknown and is not repeated. A session that had already finished is left as it is.
 func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, error) {
@@ -315,7 +315,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		return CancelResult{}, fmt.Errorf("get session: %w", err)
 	}
 	if finishedStatus(row.Status) {
-		return CancelResult{Status: row.Status, Agent: AgentNotRunning}, nil
+		return cancelledResult(row), nil
 	}
 	b, err := s.ownedBinding(ctx, sessionID)
 	if err != nil {
@@ -325,12 +325,8 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		return CancelResult{}, conflict("The main thread cannot be cancelled.")
 	}
 
-	type closed struct {
-		d    dbq.Delivery
-		prev dbstate.DeliveryState
-	}
-	var closedNow []closed
-	status := dbstate.SessionCancelled
+	var closedNow []cancelledDelivery
+	var finished dbq.GetSessionRowRow
 	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		closedNow = nil
 		// Sends take this lock before they look at the status, so none is recorded after this commits.
@@ -360,7 +356,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			if err != nil {
 				return nil, fmt.Errorf("close delivery: %w", err)
 			}
-			closedNow = append(closedNow, closed{d: d, prev: dbstate.DeliveryState(prev)})
+			closedNow = append(closedNow, cancelledDelivery{d: d, prev: dbstate.DeliveryState(prev)})
 			// Every ending publishes one event, so open clients see the turn end.
 			drafts = append(drafts, endedEvent(s.OwnerID, sessionID, d.ID))
 		}
@@ -369,7 +365,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			if err != nil {
 				return nil, err
 			}
-			status = cur.Status
+			finished = cur
 			return nil, errFinishedMeanwhile // rolls back: a finished session keeps its deliveries as they are
 		} else if err != nil {
 			return nil, fmt.Errorf("cancel session: %w", err)
@@ -383,53 +379,132 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 	if err != nil && !errors.Is(err, errFinishedMeanwhile) {
 		return CancelResult{}, err
 	}
-	if status != dbstate.SessionCancelled {
-		return CancelResult{Status: status, Agent: AgentNotRunning}, nil
+	if errors.Is(err, errFinishedMeanwhile) {
+		return cancelledResult(finished), nil
 	}
-	out := CancelResult{Status: dbstate.SessionCancelled, Agent: AgentNotRunning}
-	if s.Kagent == nil || b.KagentSessionID == nil {
-		return out, nil
+	// Reload after the intent commits: an in-flight create may have bound its Session meanwhile.
+	b, err = s.ownedBinding(ctx, sessionID)
+	if err != nil {
+		return CancelResult{}, err // the durable agent outcome stays unknown
 	}
-	agent, aerr := s.bindingAgentOf(b)
+	agentOutcome := s.cancelNativeTasks(ctx, sessionID, b, closedNow)
+	if err := q.RecordSessionCancelOutcome(ctx, dbq.RecordSessionCancelOutcomeParams{
+		ID: sessionID, AgentCancelOutcome: &agentOutcome,
+	}); err != nil {
+		return CancelResult{}, fmt.Errorf("record agent cancel outcome: %w", err)
+	}
+	return CancelResult{Status: dbstate.SessionCancelled, Agent: agentOutcome}, nil
+}
+
+type cancelledDelivery struct {
+	d    dbq.Delivery
+	prev dbstate.DeliveryState
+}
+
+// cancelledResult never treats an earlier uncertain cancel as evidence the agent stopped.
+func cancelledResult(row dbq.GetSessionRowRow) CancelResult {
+	agent := AgentNotRunning
+	if row.Status == dbstate.SessionCancelled {
+		agent = AgentUnknown
+		if row.AgentCancelOutcome != nil {
+			agent = *row.AgentCancelOutcome
+		}
+	}
+	return CancelResult{Status: row.Status, Agent: agent}
+}
+
+// cancelNativeTasks observes every bound or previously used context before cancelling. Network
+// calls happen after the cancelled intent commits; none run under a database lock or transaction.
+func (s *Service) cancelNativeTasks(ctx context.Context, sessionID string, b dbq.GetOwnedSessionBindingRow, closedNow []cancelledDelivery) string {
+	outcome := AgentNotRunning
+	contexts, err := dbq.New(s.Pool).ListSessionKagentContexts(ctx, sessionID)
+	if err != nil {
+		return AgentUnknown
+	}
+	mayHaveSent := false
+	for _, c := range closedNow {
+		mayHaveSent = mayHaveSent || c.prev != dbstate.DeliveryRecorded
+	}
+	if len(contexts) == 0 && !mayHaveSent {
+		return outcome
+	}
+	if s.Kagent == nil {
+		return AgentUnknown
+	}
+	agent, err := s.bindingAgentOf(b)
+	if err != nil {
+		return AgentUnknown
+	}
+	tasks := make(map[string]*a2a.Task)
+	for _, ksid := range contexts {
+		listed, err := s.Kagent.ListTasks(ctx, agent, ksid)
+		if err != nil {
+			s.log().WarnContext(ctx, "cancel: task listing unconfirmed", "session_id", sessionID, "error", err)
+			outcome = AgentUnknown
+			continue
+		}
+		for _, task := range listed {
+			if task == nil || task.ID == "" || task.ContextID != ksid {
+				outcome = AgentUnknown
+				continue
+			}
+			tasks[string(task.ID)] = task
+		}
+	}
 	for _, c := range closedNow {
 		if c.prev == dbstate.DeliveryRecorded {
 			continue // never sent
 		}
-		if aerr != nil {
-			out.Agent = AgentUnknown
-			continue
-		}
 		ksid := kagentSessionOf(c.d, b)
 		taskID := ""
+		var task *a2a.Task
 		if c.d.TaskID != nil {
 			taskID = *c.d.TaskID
+			task = tasks[taskID]
+			if task == nil && taskID != "" {
+				task, err = s.Kagent.GetTask(ctx, agent, taskID)
+				if err != nil {
+					outcome = AgentUnknown
+					continue
+				}
+			}
 		} else if ksid != "" {
-			task, found, err := s.Kagent.FindTaskForMessage(ctx, agent, ksid, c.d.ID)
-			if err != nil && !found {
-				out.Agent = AgentUnknown
+			var found bool
+			task, found, err = s.Kagent.FindTaskForMessage(ctx, agent, ksid, c.d.ID)
+			if err != nil || !found {
+				outcome = AgentUnknown
 				continue
 			}
-			if found && task != nil {
+			if task != nil {
 				taskID = string(task.ID)
 			}
 		}
-		if taskID == "" {
-			if c.prev != dbstate.DeliveryDelivered {
-				// The send may still land and start a task this cancel cannot see.
-				out.Agent = AgentUnknown
-			}
+		if task == nil || taskID == "" || string(task.ID) != taskID || task.ContextID != ksid {
+			// An unresolved send may still land and start a task this cancel cannot see.
+			outcome = AgentUnknown
 			continue
 		}
-		if _, err := s.Kagent.CancelTask(ctx, agent, taskID); err != nil {
+		tasks[taskID] = task
+	}
+	for taskID, task := range tasks {
+		if task.Status.State.Terminal() {
+			continue
+		}
+		cancelled, err := s.Kagent.CancelTask(ctx, agent, taskID)
+		if err != nil {
 			s.log().WarnContext(ctx, "cancel: task cancel unconfirmed", "session_id", sessionID, "error", err)
-			out.Agent = AgentUnknown
+			outcome = AgentUnknown
 			continue
 		}
-		if out.Agent != AgentUnknown {
-			out.Agent = AgentStopped
+		if cancelled == nil || string(cancelled.ID) != taskID || cancelled.ContextID != task.ContextID || !cancelled.Status.State.Terminal() {
+			outcome = AgentUnknown
+			continue
+		}
+		if cancelled.Status.State == a2a.TaskStateCanceled && outcome != AgentUnknown {
+			outcome = AgentStopped
 		}
 	}
-	return out, nil
+	return outcome
 }
 
 // Archive clears one finished session from the list. A live one must be cancelled first, and the

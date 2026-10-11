@@ -148,7 +148,7 @@ func (s *Service) syncSessions(ctx context.Context) error {
 		agent := s.Agent
 		if s.Agents != nil {
 			var err error
-			agent, err = s.Agents.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
+			agent, err = s.Agents.ResolveAgent(&b.ResolvedAgentNamespace, &b.ResolvedAgentName, &b.Kind, b.Role)
 			if err != nil {
 				s.diagnose(ctx, *b.KagentSessionID, "cannot tell which agent runs this session: "+err.Error())
 				continue

@@ -29,6 +29,8 @@ type AgentBinding struct {
 	KagentDeletedAt            *time.Time
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+	KagentAgentNamespace       *string
+	KagentAgentName            *string
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
@@ -489,26 +491,27 @@ type ScheduledRunSchedule struct {
 }
 
 type Session struct {
-	ID          string
-	UserID      string
-	ProjectID   *string
-	Title       string
-	Description string
-	Prompt      string
-	Status      dbstate.SessionStatus
-	RepoURL     *string
-	BranchName  *string
-	BaseBranch  string
-	Model       *string
-	CommitSha   *string
-	Summary     *string
-	Error       *string
-	Color       *string
-	Result      json.RawMessage
-	CreatedAt   time.Time
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	ArchivedAt  *time.Time
+	ID                 string
+	UserID             string
+	ProjectID          *string
+	Title              string
+	Description        string
+	Prompt             string
+	Status             dbstate.SessionStatus
+	RepoURL            *string
+	BranchName         *string
+	BaseBranch         string
+	Model              *string
+	CommitSha          *string
+	Summary            *string
+	Error              *string
+	Color              *string
+	Result             json.RawMessage
+	CreatedAt          time.Time
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+	ArchivedAt         *time.Time
+	AgentCancelOutcome *string
 }
 
 type SessionMessage struct {

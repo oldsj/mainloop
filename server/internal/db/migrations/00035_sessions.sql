@@ -2,6 +2,21 @@
 -- The main thread's message mirror and the delivery ledger (G6a). Sessions and their agent
 -- bindings are in 00010_core.
 
+-- Adopted native Sessions pin their Agent independently of provider configuration and create
+-- recovery markers. Merely observing an Agent does not add it to kagent_agents.
+ALTER TABLE agent_bindings ADD COLUMN kagent_agent_namespace text;
+ALTER TABLE agent_bindings ADD COLUMN kagent_agent_name text;
+ALTER TABLE agent_bindings ADD CONSTRAINT agent_bindings_agent_ref CHECK (
+    (kagent_agent_namespace IS NULL AND kagent_agent_name IS NULL) OR
+    (kagent_agent_namespace IS NOT NULL AND kagent_agent_namespace <> '' AND
+     kagent_agent_name IS NOT NULL AND kagent_agent_name <> '')
+);
+
+-- Cancel commits unknown before touching kagent. A crash or unconfirmed reply retains that
+-- outcome, and another cancel reads it without repeating the remote action.
+ALTER TABLE sessions ADD COLUMN agent_cancel_outcome text
+CHECK (agent_cancel_outcome IN ('unknown', 'stopped', 'not_running'));
+
 -- The request id of a kagent CreateSession that was sent (or may have been) for the binding, written
 -- before the call. A create whose Session id never came back is found by it: the orphan sweep
 -- counts the binding until the create is resolved, and the sessions sweep replays the create by
@@ -129,6 +144,10 @@ CREATE TRIGGER sessions_keep_main BEFORE UPDATE OF archived_at ON sessions
 FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
 
 -- +goose Down
+ALTER TABLE sessions DROP COLUMN IF EXISTS agent_cancel_outcome;
+ALTER TABLE agent_bindings DROP CONSTRAINT IF EXISTS agent_bindings_agent_ref;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_agent_name;
+ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_agent_namespace;
 DROP TRIGGER IF EXISTS agent_bindings_note_agent ON agent_bindings;
 DROP FUNCTION IF EXISTS note_create_agent();
 DROP TABLE IF EXISTS kagent_agents;

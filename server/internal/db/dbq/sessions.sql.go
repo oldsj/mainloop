@@ -234,8 +234,9 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
-       w.id AS workspace_id, w.agent_namespace AS workspace_agent_namespace,
-       w.agent_name AS workspace_agent_name,
+       w.id AS workspace_id,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
@@ -245,26 +246,26 @@ WHERE d.id = $1
 `
 
 type GetDeliveryContextRow struct {
-	ID                      string
-	SessionID               string
-	State                   dbstate.DeliveryState
-	TaskID                  *string
-	EvidenceRef             *string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	SentKagentSessionID     *string
-	BindingSessionID        *string
-	KagentSessionID         *string
-	KagentRequestID         *string
-	BindingKind             *string
-	BindingRole             string
-	BindingGrant            string
-	UserID                  string
-	SessionTitle            string
-	WorkspaceID             *string
-	WorkspaceAgentNamespace *string
-	WorkspaceAgentName      *string
-	Content                 string
+	ID                     string
+	SessionID              string
+	State                  dbstate.DeliveryState
+	TaskID                 *string
+	EvidenceRef            *string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	SentKagentSessionID    *string
+	BindingSessionID       *string
+	KagentSessionID        *string
+	KagentRequestID        *string
+	BindingKind            *string
+	BindingRole            string
+	BindingGrant           string
+	UserID                 string
+	SessionTitle           string
+	WorkspaceID            *string
+	ResolvedAgentNamespace string
+	ResolvedAgentName      string
+	Content                string
 }
 
 // What a handler needs about the delivery's session. The binding is a LEFT JOIN so a delivery
@@ -290,8 +291,8 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.UserID,
 		&i.SessionTitle,
 		&i.WorkspaceID,
-		&i.WorkspaceAgentNamespace,
-		&i.WorkspaceAgentName,
+		&i.ResolvedAgentNamespace,
+		&i.ResolvedAgentName,
 		&i.Content,
 	)
 	return i, err
@@ -299,7 +300,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.role = 'main' AND s.user_id = $1 AND s.archived_at IS NULL
@@ -325,6 +326,8 @@ type GetMainBindingRow struct {
 	KagentDeletedAt            *time.Time
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+	KagentAgentNamespace       *string
+	KagentAgentName            *string
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
@@ -359,6 +362,8 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
 		&i.KagentCreateRequestID,
 		&i.KagentCreateAgentNamespace,
 		&i.KagentCreateAgentName,
@@ -370,8 +375,10 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status, s.archived_at,
-       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status, s.archived_at,
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 LEFT JOIN workspaces w ON w.id = b.session_id
@@ -401,6 +408,8 @@ type GetOwnedSessionBindingRow struct {
 	KagentDeletedAt            *time.Time
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+	KagentAgentNamespace       *string
+	KagentAgentName            *string
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
@@ -410,10 +419,11 @@ type GetOwnedSessionBindingRow struct {
 	ArchivedAt                 *time.Time
 	WorkspaceAgentNamespace    *string
 	WorkspaceAgentName         *string
+	ResolvedAgentNamespace     string
+	ResolvedAgentName          string
 }
 
-// A session's binding, with the Agent its workspace was created on (NULL for a session that has no
-// workspace).
+// Prefer an adopted binding's stored Agent, otherwise the Agent its workspace was created on.
 func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessionBindingParams) (GetOwnedSessionBindingRow, error) {
 	row := q.db.QueryRow(ctx, getOwnedSessionBinding, arg.ID, arg.UserID)
 	var i GetOwnedSessionBindingRow
@@ -435,6 +445,8 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.KagentDeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
 		&i.KagentCreateRequestID,
 		&i.KagentCreateAgentNamespace,
 		&i.KagentCreateAgentName,
@@ -444,12 +456,14 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.ArchivedAt,
 		&i.WorkspaceAgentNamespace,
 		&i.WorkspaceAgentName,
+		&i.ResolvedAgentNamespace,
+		&i.ResolvedAgentName,
 	)
 	return i, err
 }
 
 const getSessionRow = `-- name: GetSessionRow :one
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -462,29 +476,30 @@ type GetSessionRowParams struct {
 }
 
 type GetSessionRowRow struct {
-	ID              string
-	UserID          string
-	ProjectID       *string
-	Title           string
-	Description     string
-	Prompt          string
-	Status          dbstate.SessionStatus
-	RepoURL         *string
-	BranchName      *string
-	BaseBranch      string
-	Model           *string
-	CommitSha       *string
-	Summary         *string
-	Error           *string
-	Color           *string
-	Result          json.RawMessage
-	CreatedAt       time.Time
-	StartedAt       *time.Time
-	CompletedAt     *time.Time
-	ArchivedAt      *time.Time
-	AgentKind       *string
-	ParentSessionID *string
-	Topic           *string
+	ID                 string
+	UserID             string
+	ProjectID          *string
+	Title              string
+	Description        string
+	Prompt             string
+	Status             dbstate.SessionStatus
+	RepoURL            *string
+	BranchName         *string
+	BaseBranch         string
+	Model              *string
+	CommitSha          *string
+	Summary            *string
+	Error              *string
+	Color              *string
+	Result             json.RawMessage
+	CreatedAt          time.Time
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+	ArchivedAt         *time.Time
+	AgentCancelOutcome *string
+	AgentKind          *string
+	ParentSessionID    *string
+	Topic              *string
 }
 
 // A session with what its binding says about it. The owner filter is part of the key.
@@ -512,6 +527,7 @@ func (q *Queries) GetSessionRow(ctx context.Context, arg GetSessionRowParams) (G
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.ArchivedAt,
+		&i.AgentCancelOutcome,
 		&i.AgentKind,
 		&i.ParentSessionID,
 		&i.Topic,
@@ -686,6 +702,35 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 	return items, nil
 }
 
+const listSessionKagentContexts = `-- name: ListSessionKagentContexts :many
+SELECT kagent_session_id::text FROM agent_bindings
+WHERE agent_bindings.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
+UNION
+SELECT kagent_session_id::text FROM deliveries
+WHERE deliveries.session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
+`
+
+// Include replaced contexts: a delivery may still have native work on an older Session.
+func (q *Queries) ListSessionKagentContexts(ctx context.Context, sessionID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSessionKagentContexts, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var kagent_session_id string
+		if err := rows.Scan(&kagent_session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, kagent_session_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionMessages = `-- name: ListSessionMessages :many
 SELECT id, session_id, role, content, created_at FROM session_messages WHERE session_id = $1 ORDER BY created_at, id
 `
@@ -717,7 +762,7 @@ func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]
 }
 
 const listSessionRows = `-- name: ListSessionRows :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, b.kind AS agent_kind, b.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings b ON b.session_id = s.id
 LEFT JOIN topics t ON t.id = b.topic_id
@@ -739,29 +784,30 @@ type ListSessionRowsParams struct {
 }
 
 type ListSessionRowsRow struct {
-	ID              string
-	UserID          string
-	ProjectID       *string
-	Title           string
-	Description     string
-	Prompt          string
-	Status          dbstate.SessionStatus
-	RepoURL         *string
-	BranchName      *string
-	BaseBranch      string
-	Model           *string
-	CommitSha       *string
-	Summary         *string
-	Error           *string
-	Color           *string
-	Result          json.RawMessage
-	CreatedAt       time.Time
-	StartedAt       *time.Time
-	CompletedAt     *time.Time
-	ArchivedAt      *time.Time
-	AgentKind       *string
-	ParentSessionID *string
-	Topic           *string
+	ID                 string
+	UserID             string
+	ProjectID          *string
+	Title              string
+	Description        string
+	Prompt             string
+	Status             dbstate.SessionStatus
+	RepoURL            *string
+	BranchName         *string
+	BaseBranch         string
+	Model              *string
+	CommitSha          *string
+	Summary            *string
+	Error              *string
+	Color              *string
+	Result             json.RawMessage
+	CreatedAt          time.Time
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+	ArchivedAt         *time.Time
+	AgentCancelOutcome *string
+	AgentKind          *string
+	ParentSessionID    *string
+	Topic              *string
 }
 
 // The owner's unarchived sessions other than the main thread, newest first: every session that is
@@ -797,6 +843,7 @@ func (q *Queries) ListSessionRows(ctx context.Context, arg ListSessionRowsParams
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.ArchivedAt,
+			&i.AgentCancelOutcome,
 			&i.AgentKind,
 			&i.ParentSessionID,
 			&i.Topic,
@@ -1076,6 +1123,21 @@ func (q *Queries) NoteHoldPassed(ctx context.Context, arg NoteHoldPassedParams) 
 	return result.RowsAffected(), nil
 }
 
+const recordSessionCancelOutcome = `-- name: RecordSessionCancelOutcome :exec
+UPDATE sessions SET agent_cancel_outcome = $2
+WHERE id = $1 AND status = 'cancelled' AND agent_cancel_outcome = 'unknown'
+`
+
+type RecordSessionCancelOutcomeParams struct {
+	ID                 string
+	AgentCancelOutcome *string
+}
+
+func (q *Queries) RecordSessionCancelOutcome(ctx context.Context, arg RecordSessionCancelOutcomeParams) error {
+	_, err := q.db.Exec(ctx, recordSessionCancelOutcome, arg.ID, arg.AgentCancelOutcome)
+	return err
+}
+
 const refreshSessionStatus = `-- name: RefreshSessionStatus :exec
 UPDATE sessions
 SET status = CASE WHEN EXISTS (
@@ -1188,6 +1250,23 @@ func (q *Queries) RotateCreateRequest(ctx context.Context, arg RotateCreateReque
 	return result.RowsAffected(), nil
 }
 
+const setBindingAgentRef = `-- name: SetBindingAgentRef :exec
+UPDATE agent_bindings
+SET kagent_agent_namespace = $2, kagent_agent_name = $3, updated_at = now()
+WHERE session_id = $1
+`
+
+type SetBindingAgentRefParams struct {
+	SessionID            string
+	KagentAgentNamespace *string
+	KagentAgentName      *string
+}
+
+func (q *Queries) SetBindingAgentRef(ctx context.Context, arg SetBindingAgentRefParams) error {
+	_, err := q.db.Exec(ctx, setBindingAgentRef, arg.SessionID, arg.KagentAgentNamespace, arg.KagentAgentName)
+	return err
+}
+
 const setDeliveryKagentSession = `-- name: SetDeliveryKagentSession :execrows
 UPDATE agent_bindings b
 SET kagent_session_id = $1, updated_at = now()
@@ -1225,7 +1304,7 @@ func (q *Queries) SetDeliveryKagentSession(ctx context.Context, arg SetDeliveryK
 
 const setSessionCancelled = `-- name: SetSessionCancelled :one
 UPDATE sessions
-SET status = 'cancelled', completed_at = coalesce(completed_at, now())
+SET status = 'cancelled', completed_at = coalesce(completed_at, now()), agent_cancel_outcome = 'unknown'
 WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')
 RETURNING id
 `

@@ -482,7 +482,8 @@ func (q *Queries) InsertHITLSession(ctx context.Context, arg InsertHITLSessionPa
 const listHITLBindingsToAdopt = `-- name: ListHITLBindingsToAdopt :many
 
 SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
-       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
+       coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
+       coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 LEFT JOIN workspaces w ON w.id = b.session_id
@@ -492,13 +493,13 @@ ORDER BY b.session_id
 `
 
 type ListHITLBindingsToAdoptRow struct {
-	SessionID               string
-	KagentSessionID         *string
-	UserID                  string
-	Kind                    string
-	Role                    dbstate.BindingRole
-	WorkspaceAgentNamespace *string
-	WorkspaceAgentName      *string
+	SessionID              string
+	KagentSessionID        *string
+	UserID                 string
+	Kind                   string
+	Role                   dbstate.BindingRole
+	ResolvedAgentNamespace string
+	ResolvedAgentName      string
 }
 
 // Human-in-the-loop: the observer's checkpoints and requests, and the response ledger
@@ -524,8 +525,8 @@ func (q *Queries) ListHITLBindingsToAdopt(ctx context.Context, userID string) ([
 			&i.UserID,
 			&i.Kind,
 			&i.Role,
-			&i.WorkspaceAgentNamespace,
-			&i.WorkspaceAgentName,
+			&i.ResolvedAgentNamespace,
+			&i.ResolvedAgentName,
 		); err != nil {
 			return nil, err
 		}

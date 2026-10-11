@@ -83,6 +83,7 @@ type Kagent interface {
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
+	ListTasks(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
 	SubscribeToTask(ctx context.Context, agent kagent.AgentRef, taskID string) iter.Seq2[a2a.Event, error]
 	CancelTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)

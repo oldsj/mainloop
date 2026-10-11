@@ -169,7 +169,7 @@ func (q *Queries) ListOwnedProjects(ctx context.Context, arg ListOwnedProjectsPa
 }
 
 const listProjectSessions = `-- name: ListProjectSessions :many
-SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, ab.kind AS agent_kind, ab.parent_session_id, t.name AS topic
+SELECT s.id, s.user_id, s.project_id, s.title, s.description, s.prompt, s.status, s.repo_url, s.branch_name, s.base_branch, s.model, s.commit_sha, s.summary, s.error, s.color, s.result, s.created_at, s.started_at, s.completed_at, s.archived_at, s.agent_cancel_outcome, ab.kind AS agent_kind, ab.parent_session_id, t.name AS topic
 FROM sessions s
 LEFT JOIN agent_bindings ab ON ab.session_id = s.id
 LEFT JOIN topics t ON t.id = ab.topic_id
@@ -183,29 +183,30 @@ type ListProjectSessionsParams struct {
 }
 
 type ListProjectSessionsRow struct {
-	ID              string
-	UserID          string
-	ProjectID       *string
-	Title           string
-	Description     string
-	Prompt          string
-	Status          dbstate.SessionStatus
-	RepoURL         *string
-	BranchName      *string
-	BaseBranch      string
-	Model           *string
-	CommitSha       *string
-	Summary         *string
-	Error           *string
-	Color           *string
-	Result          json.RawMessage
-	CreatedAt       time.Time
-	StartedAt       *time.Time
-	CompletedAt     *time.Time
-	ArchivedAt      *time.Time
-	AgentKind       *string
-	ParentSessionID *string
-	Topic           *string
+	ID                 string
+	UserID             string
+	ProjectID          *string
+	Title              string
+	Description        string
+	Prompt             string
+	Status             dbstate.SessionStatus
+	RepoURL            *string
+	BranchName         *string
+	BaseBranch         string
+	Model              *string
+	CommitSha          *string
+	Summary            *string
+	Error              *string
+	Color              *string
+	Result             json.RawMessage
+	CreatedAt          time.Time
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+	ArchivedAt         *time.Time
+	AgentCancelOutcome *string
+	AgentKind          *string
+	ParentSessionID    *string
+	Topic              *string
 }
 
 func (q *Queries) ListProjectSessions(ctx context.Context, arg ListProjectSessionsParams) ([]ListProjectSessionsRow, error) {
@@ -238,6 +239,7 @@ func (q *Queries) ListProjectSessions(ctx context.Context, arg ListProjectSessio
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.ArchivedAt,
+			&i.AgentCancelOutcome,
 			&i.AgentKind,
 			&i.ParentSessionID,
 			&i.Topic,
