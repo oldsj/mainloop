@@ -202,12 +202,21 @@ RETURNING *;
 SELECT a.* FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 WHERE (a.state IN ('draining', 'fenced')
-       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled'))
-       OR (a.state NOT IN ('creating', 'active') AND a.workspace_request_id IS NOT NULL
-           AND a.brief_delivery_id IS NULL AND NOT a.workspace_cleanup_confirmed))
+       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
   AND a.updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
   AND (a.resolve_after IS NULL OR a.resolve_after <= now())
 ORDER BY a.updated_at, a.id
+LIMIT $1;
+
+-- name: ListAttemptWorkspaceCleanups :many
+-- Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
+-- Unchecked cleanup comes first; unresolved looks move behind other due work durably.
+SELECT * FROM task_attempts
+WHERE state IN ('superseded', 'failed', 'cancelled', 'completed')
+  AND workspace_request_id IS NOT NULL AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed
+  AND updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+  AND (workspace_cleanup_after IS NULL OR workspace_cleanup_after <= now())
+ORDER BY workspace_cleanup_after NULLS FIRST, updated_at, id
 LIMIT $1;
 
 -- name: SetTaskAttempt :one
@@ -348,8 +357,19 @@ RETURNING a.*;
 
 -- name: FinishAttemptWorkspaceCreate :exec
 UPDATE task_attempts
-SET workspace_creates_inflight = workspace_creates_inflight - 1, updated_at = now()
+SET workspace_creates_inflight = workspace_creates_inflight - 1,
+    workspace_cleanup_after = NULL, updated_at = now()
 WHERE id = $1 AND workspace_creates_inflight > 0;
+
+-- name: DeferAttemptWorkspaceCleanup :exec
+-- Every unresolved look, including an observation/delete error, advances the retry schedule.
+-- Five seconds doubles to a five-minute cap; elapsed time never releases a create reservation.
+UPDATE task_attempts
+SET workspace_cleanup_attempts = workspace_cleanup_attempts + 1,
+    workspace_cleanup_after = now() + make_interval(
+        secs => least(300, 5 * power(2, least(workspace_cleanup_attempts, 6)))::float8)
+WHERE id = $1 AND state NOT IN ('creating', 'active') AND workspace_request_id IS NOT NULL
+  AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed;
 
 -- name: ConfirmAttemptWorkspaceCleanup :exec
 -- Absence is conclusive only after the attempt stopped accepting creates and every reserved call

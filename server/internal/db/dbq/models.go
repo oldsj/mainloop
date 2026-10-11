@@ -588,6 +588,8 @@ type TaskAttempt struct {
 	WorkspaceRequestID        *string
 	WorkspaceCreatesInflight  int32
 	WorkspaceCleanupConfirmed bool
+	WorkspaceCleanupAttempts  int32
+	WorkspaceCleanupAfter     *time.Time
 	WriterGeneration          *int32
 	BriefDeliveryID           *string
 	PredecessorID             *string

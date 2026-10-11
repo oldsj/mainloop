@@ -158,11 +158,11 @@ func (s *Service) orphanWorkspace(ctx context.Context, a dbq.TaskAttempt) (*stri
 // Neither its old workspace_id nor a matching owner/project/branch grants deletion authority.
 // Absence is confirmed only when no reserved call can still commit a workspace; final attempts
 // stay in the settle sweep until then, even if their create operation already ended.
-func (s *Service) cleanupWorkspace(ctx context.Context, a dbq.TaskAttempt) error {
+func (s *Service) cleanupWorkspace(ctx context.Context, a dbq.TaskAttempt) (err error) {
 	// A returning create may carry a snapshot from before another handler activated the attempt.
 	// Only an attempt that actually stopped grants cleanup authority.
-	var err error
-	a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, a.ID)
+	q := dbq.New(s.Pool)
+	a, err = q.GetTaskAttempt(ctx, a.ID)
 	if err != nil {
 		return err
 	}
@@ -172,6 +172,13 @@ func (s *Service) cleanupWorkspace(ctx context.Context, a dbq.TaskAttempt) error
 	if a.WorkspaceRequestID == nil || a.BriefDeliveryID != nil || a.WorkspaceCleanupConfirmed || s.Workspaces == nil {
 		return nil
 	}
+	// Record an unresolved look even when observation or deletion failed or its context ended.
+	// Confirmed cleanup makes this a no-op; neither this schedule nor its age clears a reservation.
+	defer func() {
+		deferCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		err = errors.Join(err, q.DeferAttemptWorkspaceCleanup(deferCtx, a.ID))
+	}()
 	id, err := s.orphanWorkspace(ctx, a)
 	if err != nil {
 		return err
@@ -181,7 +188,7 @@ func (s *Service) cleanupWorkspace(ctx context.Context, a dbq.TaskAttempt) error
 			return err
 		}
 	}
-	return dbq.New(s.Pool).ConfirmAttemptWorkspaceCleanup(ctx, a.ID)
+	return q.ConfirmAttemptWorkspaceCleanup(ctx, a.ID)
 }
 
 // errStopUnconfirmed means an attempt cannot be fenced: the observer has not confirmed its agent stopped.
@@ -353,6 +360,24 @@ func (s *Service) runSettle(ctx context.Context) error {
 			continue
 		}
 		if err := s.settle(ctx, a.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// Final workspace cleanup gets its own budget and retry schedule, independent of stop backoff.
+	cleanups, err := q.ListAttemptWorkspaceCleanups(ctx, dbq.ListAttemptWorkspaceCleanupsParams{Limit: 50, IdleSeconds: idle.Seconds()})
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	for _, a := range cleanups {
+		open, err := q.ListOpenOperationsForSource(ctx, &a.ID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if len(open) > 0 {
+			continue
+		}
+		if err := s.cleanupWorkspace(ctx, a); err != nil {
 			errs = append(errs, err)
 		}
 	}

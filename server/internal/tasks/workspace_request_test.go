@@ -190,6 +190,8 @@ func TestProbeCancelRacesWorkspaceCreate(t *testing.T) {
 				r.ws.mu.Lock()
 				r.ws.deleteErr = nil
 				r.ws.mu.Unlock()
+				// The unresolved deletion is paced durably; model its next scheduled look.
+				r.exec(`UPDATE task_attempts SET workspace_cleanup_after = now() WHERE task_id = $1`, child)
 			}
 			r.sweep(restarted.SettleSweep())
 			if r.count(`SELECT count(*) FROM workspaces`) != 1 ||

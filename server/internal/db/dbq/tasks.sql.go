@@ -96,7 +96,7 @@ UPDATE task_attempts
 SET session_id = $2, binding_id = $2, workspace_id = $2,
     environment = coalesce(environment, $3::jsonb), updated_at = now()
 WHERE id = $1 AND state = 'creating' AND (session_id IS NULL OR session_id = $2)
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
 
 type AttachAttemptSessionParams struct {
@@ -128,6 +128,8 @@ func (q *Queries) AttachAttemptSession(ctx context.Context, arg AttachAttemptSes
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -210,7 +212,7 @@ const confirmAttemptStop = `-- name: ConfirmAttemptStop :one
 UPDATE task_attempts
 SET stop_state = 'confirmed', updated_at = now()
 WHERE id = $1 AND state = 'draining' AND stop_state IN ('requested', 'unresolved')
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
 
 // The observer saw nothing running for the attempt's session. This is the only way an attempt's
@@ -238,6 +240,8 @@ func (q *Queries) ConfirmAttemptStop(ctx context.Context, id string) (TaskAttemp
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -344,9 +348,26 @@ func (q *Queries) DeferAttemptResolve(ctx context.Context, arg DeferAttemptResol
 	return resolve_attempts, err
 }
 
+const deferAttemptWorkspaceCleanup = `-- name: DeferAttemptWorkspaceCleanup :exec
+UPDATE task_attempts
+SET workspace_cleanup_attempts = workspace_cleanup_attempts + 1,
+    workspace_cleanup_after = now() + make_interval(
+        secs => least(300, 5 * power(2, least(workspace_cleanup_attempts, 6)))::float8)
+WHERE id = $1 AND state NOT IN ('creating', 'active') AND workspace_request_id IS NOT NULL
+  AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed
+`
+
+// Every unresolved look, including an observation/delete error, advances the retry schedule.
+// Five seconds doubles to a five-minute cap; elapsed time never releases a create reservation.
+func (q *Queries) DeferAttemptWorkspaceCleanup(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deferAttemptWorkspaceCleanup, id)
+	return err
+}
+
 const finishAttemptWorkspaceCreate = `-- name: FinishAttemptWorkspaceCreate :exec
 UPDATE task_attempts
-SET workspace_creates_inflight = workspace_creates_inflight - 1, updated_at = now()
+SET workspace_creates_inflight = workspace_creates_inflight - 1,
+    workspace_cleanup_after = NULL, updated_at = now()
 WHERE id = $1 AND workspace_creates_inflight > 0
 `
 
@@ -482,7 +503,7 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) 
 
 const getTaskAttempt = `-- name: GetTaskAttempt :one
 
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE id = $1
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE id = $1
 `
 
 // Attempts
@@ -508,6 +529,8 @@ func (q *Queries) GetTaskAttempt(ctx context.Context, id string) (TaskAttempt, e
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -1017,7 +1040,7 @@ INSERT INTO task_attempts (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
 
 type InsertTaskAttemptParams struct {
@@ -1080,6 +1103,8 @@ func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptPa
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -1246,6 +1271,83 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 	return i, err
 }
 
+const listAttemptWorkspaceCleanups = `-- name: ListAttemptWorkspaceCleanups :many
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts
+WHERE state IN ('superseded', 'failed', 'cancelled', 'completed')
+  AND workspace_request_id IS NOT NULL AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed
+  AND updated_at < now() - make_interval(secs => $2::float8)
+  AND (workspace_cleanup_after IS NULL OR workspace_cleanup_after <= now())
+ORDER BY workspace_cleanup_after NULLS FIRST, updated_at, id
+LIMIT $1
+`
+
+type ListAttemptWorkspaceCleanupsParams struct {
+	Limit       int32
+	IdleSeconds float64
+}
+
+// Final attempts use a separate bounded batch, so cleanup cannot starve runtime stop resolution.
+// Unchecked cleanup comes first; unresolved looks move behind other due work durably.
+func (q *Queries) ListAttemptWorkspaceCleanups(ctx context.Context, arg ListAttemptWorkspaceCleanupsParams) ([]TaskAttempt, error) {
+	rows, err := q.db.Query(ctx, listAttemptWorkspaceCleanups, arg.Limit, arg.IdleSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskAttempt{}
+	for rows.Next() {
+		var i TaskAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Number,
+			&i.ProfileID,
+			&i.NativeProvider,
+			&i.ConfigurationRevision,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.Role,
+			&i.Depth,
+			&i.State,
+			&i.CapacityHeld,
+			&i.SessionID,
+			&i.BindingID,
+			&i.WorkspaceID,
+			&i.WorkspaceRequestID,
+			&i.WorkspaceCreatesInflight,
+			&i.WorkspaceCleanupConfirmed,
+			&i.WorkspaceCleanupAttempts,
+			&i.WorkspaceCleanupAfter,
+			&i.WriterGeneration,
+			&i.BriefDeliveryID,
+			&i.PredecessorID,
+			&i.SuccessorID,
+			&i.EvidenceRefs,
+			&i.ResultRef,
+			&i.Environment,
+			&i.InitialRef,
+			&i.CheckpointRef,
+			&i.ManifestRef,
+			&i.SupersededAt,
+			&i.ArchivedAt,
+			&i.NativeDeletedAt,
+			&i.RetentionHold,
+			&i.StopState,
+			&i.ResolveAttempts,
+			&i.ResolveAfter,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChildTasks = `-- name: ListChildTasks :many
 SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
 `
@@ -1370,7 +1472,7 @@ func (q *Queries) ListChildTasksForUpdate(ctx context.Context, parentTaskID *str
 }
 
 const listFailedBriefAttempts = `-- name: ListFailedBriefAttempts :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 JOIN deliveries d ON d.id = a.brief_delivery_id
 WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled')
@@ -1410,6 +1512,8 @@ func (q *Queries) ListFailedBriefAttempts(ctx context.Context, limit int32) ([]T
 			&i.WorkspaceRequestID,
 			&i.WorkspaceCreatesInflight,
 			&i.WorkspaceCleanupConfirmed,
+			&i.WorkspaceCleanupAttempts,
+			&i.WorkspaceCleanupAfter,
 			&i.WriterGeneration,
 			&i.BriefDeliveryID,
 			&i.PredecessorID,
@@ -1734,7 +1838,7 @@ func (q *Queries) ListTaskArtifacts(ctx context.Context, taskIds []string) ([]Ta
 }
 
 const listTaskAttempts = `-- name: ListTaskAttempts :many
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE task_id = ANY($1::text[]) ORDER BY task_id, number
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE task_id = ANY($1::text[]) ORDER BY task_id, number
 `
 
 func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]TaskAttempt, error) {
@@ -1765,6 +1869,8 @@ func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]Tas
 			&i.WorkspaceRequestID,
 			&i.WorkspaceCreatesInflight,
 			&i.WorkspaceCleanupConfirmed,
+			&i.WorkspaceCleanupAttempts,
+			&i.WorkspaceCleanupAfter,
 			&i.WriterGeneration,
 			&i.BriefDeliveryID,
 			&i.PredecessorID,
@@ -1984,12 +2090,10 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 }
 
 const listUnsettledAttempts = `-- name: ListUnsettledAttempts :many
-SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at FROM task_attempts a
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 WHERE (a.state IN ('draining', 'fenced')
-       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled'))
-       OR (a.state NOT IN ('creating', 'active') AND a.workspace_request_id IS NOT NULL
-           AND a.brief_delivery_id IS NULL AND NOT a.workspace_cleanup_confirmed))
+       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
   AND a.updated_at < now() - make_interval(secs => $2::float8)
   AND (a.resolve_after IS NULL OR a.resolve_after <= now())
 ORDER BY a.updated_at, a.id
@@ -2032,6 +2136,8 @@ func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAt
 			&i.WorkspaceRequestID,
 			&i.WorkspaceCreatesInflight,
 			&i.WorkspaceCleanupConfirmed,
+			&i.WorkspaceCleanupAttempts,
+			&i.WorkspaceCleanupAfter,
 			&i.WriterGeneration,
 			&i.BriefDeliveryID,
 			&i.PredecessorID,
@@ -2085,7 +2191,7 @@ func (q *Queries) LockParentCurrentAttemptShared(ctx context.Context, id string)
 }
 
 const lockTaskAttemptShared = `-- name: LockTaskAttemptShared :one
-SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE id = $1 FOR SHARE
+SELECT id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at FROM task_attempts WHERE id = $1 FOR SHARE
 `
 
 // Locks an attempt against being moved while the caller's write commits, and reads its state.
@@ -2111,6 +2217,8 @@ func (q *Queries) LockTaskAttemptShared(ctx context.Context, id string) (TaskAtt
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -2150,7 +2258,7 @@ const markAttemptStopUnresolved = `-- name: MarkAttemptStopUnresolved :one
 UPDATE task_attempts
 SET stop_state = 'unresolved', updated_at = now()
 WHERE id = $1 AND state = 'draining' AND stop_state = 'requested'
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
 
 // The resolver has looked the bound number of times. Returns no row when it was already marked, so
@@ -2177,6 +2285,8 @@ func (q *Queries) MarkAttemptStopUnresolved(ctx context.Context, id string) (Tas
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -2208,7 +2318,7 @@ SET state = $1, capacity_held = $2, updated_at = now(),
     evidence_refs = CASE WHEN $3::text IS NULL THEN evidence_refs
                          ELSE array_append(evidence_refs, $3::text) END
 WHERE id = $4 AND state = $5
-RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
 
 type MoveAttemptParams struct {
@@ -2249,6 +2359,8 @@ func (q *Queries) MoveAttempt(ctx context.Context, arg MoveAttemptParams) (TaskA
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,
@@ -2408,7 +2520,7 @@ WHERE a.id = $1 AND a.state = 'creating' AND a.workspace_request_id IS NOT NULL
   AND EXISTS (SELECT 1 FROM task_operations o WHERE o.id = $2
               AND o.target_attempt_id = a.id AND o.state = 'target_creating'
               AND o.lease_owner = $3 AND o.attempts = $4)
-RETURNING a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at
+RETURNING a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.workspace_request_id, a.workspace_creates_inflight, a.workspace_cleanup_confirmed, a.workspace_cleanup_attempts, a.workspace_cleanup_after, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.stop_state, a.resolve_attempts, a.resolve_after, a.created_at, a.updated_at
 `
 
 type ReserveAttemptWorkspaceCreateParams struct {
@@ -2447,6 +2559,8 @@ func (q *Queries) ReserveAttemptWorkspaceCreate(ctx context.Context, arg Reserve
 		&i.WorkspaceRequestID,
 		&i.WorkspaceCreatesInflight,
 		&i.WorkspaceCleanupConfirmed,
+		&i.WorkspaceCleanupAttempts,
+		&i.WorkspaceCleanupAfter,
 		&i.WriterGeneration,
 		&i.BriefDeliveryID,
 		&i.PredecessorID,

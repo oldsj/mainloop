@@ -137,6 +137,9 @@ CREATE TABLE task_attempts (
     -- returns. A stopped attempt must keep looking for a late workspace while any remain.
     workspace_creates_inflight integer NOT NULL DEFAULT 0 CHECK (workspace_creates_inflight >= 0),
     workspace_cleanup_confirmed boolean NOT NULL DEFAULT false,
+    -- Unresolved cleanup has its own durable retry schedule, separate from runtime stop resolution.
+    workspace_cleanup_attempts integer NOT NULL DEFAULT 0 CHECK (workspace_cleanup_attempts >= 0),
+    workspace_cleanup_after timestamptz,
     writer_generation integer CHECK (writer_generation >= 1),
     brief_delivery_id text,
     predecessor_id text REFERENCES task_attempts (id),
@@ -182,6 +185,9 @@ CREATE TABLE task_attempts (
 CREATE UNIQUE INDEX task_attempts_one_unfenced ON task_attempts (task_id)
 WHERE state IN ('creating', 'active', 'draining');
 CREATE INDEX task_attempts_capacity ON task_attempts (task_id) WHERE capacity_held;
+CREATE INDEX task_attempts_workspace_cleanup ON task_attempts (workspace_cleanup_after NULLS FIRST, updated_at, id)
+WHERE state IN ('superseded', 'failed', 'cancelled', 'completed')
+    AND workspace_request_id IS NOT NULL AND brief_delivery_id IS NULL AND NOT workspace_cleanup_confirmed;
 
 -- A task points at its current attempt, and the attempt must be one of the task's own.
 ALTER TABLE tasks
