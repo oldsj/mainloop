@@ -184,8 +184,10 @@ repeat registration in that form until the owner reconciles the environment list
 
 React status (migration F7): the React environment section (`web/src/features/environments`)
 implements this UI, including the saved and draft lines, eligibility labels, accept-default and
-save with the observed revision, and the uncertain-registration lock. Proven by offline component
-and model tests against MSW handlers; not proven against a live registry or server.
+save with the observed revision, and the uncertain-registration lock. A version list that fails
+to load says so and offers a retry, and the defaults warning waits for a fresh read. A successful
+registration resets its form. A failed write clears an earlier success notice. Proven by offline
+component and model tests against MSW handlers; not proven against a live registry or server.
 
 ## Go server status (migration slice G4)
 

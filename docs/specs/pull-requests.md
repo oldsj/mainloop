@@ -302,8 +302,10 @@ not merged yet.
 - The card shows the repository and PR number from the digested summary. If the request context
   names a different pull request, the evidence is treated as unavailable. The PR link is shown
   only when its path is `/{repository}/pull/{number}` for those values.
-- When a poll brings a new proposal or digest for a call, the loaded detail pages are dropped and
-  an Approve chosen against the old digest is cleared. Reject is kept.
+- When a poll brings a new proposal or digest for a call, the loaded detail pages are dropped. An
+  Approve chosen against the old digest is removed from the draft, not just hidden, so it stays
+  removed if the old evidence comes back. The card then says "The merge evidence changed. Review it
+  and approve again." Reject is kept.
 - PR and diff links are shown only for https on github.com; CI result links only for https.
   CI is labelled as historical evidence.
 

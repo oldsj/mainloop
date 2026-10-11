@@ -14,10 +14,12 @@ the loading message. Retrying requests the details for the current project.
   available idle sessions have their own **Show idle (N)** filter.
 - The inbox defaults to **Needs you** with a badge for unresolved owner actions. Its **Activity**
   tab holds quieter FYIs and unverified provider reports. Empty attention says **Nothing needs you**.
+- The header has a **health** link to orchestration health, beside **new agent session**.
 - No tab bar
 
 ## Mobile
 
+- The header has an icon link to orchestration health, labelled "Orchestration health", beside the new-session icon.
 - Bottom tab bar with Chat, Sessions and Inbox tabs (the Sessions tab includes the "+ agent" link)
 - Chat tab active by default on load
 - Tab bar hidden on desktop viewports

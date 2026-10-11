@@ -361,8 +361,9 @@ proven against a test server, not a live backend.
   server. Nothing was recorded." only after a re-read proves the request is still unanswered and
   writes are off. Otherwise the 503 locks the request as uncertain. The disabled state also shows
   whenever the read reports `writes_enabled=false` and no decision exists.
-- If a re-read after an uncertain send shows no recorded decision, the card says "No decision was
-  recorded. Reload to answer again." The lock stays until the page is reloaded.
+- If a re-read after an uncertain send shows no recorded decision, the card titles the state "No
+  decision was recorded" and says "Reload to answer again." "Refresh status" re-reads but keeps the
+  lock while no decision is recorded. Reloading the page is what lets the owner answer again.
 - A request view missing its session identity or payload renders an error state with a refresh
   action instead of the card.
 - Controls follow the server: they are off while the read is stale, the request is not
