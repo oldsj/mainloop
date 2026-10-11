@@ -60,6 +60,9 @@ type Service struct {
 	// Credentials publishes a workspace agent's MCP credential before its Session is created and
 	// revokes it with the workspace. Nil creates Sessions without MCP tools.
 	Credentials *agentauth.Credentials
+	// GitRead enrolls workspaces for git read and adds the capability to their Sessions. Nil
+	// creates Sessions without it.
+	GitRead *GitRead
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.

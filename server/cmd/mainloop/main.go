@@ -138,6 +138,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	wsSvc.Credentials = creds
+	wsSvc.GitRead = gitReadFor(cfg, pool, creds, log)
 	deps.Workspaces = wsSvc
 	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {

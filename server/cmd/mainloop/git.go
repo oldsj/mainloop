@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
@@ -15,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
 // serveGit runs the two git listeners. The read listener proxies upload-pack for enrolled
@@ -59,4 +62,17 @@ func gitReadHandler(ctx context.Context, cfg *config.Config, log *slog.Logger) (
 		Dev:          cfg.IsDev(),
 	}
 	return srv.Handler(), pool.Close, nil
+}
+
+// gitReadFor returns the git read capability workspaces are created with, or nil when it is off.
+// It needs the transport enabled, a GitHub App for the read Service to fetch with, and a cluster
+// to publish the capability's Secret in.
+func gitReadFor(cfg *config.Config, pool *pgxpool.Pool, creds *agentauth.Credentials, log *slog.Logger) *workspaces.GitRead {
+	if !cfg.Git.TransportEnabled || cfg.GitHub.AppID == "" || !cfg.InCluster() {
+		return nil
+	}
+	return &workspaces.GitRead{
+		Enroller: &gittransport.Enroller{Pool: pool, Creds: creds, Log: log},
+		Origin:   cfg.Git.ReadOrigin,
+	}
 }

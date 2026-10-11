@@ -85,8 +85,8 @@ and a fake Kubernetes client; every refusal above; revocation with the workspace
 resumable issuance; and the token-reflection guard in `internal/github`.
 
 Not proven: any run against github.com, a deployed image or manifests, or a live agent session.
-Nothing yet calls `Enroller.Enroll` when a workspace is created, nor adds the credential
-reference to the session (create and replay); that wiring belongs to the workspace slice.
+The workspace create enrolls the workspace and sends the credential reference with the session
+(see `workspaces.md`); that path is proven against the fake kagent and Kubernetes client only.
 
 ## Schema notes
 

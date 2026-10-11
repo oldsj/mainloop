@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -270,6 +271,8 @@ func classify(err error) (permanent bool, reason string) {
 	var ou *kagent.OutcomeUnknown
 	var uc *unconfirmed
 	switch {
+	case errors.Is(err, gittransport.ErrWorkspaceEnded):
+		return true, "the workspace has ended"
 	case errors.Is(err, agentauth.ErrBindingEnded), errors.Is(err, agentauth.ErrInvalidGrant):
 		return true, "the workspace's agent credential cannot be issued"
 	case errors.Is(err, agentauth.ErrCleanupPending), errors.Is(err, agentauth.ErrRevoked):
@@ -373,6 +376,13 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 		return result{err: err}
 	}
 	req.Credentials = creds
+	ref, err := s.GitRead.forCreate(ctx, w)
+	if err != nil {
+		return result{err: err}
+	}
+	if ref != nil {
+		req.Credentials = append(req.Credentials, ref)
+	}
 	sess, err := s.Kagent.CreateSession(ctx, req)
 	if err != nil {
 		return result{err: err}
@@ -511,6 +521,9 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 			return result{err: &transient{err}}
 		}
 		req.Credentials = s.Credentials.ReplayCredentials(w.ID, s.Config.MCPOrigin(), b.Role, b.MCPGrantKind)
+		if ref := s.GitRead.forReplay(w); ref != nil {
+			req.Credentials = append(req.Credentials, ref)
+		}
 		sess, err := s.Kagent.CreateSession(ctx, req)
 		if replayFoundNoSession(err) {
 			// No Session holds the request id, or the orphan sweep reclaims it if a kagent-side

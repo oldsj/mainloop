@@ -58,3 +58,38 @@ func TestCredentialsInAClusterNeedAWorkingClient(t *testing.T) {
 		t.Fatalf("creds = %v, namespace %q, err %v", creds, asked, err)
 	}
 }
+
+func TestGitReadIsOnlyWiredWhenTheTransportAppAndClusterAreAllPresent(t *testing.T) {
+	app := map[string]string{"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "key"}
+	on := map[string]string{"GIT_TRANSPORT_ENABLED": "true", "KUBERNETES_SERVICE_HOST": "10.0.0.1"}
+	merge := func(ms ...map[string]string) map[string]string {
+		out := map[string]string{}
+		for _, m := range ms {
+			for k, v := range m {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	creds := &agentauth.Credentials{}
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		want bool
+	}{
+		"all present":       {merge(on, app), true},
+		"transport off":     {merge(app, map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}), false},
+		"no GitHub App":     {on, false},
+		"outside a cluster": {merge(app, map[string]string{"GIT_TRANSPORT_ENABLED": "true"}), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig(t, tt.env)
+			g := gitReadFor(cfg, nil, creds, quiet)
+			if (g != nil) != tt.want {
+				t.Fatalf("gitReadFor = %v, want wired = %v", g, tt.want)
+			}
+			if g != nil && (g.Origin != cfg.Git.ReadOrigin || g.Enroller.Creds != creds) {
+				t.Errorf("wiring = %+v", g)
+			}
+		})
+	}
+}
