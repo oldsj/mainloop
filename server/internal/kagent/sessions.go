@@ -22,7 +22,7 @@ type sessionClients struct {
 }
 
 func newSessionClients(h connect.HTTPClient, base string) sessionClients {
-	opt := connect.WithGRPCWeb()
+	opt := connect.WithClientOptions(connect.WithGRPCWeb(), withStrictSessions())
 	return sessionClients{
 		create: connect.NewClient[api.CreateSessionRequest, api.CreateSessionResponse](
 			h, base+ProcCreateSession, opt),
@@ -106,6 +106,27 @@ func (c *Client) GetSession(ctx context.Context, id string) (*api.Session, error
 		return nil, err
 	}
 	return sessionOf(op, id, resp.GetSession())
+}
+
+// ObserveSession reads one Session for display only. It differs from GetSession in one way: a reply
+// that states no context id is accepted, with the context left empty, so a caller can show the
+// Session as having an unconfirmed context. The reply must still be for this Session, and a context
+// id that names anything else is refused. Nothing that acts on a Session (delivery, lifecycle,
+// readiness) uses it; those keep GetSession's requirement that the context is confirmed.
+func (c *Client) ObserveSession(ctx context.Context, id string) (*api.Session, error) {
+	const op = "SessionService GetSession"
+	if id == "" {
+		return nil, emptyArg(op, "session id")
+	}
+	resp, err := unary(ctx, c, op, c.sessionCl.get, &api.GetSessionRequest{SessionId: id})
+	if err != nil {
+		return nil, err
+	}
+	s := resp.GetSession()
+	if s.GetId() != id || (s.GetContextId() != "" && s.GetContextId() != id) {
+		return nil, &OutcomeUnknown{Op: op, Detail: "reply is for a different session"}
+	}
+	return s, nil
 }
 
 // SuspendSession suspends a Session's runtime.

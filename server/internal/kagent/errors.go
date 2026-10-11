@@ -197,6 +197,9 @@ func classifyConnect(op string, err error) error {
 	if errors.As(err, &cfg) || errors.As(err, &ns) || errors.As(err, &st) || !errors.As(err, &ce) {
 		return classifyTransport(op, err)
 	}
+	if errors.Is(err, errAmbiguousWire) {
+		return &OutcomeUnknown{Op: op, Detail: "ambiguous reply", Err: err}
+	}
 	code := ce.Code()
 	switch {
 	case code == connect.CodePermissionDenied || code == connect.CodeUnauthenticated:

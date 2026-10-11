@@ -128,8 +128,14 @@ func projectPreparation(s *kagentapi.Session) (*api.NativePreparationObservation
 	state, okState := stateName(s.GetState())
 	op, okOp := operationName(s.GetOperation())
 	bad := false
+	// A Session that states no context id is shown with its own id as the context, unconfirmed.
+	context := s.GetContextId()
+	confirmed := context != ""
+	if !confirmed {
+		context = s.GetId()
+	}
 	obs := &api.NativePreparationObservation{
-		SessionId: s.GetId(), ContextId: s.GetContextId(), ContextConfirmed: s.GetContextId() != "",
+		SessionId: s.GetId(), ContextId: context, ContextConfirmed: confirmed,
 		State: state, Operation: op,
 		PreparedRevision: optional(s.GetPreparedRevision(), preparationIdentity, &bad),
 	}
@@ -152,10 +158,15 @@ func projectPreparation(s *kagentapi.Session) (*api.NativePreparationObservation
 	if saved == nil {
 		return obs, nil
 	}
+	// A receipt that names no original request is malformed, not merely foreign: the Python client
+	// refuses the whole reply, so no runtime field is shown beside it.
+	if saved.GetOriginal() == nil {
+		return nil, errUnprojectable
+	}
 	// A receipt for another Session or context is neither this Session's evidence nor
 	// owner-visible data, and one that does not fit the bounds is not shown either.
 	obs.ReceiptStatus = "unavailable"
-	if saved.GetOriginal().GetSessionId() != s.GetId() || saved.GetContextId() != s.GetContextId() {
+	if saved.GetOriginal().GetSessionId() != s.GetId() || saved.GetContextId() != obs.ContextId {
 		return obs, nil
 	}
 	if receipt, ok := projectReceipt(saved); ok {

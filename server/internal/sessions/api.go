@@ -221,7 +221,7 @@ func (a *SessionsAPI) sessionState(ctx context.Context, row nativeBinding) (stat
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionStateTimeout)
 	defer cancel()
-	sess, err := a.Svc.Kagent.GetSession(ctx, *row.KagentSessionID)
+	sess, err := a.Svc.Kagent.ObserveSession(ctx, *row.KagentSessionID)
 	if err != nil {
 		return nil, nil, "kagent session unavailable: " + safeDetail(err.Error())
 	}

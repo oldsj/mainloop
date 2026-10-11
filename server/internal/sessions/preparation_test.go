@@ -151,7 +151,6 @@ func TestUnavailableReceiptKeepsTheCurrentRuntimeIdentity(t *testing.T) {
 	for name, edit := range map[string]func(*kagentapi.WorkspacePreparationReceipt){
 		"foreign session":       func(r *kagentapi.WorkspacePreparationReceipt) { r.Original.SessionId = "foreign-session" },
 		"foreign context":       func(r *kagentapi.WorkspacePreparationReceipt) { r.ContextId = "foreign-context" },
-		"no original":           func(r *kagentapi.WorkspacePreparationReceipt) { r.Original = nil },
 		"action id too long":    func(r *kagentapi.WorkspacePreparationReceipt) { r.Original.ActionId = strings.Repeat("x", 129) },
 		"action id characters":  func(r *kagentapi.WorkspacePreparationReceipt) { r.Original.ActionId = "has space" },
 		"unsupported profile":   func(r *kagentapi.WorkspacePreparationReceipt) { r.Original.SetupProfile = "unsupported" },
@@ -235,13 +234,22 @@ func TestAPendingOperationIsRetainedWithoutWakeOrPreparation(t *testing.T) {
 func TestAReplyThatCannotBeProjectedLeavesNoObservation(t *testing.T) {
 	p := newPrep(t)
 	for name, edit := range map[string]func(*kagentapi.Session){
-		"foreign session":     func(s *kagentapi.Session) { s.Id = "foreign-session"; s.ContextId = "foreign-session" },
-		"foreign context":     func(s *kagentapi.Session) { s.ContextId = "foreign-context" },
-		"context not stated":  func(s *kagentapi.Session) { s.ContextId = "" },
-		"unknown state":       func(s *kagentapi.Session) { s.State = kagentapi.RuntimeState(99) },
-		"unknown operation":   func(s *kagentapi.Session) { s.Operation = kagentapi.RuntimeOperation(99) },
-		"revision too long":   func(s *kagentapi.Session) { s.PreparedRevision = strings.Repeat("r", 129) },
-		"empty association":   func(s *kagentapi.Session) { s.RuntimeAssociation = &kagentapi.RuntimeAssociation{} },
+		"foreign session":   func(s *kagentapi.Session) { s.Id = "foreign-session"; s.ContextId = "foreign-session" },
+		"foreign context":   func(s *kagentapi.Session) { s.ContextId = "foreign-context" },
+		"unknown state":     func(s *kagentapi.Session) { s.State = kagentapi.RuntimeState(99) },
+		"unknown operation": func(s *kagentapi.Session) { s.Operation = kagentapi.RuntimeOperation(99) },
+		"revision too long": func(s *kagentapi.Session) { s.PreparedRevision = strings.Repeat("r", 129) },
+		"empty association": func(s *kagentapi.Session) { s.RuntimeAssociation = &kagentapi.RuntimeAssociation{} },
+		// Python withholds the whole reply when a receipt names no original request.
+		"empty receipt": func(s *kagentapi.Session) {
+			withAssociation(s)
+			s.WorkspacePreparation = &kagentapi.WorkspacePreparationReceipt{}
+		},
+		"receipt without original": func(s *kagentapi.Session) {
+			withAssociation(s)
+			s.WorkspacePreparation = receiptFor(s, "pending", false)
+			s.WorkspacePreparation.Original = nil
+		},
 		"association control": func(s *kagentapi.Session) { withAssociation(s); s.RuntimeAssociation.Phase = "ac\ntive" },
 		"association too long": func(s *kagentapi.Session) {
 			withAssociation(s)
@@ -259,6 +267,17 @@ func TestAReplyThatCannotBeProjectedLeavesNoObservation(t *testing.T) {
 				t.Fatalf("%s: %q leaked into %s", name, leaked, b)
 			}
 		}
+	}
+}
+
+// Python's test_missing_explicit_context_remains_unconfirmed: a Session that states no context is
+// shown with its own id as the context, unconfirmed. Acting on it stays refused (see the kagent
+// client test), and a context naming anything else is not shown.
+func TestAMissingExplicitContextIsShownUnconfirmed(t *testing.T) {
+	p := newPrep(t)
+	o := p.read(func(s *kagentapi.Session) { s.ContextId = "" }).PreparationObservation
+	if o == nil || o.SessionId != p.e.bindingKsid(p.sid) || o.ContextId != o.SessionId || o.ContextConfirmed || o.ReceiptStatus != "missing" {
+		t.Fatalf("%+v", o)
 	}
 }
 

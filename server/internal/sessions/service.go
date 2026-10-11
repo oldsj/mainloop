@@ -77,6 +77,8 @@ func reason(err, sentinel error) string {
 type Kagent interface {
 	CreateSession(ctx context.Context, req *kagentapi.CreateSessionRequest) (*kagentapi.Session, error)
 	GetSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	// ObserveSession is GetSession for display: a Session without a confirmed context is returned.
+	ObserveSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]

@@ -118,9 +118,15 @@ distinguishes `observed`, `missing` and `unavailable` (a receipt that cannot be 
 including a foreign identity or a value outside the contract's bounds). Runtime association and
 receipt are independently optional. The observation itself is absent, and with it `session_state`
 (the note says "kagent session unavailable"), when GetSession is unavailable or its reply is for
-another Session or context, has no context id, or has runtime fields that cannot be projected
-(an unknown state or operation, an identity outside its bounds). The Go client already refuses a
-reply for another Session or context, so `context_confirmed` is true whenever an observation exists.
+another Session or context, repeats the workspace preparation or the runtime association on the wire,
+carries a receipt that names no original request, or has runtime fields that cannot be projected
+(an unknown state or operation, an identity outside its bounds). The duplicate check runs on the raw
+reply before protobuf merges the copies, in the kagent client's session codec, and also refuses a
+repeated singular field inside the receipt; the call then has an unknown outcome, as in the Python
+client. A Session that states no context id is shown with its own id as the context and
+`context_confirmed: false`, read through a display-only client call (`ObserveSession`); delivery,
+lifecycle and readiness keep requiring a confirmed context, and a context naming another Session is
+refused either way.
 The response excludes credentials, configuration documents, checkout content and arbitrary runtime
 data: only the fields in `NativePreparationObservation` of `api/openapi.yaml` are ever copied. This
 diagnostic API does not add a UI flow or a second RPC, refresh preparation, start work, or grant
