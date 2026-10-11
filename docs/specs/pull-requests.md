@@ -282,6 +282,26 @@ a new request ID replaces a conclusively closed attempt with a new immutable pro
 Approval retries need a new native call and owner decision. Repeated preparation IDs
 return their original proposal and cannot reset a deadline or reopen rejection. Immutable per-proposal terminal results retain earlier blocked/expired outcomes across later attempts.
 
+#### Web rendering
+
+The web client shows each merge call's summary above its Approve and Reject buttons
+(`web/src/features/hitl/merge-review.tsx`). It is built to the contract; the Go endpoints are
+not merged yet.
+
+- Evidence is reviewable only when it is ready, not stale, has a ready summary and carries a
+  summary digest. Then Approve is enabled and sends that digest as `reviewed_context`. Any other
+  case shows the reason from the server and keeps Approve disabled; Reject stays available.
+- When the evidence is missing, ambiguous or malformed (including `summary: null`), the call
+  shows "Merge evidence unavailable" with no approve path. Server notes are quoted as text.
+- The client checks commit SHAs (40 hex digits), digests (64 hex digits) and the repository name
+  (`owner/name`) more strictly than the API schema. Evidence that fails these checks is withheld,
+  and the card says so.
+- The description, changed paths and CI list load when their section is first opened, 50 at a
+  time. A page is refused unless its proposal, section, cursor and summary digest match what is on
+  screen, and a cursor must move forward. Pages already loaded stay when a later page fails.
+- PR and diff links are shown only for https on github.com; CI result links only for https.
+  CI is labelled as historical evidence.
+
 ### Evidence and dispatch
 
 Evidence requires an open non-draft same-repository feature PR at the expected SHA,

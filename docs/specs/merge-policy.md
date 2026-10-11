@@ -339,6 +339,25 @@ Tests feed real observer/owner-API results from isolated PostgreSQL and a fake g
 shared Svelte renderer and response builder. Seeded states supplement this for provider labels,
 escaping, malformed payloads and merge slots. This is not deployed or browser/live-agent proof.
 
+### Web request card and submit state
+
+The React client (`web/src/features/hitl`) renders `HITLCard` and `HITLRequest` against the
+contract in `api/openapi.yaml`. The Go endpoints are not merged yet, so this behaviour is
+proven against a test server, not a live backend.
+
+- All cards for one request id share one state machine and one query-cache entry. Only one
+  submit per request is in flight. The card polls only while the tab is visible and stops once
+  a decision is delivered.
+- A send waits 90 seconds. A timeout or network failure locks the request as uncertain, says
+  not to submit again, and re-reads it. The lock clears only when the re-read shows a recorded
+  decision. A 5xx is treated the same way. A 4xx shows the server's detail and refreshes.
+- A refused send (503) with the owner-write gate off is shown as "Responding is disabled on the
+  server. Nothing was recorded." only after a re-read proves the request is still unanswered and
+  writes are off. Otherwise the 503 locks the request as uncertain. The disabled state also shows
+  whenever the read reports `writes_enabled=false` and no decision exists.
+- Controls follow the server: they are off while the read is stale, the request is not
+  answerable, writes are off, a decision exists, or a send is in flight.
+
 ## GitHub plan availability
 
 Mainloop merge policy does not require GitHub paid branch protection or rulesets.

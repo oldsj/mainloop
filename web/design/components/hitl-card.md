@@ -21,11 +21,12 @@ The structured input card for a native agent's request: tool-call approvals and 
 ## States
 
 - **Pending:** controls enabled.
-- **Submitting:** controls disabled; the submitted choice stays visible.
+- **Submitting:** controls disabled; the submitted choice stays visible. Only one submit per request is in flight, across every card showing that request.
 - **Recorded:** a recorded answer disables further decisions and shows what was chosen.
-- **Unconfirmed:** the submission has no receipt yet. The card stays locked until the outcome is observed. Show "Awaiting confirmation".
+- **Unconfirmed:** the submission timed out (after 90 seconds) or the network failed, so it may or may not have been recorded. The card locks, says "do not submit again", and re-reads the request. It unlocks only when the re-read shows a recorded decision.
 - **Stale:** the request was replaced. Show the new request in its own card with fresh controls. The old card is read-only.
-- **Unavailable:** the continuation cannot run, or writes are off on the server. Say so on the card; do not show enabled controls.
+- **Unavailable:** the continuation cannot run, or writes are off on the server. Say so on the card ("Responding disabled by the server."); do not show enabled controls. A refused send (503) with writes off, proven by a re-read, shows the same state and says nothing was recorded.
+- **Merge call:** a call that merges a pull request shows the merge review above its decision (see `merge-review.md`). Approve stays disabled until that evidence is reviewable.
 - **Loading and error:** show the request title and a retry control. Refreshing reads status only and never resubmits a decision.
 
 The card refreshes while it is mounted and visible, about every four seconds.
@@ -33,7 +34,7 @@ The card refreshes while it is mounted and visible, about every four seconds.
 ## Keyboard and screen reader
 
 - Each call's approve and reject are two buttons with names that include the call name.
-- Choices are a radio group (single) or a checkbox group (multiple). Free text has a label.
+- Choices are toggle buttons inside a labelled fieldset, with `aria-pressed` for the selected state. Single choice allows one pressed button; multiple allows several. Free text has a label.
 - After a decision is recorded, move the announcement to "Answered" with a polite live region. Do not move focus away from the card.
 
 ## Touch
