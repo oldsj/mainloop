@@ -381,36 +381,6 @@ func TestSlowWorkspaceSessionAborts(t *testing.T) {
 	}
 }
 
-func TestUnconfirmedStopKeepsTheSlot(t *testing.T) {
-	r := newRig(t)
-	r.ses.agent = "unknown"
-	r.run()
-	_, sup := r.supervisor()
-	child := r.codeChild(sup, "feat")
-	r.eventually("child", func() bool { return r.opState(child) == "completed" })
-	attempt, _ := r.attemptOf(child)
-	if _, err := r.svc.Cancel(context.Background(), r.own, action(child, r.view(r.own, child), "c1")); err != nil {
-		t.Fatal(err)
-	}
-	r.eventually("cancelled", func() bool { return r.taskStatus(child) == "cancelled" && r.attemptState(child) == "cancelled" })
-	// The agent may still be running: its credentials are gone, but its branch and slot stay held.
-	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND capacity_held AND 'runtime-stop-unconfirmed' = ANY (evidence_refs)`, attempt); n != 1 {
-		t.Fatal("the slot was released after an unconfirmed stop")
-	}
-	if n := r.count(`SELECT count(*) FROM workspace_writer_claims WHERE attempt_id = $1 AND held`, attempt); n != 1 {
-		t.Fatal("the branch claim was released after an unconfirmed stop")
-	}
-	if len(r.ws.removed) != 0 {
-		t.Fatalf("workspace removed: %v", r.ws.removed)
-	}
-	// Replays do not ask again.
-	before := r.ses.cancelCount()
-	r.sweep(r.svc.SettleSweep())
-	if r.ses.cancelCount() != before {
-		t.Fatal("an unconfirmed stop was repeated")
-	}
-}
-
 func TestCancelledSupervisorCancelsChildren(t *testing.T) {
 	r := newRig(t)
 	r.run()

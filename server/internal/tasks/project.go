@@ -50,8 +50,8 @@ type Observer interface {
 // projectionBatch is how many tasks one sweep looks at.
 const projectionBatch = 50
 
-// normalize turns an observation into the values stored on the task. CI counts as a success only
-// when the result is for the exact commit the pull request is at; a pull request for another
+// normalize turns an observation into the values stored on the task. CI counts only when the result
+// is for the exact commit the pull request is at, in any state; a pull request for another
 // branch or repository is not the task's. An observation that cannot be trusted is unknown.
 func normalize(o Observation, repo, branch string) (pr *int32, url, head *string, prState, ciState string, ciHead *string) {
 	prState, ciState = stUnknown, stUnknown
@@ -65,12 +65,12 @@ func normalize(o Observation, repo, branch string) (pr *int32, url, head *string
 	case prOpen, prClosed, prMerged:
 		prState = o.PRState
 	}
-	switch o.CIState {
-	case ciPending, ciFailure:
-		ciState, ciHead = o.CIState, nonEmpty(o.CIHeadSHA)
-	case ciSuccess:
-		if o.CIHeadSHA != "" && o.CIHeadSHA == o.PRHeadSHA {
-			ciState, ciHead = ciSuccess, nonEmpty(o.CIHeadSHA)
+	// A result for any other commit than the pull request's head says nothing about it, whatever
+	// its state: a failure of an older head must not show against a new one.
+	if o.CIHeadSHA != "" && o.CIHeadSHA == o.PRHeadSHA {
+		switch o.CIState {
+		case ciPending, ciSuccess, ciFailure:
+			ciState, ciHead = o.CIState, nonEmpty(o.CIHeadSHA)
 		}
 	}
 	return pr, url, head, prState, ciState, ciHead

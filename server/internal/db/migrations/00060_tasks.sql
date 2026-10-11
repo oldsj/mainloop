@@ -146,6 +146,10 @@ CREATE TABLE task_attempts (
     archived_at timestamptz,
     native_deleted_at timestamptz,
     retention_hold text,
+    -- Reconcile state of an unconfirmed stop: how often the resolver looked at kagent, and when it
+    -- looks next.
+    resolve_attempts integer NOT NULL DEFAULT 0,
+    resolve_after timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (task_id, number),
@@ -213,8 +217,8 @@ CREATE TABLE task_operations (
 CREATE INDEX task_operations_task ON task_operations (task_id, created_at, id);
 CREATE INDEX task_operations_open ON task_operations (created_at, id)
 WHERE state NOT IN ('completed', 'blocked');
--- The reconcile loop claims operations in these states. An uncertain one is claimed too: its
--- handler looks at what exists before it does anything.
+-- The reconcile loop claims operations in these states; a handler looks at what exists before it
+-- does anything.
 CREATE INDEX task_operations_claim ON task_operations (next_attempt_at, id)
 WHERE state IN ('requested', 'draining', 'source_fencing', 'source_fenced', 'target_creating', 'target_ready');
 

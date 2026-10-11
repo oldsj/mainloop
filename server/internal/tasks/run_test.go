@@ -34,11 +34,30 @@ type fakeWorkspaces struct {
 	reject string
 	// unready leaves new workspaces without a kagent Session.
 	unready bool
+	// fail makes creates return this error, as a request that can never succeed would.
+	fail error
+	// gate, when set, holds the next create until it is closed, then answers gateErr. entered is told
+	// when a create is waiting.
+	gate    chan struct{}
+	gateErr error
+	entered chan struct{}
 }
 
 func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
 	f.mu.Lock()
+	gate, gateErr, entered := f.gate, f.gateErr, f.entered
+	f.gate = nil
+	f.mu.Unlock()
+	if gate != nil {
+		entered <- struct{}{}
+		<-gate
+		return api.WorkspaceLifecycle{}, gateErr
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail != nil {
+		return api.WorkspaceLifecycle{}, f.fail
+	}
 	if f.reject != "" {
 		return api.WorkspaceLifecycle{}, &workspaces.RejectedError{Detail: f.reject}
 	}
@@ -115,6 +134,33 @@ func (f *fakeSessions) cancelCount() int {
 	return f.cancels
 }
 
+// fakeStops answers the resolver of an unconfirmed stop: it reports the agent as still running
+// until released.
+type fakeStops struct {
+	mu      sync.Mutex
+	stopped bool
+	calls   int
+}
+
+func (f *fakeStops) Stopped(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return f.stopped, nil
+}
+
+func (f *fakeStops) set(stopped bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = stopped
+}
+
+func (f *fakeStops) lookCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // fakeObserver answers the projection sweep.
 type fakeObserver struct {
 	mu    sync.Mutex
@@ -150,6 +196,8 @@ type rig struct {
 	ws  *fakeWorkspaces
 	ses *fakeSessions
 	obs *fakeObserver
+	// stops is installed as the StopObserver by the tests that resolve unconfirmed stops.
+	stops *fakeStops
 }
 
 func newRig(t *testing.T) *rig {
@@ -160,10 +208,12 @@ func newRig(t *testing.T) *rig {
 	r.ses = &fakeSessions{Service: sessions.NewService(mustConfig(t), e.pool, nil, slog.Default())}
 	r.ses.OwnerID = owner
 	r.obs = &fakeObserver{}
+	r.stops = &fakeStops{}
 	e.svc.Workspaces, e.svc.Sessions, e.svc.Observer = r.ws, r.ses, r.obs
 	e.svc.Limits = tasks.Limits{
 		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, ProvisionWindow: 30 * time.Second,
 		Interval: 10 * time.Millisecond, ProjectionEvery: time.Second, SettleIdle: time.Nanosecond,
+		ResolveBackoff: reconcile.Backoff{Base: 20 * time.Millisecond, Max: 20 * time.Millisecond},
 	}
 	e.svc.Log = slog.Default()
 	return r

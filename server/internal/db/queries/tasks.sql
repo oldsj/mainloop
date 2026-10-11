@@ -202,6 +202,7 @@ JOIN tasks t ON t.id = a.task_id
 WHERE (a.state IN ('draining', 'fenced')
        OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
   AND a.updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+  AND (a.resolve_after IS NULL OR a.resolve_after <= now())
 ORDER BY a.updated_at, a.id
 LIMIT $1;
 
@@ -392,4 +393,24 @@ SELECT environment FROM workspaces WHERE id = $1;
 SELECT id FROM tasks
 WHERE mode = 'coordination' AND status = 'waiting' AND reason = 'reconciliation'
 ORDER BY updated_at, id
+LIMIT $1;
+
+-- name: DeferAttemptResolve :one
+-- An unconfirmed stop that kagent still did not settle: count the look and wait before the next.
+UPDATE task_attempts
+SET resolve_attempts = resolve_attempts + 1, resolve_after = now() + make_interval(secs => sqlc.arg(delay_seconds)::float8),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING resolve_attempts;
+
+-- name: ListFailedBriefAttempts :many
+-- Active attempts whose latest brief the sessions ledger ended failed or cancelled, and that have
+-- not been given up on yet: the brief watcher sends them again.
+SELECT a.* FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+JOIN deliveries d ON d.id = a.brief_delivery_id
+WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled')
+  AND d.state IN ('failed', 'cancelled')
+  AND NOT ('brief-delivery-failed' = ANY (a.evidence_refs))
+ORDER BY a.updated_at, a.id
 LIMIT $1;

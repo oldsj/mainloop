@@ -513,6 +513,8 @@ type TaskAttempt struct {
 	ArchivedAt            *time.Time
 	NativeDeletedAt       *time.Time
 	RetentionHold         *string
+	ResolveAttempts       int32
+	ResolveAfter          *time.Time
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }

@@ -72,6 +72,15 @@ func TestProjectionCIMustMatchTheHead(t *testing.T) {
 	if got := r.view(r.own, id).Projection; string(got.CiState) != "unknown" {
 		t.Fatalf("ci for another commit = %s", got.CiState)
 	}
+	for _, state := range []string{"pending", "failure"} {
+		r.obs.set(tasks.Observation{
+			PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: state, CIHeadSHA: "old",
+		}, nil)
+		r.project()
+		if got := r.view(r.own, id).Projection; string(got.CiState) != "unknown" {
+			t.Fatalf("%s for another commit = %s", state, got.CiState)
+		}
+	}
 	r.obs.set(tasks.Observation{
 		PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: "failure", CIHeadSHA: "new",
 	}, nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ func (s *Service) Register(r *reconcile.Runner) {
 	r.Add(s.DeliveryLoop())
 	r.AddSweep(s.SettleSweep())
 	r.AddSweep(s.CompleteSweep())
+	r.AddSweep(s.BriefSweep())
 	r.AddSweep(s.ProjectionSweep())
 }
 
@@ -439,6 +441,12 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 			out, err = s.abort(ctx, c, op, a, "workspace was refused: "+rej.Detail)
 			return out, false, err
 		}
+		// A request that can never succeed ends the attempt; retrying it would only hold the slot.
+		var inv *workspaces.InvalidError
+		if errors.As(cerr, &inv) || errors.Is(cerr, workspaces.ErrProjectNotFound) {
+			out, err = s.abort(ctx, c, op, a, "workspace request is invalid: "+cerr.Error())
+			return out, false, err
+		}
 		var unc *workspaces.UnconfirmedError
 		if cerr != nil && !errors.As(cerr, &unc) {
 			return reconcile.Outcome{}, false, cerr
@@ -467,10 +475,18 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 	return reconcile.Outcome{}, true, nil
 }
 
-// briefMessageID is the ledger id of an attempt's brief. It is derived from the attempt, so a
+// briefMessageID is the ledger id of an attempt's first brief. It is derived from the attempt, so a
 // replay finds the message an earlier run recorded.
-func briefMessageID(attemptID string) string {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("mainloop:task-brief:"+attemptID)).String()
+func briefMessageID(attemptID string) string { return briefSendID(attemptID, 0) }
+
+// briefSendID is the ledger id of the nth send of an attempt's brief: a brief the ledger failed is
+// sent again under the next id.
+func briefSendID(attemptID string, n int) string {
+	key := "mainloop:task-brief:" + attemptID
+	if n > 0 {
+		key += ":" + strconv.Itoa(n)
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(key)).String()
 }
 
 // sendBrief hands the agent its assigned work. The message is recorded in the sessions ledger
@@ -520,6 +536,7 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 // fails in one transaction, then the runtime is stopped, the attempt is fenced and it fails.
 func (s *Service) abort(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation, a dbq.TaskAttempt, why string) (reconcile.Outcome, error) {
 	reason := dbstate.ReasonProvisioningUnavailable
+	taken := false
 	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
 		if err != nil {
@@ -529,14 +546,17 @@ func (s *Service) abort(ctx context.Context, c reconcile.Claim, op dbq.TaskOpera
 		if err != nil {
 			return nil, err
 		}
+		if cur.State != dbstate.AttemptCreating {
+			// A cancel got to the attempt first and owns it: the task ends cancelled, not failed.
+			taken = true
+			return nil, advance(ctx, q, c, op, dbstate.TaskOpBlocked, nil, nil)
+		}
 		var drafts []events.Draft
-		if cur.State == dbstate.AttemptCreating {
-			if _, err := q.MoveAttempt(ctx, dbq.MoveAttemptParams{
-				ID: a.ID, FromState: dbstate.AttemptCreating, ToState: dbstate.AttemptDraining, CapacityHeld: true,
-				EvidenceRef: ptr("provision-aborted: " + why),
-			}); err != nil {
-				return nil, err
-			}
+		if _, err := q.MoveAttempt(ctx, dbq.MoveAttemptParams{
+			ID: a.ID, FromState: dbstate.AttemptCreating, ToState: dbstate.AttemptDraining, CapacityHeld: true,
+			EvidenceRef: ptr("provision-aborted: " + why),
+		}); err != nil {
+			return nil, err
 		}
 		if !TaskFinal(t.Status) {
 			after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: dbstate.TaskFailed})
@@ -549,6 +569,9 @@ func (s *Service) abort(ctx context.Context, c reconcile.Claim, op dbq.TaskOpera
 	})
 	if err != nil {
 		return reconcile.Outcome{}, err
+	}
+	if taken {
+		return reconcile.Recorded(), nil
 	}
 	// The operation is done; the settle sweep finishes the attempt if this is cut short.
 	if err := s.settle(ctx, a.ID); err != nil {

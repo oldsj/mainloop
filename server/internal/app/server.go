@@ -124,6 +124,12 @@ func New(d Deps) *Server {
 		}
 		if d.Sessions != nil {
 			taskSvc.Sessions = d.Sessions
+			// A nil kagent client means nothing can run, so an unconfirmed stop has nothing to resolve.
+			if d.Sessions.Kagent != nil {
+				taskSvc.StopObserver = &tasks.KagentStops{
+					Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Sessions: d.Sessions, Kagent: d.Sessions.Kagent,
+				}
+			}
 		}
 	}
 	att := attentionService(d)

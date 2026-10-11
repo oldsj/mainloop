@@ -226,7 +226,10 @@ func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.Tas
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryDelivered)
 	case dbstate.DeliveryRecorded, dbstate.DeliverySending:
 		return reconcile.RetryAfter(2 * time.Second), nil
-	case dbstate.DeliveryFailed:
+	case dbstate.DeliveryFailed, dbstate.DeliveryCancelled:
+		// A cancelled row is the owner stopping the parent's turn, or the parent's session ending. A
+		// resend tells which: to a live parent it is delivered again, and to one that has ended
+		// sendReport cancels the delivery, so the child is blocked only when the sends run out.
 		if d.Sends < maxSends {
 			next := messageID(d.ID, d.Sends+1)
 			_, err := q.ResendTaskEventDelivery(ctx, dbq.ResendTaskEventDeliveryParams{
@@ -261,19 +264,9 @@ func (s *Service) giveUp(ctx context.Context, c reconcile.Claim, d dbq.TaskEvent
 		if err := q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: r.AttemptID, Column2: note}); err != nil {
 			return nil, err
 		}
-		var drafts []events.Draft
-		from := TaskState{Status: t.Status}
-		if t.Reason != nil {
-			from.Reason = *t.Reason
-		}
-		to := TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
-		if !TaskFinal(t.Status) && from != to && TransitionTask(from, to) == nil {
-			reason := to.Reason
-			after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: to.Status, Reason: &reason})
-			if err != nil {
-				return nil, err
-			}
-			drafts = append(drafts, s.updated(after))
+		drafts, err := s.blockReconciliation(ctx, q, t)
+		if err != nil {
+			return nil, err
 		}
 		if _, err := q.SetTaskEventDeliveryState(ctx, dbq.SetTaskEventDeliveryStateParams{
 			State: dbstate.TaskDeliveryUncertain, ID: d.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter

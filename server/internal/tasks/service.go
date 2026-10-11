@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
 // Resolver finds a provider profile; [providers.Registry] is the implementation.
@@ -47,6 +48,9 @@ type Service struct {
 	Sessions   SessionRuntime
 	// Observer reads a task's pull request and CI from GitHub; without one nothing is projected.
 	Observer Observer
+	// StopObserver resolves a stop kagent did not confirm. Without one the service has no kagent
+	// client, and an unconfirmed stop is taken as stopped.
+	StopObserver StopObserver
 	// Limits are the capacity and timing settings of the loops.
 	Limits Limits
 	Log    *slog.Logger
@@ -67,6 +71,10 @@ type Limits struct {
 	// SettleIdle is how long an attempt must have been unchanged before the settle sweep takes it;
 	// the default is 30 seconds.
 	SettleIdle time.Duration
+	// ResolveBackoff paces the looks at kagent for a stop it did not confirm; ResolveBound is how many
+	// unsuccessful looks come before the task is blocked for reconciliation. Zero values take defaults.
+	ResolveBackoff reconcile.Backoff
+	ResolveBound   int
 }
 
 func (s *Service) log() *slog.Logger {

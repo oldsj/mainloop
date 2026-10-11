@@ -1,0 +1,108 @@
+package tasks
+
+import (
+	"context"
+	"time"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
+)
+
+// defaultResolveBackoff paces the resolver: it looks soon after a stop kagent did not confirm, then
+// less and less often.
+var defaultResolveBackoff = reconcile.Backoff{Base: 5 * time.Second, Max: 5 * time.Minute, Jitter: 0.2}
+
+func (s *Service) resolveBackoff() reconcile.Backoff {
+	if s.Limits.ResolveBackoff == (reconcile.Backoff{}) {
+		return defaultResolveBackoff
+	}
+	return s.Limits.ResolveBackoff
+}
+
+func (s *Service) resolveBound() int {
+	if s.Limits.ResolveBound > 0 {
+		return s.Limits.ResolveBound
+	}
+	return defaultResolveBound
+}
+
+// blockReconciliation moves an open task to blocked/reconciliation when that transition is allowed,
+// returning the event. A task that already ended, or already is blocked that way, is left alone.
+func (s *Service) blockReconciliation(ctx context.Context, q *dbq.Queries, t dbq.Task) ([]events.Draft, error) {
+	from := TaskState{Status: t.Status}
+	if t.Reason != nil {
+		from.Reason = *t.Reason
+	}
+	to := TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
+	if TaskFinal(t.Status) || from == to || TransitionTask(from, to) != nil {
+		return nil, nil
+	}
+	reason := to.Reason
+	after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: t.ID, Version: t.Version, Status: to.Status, Reason: &reason})
+	if err != nil {
+		return nil, err
+	}
+	return []events.Draft{s.updated(after)}, nil
+}
+
+// resolveStop is the resolver of an unconfirmed stop. For an attempt whose stop kagent did not
+// confirm, it asks the StopObserver whether anything still runs for the session. When nothing does,
+// it records the confirmation and returns 0: the attempt can be fenced. Otherwise it counts the look,
+// schedules the next one with backoff and returns how long to wait. After the bound it writes
+// evidence to the attempt and blocks the task for reconciliation, once; it keeps looking.
+//
+// Without an observer the service has no kagent client, so no agent can be running.
+func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time.Duration, err error) {
+	if !unconfirmed(a) {
+		return 0, nil
+	}
+	q := dbq.New(s.Pool)
+	stopped := s.StopObserver == nil || a.SessionID == nil
+	if !stopped {
+		var oerr error
+		stopped, oerr = s.StopObserver.Stopped(ctx, *a.SessionID)
+		if oerr != nil {
+			s.log().WarnContext(ctx, "observe unconfirmed stop", "attempt", a.ID, "error", oerr)
+			stopped = false
+		}
+	}
+	if stopped {
+		return 0, q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopConfirmed})
+	}
+	wait = s.resolveBackoff().Delay(int(a.ResolveAttempts) + 1)
+	n, err := q.DeferAttemptResolve(ctx, dbq.DeferAttemptResolveParams{ID: a.ID, DelaySeconds: wait.Seconds()})
+	if err != nil {
+		return 0, err
+	}
+	if int(n) >= s.resolveBound() {
+		if err := s.raiseUnresolved(ctx, a.ID); err != nil {
+			return 0, err
+		}
+	}
+	return wait, nil
+}
+
+// raiseUnresolved writes the unresolved-stop evidence to the attempt and blocks its task, once.
+func (s *Service) raiseUnresolved(ctx context.Context, attemptID string) error {
+	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		a, err := q.GetTaskAttempt(ctx, attemptID)
+		if err != nil {
+			return nil, err
+		}
+		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range a.EvidenceRefs {
+			if e == evidenceStopUnresolved {
+				return nil, nil
+			}
+		}
+		if err := q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopUnresolved}); err != nil {
+			return nil, err
+		}
+		return s.blockReconciliation(ctx, q, t)
+	})
+}
