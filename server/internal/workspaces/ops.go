@@ -88,6 +88,10 @@ type result struct {
 	touch  bool   // counts as owner activity
 	idle   bool   // the workspace was parked
 	purge  bool   // the workspace is gone: delete its rows
+	// unchanged: the operation found the workspace already in the state it asked for. Nothing is
+	// published for it on its first attempt; a retried attempt may be finishing what an earlier one
+	// did without recording it, so that one is.
+	unchanged bool
 }
 
 func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outcome, error) {
@@ -150,7 +154,8 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 	if reason != "" {
 		lastError = &reason
 	}
-	publish := kind == dbstate.OpCreate || (res.state == dbstate.OpSucceeded && !res.purge)
+	quiet := res.unchanged && c.Attempts <= 1 && op.Failures == 0
+	publish := kind == dbstate.OpCreate || (res.state == dbstate.OpSucceeded && !res.purge && !quiet)
 	attempts := int32(c.Attempts) //nolint:gosec // a claim count, far below 2^31
 	err := s.settle(ctx, w, res.sess, publish, func(q *dbq.Queries) (bool, error) {
 		var n int64
@@ -463,7 +468,7 @@ func (s *Service) doResume(ctx context.Context, w wsRow) result {
 	}
 	switch sess.GetState() {
 	case kagentapi.RuntimeState_RUNTIME_STATE_READY:
-		return result{state: dbstate.OpSucceeded, sess: sess, touch: true}
+		return result{state: dbstate.OpSucceeded, sess: sess, touch: true, unchanged: true}
 	case kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED:
 		sess, err = s.Kagent.ResumeSession(ctx, w.sessionID())
 		if err != nil {

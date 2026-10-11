@@ -189,3 +189,41 @@ func TestWakeOfAWorkspaceBeingDeletedOrGoneIsRefused(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// ---- G6b follow-up 3: a resume that finds the workspace running ---------------------------------------------
+
+// A resume operation that finds the Session already ready changes nothing, so it publishes no
+// workspace:updated event. Callers that read "suspended" just before another resume finished queue
+// exactly such an operation.
+func TestResumeOfARunningWorkspacePublishesNothing(t *testing.T) {
+	h := newHarness(t, nil)
+	w := h.running()
+	h.run()
+	events := h.events()
+	if _, err := h.svc.Resume(bg, w.WorkspaceId); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.fake.Count(kagent.ProcResumeSession); n != 0 || h.events() != events {
+		t.Fatalf("resume calls %d, events %d -> %d", n, events, h.events())
+	}
+}
+
+// A retried resume that finds the Session ready may be finishing a resume whose reply was lost, which
+// nothing else announced: it publishes.
+func TestRetriedResumeOfARunningWorkspacePublishes(t *testing.T) {
+	h := newHarness(t, nil)
+	w := h.running()
+	op, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpResume, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.exec(`UPDATE workspace_ops SET failures = 1 WHERE id = $1`, op.ID)
+	events := h.events()
+	h.run()
+	if final, err := h.svc.await(bg, op); err != nil || final.State != dbstate.OpSucceeded {
+		t.Fatalf("%+v %v", final, err)
+	}
+	if h.events() != events+1 {
+		t.Fatalf("events %d -> %d", events, h.events())
+	}
+}

@@ -282,3 +282,26 @@ func TestDeleteReplayWithoutASessionIDIsNotConfirmed(t *testing.T) {
 		t.Fatal("bound or dropped an empty session id")
 	}
 }
+
+// The Agent a workspace was created on stays known after its row is purged (a delete whose replay
+// kagent refused with AlreadyExists purges without finding the Session), so the orphan sweep still
+// reclaims a Session left on it.
+func TestAPurgedWorkspacesAgentIsStillSweptForOrphans(t *testing.T) {
+	h := newHarness(t, slow)
+	w, err := h.create(api.CreateWorkspaceRequest{}) // no runner
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.AddAgent("earlier", "earlier-agent")
+	h.exec(`UPDATE workspaces SET agent_namespace = 'earlier', agent_name = 'earlier-agent' WHERE id = $1`, w.WorkspaceId)
+	h.exec(`DELETE FROM sessions WHERE id = $1`, w.WorkspaceId) // cascades to the workspace row
+	if h.workspaceCount() != 0 {
+		t.Fatal("the workspace row is still there")
+	}
+	orphan := h.strayOn("earlier", "earlier-agent", "stray-earlier")
+	h.svc.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	rep, err := h.svc.SweepOrphans(bg, OrphanOptions{Delete: true})
+	if err != nil || len(rep.Deleted) != 1 || rep.Deleted[0] != orphan {
+		t.Fatalf("%v %+v", err, rep)
+	}
+}

@@ -56,7 +56,7 @@ built; nothing here has been measured against a live kagent.
 - Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
   cancelled if activity arrived after the idle check picked the workspace. Resume touches the
   workspace's activity and calls `ResumeSession` only for a suspended Session. A Session that is
-  failed or deleted refuses the resume (`409`).
+  failed or deleted refuses the resume (`409`). A resume that finds the Session already ready (a caller read it suspended just before another resume finished) changes nothing and publishes no `workspace:updated` event; only a retried attempt does, since an earlier attempt may have resumed it without recording that.
 - Delete removes the rows only after kagent confirms: `DeleteSession` must report the same Session
   as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
@@ -83,7 +83,7 @@ built; nothing here has been measured against a live kagent.
   recently counts as activity. The sweep is not registered when no ledger is set, and the server
   logs once that idle suspend is off.
 - Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
-  configured provider profiles' Agents or to an Agent recorded on a workspace row, is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
+  configured provider profiles' Agents or to any Agent a create was ever sent to (`kagent_agents`, kept after the row that named it is settled or purged), is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
   old (default 600) and that no binding names, is an orphan. It runs on a schedule
   (`WORKSPACE_ORPHAN_SWEEP_SECONDS`, default 3600) and deletes; the command
   `mainloop sweep-orphans` lists them and `--delete` removes them. Both refuse to delete while a

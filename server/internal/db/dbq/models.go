@@ -251,6 +251,11 @@ type HitlSession struct {
 	UpdatedAt       time.Time
 }
 
+type KagentAgent struct {
+	Namespace string
+	Name      string
+}
+
 type PreviewLease struct {
 	ID          string
 	WorkspaceID string

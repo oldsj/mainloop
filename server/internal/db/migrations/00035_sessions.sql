@@ -15,6 +15,29 @@ ALTER TABLE agent_bindings ADD COLUMN kagent_create_agent_name text;
 CREATE INDEX agent_bindings_create_unresolved ON agent_bindings (session_id)
 WHERE kagent_create_request_id IS NOT NULL AND kagent_session_id IS NULL;
 
+-- Every Agent Mainloop has sent a create to, kept for good. A Session can outlive the row that named
+-- its Agent (a settled create, a purged workspace) and the configuration that chose it, and the
+-- orphan sweep only looks at Sessions on Agents it knows. Written by triggers in the transaction
+-- that records the Agent, so a create is never sent for an Agent missing here.
+CREATE TABLE kagent_agents (
+    namespace text NOT NULL,
+    name text NOT NULL,
+    PRIMARY KEY (namespace, name)
+);
+-- +goose StatementBegin
+CREATE FUNCTION note_create_agent() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO kagent_agents (namespace, name) VALUES (NEW.kagent_create_agent_namespace, NEW.kagent_create_agent_name)
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER agent_bindings_note_agent AFTER INSERT OR UPDATE OF kagent_create_agent_namespace, kagent_create_agent_name
+ON agent_bindings FOR EACH ROW
+WHEN (NEW.kagent_create_agent_namespace IS NOT NULL AND NEW.kagent_create_agent_name IS NOT NULL)
+EXECUTE FUNCTION note_create_agent();
+
 -- Messages of a session's conversation, mirrored from what the user sent and what the agent
 -- answered. The conversation id of the contract is the session id. The user message and its
 -- delivery share one id, which is also the A2A messageId; the reply's id is derived from the
@@ -97,6 +120,9 @@ CREATE TRIGGER sessions_keep_main BEFORE UPDATE OF archived_at ON sessions
 FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
 
 -- +goose Down
+DROP TRIGGER IF EXISTS agent_bindings_note_agent ON agent_bindings;
+DROP FUNCTION IF EXISTS note_create_agent();
+DROP TABLE IF EXISTS kagent_agents;
 DROP INDEX IF EXISTS agent_bindings_create_unresolved;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_agent_name;
 ALTER TABLE agent_bindings DROP COLUMN IF EXISTS kagent_create_agent_namespace;

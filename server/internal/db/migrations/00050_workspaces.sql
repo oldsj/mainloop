@@ -39,6 +39,18 @@ CREATE TABLE workspaces (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX workspaces_user ON workspaces (user_id, created_at DESC);
+
+-- The Agent is recorded for the orphan sweep (kagent_agents, 00035) when the workspace is made, so it
+-- is still known after the row is purged.
+-- +goose StatementBegin
+CREATE FUNCTION note_workspace_agent() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO kagent_agents (namespace, name) VALUES (NEW.agent_namespace, NEW.agent_name) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER workspaces_note_agent AFTER INSERT OR UPDATE OF agent_namespace, agent_name ON workspaces FOR EACH ROW EXECUTE FUNCTION note_workspace_agent();
 CREATE INDEX workspaces_project ON workspaces (project_id);
 
 CREATE TABLE workspace_ops (
@@ -70,4 +82,6 @@ CREATE INDEX workspace_ops_workspace ON workspace_ops (workspace_id, created_at 
 
 -- +goose Down
 DROP TABLE IF EXISTS workspace_ops;
+DROP TRIGGER IF EXISTS workspaces_note_agent ON workspaces;
+DROP FUNCTION IF EXISTS note_workspace_agent();
 DROP TABLE IF EXISTS workspaces;

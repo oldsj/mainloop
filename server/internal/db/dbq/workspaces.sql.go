@@ -648,6 +648,32 @@ func (q *Queries) ListIdleWorkspaceCandidates(ctx context.Context, limit int32) 
 	return items, nil
 }
 
+const listKnownAgents = `-- name: ListKnownAgents :many
+SELECT namespace, name FROM kagent_agents
+`
+
+// Every Agent a create was ever sent to, whether or not a row still names it: bindings' creates and
+// workspaces, recorded by triggers.
+func (q *Queries) ListKnownAgents(ctx context.Context) ([]KagentAgent, error) {
+	rows, err := q.db.Query(ctx, listKnownAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []KagentAgent{}
+	for rows.Next() {
+		var i KagentAgent
+		if err := rows.Scan(&i.Namespace, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestCreateOps = `-- name: ListLatestCreateOps :many
 SELECT DISTINCT ON (o.workspace_id) o.id, o.workspace_id, o.kind, o.idempotency_key, o.state, o.attempts, o.next_attempt_at, o.lease_owner, o.lease_until, o.failures, o.first_failed_at, o.last_error, o.quiet_since, o.created_at
 FROM workspace_ops o
@@ -681,36 +707,6 @@ func (q *Queries) ListLatestCreateOps(ctx context.Context, userID string) ([]Wor
 			&i.QuietSince,
 			&i.CreatedAt,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkspaceAgents = `-- name: ListWorkspaceAgents :many
-SELECT DISTINCT agent_namespace, agent_name FROM workspaces
-`
-
-type ListWorkspaceAgentsRow struct {
-	AgentNamespace string
-	AgentName      string
-}
-
-// Every Agent a workspace was created on, which may no longer be the configured one.
-func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]ListWorkspaceAgentsRow, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceAgents)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListWorkspaceAgentsRow{}
-	for rows.Next() {
-		var i ListWorkspaceAgentsRow
-		if err := rows.Scan(&i.AgentNamespace, &i.AgentName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

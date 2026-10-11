@@ -66,9 +66,6 @@ func (s *Service) DeleteArchived(ctx context.Context) error {
 	}
 	var errs []error
 	for _, r := range rows {
-		if r.KagentSessionID == nil {
-			continue // no Session id: ListArchivedWorkspacesWithoutSession handles these below
-		}
 		if open, err := s.turnOpen(ctx, wsRow{ID: r.SessionID}); err != nil {
 			errs = append(errs, err)
 			continue
@@ -218,7 +215,9 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 func agentKey(r *kagentapi.ResourceReference) string { return r.GetNamespace() + "/" + r.GetName() }
 
 // ownAgents is every Agent this deployment's Sessions can be on: the configured provider Agents
-// and those recorded on workspaces, which may predate a config change.
+// and every Agent a create was ever sent to (kagent_agents, written for workspaces and for session
+// bindings). The latter keeps a Session reachable after a config change, or after the row that
+// named its Agent was settled or purged.
 //
 // The creator does not tell Mainloop instances apart: kagent records every Session made with the
 // control token as created by the same constant user. Only distinct Agent names keep one
@@ -231,12 +230,12 @@ func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 			out[ref.Namespace+"/"+ref.Name] = true
 		}
 	}
-	rows, err := dbq.New(s.Pool).ListWorkspaceAgents(ctx)
+	known, err := dbq.New(s.Pool).ListKnownAgents(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range rows {
-		out[r.AgentNamespace+"/"+r.AgentName] = true
+	for _, r := range known {
+		out[r.Namespace+"/"+r.Name] = true
 	}
 	return out, nil
 }

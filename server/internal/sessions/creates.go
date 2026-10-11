@@ -82,9 +82,10 @@ func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListU
 		// The request id belongs to a Session that is gone, or the Agent is not ready: kagent looked
 		// the id up first and found no Session holding it, so nothing is left to find.
 	case errors.As(err, &se) && se.Code == connect.CodeAlreadyExists:
-		// kagent holds a Session for the request id but will not show it to this request. The orphan
-		// sweep can reclaim it once nothing counts as unresolved, so this create is settled rather
-		// than retried for ever.
+		// kagent holds a Session for the request id but will not show it to this request (the Agent or
+		// the credentials differ from the original). The orphan sweep reclaims it once nothing counts as
+		// unresolved, and still knows the Agent: it stays in kagent_agents after the marker is cleared. So
+		// this create is settled rather than retried for ever.
 		s.log().WarnContext(ctx, "kagent refused to replay a create; its Session is left to the orphan sweep",
 			"session_id", r.SessionID, "request_id", r.CreateRequestID, "error", err)
 	case err != nil:

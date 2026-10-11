@@ -165,9 +165,10 @@ WHERE sel.project_id = $1 AND v.validation_status = 'static_validated';
 SELECT EXISTS (
     SELECT 1 FROM workspace_ops WHERE workspace_id = $1 AND kind = 'create' AND attempts > 0);
 
--- name: ListWorkspaceAgents :many
--- Every Agent a workspace was created on, which may no longer be the configured one.
-SELECT DISTINCT agent_namespace, agent_name FROM workspaces;
+-- name: ListKnownAgents :many
+-- Every Agent a create was ever sent to, whether or not a row still names it: bindings' creates and
+-- workspaces, recorded by triggers.
+SELECT namespace, name FROM kagent_agents;
 
 -- name: LockWorkspace :one
 -- Locks the workspace row. An operation insert needs a share lock on it for its foreign key, so
