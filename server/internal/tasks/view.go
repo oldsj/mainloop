@@ -197,11 +197,17 @@ func eligibility(t dbq.Task) map[string]api.TaskEligibility {
 	return map[string]api.TaskEligibility{"cancel": cancel, "retry": handoff, "reassign": handoff}
 }
 
-// projection is empty until publication and CI observation exist: every field is unknown.
-func projection() api.TaskProjection {
-	return api.TaskProjection{
-		CiState: "unknown", PrState: "unknown", PendingApprovalIds: []string{},
+// projection is what the GitHub observation last saw of the task's pull request. It is a cache:
+// nothing here says the task is done. Fields that need services this slice does not own stay
+// unknown.
+func projection(t dbq.Task) api.TaskProjection {
+	out := api.TaskProjection{
+		CiState: api.TaskProjectionCiState(t.CiState), PrState: api.TaskProjectionPrState(t.PrState),
+		PendingApprovalIds: []string{}, PrUrl: t.PrUrl, PrHeadSha: t.PrHeadSha, CiHeadSha: t.CiHeadSha,
+		ObservedAt: t.ProjectedAt, Branch: t.CheckoutBranch,
 	}
+	out.PrNumber = intp(t.PrNumber)
+	return out
 }
 
 // buildViews turns loaded rows into views, one per task, in the order of tasks.
@@ -215,7 +221,7 @@ func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOper
 		}
 		views[i] = api.TaskView{
 			Actions: eligibility(t), Artifacts: []api.TaskArtifact{}, Attempts: []api.TaskAttempt{},
-			Operations: []api.TaskOperation{}, Projection: projection(), Reports: []api.TaskReport{}, Task: task,
+			Operations: []api.TaskOperation{}, Projection: projection(t), Reports: []api.TaskReport{}, Task: task,
 		}
 		byID[t.ID] = &views[i]
 	}
@@ -255,8 +261,20 @@ func buildViews(tasks []dbq.Task, attempts []dbq.TaskAttempt, ops []dbq.TaskOper
 }
 
 // hideOwnerFields blanks what only the owner may see, as Python's read_native did for agent
-// bindings: operation idempotency keys and payloads, and attempt evidence and internal refs.
+// bindings: operation idempotency keys and payloads, attempt evidence and internal refs, and
+// checkpoint and manifest refs. History is narrowed too: an agent sees the reports of its task's
+// current attempt only (no earlier attempt's report, and no handoff artifacts, because there is
+// no continuation it is linked to), and no pending approval ids.
 func hideOwnerFields(v *api.TaskView) {
+	v.Artifacts = []api.TaskArtifact{}
+	v.Projection.PendingApprovalIds = []string{}
+	kept := []api.TaskReport{}
+	for _, r := range v.Reports {
+		if v.Task.CurrentAttemptId != nil && r.AttemptId == *v.Task.CurrentAttemptId {
+			kept = append(kept, r)
+		}
+	}
+	v.Reports = kept
 	for i := range v.Operations {
 		o := &v.Operations[i]
 		o.PrincipalKey, o.RequestDigest, o.RequestPayload = "", "", map[string]any{}
@@ -264,5 +282,6 @@ func hideOwnerFields(v *api.TaskView) {
 	for i := range v.Attempts {
 		a := &v.Attempts[i]
 		a.EvidenceRefs, a.ResultRef, a.BriefDeliveryId, a.RetentionHold = []string{}, nil, nil, nil
+		a.CheckpointRef, a.ManifestRef = nil, nil
 	}
 }

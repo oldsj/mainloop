@@ -36,7 +36,6 @@ const (
 	ReasonCodeNeedsProject     = "code_requires_project"
 	ReasonCodeNeedsCheckout    = "code_requires_checkout"
 	ReasonCoordinationCheckout = "coordination_forbids_checkout"
-	ReasonCodeHandoffRequired  = "code_handoff_required"
 	ReasonProviderUnknown      = "provider_unknown"
 	ReasonProviderRole         = "provider_role_unavailable"
 	ReasonProviderDisabled     = "provider_disabled"
@@ -44,4 +43,6 @@ const (
 	ReasonOwnerActionOutcome   = "owner_action_requires_blocked"
 	ReasonInvalidCheckout      = "invalid_checkout"
 	ReasonBriefTooLong         = "brief_too_long"
+	ReasonChildCapacity        = "child_capacity"
+	ReasonGlobalCapacity       = "global_capacity"
 )

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,9 +27,9 @@ type Resolver interface {
 	Resolve(identifier, role string, selecting bool) (config.ProviderProfile, error)
 }
 
-// Service records tasks, operations and reports. Every change commits together with its
-// task:updated event, and no transaction here reaches the network. Provisioning, handoff and
-// delivery belong to the reconcile slice that picks up the rows written here.
+// Service records tasks, operations and reports, and runs the reconcile loops that pick them up:
+// provisioning, settlement, delivery of reports and projection. Every change commits together
+// with its task:updated event, and no transaction here reaches the network.
 type Service struct {
 	Pool *pgxpool.Pool
 	// Providers resolves profile identifiers.
@@ -39,6 +40,40 @@ type Service struct {
 	MergeTools bool
 	// Now is the clock for event timestamps; time.Now when nil.
 	Now func() time.Time
+
+	// Workspaces and Sessions are the runtimes the reconcile loops drive. Without them the loops
+	// are not built, and rows written here wait.
+	Workspaces WorkspaceRuntime
+	Sessions   SessionRuntime
+	// Observer reads a task's pull request and CI from GitHub; without one nothing is projected.
+	Observer Observer
+	// Limits are the capacity and timing settings of the loops.
+	Limits Limits
+	Log    *slog.Logger
+}
+
+// Limits are the capacity and timing settings, from configuration.
+type Limits struct {
+	// MaxChildrenPerParent and MaxChildrenGlobal cap the child tasks that hold a slot: an attempt
+	// that still holds capacity, or a task not yet given an attempt.
+	MaxChildrenPerParent int
+	MaxChildrenGlobal    int
+	// ProvisionWindow is how long a new attempt may wait before it is aborted.
+	ProvisionWindow time.Duration
+	// Interval is the poll of the operation and delivery loops.
+	Interval time.Duration
+	// ProjectionEvery is the period of the projection sweep.
+	ProjectionEvery time.Duration
+	// SettleIdle is how long an attempt must have been unchanged before the settle sweep takes it;
+	// the default is 30 seconds.
+	SettleIdle time.Duration
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
 }
 
 func (s *Service) now() time.Time {
@@ -258,6 +293,9 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (api.
 		if err != nil {
 			return nil, err
 		}
+		if err := s.notify(ctx, q, OpChannel, op.ID); err != nil {
+			return nil, err
+		}
 		return []events.Draft{s.updated(t)}, nil
 	})
 	if err != nil {
@@ -312,6 +350,9 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 			return dbq.Task{}, refusal(409, ReasonParentNotActive)
 		}
 		parent = &t
+		if err := s.checkCapacity(ctx, q, p.OwnerID, t.ID); err != nil {
+			return dbq.Task{}, err
+		}
 	}
 	project, topic := ptr(in.ProjectID), ptr(in.TopicID)
 	if parent != nil {
@@ -366,6 +407,34 @@ func (s *Service) insertTask(ctx context.Context, q *dbq.Queries, p Principal, i
 		args.CheckoutBranch, args.CheckoutRef, args.CheckoutDepth = &c.Branch, &c.Ref, &depth
 	}
 	return q.InsertTask(ctx, args)
+}
+
+// checkCapacity refuses a new child when its parent or the owner already has as many children as
+// the limits allow. A child counts from the moment its task is recorded until its attempt has
+// stopped, so the count is taken under an owner-wide lock that serializes concurrent creates.
+func (s *Service) checkCapacity(ctx context.Context, q *dbq.Queries, owner, parent string) error {
+	if err := q.LockTaskRequest(ctx, "capacity\x1f"+owner); err != nil {
+		return err
+	}
+	if lim := s.Limits.MaxChildrenPerParent; lim > 0 {
+		n, err := q.CountParentCapacity(ctx, dbq.CountParentCapacityParams{OwnerID: owner, ParentTaskID: &parent})
+		if err != nil {
+			return err
+		}
+		if n >= int64(lim) {
+			return refusal(409, ReasonChildCapacity)
+		}
+	}
+	if lim := s.Limits.MaxChildrenGlobal; lim > 0 {
+		n, err := q.CountGlobalCapacity(ctx, owner)
+		if err != nil {
+			return err
+		}
+		if n >= int64(lim) {
+			return refusal(409, ReasonGlobalCapacity)
+		}
+	}
+	return nil
 }
 
 func notFoundOr(err error, reason string) error {
@@ -485,6 +554,9 @@ func (s *Service) act(ctx context.Context, p Principal, kind dbstate.TaskOpKind,
 		if op, err = q.InsertTaskOperation(ctx, newOp); err != nil {
 			return nil, err
 		}
+		if err := s.notify(ctx, q, OpChannel, op.ID); err != nil {
+			return nil, err
+		}
 		if after.Version == t.Version {
 			return nil, nil
 		}
@@ -527,13 +599,13 @@ func (s *Service) cancel(ctx context.Context, q *dbq.Queries, t dbq.Task, op *db
 	return after, nil
 }
 
-// handoff shapes a retry or reassign operation: blocked, because handoff is not available.
+// handoff shapes a retry or reassign operation. Handoff is never installed, so every request on
+// an open task, of either mode, ends in the same blocked operation with reason
+// handoff_unavailable; only a task that has ended and a reassign target that could never be used
+// are refused.
 func (s *Service) handoff(q *dbq.Queries, ctx context.Context, t dbq.Task, kind dbstate.TaskOpKind, in ActionInput, op *dbq.InsertTaskOperationParams) (dbq.Task, error) {
 	if TaskFinal(t.Status) {
 		return t, refusal(409, ReasonTaskTerminal)
-	}
-	if t.Mode != dbstate.TaskModeCode {
-		return t, refusal(422, ReasonCodeHandoffRequired)
 	}
 	if kind == dbstate.TaskOpReassign {
 		role := providers.RoleSupervisor
@@ -656,7 +728,7 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 		return t, dbq.TaskReport{}, refusal(409, ReasonTaskTerminal)
 	}
 	if in.Outcome == dbstate.OutcomeCompleted && t.Mode == dbstate.TaskModeCoordination {
-		live, err := q.CountLiveChildTasks(ctx, dbq.CountLiveChildTasksParams{OwnerID: t.OwnerID, ParentTaskID: &t.ID})
+		live, err := q.CountParentCapacity(ctx, dbq.CountParentCapacityParams{OwnerID: t.OwnerID, ParentTaskID: &t.ID})
 		if err != nil {
 			return t, dbq.TaskReport{}, err
 		}
@@ -714,7 +786,11 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 		recipients = append(recipients, "main")
 	}
 	for _, r := range recipients {
-		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ID: uuid.NewString(), ReportID: reportID, RecipientKey: r}); err != nil {
+		id := uuid.NewString()
+		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ID: id, ReportID: reportID, RecipientKey: r}); err != nil {
+			return t, report, err
+		}
+		if err := s.notify(ctx, q, EventChannel, id); err != nil {
 			return t, report, err
 		}
 	}
@@ -733,10 +809,13 @@ func reportedState(t dbq.Task, in ReportInput) TaskState {
 			return TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonPublication}
 		}
 		return TaskState{Status: dbstate.TaskWaiting, Reason: dbstate.ReasonReconciliation}
-	case dbstate.OutcomeBlocked, dbstate.OutcomeFailed:
+	case dbstate.OutcomeBlocked:
+		// Only a blocked report may carry an owner action; Report refuses it on any other outcome.
 		if in.OwnerAction != "" {
 			return TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonOwnerDecision}
 		}
+		return TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
+	case dbstate.OutcomeFailed:
 		return TaskState{Status: dbstate.TaskBlocked, Reason: dbstate.ReasonReconciliation}
 	}
 	if cur.Status == dbstate.TaskBlocked && cur.Reason == dbstate.ReasonOwnerDecision {
@@ -859,6 +938,11 @@ func NewService(cfg *config.Config, pool *pgxpool.Pool) (*Service, error) {
 	return &Service{
 		Pool: pool, Providers: reg, DefaultProfile: cfg.Tasks.DefaultProviderProfileID,
 		MergeTools: bool(cfg.MergeToolsEnabled),
+		Limits: Limits{
+			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
+			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
+			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
+		},
 	}, nil
 }
 

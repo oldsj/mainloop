@@ -90,8 +90,8 @@ func TransitionTask(from, to TaskState) error {
 	return refuse("task cannot move from %s to %s", from.Status, to.Status)
 }
 
-// AttemptLive reports whether an attempt can still act: its native session is being created or is
-// running. A live attempt is the only kind whose agent is let into MCP.
+// AttemptLive reports whether an attempt is being created or is running. Only an active attempt
+// is let into MCP: a creating attempt's agent has not been started yet.
 func AttemptLive(s dbstate.AttemptState) bool {
 	return s == dbstate.AttemptCreating || s == dbstate.AttemptActive
 }

@@ -111,6 +111,19 @@ func New(d Deps) *Server {
 		taskSvc = &tasks.Service{
 			Pool: d.Pool, Providers: prov.Registry, DefaultProfile: d.Config.Tasks.DefaultProviderProfileID,
 			MergeTools: bool(d.Config.MergeToolsEnabled),
+			Limits: tasks.Limits{
+				MaxChildrenPerParent: d.Config.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: d.Config.Tasks.MaxChildrenGlobal,
+				ProvisionWindow: d.Config.Tasks.ProvisionWindow.Duration(), Interval: d.Config.Tasks.ReconcileInterval.Duration(),
+				ProjectionEvery: d.Config.Tasks.ProjectionEvery.Duration(),
+			},
+			Log: d.Log,
+		}
+		// An interface holding a nil pointer is not nil: set the runtimes only when they exist.
+		if d.Workspaces != nil {
+			taskSvc.Workspaces = d.Workspaces
+		}
+		if d.Sessions != nil {
+			taskSvc.Sessions = d.Sessions
 		}
 	}
 	att := attentionService(d)

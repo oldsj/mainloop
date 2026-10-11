@@ -171,7 +171,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	svc.Providers, svc.Waker = wsSvc.Providers, wsSvc
 	schedSvc.Providers = wsSvc.Providers
 	wsSvc.Deliveries = svc
-	handler, err := app.New(deps).Handler()
+	apiServer := app.New(deps)
+	handler, err := apiServer.Handler()
 	if err != nil {
 		return err
 	}
@@ -204,6 +205,9 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(healthSvc.RetainSweep())
 	runner.AddSweep(schedSvc.Sweep())
 	previews.Register(runner)
+	if ts := apiServer.TasksAPI.Svc; ts != nil {
+		ts.Register(runner)
+	}
 
 	g.Go(func() error { return notifier.Run(gctx) })
 	g.Go(func() error { return source.Run(gctx) })

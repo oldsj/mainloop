@@ -1,0 +1,36 @@
+package tasks
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+)
+
+// DelegatedBrief is the first message a task's agent receives: the role and tool guidance, then
+// the brief as the delegator wrote it. The stored brief is not changed; this is only what reaches
+// the agent.
+func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
+	if mode == dbstate.TaskModeCode {
+		b.WriteString(" Do the work and run the project's checks. `git push` the task branch." +
+			" Open the pull request with `open_pull_request` (the GitHub API is unreachable from here, so do not use gh)." +
+			" After CI is green, call `merge_pull_request`, subject to policy." +
+			" If it answers `approval_required`, call `merge_pull_request_with_approval`, or report the missing approval tooling as a blocker.")
+	} else {
+		b.WriteString(" Do the assigned coordination work; you have no repository authority.")
+	}
+	b.WriteString(" Then `report` with task_id, attempt_id, outcome, evidence_refs and a stable request_id.")
+	b.WriteString("\n\n## Assigned work\n")
+	b.WriteString(brief)
+	if mode == dbstate.TaskModeCode {
+		b.WriteString("\n\n## Workspace environment\n" +
+			"- This is a gVisor sandbox, so prefer fewer, larger commands.\n" +
+			"- The workspace pauses after your turn, so run builds and tests in the foreground.\n" +
+			"- Keep `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` as they are. Only allowlisted hosts are reachable, and the GitHub API is not.\n" +
+			"- You may run as root, but OS packages cannot be installed.\n" +
+			"- Follow the repository's AGENTS.md.\n")
+	}
+	return b.String()
+}

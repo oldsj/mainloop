@@ -20,8 +20,8 @@ type Principal struct {
 	BindingID string
 	TaskID    string
 	AttemptID string
-	// Final is set when the principal's task is completed and its attempt is the completed
-	// current one. Such a principal can still file the one completed report, and nothing else.
+	// Final is set when the principal's task is completed and its attempt is the active current
+	// one (a completed task's attempt stays active until it is settled). Such a principal can still file the one completed report, and nothing else.
 	Final bool
 }
 
@@ -150,6 +150,29 @@ func ensureActive(ctx context.Context, q *dbq.Queries, p Principal) error {
 	}
 	if a.State != dbstate.AttemptActive || cur == nil || *cur != a.ID {
 		return refusal(403, ReasonInactivePrincipal)
+	}
+	if p.Role != dbstate.RoleChild {
+		return nil
+	}
+	// A child's write also holds its parent's current attempt, so the parent cannot be drained
+	// between this check and the commit, and the parent task must still be open. The child's own
+	// task and attempt are locked first, then the parent's attempt, matching the settle order.
+	t, err := q.GetTaskByID(ctx, a.TaskID)
+	if err != nil {
+		return err
+	}
+	if t.ParentTaskID == nil {
+		return nil
+	}
+	parent, err := q.LockParentCurrentAttemptShared(ctx, *t.ParentTaskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return refusal(409, ReasonParentNotActive)
+	}
+	if err != nil {
+		return err
+	}
+	if parent.State != dbstate.AttemptActive || TaskFinal(parent.TaskStatus) {
+		return refusal(409, ReasonParentNotActive)
 	}
 	return nil
 }
