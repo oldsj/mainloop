@@ -60,7 +60,7 @@ built; nothing here has been measured against a live kagent.
 - Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
   cancelled if activity arrived after the idle check picked the workspace. Resume touches the
   workspace's activity and calls `ResumeSession` only for a suspended Session. A Session that is
-  failed or deleted refuses the resume (`409`). A resume that finds the Session already ready (a caller read it suspended just before another resume finished) changes nothing and publishes no `workspace:updated` event; only a retried attempt does, since an earlier attempt may have resumed it without recording that.
+  failed or deleted refuses the resume (`409`). A resume that finds the Session already ready (a caller read it suspended just before another resume finished) changes nothing and publishes no `workspace:updated` event; only a retried attempt does, since an earlier attempt may have resumed it without recording that. That resume still advances the workspace's last activity (it is the idle-suspend keepalive), so `last_active_at` can move with no event; a client sees the new value at its next event or read.
 - Delete removes the rows only after kagent confirms: `DeleteSession` must report the same Session
   as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
@@ -382,6 +382,9 @@ request id, access log and panic recovery still wrap it. Any other host is the A
 - **Methods.** `CONNECT`, `TRACE` and `TRACK` are `405` before any lookup, wake or tunnel.
 - **Wake.** `workspaces.Service.WakeForPreview`, whose result is trusted for 5 seconds so a page
   load's many requests do not each ask kagent; the idle clock is still touched on each request.
+  Inside those 5 seconds a suspend by the owner (or an idle suspend that already passed its activity
+  re-check) is not noticed: a request there can reach the router while the workspace is suspended.
+  The window is narrow and owner-only; the per-request touch makes a later idle suspend back off.
   Not confirmed in time, or another workspace operation is in progress, shows a `503` "Workspace
   waking up" page with `Retry-After: 2`; a workspace that cannot be resumed is `409`; any other
   failure is `502`.
