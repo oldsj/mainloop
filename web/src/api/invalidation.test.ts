@@ -98,6 +98,16 @@ describe('createSseApplier', () => {
     expect(queryClient.getQueryState(keys.task('t1'))?.isInvalidated).toBe(true);
   });
 
+  it('treats a malformed cached task as unknown instead of throwing', () => {
+    for (const held of [{}, { task: null }, null]) {
+      const queryClient = new QueryClient();
+      queryClient.setQueryData(keys.task('t1'), held);
+      const apply = createSseApplier(queryClient);
+      expect(() => apply(taskEvent(1))).not.toThrow();
+      expect(queryClient.getQueryState(keys.task('t1'))?.isInvalidated).toBe(true);
+    }
+  });
+
   it('drops a redelivered event id', () => {
     const { queryClient, apply } = setup(1);
     apply(taskEvent(2, 'same'));

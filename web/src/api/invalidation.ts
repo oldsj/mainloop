@@ -98,9 +98,11 @@ export function planSseEvent(
   }
 }
 
-/** Version of the cached task view, if one is held. */
+/** Version of the cached task view, if one is held. A malformed cached view counts as none. */
 function heldTaskVersion(queryClient: QueryClient, taskId: string): number | undefined {
-  return queryClient.getQueryData<Schemas['TaskView']>(keys.task(taskId))?.task.version;
+  const version = queryClient.getQueryData<Partial<Schemas['TaskView']> | null>(keys.task(taskId))
+    ?.task?.version;
+  return typeof version === 'number' ? version : undefined;
 }
 
 /** Remembers recent event ids so a redelivered event does not cause a second read. */
