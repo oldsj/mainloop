@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,7 @@ func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Hand
 		t.Fatal(err)
 	}
 	deps := app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: ping}
-	h, err := app.New(deps).Handler(deps)
+	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,5 +256,48 @@ func TestStubHandler(t *testing.T) {
 	}
 	if r := send(h, "GET", "/mcp/anything", "", map[string]string{"Host": "evil.example"}); r.status != 404 {
 		t.Errorf("foreign host = %d", r.status)
+	}
+}
+
+func TestRequestBodyCap(t *testing.T) {
+	h := newHandler(t, nil, up())
+	huge := `{"message": "` + strings.Repeat("a", 5<<20) + `"}`
+	// Declared length: refused before the validator reads anything.
+	r := send(h, "POST", "/chat", huge, nil)
+	if r.status != http.StatusRequestEntityTooLarge || detail(t, r) != "Request body too large" {
+		t.Fatalf("declared: got %d %.100s", r.status, r.body)
+	}
+	// Undeclared length: the validator hits the cap while reading.
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/chat", io.MultiReader(strings.NewReader(huge)))
+	req.Host = "api.test"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked: got %d %.100s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["detail"] == "" {
+		t.Errorf("chunked body is not {detail}: %.100s", rec.Body.String())
+	}
+}
+
+func TestHealthLogsPingFailure(t *testing.T) {
+	var logs bytes.Buffer
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(&logs, nil)),
+		DB: pinger(func(context.Context) error { return errors.New("connection refused") })}
+	h, err := app.New(deps).Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := send(h, "GET", "/health", "", nil); r.status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d", r.status)
+	}
+	if !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), "connection refused") {
+		t.Errorf("log = %s", logs.String())
 	}
 }

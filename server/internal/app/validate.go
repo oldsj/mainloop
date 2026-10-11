@@ -37,6 +37,8 @@ func requestValidator(spec *openapi3.T) func(http.Handler) http.Handler {
 		},
 		ErrorHandlerWithOpts: func(_ context.Context, err error, w http.ResponseWriter, _ *http.Request, opts nethttpmiddleware.ErrorHandlerOpts) {
 			switch {
+			case httpx.IsBodyTooLarge(err):
+				httpx.WriteError(w, http.StatusRequestEntityTooLarge, "Request body too large")
 			case errors.Is(err, routers.ErrMethodNotAllowed):
 				httpx.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed")
 			case opts.MatchedRoute == nil:

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -289,5 +290,69 @@ func TestAccessLogOmitsQuery(t *testing.T) {
 	do(h, "GET", "/sessions?token=secret", nil)
 	if strings.Contains(logs.String(), "secret") || !strings.Contains(logs.String(), `"status":200`) {
 		t.Errorf("log = %s", logs.String())
+	}
+}
+
+func TestFlushSurvivesTheMiddlewareChain(t *testing.T) {
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	flushed := false
+	stream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("writer is not an http.Flusher")
+			return
+		}
+		_, _ = w.Write([]byte("data: x\n\n"))
+		f.Flush()
+		flushed = true
+	})
+	// The same chain app.Server.Handler builds around the routes.
+	h := httpx.Chain(stream,
+		httpx.AccessLog(log),
+		httpx.RequestIDMiddleware,
+		httpx.Recover(log),
+		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
+		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
+		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
+		httpx.MaxBody(1<<20),
+	)
+	rec := do(h, "GET", "/events", nil)
+	if !flushed || !rec.Flushed {
+		t.Errorf("flush did not reach the recorder: handler=%v recorder=%v", flushed, rec.Flushed)
+	}
+}
+
+func TestMaxBody(t *testing.T) {
+	read := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			if httpx.IsBodyTooLarge(err) {
+				httpx.WriteError(w, http.StatusRequestEntityTooLarge, "too large")
+				return
+			}
+			t.Errorf("unexpected read error: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	h := httpx.MaxBody(8)(read)
+	post := func(body io.Reader, length int64) int {
+		req := httptest.NewRequestWithContext(context.Background(), "POST", "/", body)
+		req.ContentLength = length
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := post(strings.NewReader("12345678"), 8); got != 200 {
+		t.Errorf("at the cap: %d", got)
+	}
+	if got := post(strings.NewReader("123456789"), 9); got != 413 {
+		t.Errorf("declared length over the cap: %d", got)
+	}
+	// Chunked or lying clients are caught while reading.
+	if got := post(io.MultiReader(strings.NewReader("123456789")), -1); got != 413 {
+		t.Errorf("undeclared length over the cap: %d", got)
 	}
 }

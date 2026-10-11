@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -21,7 +22,8 @@ const healthTimeout = 2 * time.Second
 // pod with no database is not routed traffic. The response is its own type so that it does not
 // depend on how the contract types the 200 body.
 type HealthAPI struct {
-	DB Pinger
+	DB  Pinger
+	Log *slog.Logger
 }
 
 type healthOK struct{}
@@ -37,6 +39,7 @@ func (h *HealthAPI) GetHealth(ctx context.Context, _ api.GetHealthRequestObject)
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	if err := h.DB.Ping(ctx); err != nil {
+		h.Log.WarnContext(ctx, "health: database ping failed", "request_id", httpx.RequestID(ctx), "error", err)
 		return nil, httpx.NewError(http.StatusServiceUnavailable, "Database unavailable")
 	}
 	return healthOK{}, nil

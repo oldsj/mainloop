@@ -39,28 +39,12 @@ type Config struct {
 	// UseMockGitHub swaps the GitHub client for a fixture-backed one in dev and test overlays.
 	UseMockGitHub bool `env:"USE_MOCK_GITHUB"`
 
-	// Retired variables are still set by some manifests or were unused in the Python backend.
-	// They are accepted and ignored so that a deployment can keep setting them.
-	Retired Retired
-
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`
 
 	// Namespace is the Kubernetes namespace this instance runs in. In-cluster origins and the
 	// prefix of per-binding credential Secrets derive from it.
 	Namespace string `env:"MAINLOOP_NAMESPACE" envDefault:"mainloop"`
-}
-
-// Retired holds variables the Go server does not use. DBOSSystemDatabaseURL can carry database
-// credentials, so it is a Secret.
-type Retired struct {
-	ClaudeModel             string `env:"CLAUDE_MODEL"`
-	ClaudeWorkerModel       string `env:"CLAUDE_WORKER_MODEL"`
-	DBOSSystemDatabaseURL   Secret `env:"DBOS_SYSTEM_DATABASE_URL"`
-	KagentRuntimeGeneration string `env:"KAGENT_RUNTIME_GENERATION"`
-	PushGateOrigin          string `env:"PUSH_GATE_ORIGIN"`
-	TaskArchiveAfterDays    string `env:"TASK_ARCHIVE_AFTER_DAYS"`
-	TaskDeleteAfterMonths   string `env:"TASK_DELETE_AFTER_MONTHS"`
 }
 
 // Database is the PostgreSQL connection, built from parts.
@@ -216,6 +200,9 @@ func (c *Config) validate() error {
 	c.Identity.OwnerID = strings.TrimSpace(c.Identity.OwnerID)
 	if c.Identity.OwnerID == "" {
 		fail("MAINLOOP_OWNER_ID must not be blank")
+	}
+	if strings.TrimSpace(c.Identity.AgentTokenKey.Reveal()) == "" {
+		fail("AGENT_TOKEN_KEY must not be blank")
 	}
 	if !dnsLabel.MatchString(c.Namespace) {
 		fail("MAINLOOP_NAMESPACE must be a DNS label")

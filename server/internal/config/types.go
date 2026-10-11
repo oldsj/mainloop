@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Seconds is a duration configured as a (possibly fractional) number of seconds, the format
@@ -22,7 +23,7 @@ func (s Seconds) Duration() time.Duration { return time.Duration(s) }
 // UnmarshalText parses a positive decimal number of seconds.
 func (s *Seconds) UnmarshalText(text []byte) error {
 	v, err := strconv.ParseFloat(strings.TrimSpace(string(text)), 64)
-	if err != nil || v <= 0 || v > 1e9 {
+	if err != nil || !(v > 0 && v <= 1e9) {
 		return errors.New("must be a positive number of seconds")
 	}
 	*s = Seconds(time.Duration(v * float64(time.Second)))
@@ -152,7 +153,7 @@ func (p ProviderProfile) validate() error {
 	if !validProviderID(p.ID) {
 		return errors.New("profile id must match ^[a-z][a-z0-9_-]*$ and be at most 80 characters")
 	}
-	if n := len(p.DisplayName); n < 1 || n > 200 {
+	if n := utf8.RuneCountInString(p.DisplayName); n < 1 || n > 200 {
 		return fmt.Errorf("profile %q: display_name must be 1 to 200 characters", p.ID)
 	}
 	if p.RuntimeAdapter != "kagent" {

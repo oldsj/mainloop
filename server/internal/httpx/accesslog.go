@@ -25,6 +25,13 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+// Flush keeps streaming responses working: the generated SSE code asserts http.Flusher on the
+// writer it is given, and this is the outermost wrapper.
+func (w *statusWriter) Flush() {
+	// Flush errors are a broken client connection; the next write reports them.
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // AccessLog logs one line per request. It records the path, never the query string, since

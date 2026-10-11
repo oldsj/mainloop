@@ -133,6 +133,7 @@ func TestAgentTokenKeyIsRequired(t *testing.T) {
 	for _, vars := range []map[string]string{
 		{},
 		{"AGENT_TOKEN_KEY": ""},
+		{"AGENT_TOKEN_KEY": " \t\n"},
 		{"DB_PASSWORD": "db-secret", "DEV_MODE": "true"},
 		{"DB_PASSWORD": "db-secret", "IS_TEST_ENV": "true"},
 	} {
@@ -173,6 +174,8 @@ func TestInvalidValues(t *testing.T) {
 		{"zero children", base("TASK_MAX_CHILDREN_PER_PARENT", "0"), "TASK_MAX_CHILDREN"},
 		{"bad seconds", base("TASK_RECONCILE_SECONDS", "0"), "TASK_RECONCILE_SECONDS"},
 		{"negative seconds", base("KAGENT_REQUEST_TIMEOUT_SECONDS", "-1"), "KAGENT_REQUEST_TIMEOUT_SECONDS"},
+		{"nan seconds", base("TASK_RECONCILE_SECONDS", "NaN"), "TASK_RECONCILE_SECONDS"},
+		{"inf seconds", base("TASK_RECONCILE_SECONDS", "Inf"), "TASK_RECONCILE_SECONDS"},
 		{"retention order", map[string]string{"AGENT_TOKEN_KEY": "k", "HEALTH_EVENT_RETENTION_DAYS": "200", "HEALTH_SUMMARY_RETENTION_DAYS": "100"}, "retention"},
 		{"event retention range", base("HEALTH_EVENT_RETENTION_DAYS", "0"), "HEALTH_EVENT_RETENTION_DAYS"},
 		{"platform", base("WORKSPACE_DEVELOPMENT_PLATFORM", "windows/amd64"), "WORKSPACE_DEVELOPMENT_PLATFORM"},
@@ -358,5 +361,19 @@ func TestHostname(t *testing.T) {
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("Hostname(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestDisplayNameCountsRunes(t *testing.T) {
+	// 150 three-byte runes: over 200 bytes, within 200 characters.
+	name := strings.Repeat("日", 150)
+	profile := func(name string) string {
+		return `[{"id":"x","display_name":"` + name + `","native_provider":"claude","configuration_revision":"r","agents":{"main":{"namespace":"kagent","name":"a"}}}]`
+	}
+	if _, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "PROVIDER_PROFILES": profile(name)}); err != nil {
+		t.Fatalf("150 runes rejected: %v", err)
+	}
+	if _, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "PROVIDER_PROFILES": profile(strings.Repeat("日", 201))}); err == nil {
+		t.Fatal("201 runes accepted")
 	}
 }

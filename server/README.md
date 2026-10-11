@@ -20,7 +20,9 @@ come from it. See [`../ROADMAP.md`](../ROADMAP.md) for direction.
 - `internal/api`: code generated from the contract. Do not edit `*.gen.go`.
 - `internal/app`: `Server` embeds one `*XAPI` per domain over a generated 501 fallback. To add a
   domain: write its `XAPI` with the contract's strict-server methods, add the field to `Server`,
-  and add one line to `New`. Its methods win over the fallback.
+  and add one line to `New`. Its methods win over the fallback. Each domain type needs a unique
+  name (`sessions.SessionsAPI`, not `sessions.API`) or an alias in `app`: an embedded field takes
+  its bare type name, so two `API` types collide.
 - `internal/db`: the pgx pool (max 10 connections, `search_path=mainloop`).
 - `tools/genfallback`: writes `internal/api/unimplemented.gen.go`.
 

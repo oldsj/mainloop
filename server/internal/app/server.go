@@ -17,12 +17,18 @@ type fallback struct {
 	api.Unimplemented
 }
 
-// Server implements the strict server interface by embedding one *XAPI per domain over the 501
+// Server implements the strict server interface by embedding one pointer per domain over the 501
 // fallback. A slice adds its field here, builds it in New, and deletes nothing.
+//
+// An embedded field is named after its bare type name, so two domains cannot both export `API`.
+// Give each domain type a unique name (`sessions.SessionsAPI`), or declare an alias here
+// (`type SessionsAPI = sessions.API`).
 type Server struct {
 	*HealthAPI
 
 	fallback
+
+	deps Deps
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -34,16 +40,22 @@ type Deps struct {
 	DB     Pinger
 }
 
+// maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
+// so the cap has to sit in this chain.
+const maxBodyBytes = 4 << 20
+
 // New builds the Server.
 func New(d Deps) *Server {
 	return &Server{
-		HealthAPI: &HealthAPI{DB: d.DB},
+		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
+		deps:      d,
 	}
 }
 
-// Handler returns the owner API: the strict handlers behind request validation, then the Host
-// guard, Origin guard, CORS, panic recovery, request id and access log.
-func (s *Server) Handler(d Deps) (http.Handler, error) {
+// Handler returns the owner API: the strict handlers behind request validation, the body cap, then the
+// Host guard, Origin guard, CORS, panic recovery, request id and access log.
+func (s *Server) Handler() (http.Handler, error) {
+	d := s.deps
 	spec, err := api.GetSpec()
 	if err != nil {
 		return nil, err
@@ -76,6 +88,7 @@ func (s *Server) Handler(d Deps) (http.Handler, error) {
 		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
 		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
+		httpx.MaxBody(maxBodyBytes),
 		requestValidator(spec),
 	), nil
 }

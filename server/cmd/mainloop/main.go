@@ -110,7 +110,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	deps := app.Deps{Config: cfg, Log: log, DB: pool}
-	handler, err := app.New(deps).Handler(deps)
+	handler, err := app.New(deps).Handler()
 	if err != nil {
 		return err
 	}
