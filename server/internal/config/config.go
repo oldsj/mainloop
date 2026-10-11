@@ -115,6 +115,16 @@ type Workspaces struct {
 	CreateRetryInitial Seconds `env:"WORKSPACE_CREATE_RETRY_INITIAL_SECONDS" envDefault:"15"`
 	CreateRetryMax     Seconds `env:"WORKSPACE_CREATE_RETRY_MAX_SECONDS" envDefault:"120"`
 	CreateRetryWindow  Seconds `env:"WORKSPACE_CREATE_RETRY_WINDOW_SECONDS" envDefault:"600"`
+	// ArchivedDeleteInterval is how often kagent Sessions of archived sessions are deleted.
+	ArchivedDeleteInterval Seconds `env:"WORKSPACE_ARCHIVED_DELETE_SECONDS" envDefault:"60"`
+	// OrphanSweepInterval is how often unreferenced kagent Sessions Mainloop created are deleted.
+	OrphanSweepInterval Seconds `env:"WORKSPACE_ORPHAN_SWEEP_SECONDS" envDefault:"3600"`
+	// OrphanMinAge keeps the orphan sweep away from Sessions younger than this, which may belong
+	// to a create whose reply is still being recorded.
+	OrphanMinAge Seconds `env:"WORKSPACE_ORPHAN_MIN_AGE_SECONDS" envDefault:"600"`
+	// OperationWait is how long a request waits for the operation it queued before it answers with
+	// what is known; the operation carries on in the background.
+	OperationWait Seconds `env:"WORKSPACE_OPERATION_WAIT_SECONDS" envDefault:"30"`
 }
 
 // MainThread tunes the native main thread.
@@ -280,6 +290,13 @@ func (c *Config) validate() error {
 	}
 	if c.WorkspaceDevelopmentPlatform != "linux/arm64" && c.WorkspaceDevelopmentPlatform != "linux/amd64" {
 		fail("WORKSPACE_DEVELOPMENT_PLATFORM must be linux/arm64 or linux/amd64")
+	}
+	w := c.Workspaces
+	if w.CreateRetryMax.Duration() < w.CreateRetryInitial.Duration() {
+		fail("WORKSPACE_CREATE_RETRY_MAX_SECONDS must be at least WORKSPACE_CREATE_RETRY_INITIAL_SECONDS")
+	}
+	if w.CreateRetryWindow.Duration() < w.CreateRetryInitial.Duration() {
+		fail("WORKSPACE_CREATE_RETRY_WINDOW_SECONDS must be at least WORKSPACE_CREATE_RETRY_INITIAL_SECONDS")
 	}
 	errs = append(errs, c.Kagent.validate()...)
 	return errors.Join(errs...)

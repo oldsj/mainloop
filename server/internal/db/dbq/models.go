@@ -184,3 +184,39 @@ type TopicRecord struct {
 	EvidenceRef *string
 	CreatedAt   time.Time
 }
+
+type Workspace struct {
+	ID                 string
+	UserID             string
+	ProjectID          string
+	RepoURL            string
+	Ref                string
+	Branch             string
+	Depth              int32
+	AgentKind          string
+	Ports              json.RawMessage
+	IdleTimeoutMinutes int32
+	Environment        json.RawMessage
+	RequestID          string
+	LastActiveAt       *time.Time
+	IdleSuspendedAt    *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type WorkspaceOp struct {
+	ID             string
+	WorkspaceID    string
+	Kind           string
+	IdempotencyKey string
+	State          string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	Failures       int32
+	FirstFailedAt  *time.Time
+	LastError      *string
+	QuietSince     *time.Time
+	CreatedAt      time.Time
+}

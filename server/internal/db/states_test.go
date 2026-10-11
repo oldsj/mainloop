@@ -48,6 +48,11 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"dev_environments", "source_kind", strs(
 			string(dbstate.SourcePrebuiltImage), string(dbstate.SourceDefinitionRepo), string(dbstate.SourceOperatorDefault))},
 		{"environment_grants", "permission", strs(string(dbstate.PermissionUse), string(dbstate.PermissionDerive))},
+		{"workspace_ops", "kind", strs(
+			string(dbstate.OpCreate), string(dbstate.OpSuspend), string(dbstate.OpResume), string(dbstate.OpDelete))},
+		{"workspace_ops", "state", strs(
+			string(dbstate.OpPending), string(dbstate.OpRetrying), string(dbstate.OpSucceeded),
+			string(dbstate.OpRejected), string(dbstate.OpGaveUp), string(dbstate.OpCancelled))},
 		{"project_merge_policy_audit", "old_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
 		{"project_merge_policy_audit", "new_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.

@@ -21,6 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
 const (
@@ -55,7 +56,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMigrate(args[1:], stdout, stderr)
 	case "kagent-probe":
 		return runKagentProbe(context.Background(), stdout, stderr)
-	case "sweep-orphans", "smoke":
+	case "sweep-orphans":
+		return workspaces.RunSweepOrphans(context.Background(), args[1:], stdout, stderr)
+	case "smoke":
 		_, _ = fmt.Fprintf(stderr, "%s: not implemented yet\n", cmd)
 		return exitNotImplemented
 	case "help", "-h", "--help":
@@ -76,7 +79,7 @@ commands:
   serve-mcp       MCP listener on :8002 (health only for now)
   serve-git       git transport on :8003 and :8004 (health only for now)
   migrate         up | status | reset the database schema
-  sweep-orphans   not implemented yet
+  sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them)
   smoke           not implemented yet
   kagent-probe    read-only check that kagent answers (GetAgent and ListSessions)
 `)
@@ -126,6 +129,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		}
 		deps.GitHub = gh
 	}
+	wsSvc, err := workspaces.New(cfg, pool, log)
+	if err != nil {
+		return err
+	}
+	deps.Workspaces = wsSvc
 	handler, err := app.New(deps).Handler()
 	if err != nil {
 		return err
@@ -144,6 +152,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	runner := reconcile.NewRunner(pool, log, notifier)
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
+	wsSvc.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })
 	g.Go(func() error { return source.Run(gctx) })

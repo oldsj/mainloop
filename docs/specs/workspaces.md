@@ -11,6 +11,74 @@ ports and the idle timeout. `agent_kind` accepts a configured [provider profile]
 or alias; existing Claude/Codex selection is unchanged. Everything about the running state is
 read from kagent.
 
+## Go server (migration slice G5)
+
+The sections below describe the frozen Python backend, which still serves production. This
+section is the Go server's lifecycle in `server/internal/workspaces`. Labels: **implemented** is
+in the code and covered by fake-backed tests against a scratch PostgreSQL; **proposed** is not
+built; nothing here has been measured against a live kagent.
+
+### Implemented
+
+- Every lifecycle change is a durable `workspace_ops` row (`create`, `suspend`, `resume`,
+  `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
+  and an idempotency key. One operation is open per workspace; asking for the kind that is
+  already open joins it, and a different kind is `409`. A delete cancels the others. The API
+  inserts the row, wakes the reconcile loop and waits up to `WORKSPACE_OPERATION_WAIT_SECONDS`
+  (default 30) for the result; if the operation is still going it answers with the workspace as
+  it stands and the loop carries on.
+- The workspace id is the kagent Session id. The row stores a stable `request_id`, which
+  `CreateSession` sends on every attempt, so a retry, a refresh or a restarted process can only
+  get the one Session back. The loop records `attempts` before it calls kagent and holds no
+  transaction or lock across the call. Outcomes are fenced on the lease, so a cancelled or
+  superseded operation is never overwritten.
+- Create retries: a transient error retries after 15 seconds, doubling to 120 seconds, until 600
+  seconds have passed since the first failure, then the operation is `gave_up` and the workspace
+  is `failed` until **refresh**. A permanent error (`INVALID_ARGUMENT`, `NOT_FOUND`,
+  `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNIMPLEMENTED`, `UNAUTHENTICATED`, a kagent
+  configuration refusal) is `rejected` at once, and a rejected create removes the rows and returns
+  `422`. Refresh sends a new create operation with a fresh window. The three timings are
+  `WORKSPACE_CREATE_RETRY_INITIAL_SECONDS`, `_MAX_SECONDS` and `_WINDOW_SECONDS`.
+- Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
+  cancelled if activity arrived after the idle check picked the workspace. Resume touches the
+  workspace's activity and calls `ResumeSession` only for a suspended Session. A Session that is
+  failed or deleted refuses the resume (`409`).
+- Delete removes the rows only after kagent confirms: `DeleteSession` must report the same Session
+  as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
+  keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
+  whose create may have been sent replays the idempotent create first and deletes whatever comes
+  back. Delete is refused (`409`) while a delivery is open.
+- Archiving a session deletes its kagent Session: a sweep (`WORKSPACE_ARCHIVED_DELETE_SECONDS`,
+  default 60) deletes the Session of every archived binding that has no open delivery, and marks
+  `kagent_deleted_at` only after kagent confirms. A failed delete is tried again on the next pass.
+- Idle suspend: a sweep (`WORKSPACE_IDLE_CHECK_SECONDS`, default 60) suspends a running workspace that has been quiet for its idle timeout (1
+  to 1440 minutes, default 30). Quiet means no preview traffic (`Touch`), no resume and no
+  delivery activity, and no open delivery.
+- Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
+  configured provider profiles' Agents, is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
+  old (default 600) and that no binding names, is an orphan. It runs on a schedule
+  (`WORKSPACE_ORPHAN_SWEEP_SECONDS`, default 3600) and deletes; the command
+  `mainloop sweep-orphans` lists them and `--delete` removes them. Both refuse to delete while a
+  binding exists that has no Session id yet and whose create was sent, because that create may own
+  a listed Session. Each Session is checked against the database again just before it is
+  deleted. The exit status is non-zero if a delete failed or deletion was blocked.
+- Every state change publishes `workspace:updated` in the same transaction as the change. The
+  event carries the workspace lifecycle; the Session is not removed by it.
+- `WakeForPreview(workspaceID)` and `Touch(workspaceID)` are the entry points the preview proxy
+  will call: a running workspace is only touched; otherwise a resume operation is queued once for
+  any number of concurrent callers, and the call returns when the Session is ready or fails with
+  `502`/`409`.
+- Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
+  by number.
+
+### Proposed, not built
+
+- The preview proxy itself (G12), the git gate (SHA resolution, credentials, publication) and the
+  per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
+- The delivery ledger (G6a). Open-turn and delivery-activity checks go through an optional
+  `Deliveries` interface that is unset until then, so in the server today a workspace is never
+  considered to have an open delivery.
+
 ## Lifecycle
 
 | Observed state | User label | Meaning                                                                                              |

@@ -1,0 +1,68 @@
+-- +goose Up
+-- Workspaces: a session with a git checkout, run as a kagent Session. The row holds only what
+-- Mainloop owns (the checkout request, preview ports, idle settings); the running state is read
+-- from kagent. The session and its agent binding are the session slice's rows; a workspace row
+-- shares the session's id.
+--
+-- Every lifecycle change is a workspace_ops row: an intent with an explicit state and an
+-- idempotency key that the reconcile loop drives (see internal/workspaces). The kagent
+-- CreateSession request id is stored once on the workspace and reused by every replay, so a
+-- crash mid-create resumes into the one Session.
+
+CREATE TABLE workspaces (
+    id text PRIMARY KEY REFERENCES sessions (id) ON DELETE CASCADE,
+    user_id text NOT NULL,
+    project_id text NOT NULL REFERENCES projects (id),
+    repo_url text NOT NULL,
+    ref text NOT NULL DEFAULT '',
+    branch text NOT NULL,
+    depth integer NOT NULL DEFAULT 0 CHECK (depth BETWEEN 0 AND 1000),
+    agent_kind text NOT NULL CHECK (agent_kind ~ '^[a-z][a-z0-9_-]{0,79}$'),
+    -- The ports the preview URL may reach: [{"name": ..., "number": ...}].
+    ports jsonb NOT NULL DEFAULT '[]',
+    idle_timeout_minutes integer NOT NULL DEFAULT 30 CHECK (idle_timeout_minutes BETWEEN 1 AND 1440),
+    -- The development environment resolved when the workspace was created; NULL when the project
+    -- has none selected.
+    environment jsonb,
+    -- The CreateSession request id: stable for the life of the workspace.
+    request_id text NOT NULL UNIQUE,
+    -- Owner activity (resume, preview traffic). Delivery activity is read from the delivery ledger.
+    last_active_at timestamptz,
+    -- When the idle sweep (or a suspend) last parked the workspace.
+    idle_suspended_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX workspaces_user ON workspaces (user_id, created_at DESC);
+CREATE INDEX workspaces_project ON workspaces (project_id);
+
+CREATE TABLE workspace_ops (
+    id text PRIMARY KEY,
+    workspace_id text NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    kind text NOT NULL CHECK (kind IN ('create', 'suspend', 'resume', 'delete')),
+    idempotency_key text NOT NULL UNIQUE,
+    -- pending and retrying are claimable; the rest are final.
+    state text NOT NULL DEFAULT 'pending' CHECK (
+        state IN ('pending', 'retrying', 'succeeded', 'rejected', 'gave_up', 'cancelled')
+    ),
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
+    -- Transient failures so far and when the first one happened: the retry window runs from it.
+    failures integer NOT NULL DEFAULT 0,
+    first_failed_at timestamptz,
+    -- The classified reason of the last failure, never raw error text.
+    last_error text CHECK (length(last_error) <= 500),
+    -- An idle suspend only goes ahead if the workspace saw no activity after this time.
+    quiet_since timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+-- One open operation per workspace.
+CREATE UNIQUE INDEX workspace_ops_open ON workspace_ops (workspace_id) WHERE state IN ('pending', 'retrying');
+CREATE INDEX workspace_ops_claim ON workspace_ops (next_attempt_at, id) WHERE state IN ('pending', 'retrying');
+CREATE INDEX workspace_ops_workspace ON workspace_ops (workspace_id, created_at DESC, id);
+
+-- +goose Down
+DROP TABLE IF EXISTS workspace_ops;
+DROP TABLE IF EXISTS workspaces;

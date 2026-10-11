@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
 // fallback is nested one struct deeper than the domain APIs, so a method a domain defines is
@@ -35,6 +36,7 @@ type Server struct {
 	*providers.ProvidersAPI
 	*environments.EnvironmentsAPI
 	*events.EventsAPI
+	*workspaces.WorkspacesAPI
 
 	fallback
 
@@ -58,6 +60,8 @@ type Deps struct {
 	Registry environments.RegistryClient
 	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
 	GitHub projects.Remote
+	// Workspaces runs the workspace lifecycle. Nil answers the workspace routes with 503.
+	Workspaces *workspaces.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -76,6 +80,7 @@ func New(d Deps) *Server {
 		ProvidersAPI:    prov,
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
 		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
+		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
 		deps:            d,
 		initErr:         err,
 	}

@@ -138,3 +138,30 @@ const (
 	PermissionUse    GrantPermission = "use"
 	PermissionDerive GrantPermission = "derive"
 )
+
+// WorkspaceOpKind is workspace_ops.kind.
+type WorkspaceOpKind string
+
+// Workspace operation kinds.
+const (
+	OpCreate  WorkspaceOpKind = "create"
+	OpSuspend WorkspaceOpKind = "suspend"
+	OpResume  WorkspaceOpKind = "resume"
+	OpDelete  WorkspaceOpKind = "delete"
+)
+
+// WorkspaceOpState is workspace_ops.state. Pending and retrying are claimable; the rest are
+// final. A retrying operation has failed transiently at least once.
+type WorkspaceOpState string
+
+// Workspace operation states.
+const (
+	OpPending   WorkspaceOpState = "pending"
+	OpRetrying  WorkspaceOpState = "retrying"
+	OpSucceeded WorkspaceOpState = "succeeded"
+	// OpRejected means kagent refused the request for good (or the operation can never apply).
+	OpRejected WorkspaceOpState = "rejected"
+	// OpGaveUp means transient failures outlasted the retry window.
+	OpGaveUp    WorkspaceOpState = "gave_up"
+	OpCancelled WorkspaceOpState = "cancelled"
+)

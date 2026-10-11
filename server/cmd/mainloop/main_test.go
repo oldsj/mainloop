@@ -14,7 +14,6 @@ func TestRun(t *testing.T) {
 		stdoutHas  string
 		stderrOnly bool
 	}{
-		{[]string{"sweep-orphans"}, 2, "not implemented yet", "", true},
 		{[]string{"smoke"}, 2, "not implemented yet", "", true},
 		{nil, 1, "usage:", "", true},
 		{[]string{"bogus"}, 1, `unknown command "bogus"`, "", true},
