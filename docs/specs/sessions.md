@@ -106,6 +106,28 @@ Assistant message prompts and processing indicators use the native runtime kind 
 
 The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Workspace health and lifecycle controls are shown separately.
 
+The owner-only `GET /sessions/{id}/native` (and the main thread's `native`) also returns an optional
+`preparation_observation`, projected from the kagent GetSession response it already reads for the
+Session state: one GetSession, no second RPC. It includes Session/context identity and whether the
+context was explicit, state/operation and prepared revision, the observed runtime generation/Actor UID,
+and allowlisted original preparation action/create/generation identity, setup profile/digest,
+classification, historical flag, challenge/sequence and effect/observation timestamps. Timestamps
+retain protobuf seconds/nanoseconds. Absent optional messages and empty identity fields stay
+unavailable; proto3 scalar defaults are retained without claiming field presence. `receipt_status`
+distinguishes `observed`, `missing` and `unavailable` (a receipt that cannot be safely projected,
+including a foreign identity or a value outside the contract's bounds). Runtime association and
+receipt are independently optional. The observation itself is absent, and with it `session_state`
+(the note says "kagent session unavailable"), when GetSession is unavailable or its reply is for
+another Session or context, has no context id, or has runtime fields that cannot be projected
+(an unknown state or operation, an identity outside its bounds). The Go client already refuses a
+reply for another Session or context, so `context_confirmed` is true whenever an observation exists.
+The response excludes credentials, configuration documents, checkout content and arbitrary runtime
+data: only the fields in `NativePreparationObservation` of `api/openapi.yaml` are ever copied. This
+diagnostic API does not add a UI flow or a second RPC, refresh preparation, start work, or grant
+dispatch authority. Runtime `ready` alone does not prove preparation; saved receipt evidence does
+not identify an earlier runtime admission failure's cause. The `web/` client has the generated types
+only; no screen shows the observation yet.
+
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
 separately from a failed connection or a 404.

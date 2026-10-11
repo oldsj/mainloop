@@ -3597,6 +3597,225 @@ components:
         - source
       title: NativeDeliveryInfo
       description: Delivery ledger row for one message sent to a native agent.
+    NativePreparationTimestamp:
+      properties:
+        seconds:
+          type: integer
+          format: int64
+          minimum: -62135596800
+          maximum: 253402300799
+          title: Seconds
+        nanos:
+          type: integer
+          minimum: 0
+          maximum: 999999999
+          title: Nanos
+      type: object
+      required:
+        - seconds
+        - nanos
+      additionalProperties: false
+      title: NativePreparationTimestamp
+      description: Present protobuf Timestamp, retaining epoch zero and nanosecond precision.
+    NativeRuntimeAssociationInfo:
+      properties:
+        generation_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Generation Id
+        actor_uid:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Actor Uid
+        phase:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Phase
+        current_active:
+          type: boolean
+          title: Current Active
+      type: object
+      required:
+        - generation_id
+        - actor_uid
+        - phase
+        - current_active
+      additionalProperties: false
+      title: NativeRuntimeAssociationInfo
+      description: Observed active runtime identity; absence does not prove replacement.
+    NativePreparationActionInfo:
+      properties:
+        session_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Session Id
+        action_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[A-Za-z0-9:._-]+$
+          title: Action Id
+        create_request_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Create Request Id
+        generation_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Generation Id
+        actor_uid:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Actor Uid
+        prepared_revision:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Prepared Revision
+        setup_profile:
+          type: string
+          enum:
+            - supervisor
+            - child
+            - agent
+          title: Setup Profile
+        setup_digest:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+          title: Setup Digest
+      type: object
+      required:
+        - session_id
+      additionalProperties: false
+      title: NativePreparationActionInfo
+      description: Allowlisted original preparation inputs, with no workspace or configuration. An empty value is absent.
+    NativePreparationReceiptInfo:
+      properties:
+        original:
+          $ref: '#/components/schemas/NativePreparationActionInfo'
+        context_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Context Id
+        classification:
+          type: string
+          enum:
+            - pending
+            - uncertain
+            - confirmed
+            - definite-failure
+          title: Classification
+        historical:
+          type: boolean
+          title: Historical
+        challenge_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Challenge Id
+        observation_sequence:
+          type: integer
+          format: uint64
+          minimum: 0
+          maximum: 18446744073709551615
+          title: Observation Sequence
+        effect_observed_at:
+          $ref: '#/components/schemas/NativePreparationTimestamp'
+        observed_at:
+          $ref: '#/components/schemas/NativePreparationTimestamp'
+      type: object
+      required:
+        - original
+        - context_id
+        - historical
+        - observation_sequence
+      additionalProperties: false
+      title: NativePreparationReceiptInfo
+      description: Saved action evidence, never a current dispatch grant.
+    NativePreparationObservation:
+      properties:
+        session_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Session Id
+        context_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Context Id
+        context_confirmed:
+          type: boolean
+          title: Context Confirmed
+        state:
+          type: string
+          enum:
+            - unspecified
+            - creating
+            - ready
+            - suspended
+            - failed
+            - deleting
+            - deleted
+          title: State
+        operation:
+          type: string
+          enum:
+            - unspecified
+            - create
+            - suspend
+            - resume
+            - delete
+            - none
+          title: Operation
+        prepared_revision:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[^\x00-\x1f\x7f]+$
+          title: Prepared Revision
+        runtime_association:
+          $ref: '#/components/schemas/NativeRuntimeAssociationInfo'
+        receipt_status:
+          type: string
+          enum:
+            - missing
+            - observed
+            - unavailable
+          title: Receipt Status
+        receipt:
+          $ref: '#/components/schemas/NativePreparationReceiptInfo'
+      type: object
+      required:
+        - session_id
+        - context_id
+        - context_confirmed
+        - state
+        - operation
+        - receipt_status
+      additionalProperties: false
+      title: NativePreparationObservation
+      description: Bounded projection of one existing GetSession response; no readiness claim. Optional fields are absent when unknown.
     NativeSessionInfo:
       properties:
         session_id:
@@ -3635,6 +3854,8 @@ components:
             - type: string
             - type: 'null'
           title: Session State
+        preparation_observation:
+          $ref: '#/components/schemas/NativePreparationObservation'
         model:
           anyOf:
             - type: string

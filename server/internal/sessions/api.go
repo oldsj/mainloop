@@ -198,8 +198,8 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 			n.Topic = &name
 		}
 	}
-	state, note := a.sessionState(ctx, row)
-	n.SessionState = state
+	state, observation, note := a.sessionState(ctx, row)
+	n.SessionState, n.PreparationObservation = state, observation
 	if unknown {
 		note = "delivery unknown: the last message was not replayed; new messages wait until this is settled, then check the reply and send again if needed"
 	} else if n := len(deliveries); n > 0 && deliveries[n-1].State == string(dbstate.DeliveryUncertain) {
@@ -212,20 +212,25 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row nativeBind
 	return n, nil
 }
 
-// sessionState reads the kagent session's state, best effort: kagent being down must not take
-// the main thread view down with it.
-func (a *SessionsAPI) sessionState(ctx context.Context, row nativeBinding) (state *string, note string) {
+// sessionState reads the kagent session once, best effort: kagent being down must not take the
+// main thread view down with it. The state and the preparation observation both come from that one
+// GetSession reply; a reply whose runtime fields cannot be projected counts as unavailable.
+func (a *SessionsAPI) sessionState(ctx context.Context, row nativeBinding) (state *string, observation *api.NativePreparationObservation, note string) {
 	if a.Svc.Kagent == nil || row.KagentSessionID == nil || *row.KagentSessionID == "" {
-		return nil, ""
+		return nil, nil, ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionStateTimeout)
 	defer cancel()
 	sess, err := a.Svc.Kagent.GetSession(ctx, *row.KagentSessionID)
 	if err != nil {
-		return nil, "kagent session unavailable: " + safeDetail(err.Error())
+		return nil, nil, "kagent session unavailable: " + safeDetail(err.Error())
+	}
+	observation, err = projectPreparation(sess)
+	if err != nil {
+		return nil, nil, "kagent session unavailable: " + err.Error()
 	}
 	s := strings.ToLower(strings.TrimPrefix(sess.GetState().String(), "RUNTIME_STATE_"))
-	return &s, ""
+	return &s, observation, ""
 }
 
 // toSession is the wire shape of a session row. needsOwner is the session's needs_owner: whether it

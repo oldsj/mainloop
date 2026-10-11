@@ -1459,6 +1459,114 @@ export interface components {
       source: string;
     };
     /**
+     * NativePreparationTimestamp
+     * @description Present protobuf Timestamp, retaining epoch zero and nanosecond precision.
+     */
+    NativePreparationTimestamp: {
+      /**
+       * Seconds
+       * Format: int64
+       */
+      seconds: number;
+      /** Nanos */
+      nanos: number;
+    };
+    /**
+     * NativeRuntimeAssociationInfo
+     * @description Observed active runtime identity; absence does not prove replacement.
+     */
+    NativeRuntimeAssociationInfo: {
+      /** Generation Id */
+      generation_id: string;
+      /** Actor Uid */
+      actor_uid: string;
+      /** Phase */
+      phase: string;
+      /** Current Active */
+      current_active: boolean;
+    };
+    /**
+     * NativePreparationActionInfo
+     * @description Allowlisted original preparation inputs, with no workspace or configuration. An empty value is absent.
+     */
+    NativePreparationActionInfo: {
+      /** Session Id */
+      session_id: string;
+      /** Action Id */
+      action_id?: string;
+      /** Create Request Id */
+      create_request_id?: string;
+      /** Generation Id */
+      generation_id?: string;
+      /** Actor Uid */
+      actor_uid?: string;
+      /** Prepared Revision */
+      prepared_revision?: string;
+      /**
+       * Setup Profile
+       * @enum {string}
+       */
+      setup_profile?: 'supervisor' | 'child' | 'agent';
+      /** Setup Digest */
+      setup_digest?: string;
+    };
+    /**
+     * NativePreparationReceiptInfo
+     * @description Saved action evidence, never a current dispatch grant.
+     */
+    NativePreparationReceiptInfo: {
+      original: components['schemas']['NativePreparationActionInfo'];
+      /** Context Id */
+      context_id: string;
+      /**
+       * Classification
+       * @enum {string}
+       */
+      classification?: 'pending' | 'uncertain' | 'confirmed' | 'definite-failure';
+      /** Historical */
+      historical: boolean;
+      /** Challenge Id */
+      challenge_id?: string;
+      /**
+       * Observation Sequence
+       * Format: uint64
+       */
+      observation_sequence: number;
+      effect_observed_at?: components['schemas']['NativePreparationTimestamp'];
+      observed_at?: components['schemas']['NativePreparationTimestamp'];
+    };
+    /**
+     * NativePreparationObservation
+     * @description Bounded projection of one existing GetSession response; no readiness claim. Optional fields are absent when unknown.
+     */
+    NativePreparationObservation: {
+      /** Session Id */
+      session_id: string;
+      /** Context Id */
+      context_id: string;
+      /** Context Confirmed */
+      context_confirmed: boolean;
+      /**
+       * State
+       * @enum {string}
+       */
+      state: 'unspecified' | 'creating' | 'ready' | 'suspended' | 'failed' | 'deleting' | 'deleted';
+      /**
+       * Operation
+       * @enum {string}
+       */
+      operation: 'unspecified' | 'create' | 'suspend' | 'resume' | 'delete' | 'none';
+      /** Prepared Revision */
+      prepared_revision?: string;
+      runtime_association?: components['schemas']['NativeRuntimeAssociationInfo'];
+      /**
+       * Receipt Status
+       * @enum {string}
+       */
+      receipt_status: 'missing' | 'observed' | 'unavailable';
+      receipt?: components['schemas']['NativePreparationReceiptInfo'];
+    };
+    /**
      * NativeSessionInfo
      * @description Identity strip for a session bound to a native agent session in kagent.
      */
@@ -1482,6 +1590,7 @@ export interface components {
       kagent_session_id: string | null;
       /** Session State */
       session_state: string | null;
+      preparation_observation?: components['schemas']['NativePreparationObservation'];
       /** Model */
       model: string | null;
       /**
