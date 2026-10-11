@@ -19,7 +19,8 @@ import {
   OBSERVATIONS_PARTIAL,
   PARTIAL_NOTICE,
   reportText,
-  retentionText
+  retentionText,
+  unreadableClaimsText
 } from './model';
 import { events, healthRow, healthView, session, toolEvent, totals } from './test/fixtures';
 import { eventsRead, healthRead, projectsRead } from './test/handlers';
@@ -152,6 +153,33 @@ describe('health page: the request', () => {
     await waitFor(() => expect(requests.at(-1)?.toString()).toBe('hours=24'));
   });
 
+  it('drops the chosen task, session and attempt from the draft when the window changes', async () => {
+    const user = userEvent.setup();
+    const { router } = renderHealth('/health?task_id=task-1&session_id=session-1&hours=168');
+    await screen.findByRole('button', { name: 'Filters · last 7 days' });
+
+    await user.selectOptions(screen.getByLabelText('Window'), '720');
+    expect(screen.getByLabelText('Task')).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await waitFor(() => expect(requests.at(-1)?.toString()).toBe('hours=720'));
+    expect(router.state.location.href).not.toContain('task_id');
+    expect(router.state.location.href).not.toContain('session_id');
+  });
+
+  it('drops the chosen task from the draft when the provider changes', async () => {
+    const user = userEvent.setup();
+    const { router } = renderHealth('/health?task_id=task-1&provider=claude');
+    await screen.findByRole('button', { name: /^Add retry button/ });
+
+    await user.selectOptions(screen.getByLabelText('Provider'), 'codex');
+    expect(screen.getByLabelText('Task')).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await waitFor(() => expect(requests.at(-1)?.get('provider')).toBe('codex'));
+    expect(router.state.location.href).not.toContain('task_id');
+  });
+
   it('offers task choices from the wider scope when a task is selected', async () => {
     const other = healthRow({
       id: 'row-2',
@@ -268,6 +296,18 @@ describe('health page: rows', () => {
     expect(screen.queryByText(EMPTY_NOTICE)).not.toBeInTheDocument();
   });
 
+  it('shows a repeated row id once and says the repeat was dropped', async () => {
+    respond = () =>
+      HttpResponse.json(
+        healthView([healthRow({ id: 'same' }), healthRow({ id: 'same', title: 'Second row' })])
+      );
+    renderHealth('/health');
+
+    expect(await screen.findByText(droppedRowsText(1))).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Add retry button/ })).toHaveLength(1);
+    expect(screen.queryByText(/Second row/)).not.toBeInTheDocument();
+  });
+
   it('shows the partial notice, the empty state and the retention footer', async () => {
     respond = () => HttpResponse.json(healthView([], { partial: true }));
     renderHealth('/health');
@@ -277,6 +317,32 @@ describe('health page: rows', () => {
     expect(
       screen.getByText(retentionText({ events_days: 7, summaries_days: 90 }))
     ).toBeInTheDocument();
+  });
+
+  it('leaves out a report or approval that cannot be read, says so, and keeps the rest of the row', async () => {
+    const report = {
+      id: 'report-1',
+      task_id: 'task-1',
+      attempt_id: 'attempt-1',
+      outcome: 'blocked' as const
+    };
+    respond = () =>
+      HttpResponse.json(
+        healthView([
+          healthRow({
+            reports: [report, { id: 'report-bad' }],
+            approvals: [{ id: 'approval-bad' }]
+          })
+        ])
+      );
+    const user = userEvent.setup();
+    renderHealth('/health');
+    await openRow(user);
+
+    expect(screen.getByText(reportText(report))).toBeInTheDocument();
+    expect(screen.getByText(unreadableClaimsText(2))).toBeInTheDocument();
+    expect(screen.queryByTestId('hitl-card')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open task' })).toBeInTheDocument();
   });
 
   it('shows the task, gaps, claims, approvals and sessions when a row is expanded', async () => {

@@ -130,10 +130,15 @@ Implemented in the React client:
 - The filter panel opens by default at 640 px and wider, and starts closed below that. Task,
   session and attempt choices come from the wider project, provider and window scope, so narrowing
   one filter does not remove the others.
+- Changing the project, provider or window clears the task, session and attempt in the draft, since
+  each belongs to one scope. Nothing is written until Apply.
 - Rows sort by failures, most first, with unknown counts last. An unknown count shows
   "Unavailable". A row with no task or title shows "Unassigned".
-- Each row is checked on its own. A malformed row is dropped and counted; the others render.
-- A session's source observations load only when asked for. A refresh clears them.
+- Each row is checked on its own. A malformed row is dropped and counted; the others render. A row
+  whose id repeats an earlier row is dropped and counted the same way.
+- Each report and approval is checked on its own. A malformed one is left out of its row, and the
+  row says how many were left out. Its totals and other claims still show.
+- A session's source observations load only when asked for. A reload clears them.
 - Each approval shows its HITL card.
 - A failed refresh keeps the rows already shown, with an inline error and a retry.
 

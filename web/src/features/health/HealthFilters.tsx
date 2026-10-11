@@ -28,8 +28,19 @@ export function HealthFilters({
 }: HealthFiltersProps) {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<HealthSearch>(search);
+  // A task, session or attempt belongs to one project, provider and window. Changing any of those
+  // makes the chosen one stale, so the draft drops it. The choices come from the applied scope.
   const set = <Key extends keyof HealthSearch>(key: Key, value: HealthSearch[Key]) =>
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft((current) => {
+      if (current[key] === value) return current;
+      const next = { ...current, [key]: value };
+      if (key === 'project_id' || key === 'provider' || key === 'hours') {
+        delete next.task_id;
+        delete next.session_id;
+        delete next.attempt_id;
+      }
+      return next;
+    });
 
   return (
     <form

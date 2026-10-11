@@ -7,6 +7,7 @@ import {
   filtersFrom,
   gapText,
   healthQuery,
+  parseRows,
   projectChoices,
   readObservations,
   readView,
@@ -50,6 +51,46 @@ describe('readView', () => {
   it('returns null when the envelope itself is not readable', () => {
     expect(readView({ rows: 'nope', hours: 24, partial: false, retention: {} })).toBeNull();
     expect(readView(null)).toBeNull();
+  });
+});
+
+describe('parseRows', () => {
+  const report = { id: 'report-1', task_id: 'task-1', attempt_id: 'attempt-1', outcome: 'failed' };
+
+  it('keeps a row whose claims are partly malformed, with its totals, and counts the bad claims', () => {
+    const { rows, dropped } = parseRows([
+      healthRow({
+        totals: totals({ failures: 4 }),
+        reports: [report, { id: 'report-2' }],
+        // No runtime_session_id, so this approval cannot be read.
+        approvals: [{ id: 'approval-bad', state: 'pending' }]
+      })
+    ]);
+
+    const row = rows[0];
+    expect(dropped).toBe(0);
+    expect(row).toBeDefined();
+    expect(row?.totals.failures).toBe(4);
+    expect(row?.reports).toEqual([report]);
+    expect(row?.approvals).toEqual([]);
+    expect(row?.unreadableClaims).toBe(2);
+  });
+
+  it('drops a row whose own fields cannot be read, even when its claims can', () => {
+    const { rows, dropped } = parseRows([healthRow({ totals: 'nope', reports: [report] })]);
+
+    expect(rows).toEqual([]);
+    expect(dropped).toBe(1);
+  });
+
+  it('drops a repeated row id and counts it, keeping the first row', () => {
+    const { rows, dropped } = parseRows([
+      healthRow({ id: 'same', title: 'First' }),
+      healthRow({ id: 'same', title: 'Second' })
+    ]);
+
+    expect(dropped).toBe(1);
+    expect(rows.map((item) => item.title)).toEqual(['First']);
   });
 });
 

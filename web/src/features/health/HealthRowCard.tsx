@@ -12,6 +12,7 @@ import {
   reportText,
   rowTitle,
   sessionLine,
+  unreadableClaimsText,
   usageLine
 } from './model';
 
@@ -69,6 +70,9 @@ export function HealthRowCard({
             </Link>
           ) : null}
           {row.gaps.length > 0 ? <p className="text-term-yellow">{gapText(row.gaps)}</p> : null}
+          {row.unreadableClaims > 0 ? (
+            <p className="text-term-yellow">{unreadableClaimsText(row.unreadableClaims)}</p>
+          ) : null}
           {row.reports.map((report) => (
             <p key={report.id} className="text-muted-foreground">
               {reportText(report)}

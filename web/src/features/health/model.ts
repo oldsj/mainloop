@@ -2,7 +2,8 @@
  * Pure rules for the health page: what the server's rows and observations must look like, how
  * rows sort, how unknown counts read, and what each filter choice offers. Kept free of React so
  * each rule has a unit test. A row or observation that fails its shape is dropped and counted,
- * so one bad record never takes down the list.
+ * so one bad record never takes down the list. A report or approval that fails its shape is left
+ * out of its row and counted there.
  */
 import { z } from 'zod';
 import type { components } from '@/api';
@@ -80,17 +81,22 @@ const ApprovalShape = z.looseObject({
   state: z.string().nullable()
 });
 
-const RowShape = z.looseObject({
+// A row's own fields. Its reports and approvals are checked one at a time (see readClaims), so one
+// bad claim costs that claim and not the row's failure totals.
+const RowFields = z.looseObject({
   id: z.string(),
   task_id: z.string().nullable(),
   project_id: z.string().nullable(),
   title: z.string().nullable(),
   sessions: z.array(SessionShape),
   totals: Totals,
-  reports: z.array(ReportShape),
-  approvals: z.array(ApprovalShape),
   gaps: z.array(z.string()),
   expected_receipts: z.number()
+});
+
+const RowShape = RowFields.extend({
+  reports: z.array(z.unknown()),
+  approvals: z.array(z.unknown())
 });
 
 const ViewShape = z.looseObject({
@@ -104,7 +110,12 @@ export type HealthTotals = z.infer<typeof Totals>;
 export type HealthSession = z.infer<typeof SessionShape>;
 export type HealthReport = z.infer<typeof ReportShape>;
 export type HealthApproval = z.infer<typeof ApprovalShape>;
-export type HealthRow = z.infer<typeof RowShape>;
+export type HealthRow = z.infer<typeof RowFields> & {
+  reports: HealthReport[];
+  approvals: HealthApproval[];
+  /** Reports and approvals on this row that could not be read. They are not listed, and the row says so. */
+  unreadableClaims: number;
+};
 
 export interface HealthView {
   rows: HealthRow[];
@@ -114,13 +125,38 @@ export interface HealthView {
   retention: { events_days: number; summaries_days: number };
 }
 
+/** Each claim is read on its own. A bad one is counted and left out, and the rest of the row still shows. */
+function readClaims<T>(list: unknown[], shape: z.ZodType<T>): { items: T[]; unreadable: number } {
+  const items: T[] = [];
+  let unreadable = 0;
+  for (const item of list) {
+    const parsed = shape.safeParse(item);
+    if (parsed.success) items.push(parsed.data);
+    else unreadable += 1;
+  }
+  return { items, unreadable };
+}
+
 export function parseRows(list: unknown[]): { rows: HealthRow[]; dropped: number } {
   const rows: HealthRow[] = [];
+  const ids = new Set<string>();
   let dropped = 0;
   for (const item of list) {
     const parsed = RowShape.safeParse(item);
-    if (parsed.success) rows.push(parsed.data);
-    else dropped += 1;
+    // Rows are keyed by id. A repeated id is dropped rather than shown twice.
+    if (!parsed.success || ids.has(parsed.data.id)) {
+      dropped += 1;
+      continue;
+    }
+    ids.add(parsed.data.id);
+    const reports = readClaims(parsed.data.reports, ReportShape);
+    const approvals = readClaims(parsed.data.approvals, ApprovalShape);
+    rows.push({
+      ...parsed.data,
+      reports: reports.items,
+      approvals: approvals.items,
+      unreadableClaims: reports.unreadable + approvals.unreadable
+    });
   }
   return { rows, dropped };
 }
@@ -186,6 +222,12 @@ export function droppedRowsText(count: number): string {
   return count === 1
     ? 'One health row could not be read and is not listed.'
     : `${count} health rows could not be read and are not listed.`;
+}
+
+export function unreadableClaimsText(count: number): string {
+  return count === 1
+    ? 'One report or approval on this row could not be read and is not listed.'
+    : `${count} reports or approvals on this row could not be read and are not listed.`;
 }
 
 export function droppedObservationsText(count: number): string {
