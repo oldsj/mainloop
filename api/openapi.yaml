@@ -4499,10 +4499,6 @@ components:
           type: string
           title: User Id
           description: Owner ID (the single configured owner)
-        main_thread_id:
-          type: string
-          title: Main Thread Id
-          description: Parent main thread ID
         title:
           type: string
           title: Title
@@ -4515,10 +4511,6 @@ components:
           type: string
           title: Prompt
           description: Initial prompt that started the session
-        conversation_id:
-          type: string
-          title: Conversation Id
-          description: Session's conversation ID
         parent_session_id:
           anyOf:
             - type: string
@@ -4549,12 +4541,6 @@ components:
           title: Needs Owner
           description: Current owner attention projection
           default: false
-        worker_pod_name:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Worker Pod Name
-          description: K8s pod running this session
         created_at:
           type: string
           format: date-time
@@ -4622,68 +4608,12 @@ components:
             - type: 'null'
           title: Model
           description: Claude model to use (haiku, sonnet, opus)
-        issue_url:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Issue Url
-          description: Plan issue URL
-        issue_number:
-          anyOf:
-            - type: integer
-            - type: 'null'
-          title: Issue Number
-          description: Plan issue number
-        issue_etag:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Issue Etag
-          description: ETag for conditional polling
-        issue_last_modified:
-          anyOf:
-            - type: string
-              format: date-time
-            - type: 'null'
-          title: Issue Last Modified
-          description: Last-Modified for polling
-        pr_url:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Pr Url
-          description: Implementation PR URL
-        pr_number:
-          anyOf:
-            - type: integer
-            - type: 'null'
-          title: Pr Number
-          description: PR number
-        pr_etag:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Pr Etag
-          description: ETag for conditional PR polling
-        pr_last_modified:
-          anyOf:
-            - type: string
-              format: date-time
-            - type: 'null'
-          title: Pr Last Modified
-          description: Last-Modified for PR polling
         commit_sha:
           anyOf:
             - type: string
             - type: 'null'
           title: Commit Sha
           description: Final commit SHA
-        anchor_message_id:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Anchor Message Id
-          description: Main thread message ID that triggered this session
         color:
           anyOf:
             - type: string
@@ -4700,18 +4630,15 @@ components:
       type: object
       required:
         - user_id
-        - main_thread_id
         - title
         - description
         - prompt
-        - conversation_id
         - id
         - parent_session_id
         - topic
         - agent_kind
         - status
         - needs_owner
-        - worker_pod_name
         - created_at
         - started_at
         - completed_at
@@ -4723,16 +4650,7 @@ components:
         - branch_name
         - base_branch
         - model
-        - issue_url
-        - issue_number
-        - issue_etag
-        - issue_last_modified
-        - pr_url
-        - pr_number
-        - pr_etag
-        - pr_last_modified
         - commit_sha
-        - anchor_message_id
         - color
         - result
       title: Session
@@ -4780,12 +4698,6 @@ components:
             - type: 'null'
           title: Repo Url
           description: GitHub repository URL for code work
-        anchor_message_id:
-          anyOf:
-            - type: string
-            - type: 'null'
-          title: Anchor Message Id
-          description: Main thread message ID to anchor this session to
         agent_kind:
           anyOf:
             - type: string
@@ -4823,8 +4735,6 @@ components:
         - failed
         - cancelled
         - waiting_on_user
-        - implementing
-        - under_review
       title: SessionStatus
       description: Status of a session.
     TaskAction:
