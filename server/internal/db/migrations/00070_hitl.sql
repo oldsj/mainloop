@@ -25,10 +25,11 @@
 --   * checked_at is the last successful look at kagent; attempted_at is the last try. A request goes
 --     stale only when it has not been confirmed for a while, so a kagent blip does not flip the inbox.
 --   * attention_items replaces queue_items and main_threads: one row per thing that needs the owner,
---     keyed by (source_kind, source_id). HITL writes only source_kind 'hitl_request'. G9b builds
---     /attention, /activity and queue respond/dismiss on it and adds its own sources, so source_kind is
---     not constrained here and detail is free for what those need. Read state is presentation only
---     (read_at) and never resolves an item.
+--     keyed by (source_kind, source_id). Three sources write it: 'hitl_request' (the hitl package),
+--     'task_decision' (the attention sweep, from tasks.decision_*; source_id is the report that asked)
+--     and 'queue' (internal/attention Open, for owner questions raised by other slices; detail holds
+--     item_type, priority, content, context, options and, once answered, response). source_kind is
+--     not constrained here. Read state is presentation only (read_at) and never resolves an item.
 --
 -- State machines (the hitl package owns the transitions):
 --   hitl_requests.availability
@@ -141,7 +142,9 @@ CREATE TABLE hitl_diagnostics (
     owner_id text NOT NULL,
     runtime_session_id text NOT NULL,
     detail text NOT NULL,
-    observed_at timestamptz NOT NULL DEFAULT now()
+    observed_at timestamptz NOT NULL DEFAULT now(),
+    -- The owner put the notice away (G9b). A dismissed notice leaves Activity and is never shown again.
+    dismissed_at timestamptz
 );
 CREATE INDEX hitl_diagnostics_owner ON hitl_diagnostics (owner_id, id DESC);
 

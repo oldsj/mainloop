@@ -35,7 +35,11 @@ func (q *Queries) ConfirmHITLRequest(ctx context.Context, id string) error {
 }
 
 const countUnreadAttention = `-- name: CountUnreadAttention :one
-SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open' AND read_at IS NULL
+SELECT count(*)::int
+FROM attention_items a
+LEFT JOIN sessions s ON s.id = a.session_id
+WHERE a.owner_id = $1 AND a.state = 'open' AND a.read_at IS NULL
+  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
 `
 
 func (q *Queries) CountUnreadAttention(ctx context.Context, ownerID string) (int32, error) {
@@ -871,6 +875,33 @@ func (q *Queries) SetHITLAvailability(ctx context.Context, arg SetHITLAvailabili
 		arg.Reason,
 		arg.ID,
 		arg.FromStates,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setHITLResponseWaiting = `-- name: SetHITLResponseWaiting :execrows
+UPDATE hitl_responses
+SET detail = $4, updated_at = now()
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded'
+`
+
+type SetHITLResponseWaitingParams struct {
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+	Detail     *string
+}
+
+// The send has not started: say why the response is still waiting, and stay recorded.
+func (q *Queries) SetHITLResponseWaiting(ctx context.Context, arg SetHITLResponseWaitingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setHITLResponseWaiting,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.Detail,
 	)
 	if err != nil {
 		return 0, err

@@ -149,6 +149,14 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 			return reconcile.Retry(), ctx.Err()
 		}
 		d.s.log().WarnContext(ctx, "hitl answer is waiting for its session to be ready", "action_id", d.c.ID, "error", err)
+		// The card says why the answer is waiting. A failed write only loses that text.
+		id, owner, attempts := d.fence()
+		why := "waiting for the session to be ready: " + readyDetail(err)
+		if _, werr := dbq.New(d.s.Pool).SetHITLResponseWaiting(ctx, dbq.SetHITLResponseWaitingParams{
+			ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &why,
+		}); werr != nil {
+			d.s.log().WarnContext(ctx, "hitl waiting reason not recorded", "action_id", d.c.ID, "error", werr)
+		}
 		return reconcile.RetryAfter(o.StaleRetry), nil
 	}
 	// Nothing has left yet, so a stop here leaves the response recorded.
@@ -189,6 +197,16 @@ func (d *dispatch) ready(ctx context.Context) error {
 		return nil
 	}
 	return d.s.Ready.ReadySession(ctx, d.w.SessionID, d.w.WorkspaceID, d.w.KagentSessionID)
+}
+
+// readyDetail words a readiness failure for the card. The sessions package's own errors name what
+// is still missing (the workspace is waking, the session is being deleted); kagent's are described,
+// never echoed, since their text is untrusted.
+func readyDetail(err error) string {
+	if d := errDetail(err); d != detailUnclassified {
+		return d
+	}
+	return clip(err.Error(), 200)
 }
 
 // notSent returns a response that provably did not leave to recorded, to be tried again.

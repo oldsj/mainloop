@@ -1,6 +1,8 @@
 package kagent_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,6 +312,24 @@ func TestRefusalAsTheFirstSSEFrameStopsAtTheBudget(t *testing.T) {
 	mustBe[*kagent.SendNotAccepted](t, err)
 	if len(events) != 0 || srv.Count("SendStreamingMessage") != 2 {
 		t.Fatalf("%d events, sent %d times", len(events), srv.Count("SendStreamingMessage"))
+	}
+}
+
+// A retry wait that is cut short (shutdown) reports the refusal that put the send to sleep, which
+// says why it never started, not the context error.
+func TestACutShortRetryWaitYieldsTheLastRefusal(t *testing.T) {
+	cut := errors.New("shutting down")
+	c, srv, _ := setup(t, func(cfg *kagent.Config) {
+		cfg.Sleep = func(context.Context, time.Duration) error { return cut }
+	})
+	srv.Script(kagenttest.Fail{Err: kagenttest.NotAccepted(10)})
+	_, err := send(c, "m")
+	mustBe[*kagent.SendNotAccepted](t, err)
+	if errors.Is(err, cut) {
+		t.Fatalf("the sleep error leaked: %v", err)
+	}
+	if srv.Count("SendStreamingMessage") != 1 {
+		t.Fatalf("sent %d times", srv.Count("SendStreamingMessage"))
 	}
 }
 

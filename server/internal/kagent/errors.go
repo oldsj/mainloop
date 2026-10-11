@@ -212,8 +212,8 @@ func classifyConnect(op string, err error) error {
 	return &SessionError{Op: op, Code: code, Detail: ce.Message()}
 }
 
-// classifyRPCError turns a JSON-RPC error object into a typed error by its ErrorInfo, never
-// by the JSON-RPC code.
+// classifyRPCError turns a JSON-RPC error object into a typed error by its ErrorInfo. A JSON-RPC
+// code alone proves nothing; the one exception is not-ready, which matches on the code plus its text.
 func classifyRPCError(code int, message string, data json.RawMessage) error {
 	e := A2AError{Code: code, Message: message, Metadata: map[string]string{}}
 	for _, item := range errorDetails(data) {

@@ -124,7 +124,11 @@ SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE source_kind = 'hitl_request' AND source_id = $1 AND state = 'open';
 
 -- name: CountUnreadAttention :one
-SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open' AND read_at IS NULL;
+SELECT count(*)::int
+FROM attention_items a
+LEFT JOIN sessions s ON s.id = a.session_id
+WHERE a.owner_id = $1 AND a.state = 'open' AND a.read_at IS NULL
+  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')));
 
 -- name: InsertHITLDiagnostic :exec
 INSERT INTO hitl_diagnostics (owner_id, runtime_session_id, detail)
@@ -197,6 +201,12 @@ RETURNING rechecks, updated_at;
 UPDATE hitl_responses
 SET state = $4, detail = $5, lease_owner = NULL, lease_until = NULL, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3;
+
+-- name: SetHITLResponseWaiting :execrows
+-- The send has not started: say why the response is still waiting, and stay recorded.
+UPDATE hitl_responses
+SET detail = $4, updated_at = now()
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded';
 
 -- name: MarkHITLResponseRecorded :execrows
 -- The send is proven not to have left: back to recorded for another try.

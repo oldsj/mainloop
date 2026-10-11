@@ -82,7 +82,7 @@ func detail(t *testing.T, r result) any {
 
 func TestUnimplementedOperationReturns501WithErrorShape(t *testing.T) {
 	h := newHandler(t, nil, up())
-	for _, path := range []string{"/attention", "/activity"} {
+	for _, path := range []string{"/schedules", "/schedules/s1"} {
 		r := send(h, "GET", path, "", nil)
 		if r.status != http.StatusNotImplemented {
 			t.Fatalf("%s: status = %d, body %s", path, r.status, r.body)
@@ -205,7 +205,7 @@ func TestRequestValidation(t *testing.T) {
 func TestGuardsApplyToTheAPI(t *testing.T) {
 	h := newHandler(t, nil, up())
 	t.Run("foreign host", func(t *testing.T) {
-		r := send(h, "GET", "/attention", "", map[string]string{"Host": "evil.example"})
+		r := send(h, "GET", "/schedules", "", map[string]string{"Host": "evil.example"})
 		if r.status != 404 || detail(t, r) != "Not Found" {
 			t.Fatalf("got %d %s", r.status, r.body)
 		}
@@ -232,10 +232,10 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 	})
 	t.Run("dev allows loopback host", func(t *testing.T) {
 		dev := newHandler(t, map[string]string{"DEV_MODE": "true"}, up())
-		if r := send(dev, "GET", "/attention", "", map[string]string{"Host": "localhost:8000"}); r.status != 501 {
+		if r := send(dev, "GET", "/schedules", "", map[string]string{"Host": "localhost:8000"}); r.status != 501 {
 			t.Fatalf("got %d", r.status)
 		}
-		if r := send(h, "GET", "/attention", "", map[string]string{"Host": "localhost:8000"}); r.status != 404 {
+		if r := send(h, "GET", "/schedules", "", map[string]string{"Host": "localhost:8000"}); r.status != 404 {
 			t.Fatalf("prod loopback got %d", r.status)
 		}
 	})

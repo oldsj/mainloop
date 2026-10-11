@@ -148,9 +148,10 @@ Built:
   writes a `hitl_responses` intent row keyed by the action id. The same action id with the same
   answer returns the same receipt; a different answer or request is `409`. One live response per
   request. `action_id` is 1 to 2048 characters. A nested (delegated) request is shown with
-  `answerable=false` and a reason, and answering it is `409`, whatever the answer says, until G10 implements the leaf rule. A nested
-  request still opens no actionable attention item yet: its card cannot be answered from the
-  inbox, and G9b words it (or opens none).
+  `answerable=false` and a reason, and answering it is `409`, whatever the answer says, until G10 implements the leaf rule. An attention
+  item is still opened for it, so the owner can see that a delegated agent is blocked, but its text
+  says so ("A delegated agent is waiting (cannot be answered here yet): Approve …"); the card
+  beneath it carries the reason and no controls.
   The view of a request whose latest response was `rejected_transport` has `response: null`, keeps
   `transport_state`, and says why in `transport_detail`; `transport_detail` is also set for
   recorded, sending and uncertain responses that have a reason. With `MAINLOOP_OWNER_HITL_WRITES_ENABLED` off the route answers `503`.
@@ -188,3 +189,35 @@ Not built:
   fake.
 - Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do
   answering nested delegated requests (shown, not answerable) and task-tree attention links.
+
+## Go attention, activity and queue (G9b)
+
+Status: implemented in the Go server (`server/internal/attention`), with tests against scratch
+PostgreSQL. Nothing here has run against a live cluster. The Python `attention.py` is frozen
+reference.
+
+- **Items.** One `attention_items` row per thing that needs the owner. Sources: `hitl_request`
+  (from the HITL observer; item id `hitl:<request id>`), `task_decision` (from `tasks.decision_*`;
+  id `task:<task id>`) and `queue` (questions other slices open with `attention.Open`; id
+  `queue:<id>`). A sweep opens a decision item for each task that is `blocked` for `owner_decision`
+  on its current, unfinished attempt, and resolves it when the decision clears, the attempt is
+  replaced or the task finishes. A new ask from the same task is a new item; an answered one is
+  never reopened.
+- **needs_owner.** A session needs the owner when it has an open attention item and is neither
+  archived nor finished. The snapshot's `sessions` lists those sessions with `needs_owner: true`
+  and `waiting_on_user` status. `/sessions` still reports `needs_owner: false` until the sessions
+  package calls `attention.Service.NeedsOwner`; project detail already does.
+- **Count.** `count` is the number of open visible items. `inbox:updated.unread_count` is the open
+  visible items not yet read; answering a queue item reads it. Activity never counts.
+- **Activity.** Provider reports ("Provider report (<outcome>; unverified): …", id `report:<id>`,
+  not dismissible), answered queue items (`queue:<id>`, not dismissible) and input notices
+  (`queue:diag_<n>`, `queue_item_id` `diag_<n>`, dismissible), newest first, at most 100.
+- **Respond.** `POST /queue/{id}/respond` answers an open `queue` item: the answer is stored on the
+  row, the item resolves and `inbox:updated` is published in the same transaction. The same answer
+  again is `200` with no second event; a different answer, or an item that is no longer open, is
+  `409`. HITL items answer `409` ("use the structured HITL response route"), notices `409`, unknown
+  ids `404`. The answer is not delivered anywhere yet: the slice that opened the item reads it.
+- **Dismiss.** `POST /queue/{id}/dismiss` puts an input notice away (idempotent; no event on a
+  repeat). Native requests and queue items answer `409`, unknown ids `404`.
+- **Not built.** `403` (there is one owner), queue expiry, FYI notification rows, and delivery of
+  an answer to the main thread.

@@ -3,6 +3,7 @@ package hitl_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
-// suspendableKagent is the fake's Session lifecycle: kagent refuses every send while the Session is
+// suspendable is the fake's Session lifecycle: kagent refuses every send while the Session is
 // suspended, before anything runs, with the refusal the client maps to SendNotAccepted.
 type suspendable struct {
 	mu        sync.Mutex
@@ -123,6 +124,32 @@ func TestAnAnswerWaitsRecordedWhileTheSessionIsStillWaking(t *testing.T) {
 	e.waitResponse("act-1", dbstate.HITLAccepted)
 	if e.k.sendCount() != 1 || susp.refused != 0 {
 		t.Fatalf("sends %d, refused %d", e.k.sendCount(), susp.refused)
+	}
+}
+
+func TestTheCardSaysWhyAnAnswerIsStillWaiting(t *testing.T) {
+	var susp suspendable
+	r := &readier{s: &susp, waking: 1000}
+	e := newEnv(t, func(s *hitl.Service) { s.Ready = r })
+	susp.install(e.k)
+	susp.set(true)
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if d := e.response("act-1").Detail; d != nil && *d != "" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := e.response("act-1")
+	if got.State != dbstate.HITLRecorded || got.Detail == nil || !strings.Contains(*got.Detail, "still waking") {
+		t.Fatalf("state %s detail %v", got.State, got.Detail)
 	}
 }
 

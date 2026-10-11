@@ -54,7 +54,7 @@ func scopeOfRequest(r dbq.HitlRequest) scope {
 //
 // A scan that fails for one session (kagent refusing its conversation, losing a reply, timing out)
 // costs that session a diagnostic and a growing delay, and the pass goes on with the others. Only
-// an unreachable kagent ends the scanning, since the rest would fail the same way. Staleness never
+// an unreachable kagent, or one that refuses our own credentials, ends the scanning, since the rest would fail the same way. Staleness never
 // comes from a scan: each request goes stale by its own refresh failing, and the refresh loop runs
 // whatever the scan did.
 func (s *Service) Observe(ctx context.Context) error {
@@ -310,12 +310,22 @@ func (s *Service) cardText(ctx context.Context, sc scope, o *observed) (title, n
 			names = append(names, t.Name)
 		}
 		needed = "Approve " + strings.Join(names, ", ")
+		if isNested(o) {
+			needed = nestedPrefix + needed
+		}
 		return title, clip(needed, 200), dbstate.AttentionApproval
 	default:
 		needed = o.ask.Questions[0].Question
+		if isNested(o) {
+			needed = nestedPrefix + needed
+		}
 		return title, clip(needed, 200), dbstate.AttentionQuestion
 	}
 }
+
+// nestedPrefix words the card of a delegated agent's ask: it is shown so the owner knows the agent
+// is blocked, but it cannot be answered until G10, so it must not read as an action to take.
+const nestedPrefix = "A delegated agent is waiting (cannot be answered here yet): "
 
 func clip(s string, n int) string {
 	if len(s) <= n {

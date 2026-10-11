@@ -196,6 +196,7 @@ type HitlDiagnostic struct {
 	RuntimeSessionID string
 	Detail           string
 	ObservedAt       time.Time
+	DismissedAt      *time.Time
 }
 
 type HitlRequest struct {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -45,6 +46,7 @@ type Server struct {
 	*sessions.SessionsAPI
 	*tasks.TasksAPI
 	*hitl.API
+	*attention.AttentionAPI
 
 	fallback
 
@@ -82,6 +84,9 @@ type Deps struct {
 	// HITL observes kagent for tasks that wait for the owner and carries the answers back. Nil builds
 	// one with no kagent client: it serves what is recorded but observes and sends nothing.
 	HITL *hitl.Service
+	// Attention is the owner's inbox. Nil builds one over Pool; the task-decision sweep runs only
+	// where the caller registers it.
+	Attention *attention.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -98,11 +103,12 @@ func New(d Deps) *Server {
 			MergeTools: bool(d.Config.MergeToolsEnabled),
 		}
 	}
+	att := attentionService(d)
 	return &Server{
 		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
 		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
 			Pool: d.Pool, Remote: d.GitHub, OwnerID: d.Config.Identity.OwnerID,
-			PolicyWrites: bool(d.Config.OwnerPolicyWritesEnabled), Log: d.Log,
+			PolicyWrites: bool(d.Config.OwnerPolicyWritesEnabled), Log: d.Log, NeedsOwner: att.NeedsOwner,
 		}},
 		ProvidersAPI:    prov,
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
@@ -111,6 +117,7 @@ func New(d Deps) *Server {
 		SessionsAPI:     sessions.NewAPI(d.Sessions, d.Config, d.Pool, d.Log),
 		TasksAPI:        &tasks.TasksAPI{Svc: taskSvc, OwnerID: d.Config.Identity.OwnerID},
 		API:             hitl.NewAPI(hitlService(d)),
+		AttentionAPI:    attention.NewAPI(att),
 		deps:            d,
 		initErr:         err,
 	}
@@ -173,4 +180,11 @@ func hitlService(d Deps) *hitl.Service {
 		return d.HITL
 	}
 	return hitl.NewService(d.Config, d.Pool, nil, d.Log)
+}
+
+func attentionService(d Deps) *attention.Service {
+	if d.Attention != nil {
+		return d.Attention
+	}
+	return &attention.Service{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Log: d.Log}
 }

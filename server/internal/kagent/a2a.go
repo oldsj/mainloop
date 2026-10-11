@@ -284,7 +284,9 @@ func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) 
 				return
 			}
 			if serr := c.sleep(ctx, delay); serr != nil {
-				yield(nil, serr)
+				// The wait was cut short: the last refusal says why the send never started, which the
+				// context error does not.
+				yield(nil, err)
 				return
 			}
 		}

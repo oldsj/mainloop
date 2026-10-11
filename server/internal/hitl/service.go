@@ -261,5 +261,8 @@ func errDetail(err error) string {
 	case errors.As(err, &a2aErr):
 		return "kagent refused the request"
 	}
-	return "the request failed"
+	return detailUnclassified
 }
+
+// detailUnclassified is errDetail's answer for an error it has no description for.
+const detailUnclassified = "the request failed"

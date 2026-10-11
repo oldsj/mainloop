@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -147,6 +148,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	hitlSvc.Agents = svc // one rule for which Agent runs a session
 	hitlSvc.Ready = svc  // wake and resume the Session before an answer is sent
 	deps.HITL = hitlSvc
+	attn := &attention.Service{Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log}
+	deps.Attention = attn
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {
 		return err
@@ -184,6 +187,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(svc.ResolveCreatesSweep())
 	runner.Add(hitlSvc.ResponseLoop())
 	runner.AddSweep(hitlSvc.ObserverSweep())
+	runner.AddSweep(attn.Sweep())
 	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })
