@@ -15,7 +15,9 @@ When documents differ, do not silently blend future design with current behavior
 
 ## Architectural direction
 
-- Reuse the SvelteKit frontend, FastAPI backend, PostgreSQL, shared Pydantic models, and suitable DBOS durability mechanisms.
+- Migration: new backend work goes in `server/` (Go), and new frontend work goes in `web/` (React). `backend/`, `models/`, `frontend/`, and `packages/ui/` are frozen until they are deleted: bug fixes and the contract conformance test only.
+- `api/openapi.yaml` (in progress) is the wire contract. Go and TypeScript types are generated from it, so change the contract first.
+- Durable side effects follow the reconciler rule, not a workflow engine: write a durable intent row with an explicit state and an idempotency key, check the remote state before any retry, and never hold a DB lock or transaction across network I/O.
 - Mainloop's control plane owns durable product state, policy, message delivery, attention, routing, and audit records.
 - Development work runs in isolated workspaces through native Codex, Claude, or qualified local-agent sessions.
 - Preserve native session identity, history, tools, compaction, and provider-specific behavior. Do not introduce a proprietary model loop unless the roadmap and task explicitly call for it.
@@ -24,15 +26,18 @@ When documents differ, do not silently blend future design with current behavior
 - Keep task lifecycle, agent activity, message delivery, user attention, workspace health, and publication state as separate concepts.
 - Parallel work is limited by architectural cohesion, not just worker capacity. Resolve shared contracts and helpers before dispatching independent consumers.
 
-Native Claude Code and Codex sessions run as kagent harness agents, from the `oldsj/kagent` fork, through the kagent A2A client in `backend/src/mainloop/runtime/`. The Substrate workspace adapter is being removed; do not extend it, and do not add the superseded worker or another workspace runtime.
+Native Claude Code and Codex sessions run as kagent harness agents, from the `oldsj/kagent` fork. New code uses the kagent client in `server/internal/kagent` (in progress); the Python client in `backend/src/mainloop/runtime/` serves only the frozen backend. The Substrate workspace adapter is being removed; do not extend it, and do not add the superseded worker or another workspace runtime.
 
 ## Project structure
 
 ```text
-backend/       FastAPI, DBOS workflows, PostgreSQL access, and orchestration
-frontend/      SvelteKit 5 application and Playwright tests
-models/        Shared Python/Pydantic models
-packages/ui/   Shared frontend theme and UI package
+api/           OpenAPI contract and MCP tool manifest (in progress)
+server/        Go backend for new work (in progress)
+web/           React frontend for new work (in progress)
+backend/       Frozen FastAPI backend, PostgreSQL access, and orchestration
+frontend/      Frozen SvelteKit 5 application and Playwright tests
+models/        Frozen shared Python/Pydantic models
+packages/ui/   Frozen shared frontend theme and UI package
 k8s/           Kubernetes bases and overlays
 docs/specs/    User-visible behavior specifications
 scripts/       Development and test automation
@@ -44,10 +49,9 @@ scripts/       Development and test automation
 - Use `uv run` for project Python commands and `uv add` for Python dependencies. Do not invoke system `python`/`python3` or edit dependency lists manually.
 - Use `pnpm` for JavaScript and TypeScript dependencies and scripts.
 - Run Make targets from the repository root.
-- Import shared backend models from `models/`; validate external data with Pydantic.
-- Use Svelte 5 runes and TypeScript. Route frontend API calls through `frontend/src/lib/api.ts` rather than hardcoding endpoints.
+- Validate external data at the boundary: against `api/openapi.yaml` in new code, with Pydantic in the frozen backend.
+- New frontend code in `web/` uses React and TypeScript and calls the API only through the generated client, never hardcoded endpoints. Frozen `frontend/` code uses Svelte 5 runes and routes API calls through `frontend/src/lib/api.ts`.
 - Use explicit HTML behavior such as `type="button"` and safe external-link attributes.
-- Bump `WORKFLOW_VERSION` in `backend/src/mainloop/workflows/dbos_config.py` when a DBOS workflow change would alter replayed behavior.
 - Prefer deleting obsolete code when a migration is complete rather than retaining unused compatibility paths.
 
 Common development commands, run from the repository root:
