@@ -18,9 +18,47 @@ spec:
         fsGroup: 1000
       imagePullSecrets:
         - name: ghcr-secret
+      initContainers:
+        # Brings the schema to the latest version before any listener starts. `migrate up`
+        # takes the migrator lock, so a restart racing another pod waits instead of failing.
+        - name: migrate
+          image: ghcr.io/oldsj/mainloop-backend:latest
+          command: [/usr/local/bin/mainloop, migrate, up]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: mainloop-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: db-password
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 500m
       containers:
         - name: backend
           image: ghcr.io/oldsj/mainloop-backend:latest
+          command: [/usr/local/bin/mainloop, serve-api]
           ports:
             - containerPort: 8000
           securityContext:
@@ -49,6 +87,11 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: agent-token-key
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
@@ -70,7 +113,7 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 90
+            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -78,15 +121,14 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            # DBOS initialization takes ~25s during startup
-            initialDelaySeconds: 30
+            initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
 
         - name: mcp
           image: ghcr.io/oldsj/mainloop-backend:latest
-          command: [uvicorn, mainloop.mcp_app:app, --host, 0.0.0.0, --port, '8002']
+          command: [/usr/local/bin/mainloop, serve-mcp]
           ports:
             - containerPort: 8002
           securityContext:
@@ -115,6 +157,11 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: agent-token-key
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
@@ -133,19 +180,21 @@ spec:
               memory: 2Gi
               cpu: 1000m
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8002
-            initialDelaySeconds: 30
+            initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8002
-            initialDelaySeconds: 90
+            initialDelaySeconds: 30
             periodSeconds: 10
 
         - name: git
           image: ghcr.io/oldsj/mainloop-backend:latest
-          command: [python, -m, mainloop.git_app]
+          command: [/usr/local/bin/mainloop, serve-git]
           ports:
             - name: git-read
               containerPort: 8003
@@ -177,6 +226,11 @@ spec:
                 secretKeyRef:
                   name: mainloop-secrets
                   key: db-password
+            - name: AGENT_TOKEN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mainloop-secrets
+                  key: agent-token-key
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
@@ -199,21 +253,19 @@ spec:
               memory: 2Gi
               cpu: 1000m
               ephemeral-storage: 3Gi
+          # The read listener answers /health only when the process is up; a failing push
+          # listener ends the process, so one probe covers both ports.
           readinessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
-            initialDelaySeconds: 30
+            httpGet:
+              path: /health
+              port: git-read
+            initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
-            exec:
-              command:
-                - python
-                - -c
-                - import socket; socket.create_connection(("127.0.0.1", 8003), 1).close(); socket.create_connection(("127.0.0.1", 8004), 1).close()
-            initialDelaySeconds: 90
+            httpGet:
+              path: /health
+              port: git-read
+            initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
         - name: git-spool

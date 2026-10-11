@@ -344,27 +344,96 @@ profiles:
                   op: replace
                   path: spec.workload.image
                   value: ${DEV_CODEX_HARNESS_IMAGE}
+      # The Go server and the React app replace the Kind profile's Python and Svelte dev
+      # containers. Each server container runs watchexec over `go run`, so a synced change
+      # rebuilds and restarts only that listener. The image already holds the source it was
+      # built from, so a pod serves before the first sync lands.
       - op: replace
-        path: dev.backend.namespace
-        value: mainloop-dev
-      - op: replace
-        path: dev.mcp.namespace
-        value: mainloop-dev
-      - op: replace
-        path: dev.frontend.namespace
-        value: mainloop-dev
-      - op: remove
-        path: dev.backend.devImage
-      - op: remove
-        path: dev.mcp.devImage
-      - op: remove
-        path: dev.frontend.devImage
-      - op: replace
-        path: dev.frontend.env
+        path: dev
         value:
-          - name: VITE_API_URL
-            value: /api
-          - name: MAINLOOP_API_PROXY
-            value: http://mainloop-backend:8000
-          - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
-            value: mainloop-dev.olds.network
+          backend: &server
+            container: backend
+            labelSelector:
+              app: mainloop-backend
+            namespace: mainloop-dev
+            sync: &server-sync
+              - path: ./server:/src
+                excludePaths:
+                  - .git/
+                  - bin/
+                  - tmp/
+                  - '*.test'
+                  - '*_test.go'
+                  - testdata/
+                disableDownload: true
+                onUpload:
+                  exec:
+                    - command: sh
+                      args:
+                        - -c
+                        - cd /src && go mod download
+                      onChange:
+                        - go.mod
+                        - go.sum
+            command: &watch
+              - watchexec
+              - --restart
+              - --exts
+              - go,sql
+              - --stop-timeout
+              - 5s
+              - --
+              - go
+              - run
+              - ./cmd/mainloop
+            args: [serve-api]
+            logs: {}
+          mcp:
+            <<: *server
+            container: mcp
+            args: [serve-mcp]
+          git:
+            <<: *server
+            container: git
+            args: [serve-git]
+          frontend:
+            labelSelector:
+              app: mainloop-frontend
+            namespace: mainloop-dev
+            container: frontend
+            sync:
+              - path: ./web:/app/web
+                excludePaths:
+                  - node_modules/
+                  - dist/
+                  - e2e/
+                  - playwright-report/
+                  - test-results/
+                disableDownload: true
+                onUpload:
+                  exec:
+                    - command: sh
+                      args:
+                        - -c
+                        - cd /app && pnpm install --frozen-lockfile --filter 'web...' || pnpm install --filter 'web...'
+                      onChange:
+                        - package.json
+              - path: ./pnpm-lock.yaml:/app/pnpm-lock.yaml
+                file: true
+                disableDownload: true
+                onUpload:
+                  execRemote:
+                    command: sh
+                    args:
+                      - -c
+                      - cd /app && pnpm install --frozen-lockfile --filter 'web...' || pnpm install --filter 'web...'
+            command:
+              - /app/web/node_modules/.bin/vite
+            env:
+              - name: VITE_API_URL
+                value: /api
+              - name: MAINLOOP_API_PROXY
+                value: http://mainloop-backend:8000
+              - name: __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+                value: mainloop-dev.olds.network
+            logs: {}

@@ -326,45 +326,71 @@ raw `devspace sync`, `restart`, `enter`, `logs` and `attach` with `-p live` are 
 guarded and act on whatever `--kube-context` and `-n` say. `make dev` and the Kind
 setup are unchanged.
 
-What syncs:
+What runs and syncs: the Go server and the React app.
 
-- `backend/src` and `models` sync into the backend and MCP containers, and
-  uvicorn reloads. `backend/pyproject.toml` and `backend/uv.lock` run `uv sync`
-  in the pod.
-- `frontend/src`, `packages` and `frontend/vite.config.ts` sync into the Vite dev
-  server, which hot-reloads. `package.json` and `pnpm-lock.yaml` run
-  `pnpm install` in the pod.
+- `server/` syncs into `/src` in the backend, MCP and Git containers. Each runs
+  `watchexec` over `go run ./cmd/mainloop serve-api|serve-mcp|serve-git`, so a change
+  rebuilds and restarts only that listener. A change to `go.mod` or `go.sum` runs
+  `go mod download` in the pod. Test files, `testdata`, `.git` and build output do not sync.
+- `web/` syncs into `/app/web` in the frontend, where Vite hot-reloads. A change to
+  `web/package.json` or `pnpm-lock.yaml` runs the workspace `pnpm install` in the pod.
+  `node_modules`, `dist` and test output do not sync.
+- The images already hold the source they were built from, so a pod serves before the
+  first sync lands. A `migrate` initContainer runs `mainloop migrate up` from that
+  baked-in source on every pod start; a later sync is picked up by the next restart.
+- The Go services need no `models` or Python sync, and nothing runs Python.
 
 The UI is `https://mainloop-dev.olds.network` (tailnet only, through the same
 Envoy gateway as production). The browser calls `/api` on that host, and Vite
-forwards it to the backend Service, so the backend needs no route of its own.
+forwards it to the backend Service (`MAINLOOP_API_PROXY`), so the backend needs no route
+of its own. Vite accepts the gateway host through `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
 
-Images: the **Publish live dev images** workflow builds the `--target=dev`
-backend and frontend images for arm64 on each push to `main` and pushes
-`ghcr.io/oldsj/mainloop-{backend,frontend}-dev` with `<short SHA>` and `latest`
-tags. Nothing is built locally on each run; the pods pull `latest` and the sync
-overlays the working tree. The packages are public, so no pull secret is needed.
+Images: the **Publish live dev images** workflow builds arm64 images on each push to
+`go-react` and pushes `ghcr.io/oldsj/mainloop-server-dev` (`server/Dockerfile --target dev`:
+Go toolchain, `git`, `watchexec`) and `ghcr.io/oldsj/mainloop-web-dev`
+(`web/Dockerfile --target dev`: node 24, pnpm, Vite on `0.0.0.0:3000`), each tagged
+`<short SHA>` and `go-react`. The overlay runs `go-react`. Pushes to `main` still publish
+the Python and Svelte `mainloop-{backend,frontend}-dev:latest` images. Nothing is built
+locally on each run; the pods pull the moving tag and the sync overlays the working tree.
+The packages are public, so no pull secret is needed.
 
 Data: a one-instance CloudNativePG cluster on `local-path` storage. CNPG creates
 the database credentials. Purging deletes the data.
 
+Reset: the overlay sets `MAINLOOP_ALLOW_RESET=1`, which lets `mainloop migrate reset`
+drop the schema and migrate back to the latest version. Run it in the backend container,
+then restart the pod so the listeners reconnect:
+
+```bash
+kubectl --context admin@internal-01 -n mainloop-dev exec deploy/mainloop-backend -c backend -- \
+  go run ./cmd/mainloop migrate reset
+kubectl --context admin@internal-01 -n mainloop-dev rollout restart deploy/mainloop-backend
+```
+
+The first deploy of the Go server onto a database that the Python backend created needs
+the database emptied by hand first (no legacy migration); the same reset does it.
+`make dev-live-purge` also drops the data, along with the namespace.
+
 Settings (`k8s/apps/mainloop/overlays/dev-live`): `DEV_MODE=true`; merge tools,
 owner writes, Git transport and the push gate are off; every kagent role uses
-`claude-workspace-dev` or `codex-workspace-dev`. Dev work targets `oldsj/testrepo` only
-through the dev agents' instructions: Mainloop has no repository allowlist, and the
-shared production GitHub App can reach every repository it is installed on. With Git
-transport off, nothing reaches GitHub today.
+`claude-workspace-dev` or `codex-workspace-dev`; `MAINLOOP_MCP_HOSTS` lists the
+`mainloop-mcp` Service names in `mainloop-dev`; the `control-auth` component is on. Dev work
+targets `oldsj/testrepo` only through the dev agents' instructions: Mainloop has no repository
+allowlist, and the shared production GitHub App can reach every repository it is installed
+on. With Git transport off, nothing reaches GitHub today.
 
 Secrets are not in this repository. The infrastructure repository supplies them from
 production's existing items (mainloop-dev shares production's GitHub App, agent token
-key and kagent control principal). Each reference is optional, so the instance starts
-without them, and the features that need them stay unavailable:
+key and kagent control principal). The server needs `agent-token-key` and the kagent control
+Secrets to start, because it has no fallback for the token key; the GitHub App keys are
+optional, so without them the instance runs with GitHub unavailable:
 
-| Secret in `mainloop-dev` | Keys                                                         | Without it                                                                  |
-| ------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `mainloop-secrets`       | `github-app-id`, `github-app-private-key`, `agent-token-key` | No GitHub access; the agent token key falls back to the database password   |
-| `kagent-control-token`   | `current`                                                    | No kagent sessions; also enable the `control-auth` component in the overlay |
-| `kagent-control-ca`      | `ca.crt` (cert-manager)                                      | As above                                                                    |
+| Secret in `mainloop-dev` | Keys                                      | Without it                                              |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------- |
+| `mainloop-secrets`       | `agent-token-key`                         | The backend, MCP and Git containers do not start        |
+| `mainloop-secrets`       | `github-app-id`, `github-app-private-key` | No GitHub access (set both or neither)                  |
+| `kagent-control-token`   | `current`                                 | The pods wait on the missing volume; no kagent sessions |
+| `kagent-control-ca`      | `ca.crt` (cert-manager)                   | As above                                                |
 
 Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to
 `mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local`

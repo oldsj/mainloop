@@ -52,23 +52,12 @@ spec:
         - name: kagent-control-trust-bundle
           image: ghcr.io/oldsj/mainloop-backend:latest
           command:
-            - /app/.venv/bin/python
+            - sh
             - -c
             - |
-              from pathlib import Path
-              import ssl
-              root = Path('/run/kagent-control-root/ca.crt').read_bytes()
-              ssl.create_default_context(cadata=root.decode())
-              roots_path = ssl.get_default_verify_paths().cafile
-              if roots_path is None:
-                  import certifi
-                  roots_path = certifi.where()
-              bundle = Path(roots_path).read_bytes() + b'\n' + root
-              ssl.create_default_context(cadata=bundle.decode())
-              Path('/run/kagent-control-ca/ca-bundle.crt').write_bytes(bundle)
-          env:
-            - name: PYTHONDONTWRITEBYTECODE
-              value: '1'
+              cat /etc/ssl/certs/ca-certificates.crt > /run/kagent-control-ca/ca-bundle.crt
+              echo >> /run/kagent-control-ca/ca-bundle.crt
+              cat /run/kagent-control-root/ca.crt >> /run/kagent-control-ca/ca-bundle.crt
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
