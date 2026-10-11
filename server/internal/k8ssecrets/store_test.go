@@ -62,6 +62,24 @@ func TestCreateIsIdempotentAndNeverOverwrites(t *testing.T) {
 	}
 }
 
+func TestCreateRefusesAnExistingSecretOfAnotherType(t *testing.T) {
+	cl := secretstest.New()
+	immutable := true
+	_, err := cl.CoreV1().Secrets(ns).Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: ns, Labels: map[string]string{
+			"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp",
+		}},
+		Type: corev1.SecretTypeBasicAuth, Immutable: &immutable,
+		Data: map[string][]byte{k8ssecrets.DataKey: []byte("Bearer ml_one")},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k8ssecrets.New(cl, ns).Create(context.Background(), "n", "mcp", "ml_one"); !errors.Is(err, k8ssecrets.ErrMismatch) {
+		t.Errorf("err = %v, want ErrMismatch", err)
+	}
+}
+
 func TestDeleteCarriesUIDPrecondition(t *testing.T) {
 	cl := secretstest.New()
 	s := k8ssecrets.New(cl, ns)

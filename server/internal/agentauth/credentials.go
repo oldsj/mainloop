@@ -36,8 +36,8 @@ var (
 	// ErrCleanupPending means the binding's previous Secret is still owed a delete, so the name is
 	// not free yet. Try again after cleanup.
 	ErrCleanupPending = errors.New("agentauth: previous credential Secret is still being cleaned up")
-	// ErrRevoked means the credential was revoked while it was being published. Its Secret is
-	// owed a delete and the cleanup loop will remove it.
+	// ErrRevoked means the credential was revoked while it was being published. The Secret this
+	// call created has been deleted again.
 	ErrRevoked = errors.New("agentauth: credential was revoked while being published")
 )
 
@@ -84,6 +84,9 @@ func purpose(kind dbstate.CredentialKind) string {
 // is returned as it is, and one left planned by an interrupted publish is resumed. The database
 // holds the intent first; the Kubernetes call runs with no transaction open.
 func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.CredentialKind) (Issued, error) {
+	if _, off := c.Secrets.(Unconfigured); off {
+		return Issued{}, ErrNotConfigured // before any intent row is written
+	}
 	row, err := c.plan(ctx, bindingID, kind)
 	if err != nil {
 		return Issued{}, err
@@ -101,6 +104,12 @@ func (c *Credentials) Issue(ctx context.Context, bindingID string, kind dbstate.
 			// Not planned any more: a concurrent Issue published it, or it was revoked.
 			if cur, gerr := dbq.New(c.Pool).GetCredential(ctx, row.ID); gerr == nil && cur.State == dbstate.CredentialPublished && deref(cur.SecretUID) == uid {
 				return Issued{CredentialID: row.ID, SecretName: row.SecretName, SecretUID: uid}, nil
+			}
+			// Revoked: cleanup may already have marked the row deleted without seeing this
+			// Secret, so nothing else will remove it. The UID precondition keeps a newer Secret
+			// under the same name safe.
+			if derr := c.Secrets.Delete(ctx, row.SecretName, uid); derr != nil {
+				return Issued{}, fmt.Errorf("agentauth: remove the Secret of revoked credential %s: %w", row.ID, errors.Join(ErrRevoked, derr))
 			}
 			return Issued{}, ErrRevoked
 		}
@@ -146,12 +155,40 @@ func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.C
 // Revoke revokes the live credentials of one binding. Only that binding's rows change; the
 // cleanup loop deletes their Secrets. It returns how many credentials were revoked.
 func (c *Credentials) Revoke(ctx context.Context, bindingID string) (int, error) {
-	rows, err := dbq.New(c.Pool).RevokeBindingCredentials(ctx, bindingID)
+	return RevokeInTx(ctx, dbq.New(c.Pool), bindingID)
+}
+
+// RevokeInTx revokes the live credentials of one binding with the given queries, so a caller can
+// do it in the same transaction as the state change that ends the binding (pass dbq.New(tx)).
+// It touches no Kubernetes object; the cleanup loop deletes the Secrets after the commit.
+func RevokeInTx(ctx context.Context, q *dbq.Queries, bindingID string) (int, error) {
+	rows, err := q.RevokeBindingCredentials(ctx, bindingID)
 	if err != nil {
 		return 0, fmt.Errorf("agentauth: revoke credentials of %s: %w", bindingID, err)
 	}
 	return len(rows), nil
 }
+
+// ErrNotConfigured is what [Unconfigured] returns from Issue: this process has no Kubernetes to
+// publish a Secret to.
+var ErrNotConfigured = errors.New("agentauth: Kubernetes not configured")
+
+// Unconfigured is the [SecretStore] of a process outside a cluster. Every call fails with
+// [ErrNotConfigured]; revokes still record their intent in the database.
+type Unconfigured struct{}
+
+// Create always fails.
+func (Unconfigured) Create(context.Context, string, string, string) (string, error) {
+	return "", ErrNotConfigured
+}
+
+// Lookup always fails.
+func (Unconfigured) Lookup(context.Context, string) (string, bool, error) {
+	return "", false, ErrNotConfigured
+}
+
+// Delete always fails.
+func (Unconfigured) Delete(context.Context, string, string) error { return ErrNotConfigured }
 
 // CleanupTable is the intent table the cleanup loop drives: revoked credentials.
 func CleanupTable() reconcile.Table {

@@ -94,7 +94,7 @@ func (s *Store) Create(ctx context.Context, name, purpose, bearer string) (strin
 }
 
 func same(have, want *corev1.Secret) bool {
-	return have.Immutable != nil && *have.Immutable &&
+	return have.Type == corev1.SecretTypeOpaque && have.Immutable != nil && *have.Immutable &&
 		maps.Equal(have.Labels, want.Labels) &&
 		len(have.Data) == 1 && bytes.Equal(have.Data[DataKey], want.Data[DataKey])
 }

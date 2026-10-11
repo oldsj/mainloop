@@ -18,6 +18,13 @@ INSERT INTO topics (id, user_id, name) VALUES ($1, $2, $3)
 ON CONFLICT (user_id, name) DO UPDATE SET updated_at = now()
 RETURNING *;
 
+-- name: EnsureTopic :one
+-- Returns the topic, creating it when missing. An existing topic keeps its updated_at; the no-op
+-- update is what makes RETURNING yield the row under concurrent inserts.
+INSERT INTO topics (id, user_id, name) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, name) DO UPDATE SET name = topics.name
+RETURNING *;
+
 -- name: SetTopicStatusLine :exec
 UPDATE topics SET status_line = $2, updated_at = now() WHERE id = $1;
 

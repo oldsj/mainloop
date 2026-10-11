@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -59,6 +60,38 @@ func TestOpenAndIndex(t *testing.T) {
 	// Topics are per owner.
 	if other, _ := svc.Index(ctx, "u2"); len(other) != 0 {
 		t.Errorf("u2 sees %+v", other)
+	}
+}
+
+func TestOpenWithoutAStatusDoesNotBumpTheTopic(t *testing.T) {
+	d := testdb.New(t)
+	svc := &topics.Service{Pool: d.Pool}
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, "u1", "older", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "u1", "newer", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool.Exec(ctx, `UPDATE topics SET updated_at = now() - interval '1 hour' WHERE name = 'older'`); err != nil {
+		t.Fatal(err)
+	}
+	var before time.Time
+	if err := d.Pool.QueryRow(ctx, `SELECT updated_at FROM topics WHERE name = 'older'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "u1", "older", nil); err != nil {
+		t.Fatal(err)
+	}
+	var after time.Time
+	if err := d.Pool.QueryRow(ctx, `SELECT updated_at FROM topics WHERE name = 'older'`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Equal(before) {
+		t.Errorf("updated_at moved from %v to %v", before, after)
+	}
+	if idx, _ := svc.Index(ctx, "u1"); len(idx) != 2 || idx[0].Name != "newer" {
+		t.Errorf("Index = %+v", idx)
 	}
 }
 

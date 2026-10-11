@@ -17,8 +17,8 @@ import (
 var ErrUnauthorized = errors.New("agentauth: unauthorized")
 
 // DepthFunc resolves an actor's depth and whether it is limited to merge status. Task
-// supervisors and children get theirs from the task principal; a nil DepthFunc derives it from
-// the role.
+// supervisors and children get theirs from the task principal. With a nil DepthFunc those two
+// roles are refused, since nothing then checks their task principal.
 type DepthFunc func(ctx context.Context, row dbq.GetMCPActorRow) (depth int, mergeStatusOnly bool, err error)
 
 // Authenticator turns a bearer into an [Actor].
@@ -53,6 +53,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (Actor, 
 		return Actor{}, ErrUnauthorized
 	}
 	if !ValidPair(row.Role, row.MCPGrantKind) {
+		return Actor{}, ErrUnauthorized
+	}
+	if a.Depth == nil && (row.Role == dbstate.RoleSupervisor || row.Role == dbstate.RoleChild) {
 		return Actor{}, ErrUnauthorized
 	}
 	actor := Actor{

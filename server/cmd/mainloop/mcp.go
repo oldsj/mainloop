@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -39,22 +40,38 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	return httpx.Serve(ctx, log, "mcp", mcpAddr, srv.Handler())
 }
 
-// registerCredentials adds the credential cleanup loop to the runner. Secrets exist only in
-// the cluster, so outside one (local development) the loop is off and revoked credentials wait
-// for a process that can reach Kubernetes.
-func registerCredentials(cfg *config.Config, pool *pgxpool.Pool, runner *reconcile.Runner, log *slog.Logger) {
-	if !cfg.InCluster() {
-		log.Warn("credential cleanup is off: not running in a cluster")
-		return
+// newCredentials builds the one credential service of this process. In a cluster it publishes
+// Secrets to the kagent namespace, and failing to reach Kubernetes stops startup: running on
+// without it would silently leave revoked Secrets behind. Outside a cluster (local development)
+// its Issue fails with [agentauth.ErrNotConfigured] and nothing cleans up, since there are no
+// Secrets to clean.
+func newCredentials(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) (*agentauth.Credentials, error) {
+	return newCredentialsWith(cfg, pool, log, func(ns string) (agentauth.SecretStore, error) {
+		return k8ssecrets.NewInCluster(ns)
+	})
+}
+
+func newCredentialsWith(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, inCluster func(namespace string) (agentauth.SecretStore, error)) (*agentauth.Credentials, error) {
+	var store agentauth.SecretStore = agentauth.Unconfigured{}
+	if cfg.InCluster() {
+		s, err := inCluster(cfg.Kagent.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("credentials: %w", err)
+		}
+		store = s
+	} else {
+		log.Warn("credential cleanup is off and credentials cannot be issued: not running in a cluster")
 	}
-	store, err := k8ssecrets.NewInCluster(cfg.Kagent.Namespace)
-	if err != nil {
-		log.Error("credential cleanup is off", "error", err.Error())
-		return
-	}
-	creds := &agentauth.Credentials{
+	return &agentauth.Credentials{
 		Pool: pool, Secrets: store, Key: []byte(cfg.Identity.AgentTokenKey.Reveal()),
 		Prefix: cfg.CredentialSecretPrefix(), Log: log,
+	}, nil
+}
+
+// registerCredentials adds the cleanup loop to the runner when the credentials can reach
+// Kubernetes.
+func registerCredentials(cfg *config.Config, creds *agentauth.Credentials, runner *reconcile.Runner) {
+	if cfg.InCluster() {
+		creds.Register(runner)
 	}
-	creds.Register(runner)
 }

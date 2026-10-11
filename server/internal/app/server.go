@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
@@ -68,6 +69,9 @@ type Deps struct {
 	// Sessions is the main thread service, shared with the delivery loop. Nil builds one with no
 	// kagent client, which records sends but does not deliver them.
 	Sessions *sessions.Service
+	// Credentials issues and revokes agent bearers; there is one per process. The sessions and
+	// workspaces services receive it from serve-api. Nil in tests that issue no credentials.
+	Credentials *agentauth.Credentials
 	// Preview routes preview hosts to workspace dev servers. Nil serves no previews, and a
 	// preview host is then refused by the Host guard like any unknown host.
 	Preview *preview.Proxy

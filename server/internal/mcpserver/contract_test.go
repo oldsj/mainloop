@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
@@ -114,7 +116,9 @@ func TestVisibilityMatchesTheContract(t *testing.T) {
 		}
 		return s
 	}
+	visited := map[key]bool{}
 	check := func(k key, a agentauth.Actor) {
+		visited[k] = true
 		p := agentauth.Policy{MergeTools: k.merge}
 		w := want[k] // absent means the actor sees nothing
 		for i, surface := range []agentauth.Surface{agentauth.SurfaceOrdinary, agentauth.SurfaceApproval} {
@@ -142,10 +146,18 @@ func TestVisibilityMatchesTheContract(t *testing.T) {
 	if seen != 2*4*3*3 {
 		t.Fatal(fmt.Sprint("walked ", seen, " actors"))
 	}
+	// A row of the file for a role, depth or grant this walk does not enumerate would otherwise
+	// go unchecked.
+	for k := range want {
+		if !visited[k] {
+			t.Errorf("the contract has a visibility row %+v that this test does not enumerate", k)
+		}
+	}
 }
 
-// The properties, required fields and string lengths of every implemented tool's input match the
-// Python models. Descriptions and wording of the schema may differ.
+// Every implemented tool's input schema matches the Python model's: the same properties and
+// required set, and for each property the type, nullability, length, pattern, enum, numeric and
+// item bounds, recursively. Titles, defaults and descriptions may differ.
 func TestInputSchemasMatchTheContract(t *testing.T) {
 	c := loadContract(t)
 	contractSchema := map[string]map[string]any{}
@@ -153,79 +165,137 @@ func TestInputSchemasMatchTheContract(t *testing.T) {
 		contractSchema[tool.Name] = tool.InputSchema
 	}
 	for _, tool := range (&mcpserver.Server{}).Implemented() {
-		want, got := contractSchema[tool.Name], tool.InputSchema
-		if got["additionalProperties"] != false || want["additionalProperties"] != false {
-			t.Errorf("%s: additionalProperties differs", tool.Name)
-		}
-		if fmt.Sprint(required(got)) != fmt.Sprint(required(want)) {
-			t.Errorf("%s: required %v, contract %v", tool.Name, required(got), required(want))
-		}
-		gotProps, wantProps := props(got), props(want)
-		if len(gotProps) != len(wantProps) {
-			t.Errorf("%s: properties %v, contract %v", tool.Name, keys(gotProps), keys(wantProps))
-		}
-		for name, wp := range wantProps {
-			gp, ok := gotProps[name]
-			if !ok {
-				t.Errorf("%s: missing property %q", tool.Name, name)
-				continue
-			}
-			if g, w := lengths(gp), lengths(wp); g != w {
-				t.Errorf("%s.%s: lengths %v, contract %v", tool.Name, name, g, w)
-			}
+		got, want := normalizeSchema(t, tool.InputSchema, tool.InputSchema), normalizeSchema(t, contractSchema[tool.Name], contractSchema[tool.Name])
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: input schema differs from the contract\n got  %s\n want %s", tool.Name, mustJSON(got), mustJSON(want))
 		}
 	}
 }
 
-func required(schema map[string]any) []string {
-	var out []string
-	switch r := schema["required"].(type) {
-	case []any:
-		for _, v := range r {
-			out = append(out, v.(string))
+// TestSchemaComparisonSeesADifferentType proves the comparison is not shallow: changing one
+// property's type, pattern, enum, bound or nullability must change its normalized form.
+func TestSchemaComparisonSeesADifferentType(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{
+			"type": "object", "additionalProperties": false, "required": []any{"a"},
+			"properties": map[string]any{"a": map[string]any{"type": "string", "minLength": float64(1), "pattern": "^x$", "enum": []any{"x", "y"}}},
 		}
-	case []string:
-		out = r
 	}
-	slices.Sort(out)
+	prop := func(m map[string]any) map[string]any { return m["properties"].(map[string]any)["a"].(map[string]any) }
+	mutations := map[string]func(map[string]any){
+		"type":      func(m map[string]any) { prop(m)["type"] = "integer" },
+		"pattern":   func(m map[string]any) { prop(m)["pattern"] = "^y$" },
+		"enum":      func(m map[string]any) { prop(m)["enum"] = []any{"x"} },
+		"minLength": func(m map[string]any) { prop(m)["minLength"] = float64(2) },
+		"maximum":   func(m map[string]any) { prop(m)["maximum"] = float64(3) },
+		"nullable": func(m map[string]any) {
+			m["properties"].(map[string]any)["a"] = map[string]any{"anyOf": []any{prop(m), map[string]any{"type": "null"}}}
+		},
+		"required": func(m map[string]any) { m["required"] = []any{} },
+	}
+	want := normalizeSchema(t, base(), base())
+	for name, mutate := range mutations {
+		m := base()
+		mutate(m)
+		if reflect.DeepEqual(normalizeSchema(t, m, m), want) {
+			t.Errorf("a changed %s is not noticed", name)
+		}
+	}
+	// What may differ does not matter.
+	m := base()
+	prop(m)["title"], prop(m)["description"], prop(m)["default"] = "A", "words", nil
+	if !reflect.DeepEqual(normalizeSchema(t, m, m), want) {
+		t.Error("title, description and default should be ignored")
+	}
+}
+
+// ignoredKeys may differ between the Pydantic schema and the Go one.
+var ignoredKeys = map[string]bool{"title": true, "description": true, "default": true, "$defs": true}
+
+// normalizeSchema reduces a schema to what a client can rely on. A nullable property (anyOf with
+// a null branch) becomes the other branch plus "nullable": true; $ref is resolved against root's
+// $defs; numbers are compared as numbers.
+func normalizeSchema(t *testing.T, node, root map[string]any) map[string]any {
+	t.Helper()
+	return normalizeNode(t, viaJSON(t, node), viaJSON(t, root))
+}
+
+// viaJSON gives the Go schema the types a decoded file has: float64 numbers, []any lists.
+func viaJSON(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
 	return out
 }
 
-func props(schema map[string]any) map[string]map[string]any {
-	out := map[string]map[string]any{}
-	for name, v := range schema["properties"].(map[string]any) {
-		out[name] = v.(map[string]any)
+func normalizeNode(t *testing.T, node, root map[string]any) map[string]any {
+	t.Helper()
+	if ref, ok := node["$ref"].(string); ok {
+		name := strings.TrimPrefix(ref, "#/$defs/")
+		defs, _ := root["$defs"].(map[string]any)
+		target, ok := defs[name].(map[string]any)
+		if !ok || name == ref {
+			t.Fatalf("unresolvable $ref %q", ref)
+		}
+		return normalizeNode(t, target, root)
 	}
-	return out
-}
-
-func keys[V any](m map[string]V) []string {
-	var out []string
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// lengths reads minLength and maxLength from a property or from the non-null branch of its
-// optional form.
-func lengths(prop map[string]any) [2]int {
-	if branches, ok := prop["anyOf"].([]any); ok {
+	if branches, ok := node["anyOf"].([]any); ok {
+		var rest []any
+		nullable := false
 		for _, b := range branches {
-			if m := b.(map[string]any); m["type"] != "null" {
-				prop = m
+			if m, _ := b.(map[string]any); m["type"] == "null" && len(m) == 1 {
+				nullable = true
+			} else {
+				rest = append(rest, b)
 			}
 		}
-	}
-	num := func(k string) int {
-		switch v := prop[k].(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
+		if len(rest) != 1 {
+			t.Fatalf("anyOf with %d non-null branches is not supported by this test", len(rest))
 		}
-		return 0
+		out := normalizeNode(t, rest[0].(map[string]any), root)
+		if nullable {
+			out["nullable"] = true
+		}
+		return out
 	}
-	return [2]int{num("minLength"), num("maxLength")}
+	out := map[string]any{}
+	for k, v := range node {
+		if ignoredKeys[k] {
+			continue
+		}
+		switch k {
+		case "properties":
+			props := map[string]any{}
+			for name, p := range v.(map[string]any) {
+				props[name] = normalizeNode(t, p.(map[string]any), root)
+			}
+			out[k] = props
+		case "items":
+			out[k] = normalizeNode(t, v.(map[string]any), root)
+		case "required", "enum":
+			list := []string{}
+			for _, e := range v.([]any) {
+				list = append(list, fmt.Sprint(e))
+			}
+			slices.Sort(list)
+			out[k] = list
+		default:
+			out[k] = v
+		}
+	}
+	if _, ok := out["required"]; !ok && out["type"] == "object" {
+		out["required"] = []string{}
+	}
+	return out
+}
+
+func mustJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }

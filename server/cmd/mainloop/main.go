@@ -137,6 +137,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 	deps.Workspaces = wsSvc
+	creds, err := newCredentials(cfg, pool, log)
+	if err != nil {
+		return err
+	}
+	deps.Credentials = creds
 	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {
 		return err
@@ -167,7 +172,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner := reconcile.NewRunner(pool, log, notifier)
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
-	registerCredentials(cfg, pool, runner, log)
+	registerCredentials(cfg, creds, runner)
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	previews.Register(runner)

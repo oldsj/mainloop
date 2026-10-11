@@ -45,6 +45,35 @@ func (q *Queries) ClosePendingByPrefix(ctx context.Context, arg ClosePendingByPr
 	return items, nil
 }
 
+const ensureTopic = `-- name: EnsureTopic :one
+INSERT INTO topics (id, user_id, name) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, name) DO UPDATE SET name = topics.name
+RETURNING id, user_id, name, status_line, checkpoint, created_at, updated_at
+`
+
+type EnsureTopicParams struct {
+	ID     string
+	UserID string
+	Name   string
+}
+
+// Returns the topic, creating it when missing. An existing topic keeps its updated_at; the no-op
+// update is what makes RETURNING yield the row under concurrent inserts.
+func (q *Queries) EnsureTopic(ctx context.Context, arg EnsureTopicParams) (Topic, error) {
+	row := q.db.QueryRow(ctx, ensureTopic, arg.ID, arg.UserID, arg.Name)
+	var i Topic
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.StatusLine,
+		&i.Checkpoint,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listTopicsWithPending = `-- name: ListTopicsWithPending :many
 
 SELECT

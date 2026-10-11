@@ -102,6 +102,12 @@ func (s *Server) endpoint(surface agentauth.Surface, tools map[string]Tool) http
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Agents are not browsers and send no Origin; a request that carries one is a web page
+		// calling in, which no origin is allowed to do.
+		if r.Header.Get("Origin") != "" {
+			httpx.WriteError(w, http.StatusForbidden, "Forbidden")
+			return
+		}
 		token, err := agentauth.BearerToken(r.Header.Get("Authorization"))
 		if err != nil {
 			unauthorized(w)

@@ -74,7 +74,8 @@ func (s *Service) Open(ctx context.Context, userID, name string, status *string)
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
 		var err error
-		if topic, err = q.UpsertTopic(ctx, dbq.UpsertTopicParams{ID: uuid.NewString(), UserID: userID, Name: name}); err != nil {
+		// Opening without a status only reads the topic; it must not move it in the index.
+		if topic, err = q.EnsureTopic(ctx, dbq.EnsureTopicParams{ID: uuid.NewString(), UserID: userID, Name: name}); err != nil {
 			return err
 		}
 		if status != nil {

@@ -499,32 +499,6 @@ func (q *Queries) GetProjectByFullName(ctx context.Context, arg GetProjectByFull
 	return i, err
 }
 
-const getPublishedCredentialByHash = `-- name: GetPublishedCredentialByHash :one
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE token_hash = $1 AND state = 'published'
-`
-
-func (q *Queries) GetPublishedCredentialByHash(ctx context.Context, tokenHash string) (Credential, error) {
-	row := q.db.QueryRow(ctx, getPublishedCredentialByHash, tokenHash)
-	var i Credential
-	err := row.Scan(
-		&i.ID,
-		&i.Kind,
-		&i.BindingID,
-		&i.TokenHash,
-		&i.SecretName,
-		&i.SecretUID,
-		&i.State,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RevokedAt,
-		&i.Attempts,
-		&i.NextAttemptAt,
-		&i.LeaseOwner,
-		&i.LeaseUntil,
-	)
-	return i, err
-}
-
 const getSession = `-- name: GetSession :one
 SELECT id, user_id, project_id, title, description, prompt, status, repo_url, branch_name, base_branch, model, commit_sha, summary, error, color, result, created_at, started_at, completed_at, archived_at FROM sessions WHERE id = $1
 `
@@ -648,45 +622,6 @@ SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created
 
 func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string) ([]Credential, error) {
 	rows, err := q.db.Query(ctx, listCredentialsByBinding, bindingID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Credential{}
-	for rows.Next() {
-		var i Credential
-		if err := rows.Scan(
-			&i.ID,
-			&i.Kind,
-			&i.BindingID,
-			&i.TokenHash,
-			&i.SecretName,
-			&i.SecretUID,
-			&i.State,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RevokedAt,
-			&i.Attempts,
-			&i.NextAttemptAt,
-			&i.LeaseOwner,
-			&i.LeaseUntil,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCredentialsPendingCleanup = `-- name: ListCredentialsPendingCleanup :many
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE state = 'revoked' ORDER BY updated_at, id LIMIT $1
-`
-
-func (q *Queries) ListCredentialsPendingCleanup(ctx context.Context, limit int32) ([]Credential, error) {
-	rows, err := q.db.Query(ctx, listCredentialsPendingCleanup, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -887,35 +822,6 @@ WHERE session_id = $1
 func (q *Queries) MarkBindingKagentDeleted(ctx context.Context, sessionID string) error {
 	_, err := q.db.Exec(ctx, markBindingKagentDeleted, sessionID)
 	return err
-}
-
-const markCredentialDeleted = `-- name: MarkCredentialDeleted :one
-UPDATE credentials
-SET state = 'deleted', updated_at = now()
-WHERE id = $1 AND state = 'revoked'
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
-`
-
-func (q *Queries) MarkCredentialDeleted(ctx context.Context, id string) (Credential, error) {
-	row := q.db.QueryRow(ctx, markCredentialDeleted, id)
-	var i Credential
-	err := row.Scan(
-		&i.ID,
-		&i.Kind,
-		&i.BindingID,
-		&i.TokenHash,
-		&i.SecretName,
-		&i.SecretUID,
-		&i.State,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RevokedAt,
-		&i.Attempts,
-		&i.NextAttemptAt,
-		&i.LeaseOwner,
-		&i.LeaseUntil,
-	)
-	return i, err
 }
 
 const markCredentialPublished = `-- name: MarkCredentialPublished :one

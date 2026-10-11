@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
+	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
@@ -89,14 +92,28 @@ func TestAuthenticate(t *testing.T) {
 		t.Errorf("actor = %+v", got)
 	}
 
+	// Task roles need a DepthFunc that checks the task principal; without one they are refused.
+	taskAuth := &agentauth.Authenticator{Q: dbq.New(d.Pool), Depth: func(_ context.Context, row dbq.GetMCPActorRow) (int, bool, error) {
+		if row.Role == dbstate.RoleChild {
+			return 2, false, nil
+		}
+		return 1, false, nil
+	}}
 	sup := env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantWorkspace, Parent: main.SessionID})
-	if got, err = auth.Authenticate(ctx, sup.Token); err != nil || got.Depth != 1 {
+	if got, err = taskAuth.Authenticate(ctx, sup.Token); err != nil || got.Depth != 1 {
 		t.Errorf("supervisor = %+v, %v", got, err)
 	}
 	child := env.Seed(t, authtest.Agent{Role: dbstate.RoleChild, Grant: dbstate.GrantCoordination, Parent: sup.SessionID})
-	if got, err = auth.Authenticate(ctx, child.Token); err != nil || got.Depth != 2 {
+	if got, err = taskAuth.Authenticate(ctx, child.Token); err != nil || got.Depth != 2 {
 		t.Errorf("child = %+v, %v", got, err)
 	}
+	t.Run("task roles fail closed without a depth hook", func(t *testing.T) {
+		for _, s := range []authtest.Seeded{sup, child} {
+			if _, err := auth.Authenticate(ctx, s.Token); !errors.Is(err, agentauth.ErrUnauthorized) {
+				t.Errorf("err = %v", err)
+			}
+		}
+	})
 
 	t.Run("unknown token", func(t *testing.T) {
 		for _, tok := range []string{"ml_" + strings.Repeat("0", 64), agentauth.Token([]byte("wrong key"), main.CredentialID)} {
@@ -223,6 +240,120 @@ func TestIssueIsIdempotentAndPublishesTheSecret(t *testing.T) {
 	}
 	if strings.Contains(row.TokenHash, "ml_") {
 		t.Error("the plaintext bearer is stored")
+	}
+}
+
+// gatedStore holds Create after the Secret exists, so a test can act between the Secret landing
+// and the credential row being marked published.
+type gatedStore struct {
+	agentauth.SecretStore
+	created chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedStore) Create(ctx context.Context, name, purpose, bearer string) (string, error) {
+	uid, err := g.SecretStore.Create(ctx, name, purpose, bearer)
+	close(g.created)
+	<-g.release
+	return uid, err
+}
+
+func TestRevokeDuringPublishDoesNotLeakTheSecret(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	q := dbq.New(d.Pool)
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	// Start over: revoke the seeded credential, let cleanup finish, then issue a new one with a
+	// gated Create.
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	runCleanup(t, env, func() bool {
+		got, _ := q.GetCredential(ctx, s.CredentialID)
+		return got.State == dbstate.CredentialDeleted
+	})
+	name := "mainloop-mcp-" + s.SessionID
+	gate := &gatedStore{SecretStore: env.Creds.Secrets, created: make(chan struct{}), release: make(chan struct{})}
+	gated := *env.Creds
+	gated.Secrets = gate
+	done := make(chan error, 1)
+	go func() { _, err := gated.Issue(ctx, s.SessionID, dbstate.CredentialMCP); done <- err }()
+	<-gate.created
+	// The Secret exists; revoke and let cleanup mark the row deleted before the publish lands.
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	live, err := q.ListCredentialsByBinding(ctx, s.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := live[len(live)-1]
+	if _, err := d.Pool.Exec(ctx, `UPDATE credentials SET state = 'deleted' WHERE id = $1`, newest.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(gate.release)
+	if err := <-done; !errors.Is(err, agentauth.ErrRevoked) {
+		t.Fatalf("Issue err = %v, want ErrRevoked", err)
+	}
+	if uid := env.Cluster.UID(authtest.Namespace, name); uid != "" {
+		t.Errorf("the Secret %s leaked (uid %s)", name, uid)
+	}
+	// And the binding can be issued a credential again.
+	if _, err := env.Creds.Issue(ctx, s.SessionID, dbstate.CredentialMCP); err != nil {
+		t.Errorf("reissue: %v", err)
+	}
+}
+
+func TestRevokeInTxRollsBackWithTheTransaction(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+
+	rollback := errors.New("rollback")
+	err := db.InTx(ctx, d.Pool, func(tx pgx.Tx) error {
+		if n, err := agentauth.RevokeInTx(ctx, dbq.New(tx), s.SessionID); err != nil || n != 1 {
+			t.Errorf("RevokeInTx = %d, %v", n, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatal(err)
+	}
+	if got, _ := dbq.New(d.Pool).GetCredential(ctx, s.CredentialID); got.State != dbstate.CredentialPublished {
+		t.Fatalf("state after rollback = %s", got.State)
+	}
+	if err := db.InTx(ctx, d.Pool, func(tx pgx.Tx) error {
+		_, err := agentauth.RevokeInTx(ctx, dbq.New(tx), s.SessionID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := dbq.New(d.Pool).GetCredential(ctx, s.CredentialID); got.State != dbstate.CredentialRevoked {
+		t.Fatalf("state after commit = %s", got.State)
+	}
+}
+
+func TestUnconfiguredStoreCannotIssue(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	if _, err := env.Creds.Revoke(ctx, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	runCleanup(t, env, func() bool {
+		got, _ := dbq.New(d.Pool).GetCredential(ctx, s.CredentialID)
+		return got.State == dbstate.CredentialDeleted
+	})
+	off := *env.Creds
+	off.Secrets = agentauth.Unconfigured{}
+	if _, err := off.Issue(ctx, s.SessionID, dbstate.CredentialMCP); !errors.Is(err, agentauth.ErrNotConfigured) {
+		t.Errorf("Issue err = %v", err)
+	}
+	if rows, _ := dbq.New(d.Pool).ListCredentialsByBinding(ctx, s.SessionID); len(rows) != 1 {
+		t.Errorf("Issue left %d credential rows, want the 1 it started with", len(rows))
 	}
 }
 

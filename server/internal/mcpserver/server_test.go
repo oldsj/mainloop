@@ -37,7 +37,16 @@ func newHarness(t *testing.T, mergeTools bool) *harness {
 	env := authtest.NewEnv(d.Pool)
 	q := dbq.New(d.Pool)
 	srv := &mcpserver.Server{
-		Auth:         &agentauth.Authenticator{Q: q},
+		// The task slice supplies the real DepthFunc; this one only gives the task roles a depth.
+		Auth: &agentauth.Authenticator{Q: q, Depth: func(_ context.Context, row dbq.GetMCPActorRow) (int, bool, error) {
+			switch row.Role {
+			case dbstate.RoleSupervisor:
+				return 1, false, nil
+			case dbstate.RoleChild:
+				return 2, false, nil
+			}
+			return 0, false, nil
+		}},
 		Policy:       agentauth.Policy{MergeTools: mergeTools},
 		Queries:      q,
 		Topics:       &topics.Service{Pool: d.Pool},
@@ -152,6 +161,33 @@ func TestHostAllowlist(t *testing.T) {
 	h.handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "healthy") {
 		t.Errorf("/health = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestARequestWithAnOriginIsRefused(t *testing.T) {
+	h := newHarness(t, false)
+	main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	for _, path := range []string{mcpserver.PathOrdinary, mcpserver.PathApproval} {
+		for _, token := range []string{main.Token, ""} {
+			raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(raw))
+			req.Host = host
+			req.Header.Set("Origin", "https://example.com")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			w := httptest.NewRecorder()
+			h.handler.ServeHTTP(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("%s with token=%t: status = %d, want 403", path, token != "", w.Code)
+			}
+		}
+	}
+	// The same request without Origin still works.
+	if got := h.list(t, mcpserver.PathOrdinary, main.Token); len(got) == 0 {
+		t.Error("no tools without an Origin")
 	}
 }
 

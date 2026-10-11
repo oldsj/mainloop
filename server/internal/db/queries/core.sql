@@ -118,14 +118,8 @@ RETURNING *;
 -- name: GetCredential :one
 SELECT * FROM credentials WHERE id = $1;
 
--- name: GetPublishedCredentialByHash :one
-SELECT * FROM credentials WHERE token_hash = $1 AND state = 'published';
-
 -- name: ListCredentialsByBinding :many
 SELECT * FROM credentials WHERE binding_id = $1 ORDER BY created_at, id;
-
--- name: ListCredentialsPendingCleanup :many
-SELECT * FROM credentials WHERE state = 'revoked' ORDER BY updated_at, id LIMIT $1;
 
 -- name: MarkCredentialPublished :one
 UPDATE credentials
@@ -137,12 +131,6 @@ RETURNING *;
 UPDATE credentials
 SET state = 'revoked', secret_uid = coalesce(secret_uid, $2), revoked_at = now(), updated_at = now()
 WHERE id = $1 AND state IN ('planned', 'published')
-RETURNING *;
-
--- name: MarkCredentialDeleted :one
-UPDATE credentials
-SET state = 'deleted', updated_at = now()
-WHERE id = $1 AND state = 'revoked'
 RETURNING *;
 
 -- Topics

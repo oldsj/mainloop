@@ -93,6 +93,27 @@ jobs:
         # status, not diff: new untracked files count too
         run: test -z "$(git status --porcelain -- .)"
 
+  mcp-contract:
+    name: MCP tool contract is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_HTTP_TIMEOUT: '30'
+      UV_HTTP_RETRIES: '1'
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Compare api/mcp-tools.json with the Python registry
+        run: uv run --frozen --project backend --python 3.13 python scripts/export-mcp-tools.py --check
+
   image:
     name: Build prod image
     runs-on: ubuntu-latest
