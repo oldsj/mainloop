@@ -13,6 +13,24 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
+const beginScheduledRunAttempt = `-- name: BeginScheduledRunAttempt :exec
+UPDATE scheduled_run_schedules
+SET contested = coalesce(attempt_at > $2::timestamptz, false), attempt_at = now(), updated_at = now()
+WHERE request_id = $1 AND state = 'intent'
+`
+
+type BeginScheduledRunAttemptParams struct {
+	RequestID string
+	Recent    time.Time
+}
+
+// A create attempt begins. It is contested when the previous attempt began within the grace: that attempt
+// may still be running or may have made the schedule, so this one's refusal proves nothing.
+func (q *Queries) BeginScheduledRunAttempt(ctx context.Context, arg BeginScheduledRunAttemptParams) error {
+	_, err := q.db.Exec(ctx, beginScheduledRunAttempt, arg.RequestID, arg.Recent)
+	return err
+}
+
 const confirmScheduledRunCreate = `-- name: ConfirmScheduledRunCreate :execrows
 UPDATE scheduled_run_schedules
 SET state = 'created', schedule_id = $2, updated_at = now()
@@ -33,13 +51,32 @@ func (q *Queries) ConfirmScheduledRunCreate(ctx context.Context, arg ConfirmSche
 	return result.RowsAffected(), nil
 }
 
-const deleteScheduledRunIntent = `-- name: DeleteScheduledRunIntent :exec
-DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent'
+const deleteScheduledRunIntent = `-- name: DeleteScheduledRunIntent :execrows
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND NOT contested
 `
 
-// kagent refused the create for good: nothing exists, so the intent goes.
-func (q *Queries) DeleteScheduledRunIntent(ctx context.Context, requestID string) error {
-	_, err := q.db.Exec(ctx, deleteScheduledRunIntent, requestID)
+// kagent refused a create. When no other attempt overlapped or closely preceded it, nothing exists and
+// the intent goes; a contested intent stays for the sweep.
+func (q *Queries) DeleteScheduledRunIntent(ctx context.Context, requestID string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteScheduledRunIntent, requestID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteStaleUnownedIntent = `-- name: DeleteStaleUnownedIntent :exec
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= $2::timestamptz
+`
+
+type DeleteStaleUnownedIntentParams struct {
+	RequestID string
+	Before    time.Time
+}
+
+// An intent on an Agent that has been outside this deployment for long enough.
+func (q *Queries) DeleteStaleUnownedIntent(ctx context.Context, arg DeleteStaleUnownedIntentParams) error {
+	_, err := q.db.Exec(ctx, deleteStaleUnownedIntent, arg.RequestID, arg.Before)
 	return err
 }
 
@@ -62,7 +99,7 @@ func (q *Queries) EndScheduledRunSession(ctx context.Context, arg EndScheduledRu
 }
 
 const getScheduledRunByRequest = `-- name: GetScheduledRunByRequest :one
-SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE request_id = $1 AND owner_id = $2
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, attempt_at, contested, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE request_id = $1 AND owner_id = $2
 `
 
 type GetScheduledRunByRequestParams struct {
@@ -80,6 +117,8 @@ func (q *Queries) GetScheduledRunByRequest(ctx context.Context, arg GetScheduled
 		&i.AgentName,
 		&i.CreateConfig,
 		&i.State,
+		&i.AttemptAt,
+		&i.Contested,
 		&i.ScheduleID,
 		&i.CursorExecutionID,
 		&i.DeletedAt,
@@ -111,7 +150,7 @@ func (q *Queries) GetScheduledRunLink(ctx context.Context, executionID string) (
 }
 
 const getScheduledRunSchedule = `-- name: GetScheduledRunSchedule :one
-SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, attempt_at, contested, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2
 `
 
 type GetScheduledRunScheduleParams struct {
@@ -129,6 +168,8 @@ func (q *Queries) GetScheduledRunSchedule(ctx context.Context, arg GetScheduledR
 		&i.AgentName,
 		&i.CreateConfig,
 		&i.State,
+		&i.AttemptAt,
+		&i.Contested,
 		&i.ScheduleID,
 		&i.CursorExecutionID,
 		&i.DeletedAt,
@@ -225,8 +266,8 @@ func (q *Queries) ListScheduleOwnedAgents(ctx context.Context) ([]KagentAgent, e
 }
 
 const listScheduledRunIntents = `-- name: ListScheduledRunIntents :many
-SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
-WHERE owner_id = $1 AND state = 'intent' AND created_at <= $2::timestamptz
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, attempt_at, contested, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
+WHERE owner_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= $2::timestamptz
 ORDER BY created_at
 `
 
@@ -235,7 +276,7 @@ type ListScheduledRunIntentsParams struct {
 	Before  time.Time
 }
 
-// Creates that may have been sent and not confirmed, old enough that the request that sent them has ended.
+// Creates that may have been sent and not confirmed, whose latest attempt began before the grace.
 func (q *Queries) ListScheduledRunIntents(ctx context.Context, arg ListScheduledRunIntentsParams) ([]ScheduledRunSchedule, error) {
 	rows, err := q.db.Query(ctx, listScheduledRunIntents, arg.OwnerID, arg.Before)
 	if err != nil {
@@ -252,6 +293,8 @@ func (q *Queries) ListScheduledRunIntents(ctx context.Context, arg ListScheduled
 			&i.AgentName,
 			&i.CreateConfig,
 			&i.State,
+			&i.AttemptAt,
+			&i.Contested,
 			&i.ScheduleID,
 			&i.CursorExecutionID,
 			&i.DeletedAt,
@@ -308,7 +351,7 @@ func (q *Queries) ListScheduledRunLinks(ctx context.Context, arg ListScheduledRu
 }
 
 const listScheduledRunSchedulesByID = `-- name: ListScheduledRunSchedulesByID :many
-SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE owner_id = $1 AND schedule_id = ANY($2::text[])
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, attempt_at, contested, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE owner_id = $1 AND schedule_id = ANY($2::text[])
 `
 
 type ListScheduledRunSchedulesByIDParams struct {
@@ -332,6 +375,8 @@ func (q *Queries) ListScheduledRunSchedulesByID(ctx context.Context, arg ListSch
 			&i.AgentName,
 			&i.CreateConfig,
 			&i.State,
+			&i.AttemptAt,
+			&i.Contested,
 			&i.ScheduleID,
 			&i.CursorExecutionID,
 			&i.DeletedAt,
@@ -350,7 +395,7 @@ func (q *Queries) ListScheduledRunSchedulesByID(ctx context.Context, arg ListSch
 }
 
 const listScheduledRunSchedulesToAdopt = `-- name: ListScheduledRunSchedulesToAdopt :many
-SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, attempt_at, contested, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
 WHERE owner_id = $1 AND state = 'created' AND settled_at IS NULL
 ORDER BY schedule_id
 `
@@ -371,6 +416,8 @@ func (q *Queries) ListScheduledRunSchedulesToAdopt(ctx context.Context, ownerID 
 			&i.AgentName,
 			&i.CreateConfig,
 			&i.State,
+			&i.AttemptAt,
+			&i.Contested,
 			&i.ScheduleID,
 			&i.CursorExecutionID,
 			&i.DeletedAt,

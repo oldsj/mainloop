@@ -56,12 +56,12 @@ func (s *Service) Adopt(ctx context.Context) error {
 	}
 	q := dbq.New(s.Pool)
 	var errs []error
-	if err := s.recoverCreates(ctx); err != nil {
-		errs = append(errs, err)
-	}
 	owned, err := s.ownAgents(ctx)
 	if err != nil {
-		return errors.Join(append(errs, err)...)
+		return err
+	}
+	if err := s.recoverCreates(ctx, owned); err != nil {
+		errs = append(errs, err)
 	}
 	rows, err := q.ListScheduledRunSchedulesToAdopt(ctx, s.OwnerID)
 	if err != nil {
@@ -83,35 +83,42 @@ func (s *Service) Adopt(ctx context.Context) error {
 }
 
 // recoverCreates replays the creates that were sent and never confirmed (the reply was lost, or the
-// process ended between the intent and the answer). kagent dedupes on the request id, so a replay
-// returns the schedule the first send made, or makes it now; a create kagent refuses made nothing,
-// so its intent is dropped.
-func (s *Service) recoverCreates(ctx context.Context) error {
+// process ended between the intent and the answer). It sends a create only for an intent on an Agent
+// this deployment owns now, as the routes do: a replay is a fresh create, so it must not outlive the
+// ownership that allowed the first send. Other intents are left for the Agent to return. kagent
+// dedupes on the request id, so a replay returns the schedule an earlier send made, or makes it now.
+func (s *Service) recoverCreates(ctx context.Context, owned map[string]bool) error {
 	q := dbq.New(s.Pool)
+	now := time.Now()
 	rows, err := q.ListScheduledRunIntents(ctx, dbq.ListScheduledRunIntentsParams{
-		OwnerID: s.OwnerID, Before: time.Now().Add(-s.Limits.intentGrace()),
+		OwnerID: s.OwnerID, Before: now.Add(-s.Limits.intentGrace()),
 	})
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, row := range rows {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !owned[agentKey(row.AgentNamespace, row.AgentName)] {
+			continue
+		}
 		var cfg kagentapi.ScheduledRunConfig
 		if err := protojson.Unmarshal(row.CreateConfig, &cfg); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		sc, err := s.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{
-			Agent:     &kagentapi.ResourceReference{Namespace: row.AgentNamespace, Name: row.AgentName},
-			RequestId: row.RequestID, Config: &cfg,
-		})
-		switch {
-		case definite(err):
-			err = q.DeleteScheduledRunIntent(ctx, row.RequestID)
-		case err == nil:
-			err = s.confirm(ctx, row.RequestID, sc)
+		if err := q.BeginScheduledRunAttempt(ctx, dbq.BeginScheduledRunAttemptParams{
+			RequestID: row.RequestID, Recent: now.Add(-s.Limits.intentGrace()),
+		}); err != nil {
+			errs = append(errs, err)
+			continue
 		}
-		if err != nil {
+		agent := &kagentapi.ResourceReference{Namespace: row.AgentNamespace, Name: row.AgentName}
+		_, sendErr, regErr := s.attempt(ctx, row.RequestID, agent, &cfg)
+		if regErr != nil || (sendErr != nil && !definite(sendErr)) {
+			err := errors.Join(regErr, sendErr)
 			s.log().WarnContext(ctx, "schedule create recovery failed", "request_id", row.RequestID, "error", err)
 			errs = append(errs, err)
 		}

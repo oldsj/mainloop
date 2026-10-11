@@ -3,8 +3,10 @@ package schedules
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -157,13 +159,28 @@ func (s *Service) touch(ctx context.Context, id string, deleted bool) error {
 
 // confirm records kagent's answer to a create: the intent becomes the registry entry for the
 // schedule, with schedule:updated in the same transaction. A replay of a confirmed create changes
-// nothing and publishes nothing.
+// nothing and publishes nothing, but only when the registry already holds this very schedule under
+// the request id: a missing row or another schedule is an error, never a silent success, so the
+// client retries (which writes the intent again and finds the same schedule) instead of holding a
+// schedule the registry does not know.
 func (s *Service) confirm(ctx context.Context, requestID string, sc *kagentapi.ScheduledRun) error {
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		n, err := q.ConfirmScheduledRunCreate(ctx, dbq.ConfirmScheduledRunCreateParams{RequestID: requestID, ScheduleID: ptr(sc.GetId())})
 		if err != nil {
 			return nil, err
+		}
+		if n == 0 {
+			row, err := q.GetScheduledRunByRequest(ctx, dbq.GetScheduledRunByRequestParams{RequestID: requestID, OwnerID: s.OwnerID})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("schedule %s was created for request %s but the registry has no intent for it", sc.GetId(), requestID)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if row.ScheduleID == nil || *row.ScheduleID != sc.GetId() {
+				return nil, fmt.Errorf("request %s is registered to another schedule than %s", requestID, sc.GetId())
+			}
 		}
 		if sc.GetDeletedAt() != nil {
 			if err := q.MarkScheduledRunScheduleDeleted(ctx, ptr(sc.GetId())); err != nil {
@@ -214,7 +231,28 @@ func (s *Service) beginCreate(
 	if row.AgentNamespace != agent.GetNamespace() || row.AgentName != agent.GetName() || !proto.Equal(&had, cfg) {
 		return errRequestIDReused
 	}
-	return nil
+	return q.BeginScheduledRunAttempt(ctx, dbq.BeginScheduledRunAttemptParams{
+		RequestID: requestID, Recent: time.Now().Add(-s.Limits.intentGrace()),
+	})
+}
+
+// attempt sends the create of an intent whose attempt has begun and records the answer. A schedule
+// confirms the intent. A definite refusal drops it unless another attempt overlapped or closely
+// preceded this one (that attempt may have made the schedule); an uncertain error leaves it for the
+// sweep to replay. sendErr is kagent's answer or failure; regErr is the registry's.
+func (s *Service) attempt(
+	ctx context.Context, requestID string, agent *kagentapi.ResourceReference, cfg *kagentapi.ScheduledRunConfig,
+) (sc *kagentapi.ScheduledRun, sendErr, regErr error) {
+	sc, err := s.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{Agent: agent, RequestId: requestID, Config: cfg})
+	if err != nil {
+		if definite(err) {
+			if _, derr := dbq.New(s.Pool).DeleteScheduledRunIntent(ctx, requestID); derr != nil {
+				s.log().WarnContext(ctx, "dropping a refused schedule intent failed", "error", derr)
+			}
+		}
+		return nil, err, nil
+	}
+	return sc, nil, s.confirm(ctx, requestID, sc)
 }
 
 // maxListPages bounds how many kagent pages one list call reads looking for this instance's schedules.
@@ -302,19 +340,12 @@ func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleR
 	if err := a.Svc.beginCreate(ctx, r.Body.RequestId, agent, cfg); err != nil {
 		return nil, err
 	}
-	sc, err := a.Svc.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{
-		Agent: agent, RequestId: r.Body.RequestId, Config: cfg,
-	})
-	if err != nil {
-		if definite(err) {
-			if derr := dbq.New(a.Svc.Pool).DeleteScheduledRunIntent(ctx, r.Body.RequestId); derr != nil {
-				a.Svc.log().WarnContext(ctx, "dropping a refused schedule intent failed", "error", derr)
-			}
-		}
-		return nil, a.Svc.refusal(err, true)
+	sc, sendErr, regErr := a.Svc.attempt(ctx, r.Body.RequestId, agent, cfg)
+	if sendErr != nil {
+		return nil, a.Svc.refusal(sendErr, true)
 	}
-	if err := a.Svc.confirm(ctx, r.Body.RequestId, sc); err != nil {
-		return nil, err
+	if regErr != nil {
+		return nil, regErr
 	}
 	if sc.GetDeletedAt() != nil {
 		// A replay of a create whose schedule was deleted since: kagent still returns it.

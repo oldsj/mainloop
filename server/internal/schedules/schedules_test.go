@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -520,16 +521,21 @@ func TestLostCreateReplyIsRecoveredByTheClientsRetry(t *testing.T) {
 
 func TestCreateReplayOfADeletedScheduleIsConflict(t *testing.T) {
 	e := newEnv(t)
-	sc := create(t, e, "req-1")
-	if _, err := e.api.DeleteSchedule(ctx, api.DeleteScheduleRequestObject{ScheduleId: sc.Id}); err != nil {
+	// The identical body twice, so the conflict can only come from the tombstone, not from a changed request.
+	resp, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("req-1")})
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("req-1")})
+	if _, err := e.api.DeleteSchedule(ctx, api.DeleteScheduleRequestObject{ScheduleId: resp.(api.CreateSchedule201JSONResponse).Body.Id}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("req-1")})
 	if status(t, err) != http.StatusConflict {
 		t.Fatalf("replay of a deleted schedule: %v", err)
 	}
-	if e.srv.ScheduleCount() != 1 {
-		t.Fatal("the replay made a second schedule")
+	if e.srv.ScheduleCount() != 1 || e.srv.ScheduleCreates() != 2 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE deleted_at IS NOT NULL`) != 1 {
+		t.Fatal("the replay did not reach kagent and keep the deletion recorded")
 	}
 }
 
@@ -762,4 +768,216 @@ func TestARepeatedExecutionPageTokenEndsThePass(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the pass followed a repeated page token for good")
 	}
+}
+
+// A create that fails before kagent accepts it leaves an intent. If the Agent then leaves this
+// deployment and another instance takes it, the sweep must not send the create: a replay is a fresh
+// create on an Agent that is no longer ours.
+func TestRecoveryDoesNotCreateOnAnAgentThatLeftTheDeployment(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Limits.IntentGrace = time.Nanosecond
+	code := connect.CodeUnavailable
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &code})
+	_, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("ownership-change")})
+	if status(t, err) != http.StatusBadGateway || e.srv.ScheduleCount() != 0 {
+		t.Fatalf("setup: want an unaccepted create with a durable intent; err=%v schedules=%d", err, e.srv.ScheduleCount())
+	}
+	if _, err := e.pool.Exec(ctx, `DELETE FROM kagent_agents WHERE namespace = 'kagent' AND name = 'claude'`); err != nil {
+		t.Fatal(err)
+	}
+	// A second database now owns the relinquished Agent, on the same kagent principal.
+	other := newEnvOn(t, e.srv, "claude")
+	create(t, other, "new-instance")
+	before := e.srv.ScheduleCount()
+	_, err = e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("ownership-change")})
+	if status(t, err) != http.StatusForbidden {
+		t.Fatalf("create after ownership ended: %v", err)
+	}
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.srv.ScheduleCount() != before {
+		t.Fatalf("recovery sent a create on an Agent outside the owned set: schedules %d -> %d", before, e.srv.ScheduleCount())
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'created'`) != 0 {
+		t.Fatal("recovery registered a schedule on an Agent outside the owned set")
+	}
+	// The intent waits for the Agent to return; the Agent coming back lets the sweep finish it.
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
+		t.Fatal("the intent of an unowned Agent was dropped")
+	}
+	if _, err := e.pool.Exec(ctx, `INSERT INTO kagent_agents (namespace, name) VALUES ('kagent', 'claude')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'created'`) != 1 {
+		t.Fatal("the sweep did not finish the intent once its Agent was owned again")
+	}
+}
+
+// concurrentCreateReplies scripts two overlapping creates of one request id: the first reaches
+// kagent and commits but its reply waits; the second is refused. The fork can do this because it
+// reads the request key, checks the Agent and inserts as separate steps, so the Agent can vanish
+// between the targets checks of two concurrent calls.
+type concurrentCreateReplies struct {
+	schedules.Kagent
+	n                                                          atomic.Int32
+	firstStarted, firstMaySend, firstCommitted, firstMayReturn chan struct{}
+}
+
+func (r *concurrentCreateReplies) CreateScheduledRun(c context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error) {
+	switch r.n.Add(1) {
+	case 1:
+		close(r.firstStarted)
+		select {
+		case <-r.firstMaySend:
+		case <-c.Done():
+			return nil, c.Err()
+		}
+		sc, err := r.Kagent.CreateScheduledRun(c, req)
+		close(r.firstCommitted)
+		select {
+		case <-r.firstMayReturn:
+		case <-c.Done():
+			return nil, c.Err()
+		}
+		return sc, err
+	case 2:
+		close(r.firstMaySend)
+		select {
+		case <-r.firstCommitted:
+		case <-c.Done():
+			return nil, c.Err()
+		}
+		return nil, &kagent.SessionError{Code: connect.CodeFailedPrecondition, Detail: "Agent disappeared between concurrent target checks"}
+	default:
+		return r.Kagent.CreateScheduledRun(c, req)
+	}
+}
+
+func TestConcurrentRefusalKeepsSuccessfulCreateRegistered(t *testing.T) {
+	e := newEnv(t)
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	r := &concurrentCreateReplies{Kagent: e.svc.Kagent, firstStarted: make(chan struct{}), firstMaySend: make(chan struct{}),
+		firstCommitted: make(chan struct{}), firstMayReturn: make(chan struct{})}
+	e.svc.Kagent = r
+	type result struct {
+		resp api.CreateScheduleResponseObject
+		err  error
+	}
+	first := make(chan result, 1)
+	go func() {
+		resp, err := e.api.CreateSchedule(c, api.CreateScheduleRequestObject{Body: createBody("same-request")})
+		first <- result{resp, err}
+	}()
+	select {
+	case <-r.firstStarted:
+	case <-c.Done():
+		t.Fatal(c.Err())
+	}
+	if _, err := e.api.CreateSchedule(c, api.CreateScheduleRequestObject{Body: createBody("same-request")}); status(t, err) != http.StatusNotFound {
+		t.Fatalf("second reply: %v", err)
+	}
+	close(r.firstMayReturn)
+	var got result
+	select {
+	case got = <-first:
+	case <-c.Done():
+		t.Fatal(c.Err())
+	}
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	id := got.resp.(api.CreateSchedule201JSONResponse).Body.Id
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE schedule_id = $1 AND state = 'created'`, id) != 1 {
+		t.Fatal("a concurrent refusal erased the successful create's registry row")
+	}
+	if _, err := e.api.GetSchedule(c, api.GetScheduleRequestObject{ScheduleId: id}); err != nil {
+		t.Fatalf("the created schedule is not readable: %v", err)
+	}
+	if e.scheduleEvents(t) != 1 {
+		t.Fatalf("schedule:updated events = %d, want 1", e.scheduleEvents(t))
+	}
+	x := fire(e, id)
+	reserve(e, x.GetId(), "ks-concurrent", running)
+	if err := e.svc.Adopt(c); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_links`) != 1 {
+		t.Fatal("the created schedule was not adopted")
+	}
+}
+
+// A lone definite refusal still drops its intent; a refusal after an uncertain attempt does not (that
+// attempt may have made the schedule), and the sweep ends it once the grace has passed.
+func TestRefusalDropsALoneIntentButNotOneAfterAnUncertainAttempt(t *testing.T) {
+	e := newEnv(t)
+	refused := connect.CodeFailedPrecondition
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
+	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("alone")}); status(t, err) != http.StatusNotFound {
+		t.Fatalf("lone refusal: %v", err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 0 {
+		t.Fatal("a lone refused create left its intent")
+	}
+
+	unavailable := connect.CodeUnavailable
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &unavailable})
+	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("after-unknown")}); status(t, err) != http.StatusBadGateway {
+		t.Fatalf("uncertain attempt: %v", err)
+	}
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
+	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("after-unknown")}); status(t, err) != http.StatusNotFound {
+		t.Fatalf("refusal after an uncertain attempt: %v", err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent' AND contested`) != 1 {
+		t.Fatal("a refusal right after an uncertain attempt dropped the intent")
+	}
+	// Past the grace the sweep replays on its own; kagent refuses it again, with nothing else in flight.
+	e.svc.Limits.IntentGrace = time.Nanosecond
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 0 {
+		t.Fatal("the sweep's lone refused replay did not end the intent")
+	}
+}
+
+// A success whose registry row is gone is an error the client retries, never a silent 201.
+func TestConfirmWithoutAnIntentIsAnErrorAndTheRetryHeals(t *testing.T) {
+	e := newEnv(t)
+	d := &deleteIntentBeforeReply{Kagent: e.svc.Kagent, pool: e.pool}
+	e.svc.Kagent = d
+	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("vanished")}); err == nil {
+		t.Fatal("create answered success while the registry has no row for it")
+	}
+	d.off = true
+	resp, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("vanished")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := resp.(api.CreateSchedule201JSONResponse).Body.Id
+	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'created' AND schedule_id = $1`, id) != 1 {
+		t.Fatal("the retry did not register the schedule the first send made")
+	}
+}
+
+type deleteIntentBeforeReply struct {
+	schedules.Kagent
+	pool *pgxpool.Pool
+	off  bool
+}
+
+func (d *deleteIntentBeforeReply) CreateScheduledRun(c context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error) {
+	sc, err := d.Kagent.CreateScheduledRun(c, req)
+	if !d.off {
+		if _, derr := d.pool.Exec(c, `DELETE FROM scheduled_run_schedules WHERE request_id = $1`, req.GetRequestId()); derr != nil {
+			return nil, derr
+		}
+	}
+	return sc, err
 }

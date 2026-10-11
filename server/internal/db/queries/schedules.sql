@@ -15,14 +15,26 @@ UPDATE scheduled_run_schedules
 SET state = 'created', schedule_id = $2, updated_at = now()
 WHERE request_id = $1 AND state = 'intent';
 
--- kagent refused the create for good: nothing exists, so the intent goes.
--- name: DeleteScheduledRunIntent :exec
-DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent';
+-- A create attempt begins. It is contested when the previous attempt began within the grace: that attempt
+-- may still be running or may have made the schedule, so this one's refusal proves nothing.
+-- name: BeginScheduledRunAttempt :exec
+UPDATE scheduled_run_schedules
+SET contested = coalesce(attempt_at > sqlc.arg(recent)::timestamptz, false), attempt_at = now(), updated_at = now()
+WHERE request_id = $1 AND state = 'intent';
 
--- Creates that may have been sent and not confirmed, old enough that the request that sent them has ended.
+-- kagent refused a create. When no other attempt overlapped or closely preceded it, nothing exists and
+-- the intent goes; a contested intent stays for the sweep.
+-- name: DeleteScheduledRunIntent :execrows
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND NOT contested;
+
+-- An intent on an Agent that has been outside this deployment for long enough.
+-- name: DeleteStaleUnownedIntent :exec
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= sqlc.arg(before)::timestamptz;
+
+-- Creates that may have been sent and not confirmed, whose latest attempt began before the grace.
 -- name: ListScheduledRunIntents :many
 SELECT * FROM scheduled_run_schedules
-WHERE owner_id = $1 AND state = 'intent' AND created_at <= sqlc.arg(before)::timestamptz
+WHERE owner_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= sqlc.arg(before)::timestamptz
 ORDER BY created_at;
 
 -- name: GetScheduledRunSchedule :one

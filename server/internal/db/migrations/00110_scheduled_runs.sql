@@ -6,8 +6,8 @@
 -- kagent principal serves every Mainloop instance, so a schedule is ours only if this table says
 -- so: a row is written in state 'intent' (request id, Agent, the config sent) before the create is
 -- sent, and moves to 'created' with the schedule id once kagent answered. A create whose reply was
--- lost is finished by replaying it from the row (kagent dedupes on the request id). Nothing else
--- ever enters the registry, so another instance's schedules are never listed, controlled or adopted.
+-- lost is finished by replaying it from the row (kagent dedupes on the request id), and only on an
+-- Agent this deployment still owns. Nothing else ever enters the registry, so another instance's schedules are never listed, controlled or adopted.
 --
 -- cursor_execution_id is the newest execution id up to which every execution has been fully handled
 -- (and was old enough to be settled); the sweep reads kagent's executions newest first and stops
@@ -20,6 +20,11 @@ CREATE TABLE scheduled_run_schedules (
     -- protojson of the ScheduledRunConfig the create sent, for the replay.
     create_config jsonb NOT NULL,
     state text NOT NULL DEFAULT 'intent' CHECK (state IN ('intent', 'created')),
+    -- When the latest create attempt began (NULL: none yet), and whether it overlapped or closely
+    -- followed another. A contested intent is not deleted by one attempt's refusal: the other attempt
+    -- may still have made the schedule.
+    attempt_at timestamptz,
+    contested boolean NOT NULL DEFAULT false,
     schedule_id text UNIQUE,
     cursor_execution_id text NOT NULL DEFAULT '',
     deleted_at timestamptz,

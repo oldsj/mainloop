@@ -31,8 +31,21 @@ The registry row (request id, Agent, config, state `intent`) is written before `
 is sent, and the request id goes to kagent unchanged. A lost reply is recovered by replaying the
 create from the row: the retry from the client does it, and so does the sweep once the intent is
 older than `Limits.IntentGrace`. kagent returns the schedule the first send made, and the row becomes
-`created`. A definite refusal from kagent deletes the intent. A request id reused with a different
-Agent or config is 409, and so is a replay whose schedule has since been deleted.
+`created`. A request id reused with a different Agent or config is 409, and so is a replay whose
+schedule has since been deleted.
+
+Attempts can overlap (a client retry while the first call is still running, or the sweep). A definite
+refusal from kagent deletes the intent only when no other attempt began within `Limits.IntentGrace`
+before or after it, because another attempt may have made the schedule. A contested intent stays and
+the sweep replays it after the grace; a lone refusal then ends it. A success whose registry row is
+gone, or is registered to another schedule, is an error the client retries; it is never answered 201
+without the row. The sweep reads the owned Agents before it replays and sends no create for an intent on an Agent
+this deployment no longer owns; that intent waits for the Agent to return.
+
+One Mainloop instance per kagent principal is an invariant (a second environment gets its own
+kagent). The registry and the owned-Agent filter keep the routes and the sweep to this instance's own
+schedules; they are not a defence against another instance sharing the principal, and kagent has no
+read-only lookup by request id for resolving an intent on a departed Agent.
 
 ## Executions become sessions (implemented)
 

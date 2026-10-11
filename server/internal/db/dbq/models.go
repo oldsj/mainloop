@@ -392,6 +392,8 @@ type ScheduledRunSchedule struct {
 	AgentName         string
 	CreateConfig      json.RawMessage
 	State             string
+	AttemptAt         *time.Time
+	Contested         bool
 	ScheduleID        *string
 	CursorExecutionID string
 	DeletedAt         *time.Time
