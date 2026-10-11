@@ -26,7 +26,7 @@ const OpChannel = "mainloop_task_ops"
 
 // WorkspaceRuntime is the part of [workspaces.Service] provisioning uses.
 type WorkspaceRuntime interface {
-	Create(ctx context.Context, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error)
+	CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error)
 	Delete(ctx context.Context, id string) error
 }
 
@@ -238,6 +238,7 @@ func (s *Service) beginCreate(ctx context.Context, c reconcile.Claim, op dbq.Tas
 			}
 			repo = strings.ToLower(full)
 			a.InitialRef = t.CheckoutRef
+			a.WorkspaceRequestID = ptr(workspaceRequestID(a.ID))
 		} else {
 			id := uuid.NewString()
 			a.SessionID, a.BindingID = &id, &id
@@ -423,10 +424,25 @@ func (s *Service) stepAside(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 // for this attempt. done is false when the outcome is already decided.
 func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation, t dbq.Task, a dbq.TaskAttempt) (out reconcile.Outcome, done bool, err error) {
 	q := dbq.New(s.Pool)
-	id, err := q.FindUnattachedWorkspace(ctx, dbq.FindUnattachedWorkspaceParams{
-		UserID: t.OwnerID, ProjectID: deref(t.ProjectID), Branch: deref(t.CheckoutBranch), CreatedAt: a.CreatedAt,
-	})
+	if a.WorkspaceRequestID == nil {
+		return reconcile.Outcome{}, false, errors.New("tasks: code attempt has no workspace request id")
+	}
+	w, err := q.GetWorkspaceByRequestID(ctx, dbq.GetWorkspaceByRequestIDParams{UserID: t.OwnerID, RequestID: *a.WorkspaceRequestID})
+	id := w.ID
 	if errors.Is(err, pgx.ErrNoRows) {
+		if err := s.reserveWorkspaceCreate(ctx, c, op, a); errors.Is(err, pgx.ErrNoRows) {
+			out, err = s.stepAside(ctx, c, op)
+			return out, false, err
+		} else if err != nil {
+			return reconcile.Outcome{}, false, err
+		}
+		// A cancelled handler still records the return. A lost process leaves its reservation
+		// unresolved, so an absent workspace is never mistaken for proof of no late commit.
+		defer func() {
+			finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			err = errors.Join(err, q.FinishAttemptWorkspaceCreate(finishCtx, a.ID))
+		}()
 		req := api.CreateWorkspaceRequest{ProjectId: t.ProjectID, Branch: t.CheckoutBranch, AgentKind: &a.ProfileID}
 		if t.CheckoutRef != nil && *t.CheckoutRef != "" {
 			req.Ref = t.CheckoutRef
@@ -435,7 +451,7 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 			d := int(*t.CheckoutDepth)
 			req.Depth = &d
 		}
-		lc, cerr := s.Workspaces.Create(ctx, req)
+		lc, cerr := s.Workspaces.CreateWithRequestID(ctx, *a.WorkspaceRequestID, req)
 		var rej *workspaces.RejectedError
 		if errors.As(cerr, &rej) {
 			out, err = s.abort(ctx, c, op, a, "workspace was refused: "+rej.Detail)
@@ -469,16 +485,60 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 		return reconcile.Outcome{}, false, err
 	}
 	err = s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		if _, err := q.GetTaskByIDForUpdate(ctx, a.TaskID); err != nil {
+			return nil, err
+		}
 		if _, err := q.AttachAttemptSession(ctx, dbq.AttachAttemptSessionParams{ID: a.ID, SessionID: &id, Environment: env}); err != nil {
 			return nil, err
 		}
 		_, err := q.SetBindingRole(ctx, dbq.SetBindingRoleParams{SessionID: id, Role: bindingRole(attemptShape{role: a.Role})})
 		return nil, err
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		cur, err := q.GetTaskAttempt(ctx, a.ID)
+		if err != nil {
+			return reconcile.Outcome{}, false, err
+		}
+		if cur.State == dbstate.AttemptCreating {
+			out, err = s.abort(ctx, c, op, cur, "workspace disappeared before attachment")
+			return out, false, err
+		}
+		// A cancel or another handler moved the attempt on. Cleanup re-checks that it actually
+		// stopped, then deletes only its keyed workspace. If this handler dies or deletion is
+		// unconfirmed, the settle sweep keeps resolving the same key.
+		if err := s.cleanupWorkspace(ctx, a); err != nil {
+			return reconcile.Outcome{}, false, err
+		}
+		out, err = s.stepAside(ctx, c, op)
+		return out, false, err
+	}
 	if err != nil {
 		return reconcile.Outcome{}, false, err
 	}
 	return reconcile.Outcome{}, true, nil
+}
+
+// workspaceRequestID is stable across every replay of an attempt's workspace create.
+func workspaceRequestID(attemptID string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("mainloop:task-workspace:"+attemptID)).String()
+}
+
+// reserveWorkspaceCreate re-checks authority and commits a reservation before any workspace call.
+// The task lock orders it against a drain, including one that races a stale create handler.
+func (s *Service) reserveWorkspaceCreate(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation, a dbq.TaskAttempt) error {
+	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		t, err := q.GetTaskByIDForUpdate(ctx, a.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if TaskFinal(t.Status) || t.CurrentAttemptID == nil || *t.CurrentAttemptID != a.ID {
+			return nil, pgx.ErrNoRows
+		}
+		_, err = q.ReserveAttemptWorkspaceCreate(ctx, dbq.ReserveAttemptWorkspaceCreateParams{
+			ID: a.ID, OperationID: op.ID, LeaseOwner: &c.Owner, Attempts: int32(c.Attempts), //nolint:gosec // a small counter
+		})
+		return nil, err
+	})
 }
 
 // briefMessageID is the ledger id of an attempt's first brief. It is derived from the attempt, so a

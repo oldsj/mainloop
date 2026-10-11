@@ -570,40 +570,43 @@ type TaskArtifact struct {
 }
 
 type TaskAttempt struct {
-	ID                    string
-	TaskID                string
-	Number                int32
-	ProfileID             string
-	NativeProvider        dbstate.NativeProvider
-	ConfigurationRevision string
-	AgentNamespace        string
-	AgentName             string
-	Role                  dbstate.AttemptRole
-	Depth                 int32
-	State                 dbstate.AttemptState
-	CapacityHeld          bool
-	SessionID             *string
-	BindingID             *string
-	WorkspaceID           *string
-	WriterGeneration      *int32
-	BriefDeliveryID       *string
-	PredecessorID         *string
-	SuccessorID           *string
-	EvidenceRefs          []string
-	ResultRef             *string
-	Environment           json.RawMessage
-	InitialRef            *string
-	CheckpointRef         *string
-	ManifestRef           *string
-	SupersededAt          *time.Time
-	ArchivedAt            *time.Time
-	NativeDeletedAt       *time.Time
-	RetentionHold         *string
-	StopState             string
-	ResolveAttempts       int32
-	ResolveAfter          *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                        string
+	TaskID                    string
+	Number                    int32
+	ProfileID                 string
+	NativeProvider            dbstate.NativeProvider
+	ConfigurationRevision     string
+	AgentNamespace            string
+	AgentName                 string
+	Role                      dbstate.AttemptRole
+	Depth                     int32
+	State                     dbstate.AttemptState
+	CapacityHeld              bool
+	SessionID                 *string
+	BindingID                 *string
+	WorkspaceID               *string
+	WorkspaceRequestID        *string
+	WorkspaceCreatesInflight  int32
+	WorkspaceCleanupConfirmed bool
+	WriterGeneration          *int32
+	BriefDeliveryID           *string
+	PredecessorID             *string
+	SuccessorID               *string
+	EvidenceRefs              []string
+	ResultRef                 *string
+	Environment               json.RawMessage
+	InitialRef                *string
+	CheckpointRef             *string
+	ManifestRef               *string
+	SupersededAt              *time.Time
+	ArchivedAt                *time.Time
+	NativeDeletedAt           *time.Time
+	RetentionHold             *string
+	StopState                 string
+	ResolveAttempts           int32
+	ResolveAfter              *time.Time
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 type TaskEventDelivery struct {

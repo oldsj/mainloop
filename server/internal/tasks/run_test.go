@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
@@ -27,6 +28,7 @@ type fakeWorkspaces struct {
 	mu   sync.Mutex
 	// made and removed are the workspace ids created and deleted.
 	made, removed []string
+	requests      []string
 	// crash makes the next creates write their rows and then fail, as a process dying before it
 	// could record the answer would.
 	crash int
@@ -35,26 +37,42 @@ type fakeWorkspaces struct {
 	// unready leaves new workspaces without a kagent Session.
 	unready bool
 	// fail makes creates return this error, as a request that can never succeed would.
-	fail error
-	// gate, when set, holds the next create until it is closed, then answers gateErr. entered is told
-	// when a create is waiting.
+	fail      error
+	deleteErr error
+	// gate holds the next create until it is closed, then returns gateErr if set, otherwise commits
+	// the workspace. entered is told when a create is waiting.
 	gate    chan struct{}
 	gateErr error
 	entered chan struct{}
 }
 
 func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
+	return f.CreateWithRequestID(ctx, uuid.NewString(), body)
+}
+
+func (f *fakeWorkspaces) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
 	f.mu.Lock()
+	f.requests = append(f.requests, requestID)
 	gate, gateErr, entered := f.gate, f.gateErr, f.entered
 	f.gate = nil
 	f.mu.Unlock()
 	if gate != nil {
 		entered <- struct{}{}
 		<-gate
-		return api.WorkspaceLifecycle{}, gateErr
+		if gateErr != nil {
+			return api.WorkspaceLifecycle{}, gateErr
+		}
+		// Model a commit that was already in flight when the caller lost its lease or cancelled.
+		ctx = context.WithoutCancel(ctx)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	q := dbq.New(f.pool)
+	if w, err := q.GetWorkspaceByRequestID(ctx, dbq.GetWorkspaceByRequestIDParams{UserID: owner, RequestID: requestID}); err == nil {
+		return api.WorkspaceLifecycle{WorkspaceId: w.ID, SessionId: w.ID}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return api.WorkspaceLifecycle{}, err
+	}
 	if f.fail != nil {
 		return api.WorkspaceLifecycle{}, f.fail
 	}
@@ -62,7 +80,6 @@ func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceReq
 		return api.WorkspaceLifecycle{}, &workspaces.RejectedError{Detail: f.reject}
 	}
 	id := uuid.NewString()
-	q := dbq.New(f.pool)
 	if _, err := q.CreateSession(ctx, dbq.CreateSessionParams{
 		ID: id, UserID: owner, ProjectID: body.ProjectId, Title: "ws", RepoURL: ptr("https://example.test/o/p1"), BranchName: body.Branch,
 	}); err != nil {
@@ -79,7 +96,7 @@ func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceReq
 		}
 	}
 	if _, err := f.pool.Exec(ctx, `INSERT INTO workspaces (id, user_id, project_id, repo_url, branch, agent_kind, agent_namespace, agent_name, request_id)
-	     VALUES ($1, $2, $3, 'https://example.test/o/p1', $4, $5, 'kagent', 'agent', $1)`, id, owner, *body.ProjectId, *body.Branch, *body.AgentKind); err != nil {
+	     VALUES ($1, $2, $3, 'https://example.test/o/p1', $4, $5, 'kagent', 'agent', $6)`, id, owner, *body.ProjectId, *body.Branch, *body.AgentKind, requestID); err != nil {
 		return api.WorkspaceLifecycle{}, err
 	}
 	f.made = append(f.made, id)
@@ -93,8 +110,13 @@ func (f *fakeWorkspaces) Create(ctx context.Context, body api.CreateWorkspaceReq
 func (f *fakeWorkspaces) Delete(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.removed = append(f.removed, id)
-	_, err := f.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	tag, err := f.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	if err == nil && tag.RowsAffected() > 0 {
+		f.removed = append(f.removed, id)
+	}
 	return err
 }
 

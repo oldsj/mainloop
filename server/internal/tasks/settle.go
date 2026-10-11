@@ -121,48 +121,29 @@ func (s *Service) cancelOpenChildren(ctx context.Context, q *dbq.Queries, t dbq.
 // deliveries, and removes its workspace when the agent never ran. What the session's Cancel reports
 // never confirms a stop (it may be a repeat on a cancelled session, or have no kagent session to ask):
 // [Service.resolveStop] asks the observer, and only the observer confirms. stop is safe to repeat, and
-// is skipped once the resolver has looked: it has already done its part, and the observer cancels
-// whatever runs.
+// session cancel is skipped once the resolver has looked: the observer cancels whatever runs.
+// Workspace cleanup still checks its key on every pass until it is confirmed.
 func (s *Service) stop(ctx context.Context, a dbq.TaskAttempt) error {
-	if a.ResolveAttempts > 0 {
-		return nil
-	}
-	if a.SessionID != nil {
+	if a.ResolveAttempts == 0 && a.SessionID != nil {
 		if _, err := s.Sessions.Cancel(ctx, *a.SessionID); err != nil && !errors.Is(err, sessions.ErrNotFound) {
 			return err
 		}
 	}
-	if a.BriefDeliveryID != nil || s.Workspaces == nil {
-		return nil
-	}
-	// The agent never started, so nothing it did needs to stay: remove the workspace too.
-	id := a.WorkspaceID
-	if id == nil {
-		// A create that was cut off before the attempt recorded its workspace: workspace creation
-		// has no caller-supplied key, so it is found by owner, project, branch and time.
-		var err error
-		if id, err = s.orphanWorkspace(ctx, a); err != nil || id == nil {
-			return err
-		}
-	}
-	if err := s.Workspaces.Delete(ctx, *id); err != nil && !errors.Is(err, workspaces.ErrNotFound) {
-		return err
-	}
-	return nil
+	return s.cleanupWorkspace(ctx, a)
 }
 
 // orphanWorkspace finds the workspace a cut-off create made for an attempt, if there is one.
 func (s *Service) orphanWorkspace(ctx context.Context, a dbq.TaskAttempt) (*string, error) {
+	if a.WorkspaceRequestID == nil {
+		return nil, nil
+	}
 	q := dbq.New(s.Pool)
 	t, err := q.GetTaskByID(ctx, a.TaskID)
 	if err != nil {
 		return nil, err
 	}
-	if t.Mode != dbstate.TaskModeCode || t.ProjectID == nil || t.CheckoutBranch == nil {
-		return nil, nil
-	}
-	id, err := q.FindUnattachedWorkspace(ctx, dbq.FindUnattachedWorkspaceParams{
-		UserID: t.OwnerID, ProjectID: *t.ProjectID, Branch: *t.CheckoutBranch, CreatedAt: a.CreatedAt,
+	w, err := q.GetWorkspaceByRequestID(ctx, dbq.GetWorkspaceByRequestIDParams{
+		UserID: t.OwnerID, RequestID: *a.WorkspaceRequestID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -170,7 +151,37 @@ func (s *Service) orphanWorkspace(ctx context.Context, a dbq.TaskAttempt) (*stri
 	if err != nil {
 		return nil, err
 	}
-	return &id, nil
+	return &w.ID, nil
+}
+
+// cleanupWorkspace resolves the exact create key of an attempt that never received a brief.
+// Neither its old workspace_id nor a matching owner/project/branch grants deletion authority.
+// Absence is confirmed only when no reserved call can still commit a workspace; final attempts
+// stay in the settle sweep until then, even if their create operation already ended.
+func (s *Service) cleanupWorkspace(ctx context.Context, a dbq.TaskAttempt) error {
+	// A returning create may carry a snapshot from before another handler activated the attempt.
+	// Only an attempt that actually stopped grants cleanup authority.
+	var err error
+	a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	if a.State == dbstate.AttemptCreating || a.State == dbstate.AttemptActive {
+		return nil
+	}
+	if a.WorkspaceRequestID == nil || a.BriefDeliveryID != nil || a.WorkspaceCleanupConfirmed || s.Workspaces == nil {
+		return nil
+	}
+	id, err := s.orphanWorkspace(ctx, a)
+	if err != nil {
+		return err
+	}
+	if id != nil {
+		if err := s.Workspaces.Delete(ctx, *id); err != nil && !errors.Is(err, workspaces.ErrNotFound) {
+			return err
+		}
+	}
+	return dbq.New(s.Pool).ConfirmAttemptWorkspaceCleanup(ctx, a.ID)
 }
 
 // errStopUnconfirmed means an attempt cannot be fenced: the observer has not confirmed its agent stopped.
@@ -287,7 +298,7 @@ func (s *Service) settle(ctx context.Context, attemptID string) error {
 		return err
 	}
 	if AttemptFinal(a.State) {
-		return nil
+		return s.cleanupWorkspace(ctx, a)
 	}
 	if a.State == dbstate.AttemptDraining {
 		if err := s.stop(ctx, a); err != nil {
@@ -317,8 +328,9 @@ func (s *Service) settle(ctx context.Context, attemptID string) error {
 }
 
 // SettleSweep ends the attempts that are still running or half-ended although they no longer
-// should be: those of tasks that ended, and those left draining or fenced by a crash. An attempt
-// that a cancel operation is draining is left to the operation.
+// should be: those of tasks that ended, and those left draining or fenced by a crash. It also
+// resolves late workspace creates for final attempts. An attempt that a cancel operation is
+// draining is left to the operation.
 func (s *Service) SettleSweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "task-settle", Every: s.Limits.Interval, Run: s.runSettle}
 }

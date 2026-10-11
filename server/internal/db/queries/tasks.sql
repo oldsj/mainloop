@@ -163,9 +163,9 @@ WHERE kind = 'create' AND target_attempt_id = $1 AND state IN ('target_creating'
 -- name: InsertTaskAttempt :one
 INSERT INTO task_attempts (
     id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
-    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id, workspace_request_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 )
 RETURNING *;
 
@@ -202,7 +202,9 @@ RETURNING *;
 SELECT a.* FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 WHERE (a.state IN ('draining', 'fenced')
-       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
+       OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled'))
+       OR (a.state NOT IN ('creating', 'active') AND a.workspace_request_id IS NOT NULL
+           AND a.brief_delivery_id IS NULL AND NOT a.workspace_cleanup_confirmed))
   AND a.updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
   AND (a.resolve_after IS NULL OR a.resolve_after <= now())
 ORDER BY a.updated_at, a.id
@@ -333,13 +335,30 @@ RETURNING *;
 -- name: TouchTaskProjection :exec
 UPDATE tasks SET projected_at = now() WHERE id = $1;
 
--- Workspaces made for an attempt whose create was interrupted before the attempt recorded them.
--- name: FindUnattachedWorkspace :one
-SELECT w.id FROM workspaces w
-WHERE w.user_id = $1 AND w.project_id = $2 AND w.branch = $3 AND w.created_at >= $4
-  AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.workspace_id = w.id)
-ORDER BY w.created_at, w.id
-LIMIT 1;
+-- name: ReserveAttemptWorkspaceCreate :one
+-- The caller holds the task lock, so a drain cannot race the reservation. A stale claim cannot
+-- start another call. No transaction stays open across the workspace service call.
+UPDATE task_attempts a
+SET workspace_creates_inflight = workspace_creates_inflight + 1, updated_at = now()
+WHERE a.id = sqlc.arg(id) AND a.state = 'creating' AND a.workspace_request_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM task_operations o WHERE o.id = sqlc.arg(operation_id)
+              AND o.target_attempt_id = a.id AND o.state = 'target_creating'
+              AND o.lease_owner = sqlc.arg(lease_owner) AND o.attempts = sqlc.arg(attempts))
+RETURNING a.*;
+
+-- name: FinishAttemptWorkspaceCreate :exec
+UPDATE task_attempts
+SET workspace_creates_inflight = workspace_creates_inflight - 1, updated_at = now()
+WHERE id = $1 AND workspace_creates_inflight > 0;
+
+-- name: ConfirmAttemptWorkspaceCleanup :exec
+-- Absence is conclusive only after the attempt stopped accepting creates and every reserved call
+-- returned. Ending the task's create operation alone does not rule out a late commit.
+UPDATE task_attempts a SET workspace_cleanup_confirmed = true, updated_at = now()
+WHERE a.id = $1 AND a.state NOT IN ('creating', 'active') AND a.workspace_request_id IS NOT NULL
+  AND a.workspace_creates_inflight = 0 AND a.brief_delivery_id IS NULL
+  AND NOT a.workspace_cleanup_confirmed
+  AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.request_id = a.workspace_request_id);
 
 -- name: SetBindingRole :one
 UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING *;

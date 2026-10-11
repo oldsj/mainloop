@@ -131,6 +131,12 @@ CREATE TABLE task_attempts (
     session_id text UNIQUE,
     binding_id text UNIQUE,
     workspace_id text UNIQUE,
+    -- Written before workspace creation. Only this key identifies an attempt's workspace.
+    workspace_request_id text UNIQUE,
+    -- Reservations committed before calling the workspace service, released only when the call
+    -- returns. A stopped attempt must keep looking for a late workspace while any remain.
+    workspace_creates_inflight integer NOT NULL DEFAULT 0 CHECK (workspace_creates_inflight >= 0),
+    workspace_cleanup_confirmed boolean NOT NULL DEFAULT false,
     writer_generation integer CHECK (writer_generation >= 1),
     brief_delivery_id text,
     predecessor_id text REFERENCES task_attempts (id),
@@ -385,8 +391,8 @@ FOR EACH ROW EXECUTE FUNCTION validate_attempt_hierarchy();
 -- +goose StatementBegin
 CREATE FUNCTION task_attempt_routing_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF ROW(OLD.task_id, OLD.number, OLD.profile_id, OLD.native_provider, OLD.configuration_revision, OLD.agent_namespace, OLD.agent_name, OLD.role, OLD.depth, coalesce(OLD.environment, NEW.environment), OLD.initial_ref)
-        IS DISTINCT FROM ROW(NEW.task_id, NEW.number, NEW.profile_id, NEW.native_provider, NEW.configuration_revision, NEW.agent_namespace, NEW.agent_name, NEW.role, NEW.depth, NEW.environment, NEW.initial_ref) THEN
+    IF ROW(OLD.task_id, OLD.number, OLD.profile_id, OLD.native_provider, OLD.configuration_revision, OLD.agent_namespace, OLD.agent_name, OLD.role, OLD.depth, coalesce(OLD.environment, NEW.environment), OLD.initial_ref, OLD.workspace_request_id)
+        IS DISTINCT FROM ROW(NEW.task_id, NEW.number, NEW.profile_id, NEW.native_provider, NEW.configuration_revision, NEW.agent_namespace, NEW.agent_name, NEW.role, NEW.depth, NEW.environment, NEW.initial_ref, NEW.workspace_request_id) THEN
         RAISE EXCEPTION 'attempt routing is immutable';
     END IF;
     RETURN NEW;

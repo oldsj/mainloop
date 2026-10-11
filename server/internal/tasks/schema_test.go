@@ -122,6 +122,8 @@ func TestAttemptInvariants(t *testing.T) {
 	// Routing is fixed once an attempt exists.
 	e.refused("routing is immutable", `UPDATE task_attempts SET profile_id = 'codex' WHERE id = $1`, att)
 	e.refused("routing is immutable", `UPDATE task_attempts SET number = 9 WHERE id = $1`, att)
+	e.refused("routing is immutable", `UPDATE task_attempts SET workspace_request_id = gen_random_uuid()::text WHERE id = $1`, att)
+	e.refused("workspace_creates_inflight_check", `UPDATE task_attempts SET workspace_creates_inflight = -1 WHERE id = $1`, att)
 	// A task's current attempt must be its own.
 	other := e.mustCreate(e.own, tasks.CreateInput{})
 	e.refused("tasks_current_attempt", `UPDATE tasks SET current_attempt_id = $1 WHERE id = $2`, att, other)
