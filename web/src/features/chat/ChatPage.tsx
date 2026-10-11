@@ -22,7 +22,10 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
   const offline = useConnection().status === 'offline';
   const { info } = chat;
   // A send, a stop or an unread thread holds the provider selection as well as offline does.
-  const provider = useMainProvider(info, offline || chat.sendPending || chat.stopping || !chat.loaded);
+  const provider = useMainProvider(
+    info,
+    offline || chat.sendPending || chat.stopping || !chat.loaded
+  );
   const inputLock = mainInputLock(info, provider);
 
   return (

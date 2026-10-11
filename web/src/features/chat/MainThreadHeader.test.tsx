@@ -119,18 +119,41 @@ const withProvider = (provider: MainProviderInfo | null) => mainThreadFixture({ 
 
 describe('MainThreadHeader main provider row', () => {
   it('shows the desired provider, the confirmed one and the status as separate things', () => {
-    view(withProvider(providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })), {
-      provider: control({ switchBlocked: true })
-    });
+    view(
+      withProvider(
+        providerFixture({
+          desired_provider: 'codex',
+          effective_provider: 'claude',
+          status: 'pending'
+        })
+      ),
+      {
+        provider: control({ switchBlocked: true })
+      }
+    );
     expect(screen.getByLabelText('Main provider')).toHaveValue('codex');
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Claude');
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('preparing');
   });
 
   it.each([
-    ['not_started', providerFixture({ status: 'not_started', effective_provider: null }), 'not started, starts with your next message', 'none confirmed'],
+    [
+      'not_started',
+      providerFixture({ status: 'not_started', effective_provider: null }),
+      'not started, starts with your next message',
+      'none confirmed'
+    ],
     ['ready', providerFixture(), 'ready', 'Claude'],
-    ['failed', providerFixture({ status: 'failed', effective_provider: null, error: 'Codex did not start.' }), 'failed', 'none confirmed']
+    [
+      'failed',
+      providerFixture({
+        status: 'failed',
+        effective_provider: null,
+        error: 'Codex did not start.'
+      }),
+      'failed',
+      'none confirmed'
+    ]
   ])('shows the %s status in words, not colour alone', (_status, provider, words, effective) => {
     view(withProvider(provider), { provider: control() });
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(words);
@@ -151,7 +174,9 @@ describe('MainThreadHeader main provider row', () => {
 
   it('holds Retry by its own rule, so a pending switch can offer it with the select held', () => {
     view(
-      withProvider(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })),
+      withProvider(
+        providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })
+      ),
       { provider: control({ switchBlocked: true, retryOffered: true, retryBlocked: false }) }
     );
     expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
@@ -159,12 +184,16 @@ describe('MainThreadHeader main provider row', () => {
   });
 
   it('holds Retry while its own rule says so', () => {
-    view(withProvider(providerFixture()), { provider: control({ retryOffered: true, retryBlocked: true }) });
+    view(withProvider(providerFixture()), {
+      provider: control({ retryOffered: true, retryBlocked: true })
+    });
     expect(screen.getByTestId('mt-provider-retry')).toBeDisabled();
   });
 
   it('announces the provider status as a polite status region', () => {
-    view(withProvider(providerFixture({ status: 'pending', effective_provider: null })), { provider: control() });
+    view(withProvider(providerFixture({ status: 'pending', effective_provider: null })), {
+      provider: control()
+    });
     expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
   });
 
@@ -176,19 +205,30 @@ describe('MainThreadHeader main provider row', () => {
   });
 
   it('shows the state as offline and holds the select while the backend is unreachable', () => {
-    view(withProvider(providerFixture()), { offline: true, provider: control({ switchBlocked: true }) });
-    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('offline, selection unavailable');
+    view(withProvider(providerFixture()), {
+      offline: true,
+      provider: control({ switchBlocked: true })
+    });
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
+      'offline, selection unavailable'
+    );
     expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
   });
 
   it('says when a selection is in flight', () => {
-    view(withProvider(providerFixture()), { provider: control({ selecting: true, switchBlocked: true }) });
+    view(withProvider(providerFixture()), {
+      provider: control({ selecting: true, switchBlocked: true })
+    });
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('selecting provider…');
   });
 
   it('says when the provider state is unconfirmed', () => {
-    view(withProvider(providerFixture()), { provider: control({ unconfirmed: true, switchBlocked: true }) });
-    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('provider state unconfirmed');
+    view(withProvider(providerFixture()), {
+      provider: control({ unconfirmed: true, switchBlocked: true })
+    });
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
+      'provider state unconfirmed'
+    );
   });
 
   it('shows the bounded error of a failed start', () => {
@@ -203,7 +243,11 @@ describe('MainThreadHeader main provider row', () => {
     const { rerender } = view(withProvider(providerFixture()), { provider: control() });
     expect(screen.queryByTestId('mt-provider-retry')).toBeNull();
     rerender(
-      <MainThreadHeader info={withProvider(providerFixture())} offline={false} provider={control({ retryOffered: true, retry })} />
+      <MainThreadHeader
+        info={withProvider(providerFixture())}
+        offline={false}
+        provider={control({ retryOffered: true, retry })}
+      />
     );
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(retry).toHaveBeenCalledOnce();
@@ -220,7 +264,9 @@ describe('MainThreadHeader main provider row', () => {
 
   it('shows the notice of a selection as an alert', () => {
     view(withProvider(providerFixture()), {
-      provider: control({ notice: 'Provider change blocked (409): busy. State is refreshed; no automatic retry.' })
+      provider: control({
+        notice: 'Provider change blocked (409): busy. State is refreshed; no automatic retry.'
+      })
     });
     expect(screen.getByRole('alert')).toHaveTextContent('Provider change blocked (409)');
   });
@@ -233,6 +279,8 @@ describe('MainThreadHeader main provider row', () => {
   it('explains what a switch keeps, under details', async () => {
     view(withProvider(providerFixture()), { provider: control() });
     await userEvent.click(screen.getByTestId('mt-details-toggle'));
-    expect(screen.getByTestId('mt-provider-help')).toHaveTextContent('Conversation and tasks stay.');
+    expect(screen.getByTestId('mt-provider-help')).toHaveTextContent(
+      'Conversation and tasks stay.'
+    );
   });
 });

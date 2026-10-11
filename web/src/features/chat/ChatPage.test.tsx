@@ -772,7 +772,9 @@ describe('inline requests', () => {
 });
 
 /** A main thread with a conversation and nothing in flight, so the provider select is open. */
-function idleThread(provider: MainProviderInfo | null = providerFixture()): Partial<ChatBackendState> {
+function idleThread(
+  provider: MainProviderInfo | null = providerFixture()
+): Partial<ChatBackendState> {
   return {
     mainThread: mainThreadFixture({
       conversation_id: CONVERSATION_ID,
@@ -824,7 +826,15 @@ describe('the main provider', () => {
   });
 
   it('locks the selection and the main input while the provider is preparing', async () => {
-    setup(idleThread(providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })));
+    setup(
+      idleThread(
+        providerFixture({
+          desired_provider: 'codex',
+          effective_provider: 'claude',
+          status: 'pending'
+        })
+      )
+    );
     await screen.findByText('build it');
     expect(providerSelect()).toBeDisabled();
     expect(input()).toBeDisabled();
@@ -851,11 +861,17 @@ describe('the main provider', () => {
   });
 
   it('holds the selection while the backend is unreachable', async () => {
-    connectionState.current = { status: 'offline', offlineSince: '2026-01-01T00:00:00Z', recoveries: 0 };
+    connectionState.current = {
+      status: 'offline',
+      offlineSince: '2026-01-01T00:00:00Z',
+      recoveries: 0
+    };
     setup(idleThread());
     await screen.findByText('build it');
     expect(providerSelect()).toBeDisabled();
-    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('offline, selection unavailable');
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
+      'offline, selection unavailable'
+    );
   });
 
   it('shows a 409 and the refreshed state, and offers no retry', async () => {
@@ -876,7 +892,9 @@ describe('the main provider', () => {
     state.lostProvider = 'unrecorded';
     await screen.findByText('build it');
     await userEvent.selectOptions(providerSelect(), 'codex');
-    expect(await screen.findByRole('alert')).toHaveTextContent('Provider selection was not confirmed');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Provider selection was not confirmed'
+    );
     // The read after the failed write shows the old provider, so Retry is offered.
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Claude');
     await pause(2 * RECONCILE_MS);
@@ -901,7 +919,9 @@ describe('the main provider', () => {
     expect(await screen.findByText(/Could not confirm provider state/)).toBeInTheDocument();
     expect(providerSelect()).toBeDisabled();
     expect(input()).toBeDisabled();
-    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('provider state unconfirmed');
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent(
+      'provider state unconfirmed'
+    );
 
     await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 3000 });
     expect(input()).toBeEnabled();
@@ -910,7 +930,15 @@ describe('the main provider', () => {
   });
 
   it('shows the bounded error of a failed start, and offers Retry without Restart when it is not recoverable', async () => {
-    setup(idleThread(providerFixture({ status: 'failed', effective_provider: null, error: 'Codex did not start.' })));
+    setup(
+      idleThread(
+        providerFixture({
+          status: 'failed',
+          effective_provider: null,
+          error: 'Codex did not start.'
+        })
+      )
+    );
     await screen.findByText('build it');
     expect(screen.getByTestId('mt-provider-error')).toHaveTextContent('Codex did not start.');
     expect(screen.getByTestId('mt-provider-retry')).toBeInTheDocument();
@@ -920,7 +948,14 @@ describe('the main provider', () => {
 
   it('offers Restart for a recoverable failure, which sends restart_failed', async () => {
     const { state } = setup(
-      idleThread(providerFixture({ status: 'failed', effective_provider: null, error: 'Codex did not start.', recoverable: true }))
+      idleThread(
+        providerFixture({
+          status: 'failed',
+          effective_provider: null,
+          error: 'Codex did not start.',
+          recoverable: true
+        })
+      )
     );
     await screen.findByText('build it');
     await userEvent.click(screen.getByTestId('mt-provider-restart'));
@@ -953,7 +988,9 @@ describe('the main provider', () => {
 
   it('offers Retry for a pending switch with no write from this page, and one click repeats the same write', async () => {
     const { state } = setup(
-      idleThread(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }))
+      idleThread(
+        providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })
+      )
     );
     await screen.findByText('build it');
     expect(providerSelect()).toBeDisabled();
@@ -968,7 +1005,11 @@ describe('the main provider', () => {
     setup({
       mainThread: mainThreadFixture({
         conversation_id: CONVERSATION_ID,
-        provider: providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }),
+        provider: providerFixture({
+          desired_provider: 'codex',
+          effective_provider: null,
+          status: 'pending'
+        }),
         native: nativeFixture({
           turn_in_flight: true,
           deliveries: [deliveryFixture({ message_id: 'm1', state: 'sending' })]
@@ -983,17 +1024,25 @@ describe('the main provider', () => {
 
   it('re-reads a pending switch without a reload, unlocks when it turns ready, then stops reading', async () => {
     const { state } = setup(
-      idleThread(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }))
+      idleThread(
+        providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })
+      )
     );
     await screen.findByText('build it');
     // The read at mount, then a poll on the interval, both still find the switch pending.
-    await waitFor(() => expect(state.providerReads).toBeGreaterThanOrEqual(2), { timeout: POLL_MS * 3 });
+    await waitFor(() => expect(state.providerReads).toBeGreaterThanOrEqual(2), {
+      timeout: POLL_MS * 3
+    });
     expect(input()).toBeDisabled();
 
     const threadReads = state.mainThreadReads;
     state.mainThread = {
       ...state.mainThread,
-      provider: providerFixture({ desired_provider: 'codex', effective_provider: 'codex', status: 'ready' })
+      provider: providerFixture({
+        desired_provider: 'codex',
+        effective_provider: 'codex',
+        status: 'ready'
+      })
     };
     await waitFor(() => expect(input()).toBeEnabled(), { timeout: POLL_MS * 3 });
     expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
@@ -1074,7 +1123,11 @@ describe('the main lock does not reach drafts or a child session', () => {
   it('keeps the main draft, and lets a child session take input and send, while the main is locked', async () => {
     const backend = createChatBackend(
       idleThread(
-        providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })
+        providerFixture({
+          desired_provider: 'codex',
+          effective_provider: 'claude',
+          status: 'pending'
+        })
       )
     );
     server.use(...backend.handlers);
@@ -1115,7 +1168,10 @@ describe('the main lock does not reach drafts or a child session', () => {
 describe('refusal codes from the backend', () => {
   it.each<[RefusalCode, string]>([
     ['busy', 'Provider change refused: the main has open work or changed while the request ran.'],
-    ['pending', 'Provider change refused: a switch is already pending and must settle or be recoverable first.'],
+    [
+      'pending',
+      'Provider change refused: a switch is already pending and must settle or be recoverable first.'
+    ],
     ['unconfirmed', 'Provider change refused: kagent could not confirm the main is idle.'],
     ['unresolved', 'Provider change refused: a native create for the main is still unresolved.'],
     ['agent_unavailable', "Codex isn't installed here. Nothing changed."]
@@ -1149,7 +1205,10 @@ describe('refusal codes from the backend', () => {
     ['pending', 'Message not sent: a provider switch is pending.'],
     ['unconfirmed', 'Message not sent: kagent could not confirm the main is idle.'],
     ['unresolved', 'Message not sent: a native create for the main is unresolved.'],
-    ['agent_unavailable', "Message not sent: the other provider isn't installed here. Nothing changed."]
+    [
+      'agent_unavailable',
+      "Message not sent: the other provider isn't installed here. Nothing changed."
+    ]
   ])('a message refused as %s shows its notice, and the box keeps the text', async (code, text) => {
     const { state } = setup(existing());
     await screen.findByText('build it');
@@ -1164,7 +1223,11 @@ describe('refusal codes from the backend', () => {
   it('a message refused with a code the contract does not name shows the server detail', async () => {
     const { state } = setup(existing());
     await screen.findByText('build it');
-    state.rejectNextChat = { status: 409, detail: 'Raw server prose.', code: 'mystery' as RefusalCode };
+    state.rejectNextChat = {
+      status: 409,
+      detail: 'Raw server prose.',
+      code: 'mystery' as RefusalCode
+    };
     await userEvent.type(input(), 'too soon{Enter}');
     expect(await screen.findByTestId('send-error')).toHaveTextContent(
       'Raw server prose. Your message is back in the box.'

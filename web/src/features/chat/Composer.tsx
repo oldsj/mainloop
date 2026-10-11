@@ -123,7 +123,13 @@ export function Composer({
         rows={1}
         value={text}
         disabled={disabled}
-        placeholder={placeholder(offline, busy, loading, unavailable, closed ? closedPlaceholder : null)}
+        placeholder={placeholder(
+          offline,
+          busy,
+          loading,
+          unavailable,
+          closed ? closedPlaceholder : null
+        )}
         aria-label="Message"
         onChange={(event) => change(event.target.value)}
         onKeyDown={keyDown}

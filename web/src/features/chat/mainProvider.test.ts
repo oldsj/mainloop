@@ -58,7 +58,9 @@ describe('providerSwitchBlocked', () => {
     (state) => {
       expect(
         providerSwitchBlocked(
-          mainThreadFixture({ native: nativeFixture({ deliveries: [deliveryFixture({ state })] }) }),
+          mainThreadFixture({
+            native: nativeFixture({ deliveries: [deliveryFixture({ state })] })
+          }),
           false
         )
       ).toBe(true);
@@ -70,7 +72,9 @@ describe('providerSwitchBlocked', () => {
     (state) => {
       expect(
         providerSwitchBlocked(
-          mainThreadFixture({ native: nativeFixture({ deliveries: [deliveryFixture({ state })] }) }),
+          mainThreadFixture({
+            native: nativeFixture({ deliveries: [deliveryFixture({ state })] })
+          }),
           false
         )
       ).toBe(false);
@@ -81,10 +85,7 @@ describe('providerSwitchBlocked', () => {
     'stays open for a %s provider, so a failed start can be retried',
     (status) => {
       expect(
-        providerSwitchBlocked(
-          mainThreadFixture({ provider: providerFixture({ status }) }),
-          false
-        )
+        providerSwitchBlocked(mainThreadFixture({ provider: providerFixture({ status }) }), false)
       ).toBe(false);
     }
   );
@@ -122,7 +123,9 @@ describe('providerRetryBlocked', () => {
     (state) => {
       expect(
         providerRetryBlocked(
-          mainThreadFixture({ native: nativeFixture({ deliveries: [deliveryFixture({ state })] }) }),
+          mainThreadFixture({
+            native: nativeFixture({ deliveries: [deliveryFixture({ state })] })
+          }),
           false
         )
       ).toBe(true);
@@ -138,7 +141,11 @@ describe('providerRetryBlocked', () => {
 describe('providerReady', () => {
   it.each([
     ['ready and matching', providerFixture(), true],
-    ['ready but still on the other provider', providerFixture({ desired_provider: 'codex' }), false],
+    [
+      'ready but still on the other provider',
+      providerFixture({ desired_provider: 'codex' }),
+      false
+    ],
     ['not started', providerFixture({ status: 'not_started', effective_provider: null }), false],
     ['pending', providerFixture({ status: 'pending' }), false],
     ['failed', providerFixture({ status: 'failed' }), false],
@@ -173,9 +180,17 @@ describe('mainInputLock', () => {
   it.each([
     ['not_started', providerFixture({ status: 'not_started', effective_provider: null }), null],
     ['ready and matching', providerFixture(), null],
-    ['ready but not switched yet', providerFixture({ desired_provider: 'codex' }), 'Main provider is not switched yet.'],
+    [
+      'ready but not switched yet',
+      providerFixture({ desired_provider: 'codex' }),
+      'Main provider is not switched yet.'
+    ],
     ['pending', providerFixture({ status: 'pending' }), 'Main provider is preparing.'],
-    ['failed', providerFixture({ status: 'failed' }), 'Main provider failed to start. Retry or restart it above.'],
+    [
+      'failed',
+      providerFixture({ status: 'failed' }),
+      'Main provider failed to start. Retry or restart it above.'
+    ],
     ['no provider state', null, 'Main provider state is unknown.']
   ])('%s', (_label, provider, expected) => {
     expect(mainInputLock(info(provider), idle)).toBe(expected);
@@ -205,15 +220,40 @@ describe('mainInputLock', () => {
 
 describe('providerStateWords', () => {
   it.each([
-    ['offline', null, { offline: true, selecting: false, unconfirmed: false }, 'offline, selection unavailable'],
-    ['selecting', providerFixture(), { offline: false, selecting: true, unconfirmed: false }, 'selecting provider…'],
-    ['unconfirmed', providerFixture(), { offline: false, selecting: false, unconfirmed: true }, 'provider state unconfirmed'],
+    [
+      'offline',
+      null,
+      { offline: true, selecting: false, unconfirmed: false },
+      'offline, selection unavailable'
+    ],
+    [
+      'selecting',
+      providerFixture(),
+      { offline: false, selecting: true, unconfirmed: false },
+      'selecting provider…'
+    ],
+    [
+      'unconfirmed',
+      providerFixture(),
+      { offline: false, selecting: false, unconfirmed: true },
+      'provider state unconfirmed'
+    ],
     ['no state', null, idleWords, 'state unknown'],
-    ['not started', providerFixture({ status: 'not_started', effective_provider: null }), idleWords, 'not started, starts with your next message'],
+    [
+      'not started',
+      providerFixture({ status: 'not_started', effective_provider: null }),
+      idleWords,
+      'not started, starts with your next message'
+    ],
     ['pending', providerFixture({ status: 'pending' }), idleWords, 'preparing'],
     ['failed', providerFixture({ status: 'failed' }), idleWords, 'failed'],
     ['ready', providerFixture(), idleWords, 'ready'],
-    ['ready but not switched yet', providerFixture({ desired_provider: 'codex' }), idleWords, 'waiting to switch']
+    [
+      'ready but not switched yet',
+      providerFixture({ desired_provider: 'codex' }),
+      idleWords,
+      'waiting to switch'
+    ]
   ])('%s', (_label, provider, state, words) => {
     expect(providerStateWords(provider, state)).toBe(words);
   });
@@ -241,7 +281,12 @@ describe('retryOffered', () => {
   });
 
   it('is not offered once the failed write is confirmed ready', () => {
-    expect(retryOffered(providerFixture({ desired_provider: 'codex', effective_provider: 'codex' }), failedWrite)).toBe(false);
+    expect(
+      retryOffered(
+        providerFixture({ desired_provider: 'codex', effective_provider: 'codex' }),
+        failedWrite
+      )
+    ).toBe(false);
   });
 
   it('is not offered with no failure at all', () => {
@@ -304,10 +349,22 @@ describe('refusalCode', () => {
 
 describe('selectionNotice refusal codes', () => {
   it.each<[RefusalCode, string]>([
-    ['busy', 'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'],
-    ['pending', 'Provider change refused: a switch is already pending and must settle or be recoverable first. State is refreshed; no automatic retry.'],
-    ['unconfirmed', 'Provider change refused: kagent could not confirm the main is idle. State is refreshed; no automatic retry.'],
-    ['unresolved', 'Provider change refused: a native create for the main is still unresolved. State is refreshed; no automatic retry.']
+    [
+      'busy',
+      'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'
+    ],
+    [
+      'pending',
+      'Provider change refused: a switch is already pending and must settle or be recoverable first. State is refreshed; no automatic retry.'
+    ],
+    [
+      'unconfirmed',
+      'Provider change refused: kagent could not confirm the main is idle. State is refreshed; no automatic retry.'
+    ],
+    [
+      'unresolved',
+      'Provider change refused: a native create for the main is still unresolved. State is refreshed; no automatic retry.'
+    ]
   ])('%s shows its own notice, not the server prose', (code, expected) => {
     expect(selectionNotice(coded(code), 'codex')).toBe(expected);
   });

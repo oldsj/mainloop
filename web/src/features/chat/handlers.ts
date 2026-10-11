@@ -11,12 +11,7 @@ import {
   providerFixture,
   sessionFixture
 } from './fixtures';
-import type {
-  ChatMessage,
-  MainProviderInfo,
-  MainThreadInfo,
-  NativeSessionInfo
-} from './types';
+import type { ChatMessage, MainProviderInfo, MainThreadInfo, NativeSessionInfo } from './types';
 
 type Schemas = components['schemas'];
 

@@ -179,7 +179,8 @@ const REFUSAL_NOTICE: Record<MainProviderRefusalCode, (requested: MainProvider) 
     'Provider change refused: a switch is already pending and must settle or be recoverable first.',
   unconfirmed: () => 'Provider change refused: kagent could not confirm the main is idle.',
   unresolved: () => 'Provider change refused: a native create for the main is still unresolved.',
-  agent_unavailable: (requested) => `${providerLabel(requested)} isn't installed here. Nothing changed.`
+  agent_unavailable: (requested) =>
+    `${providerLabel(requested)} isn't installed here. Nothing changed.`
 };
 
 /** The notice for a chat message the backend refused because of the main's provider state. */
@@ -213,7 +214,9 @@ export function selectionNotice(error: unknown, requested: MainProvider): string
   const code = refusalCode(error);
   if (code) return `${REFUSAL_NOTICE[code](requested)} ${REFRESHED}`;
   // The detail may end in a full stop of its own; the sentence after it adds one.
-  const detail = boundedText(error instanceof Error && error.message ? error.message : 'request failed').replace(/\.+$/, '');
+  const detail = boundedText(
+    error instanceof Error && error.message ? error.message : 'request failed'
+  ).replace(/\.+$/, '');
   if (error instanceof ApiError && error.status === 409)
     return `Provider change blocked (409): ${detail}. ${REFRESHED}`;
   return `Provider selection was not confirmed: ${detail}. ${REFRESHED}`;

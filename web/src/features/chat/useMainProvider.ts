@@ -60,7 +60,10 @@ async function readProvider(read: ProviderRead, token: number): Promise<void> {
  * `busy` is what the thread does not know itself: offline, a send or stop running, or the thread
  * not read yet.
  */
-export function useMainProvider(info: MainThreadInfo | undefined, busy: boolean): MainProviderControl {
+export function useMainProvider(
+  info: MainThreadInfo | undefined,
+  busy: boolean
+): MainProviderControl {
   const queryClient = useQueryClient();
   const [selecting, setSelecting] = useState(false);
   const [unconfirmed, setUnconfirmed] = useState(false);
@@ -126,8 +129,12 @@ export function useMainProvider(info: MainThreadInfo | undefined, busy: boolean)
   const notice = [writeNotice, unconfirmed ? UNCONFIRMED_NOTICE : null]
     .filter((text): text is string => text !== null)
     .join(' ');
-  const desiredWrite = current ? { provider: current.desired_provider, restart_failed: false } : null;
-  const restartTarget = current ? { provider: current.desired_provider, restart_failed: true } : null;
+  const desiredWrite = current
+    ? { provider: current.desired_provider, restart_failed: false }
+    : null;
+  const restartTarget = current
+    ? { provider: current.desired_provider, restart_failed: true }
+    : null;
 
   return {
     selecting,

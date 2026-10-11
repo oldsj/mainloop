@@ -56,15 +56,12 @@ function ProviderRow({
     selecting: provider.selecting,
     unconfirmed: provider.unconfirmed
   });
-  const stateError = current?.status === 'failed' && current.error ? boundedText(current.error) : null;
-  const buttonClass =
-    'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
+  const stateError =
+    current?.status === 'failed' && current.error ? boundedText(current.error) : null;
+  const buttonClass = 'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
 
   return (
-    <div
-      className="gap-sm px-md flex flex-wrap items-center pb-xs"
-      data-testid="mt-provider"
-    >
+    <div className="gap-sm px-md pb-xs flex flex-wrap items-center" data-testid="mt-provider">
       <label htmlFor="main-provider-select" className="text-muted-foreground">
         Main provider
       </label>
@@ -88,7 +85,8 @@ function ProviderRow({
         ))}
       </select>
       <span data-testid="mt-provider-effective">
-        effective: {current?.effective_provider ? providerLabel(current.effective_provider) : 'none confirmed'}
+        effective:{' '}
+        {current?.effective_provider ? providerLabel(current.effective_provider) : 'none confirmed'}
       </span>
       <span className="text-foreground" role="status" data-testid="mt-provider-status">
         {words}
@@ -116,12 +114,19 @@ function ProviderRow({
         </button>
       ) : null}
       {provider.notice ? (
-        <p className="text-destructive w-full [overflow-wrap:anywhere]" role="alert" data-testid="mt-provider-notice">
+        <p
+          className="text-destructive w-full [overflow-wrap:anywhere]"
+          role="alert"
+          data-testid="mt-provider-notice"
+        >
           {provider.notice}
         </p>
       ) : null}
       {stateError ? (
-        <p className="text-destructive w-full [overflow-wrap:anywhere]" data-testid="mt-provider-error">
+        <p
+          className="text-destructive w-full [overflow-wrap:anywhere]"
+          data-testid="mt-provider-error"
+        >
           {stateError}
         </p>
       ) : null}
@@ -191,16 +196,14 @@ export function MainThreadHeader({
         </button>
       </div>
 
-      {provider ? (
-        <ProviderRow info={info} offline={offline} provider={provider} />
-      ) : null}
+      {provider ? <ProviderRow info={info} offline={offline} provider={provider} /> : null}
 
       {open ? (
         <div id="main-thread-details" className="border-border border-t">
           {provider ? (
             <p className="px-md py-xs" data-testid="mt-provider-help">
-              Conversation and tasks stay. Switching starts a fresh native session; prior native history
-              is retained.
+              Conversation and tasks stay. Switching starts a fresh native session; prior native
+              history is retained.
             </p>
           ) : null}
           {info.session_id && renderIdentity ? renderIdentity(info.session_id) : null}

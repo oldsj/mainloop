@@ -34,7 +34,10 @@ function thread(provider: MainProviderInfo | null): MainThreadInfo {
 export default function MainThreadHeaderPreview() {
   const turn = mainThreadFixture({
     topics,
-    native: nativeFixture({ turn_in_flight: true, deliveries: [deliveryFixture({ state: 'sending' })] })
+    native: nativeFixture({
+      turn_in_flight: true,
+      deliveries: [deliveryFixture({ state: 'sending' })]
+    })
   });
   const failed = mainThreadFixture({
     topics,
@@ -47,10 +50,23 @@ export default function MainThreadHeaderPreview() {
   return (
     <div className="gap-md flex flex-col">
       <MainThreadHeader info={thread(providerFixture())} offline={false} provider={idleControl} />
-      <MainThreadHeader info={turn} offline={false} onStop={() => {}} provider={{ ...idleControl, switchBlocked: true }} />
+      <MainThreadHeader
+        info={turn}
+        offline={false}
+        onStop={() => {}}
+        provider={{ ...idleControl, switchBlocked: true }}
+      />
       <MainThreadHeader info={failed} offline={false} provider={idleControl} />
-      <MainThreadHeader info={uncertain} offline={false} provider={{ ...idleControl, switchBlocked: true }} />
-      <MainThreadHeader info={thread(providerFixture())} offline provider={{ ...idleControl, switchBlocked: true }} />
+      <MainThreadHeader
+        info={uncertain}
+        offline={false}
+        provider={{ ...idleControl, switchBlocked: true }}
+      />
+      <MainThreadHeader
+        info={thread(providerFixture())}
+        offline
+        provider={{ ...idleControl, switchBlocked: true }}
+      />
     </div>
   );
 }
@@ -63,13 +79,23 @@ export function ProviderNotStartedPreview() {
 
 /** The provider row while a selection is preparing: the select is held. */
 export function ProviderPendingPreview() {
-  const info = thread(providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' }));
-  return <MainThreadHeader info={info} offline={false} provider={{ ...idleControl, switchBlocked: true }} />;
+  const info = thread(
+    providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })
+  );
+  return (
+    <MainThreadHeader
+      info={info}
+      offline={false}
+      provider={{ ...idleControl, switchBlocked: true }}
+    />
+  );
 }
 
 /** The provider row for a ready, confirmed provider. */
 export function ProviderReadyPreview() {
-  return <MainThreadHeader info={thread(providerFixture())} offline={false} provider={idleControl} />;
+  return (
+    <MainThreadHeader info={thread(providerFixture())} offline={false} provider={idleControl} />
+  );
 }
 
 /** The provider row for a failed start: Retry, and Restart because the failure is recoverable. */
@@ -91,7 +117,8 @@ export function ProviderFailedPreview() {
         ...idleControl,
         retryOffered: true,
         restartOffered: true,
-        notice: 'Provider selection was not confirmed: request failed. State is refreshed; no automatic retry.'
+        notice:
+          'Provider selection was not confirmed: request failed. State is refreshed; no automatic retry.'
       }}
     />
   );
