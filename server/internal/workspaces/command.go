@@ -37,11 +37,13 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) (*Service, er
 }
 
 // RunSweepOrphans lists the kagent Sessions Mainloop created and no longer references. It deletes
-// nothing unless --delete is given.
+// nothing unless --delete is given. It first prints the Agents it sweeps. --forget-agent ns/name
+// instead removes an Agent from that set (refused if the configuration names it).
 func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sweep-orphans", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	del := fs.Bool("delete", false, "delete the orphans (default: list only)")
+	forget := fs.String("forget-agent", "", "remove an Agent (namespace/name) from the swept set and exit")
 	if err := fs.Parse(args); err != nil {
 		return exitFailure
 	}
@@ -63,11 +65,30 @@ func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Write
 		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
 		return exitFailure
 	}
+	if *forget != "" {
+		if *del {
+			_, _ = fmt.Fprintln(stderr, "sweep-orphans: --forget-agent cannot be combined with --delete")
+			return exitFailure
+		}
+		return forgetAgent(ctx, svc, *forget, stdout, stderr)
+	}
 	rep, err := svc.SweepOrphans(ctx, OrphanOptions{Delete: *del})
 	return printOrphans(rep, err, *del, stdout, stderr)
 }
 
+func forgetAgent(ctx context.Context, svc *Service, key string, stdout, stderr io.Writer) int {
+	if err := svc.ForgetAgent(ctx, key); err != nil {
+		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
+		return exitFailure
+	}
+	_, _ = fmt.Fprintf(stdout, "forgot agent %s\n", key)
+	return 0
+}
+
 func printOrphans(rep OrphanReport, err error, del bool, stdout, stderr io.Writer) int {
+	for _, a := range rep.Agents {
+		_, _ = fmt.Fprintf(stdout, "agent   %s\n", a)
+	}
 	deleted := map[string]bool{}
 	for _, id := range rep.Deleted {
 		deleted[id] = true

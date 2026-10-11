@@ -216,8 +216,12 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 			sess, err = t.s.Kagent.GetSession(ctx, t.ksid)
 		}
 		var se *kagent.SessionError
+		// An unbound create that kagent refuses as AlreadyExists replays a request id whose landed
+		// Session was made for another Agent (a config change since the lost reply). Treat it like a
+		// deleted one: replace the request id and create on the configured Agent; the orphan sweep
+		// reclaims the landed Session.
 		gone := errors.As(err, &se) && ((t.ksid != "" && se.Code == connect.CodeNotFound) ||
-			(t.ksid == "" && createHitDeleted(se)))
+			(t.ksid == "" && (createHitDeleted(se) || se.Code == connect.CodeAlreadyExists)))
 		switch {
 		case err != nil && !gone:
 			return "", err

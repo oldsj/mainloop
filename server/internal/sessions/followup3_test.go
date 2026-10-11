@@ -40,10 +40,10 @@ func (e *env) orphans(c *kagent.Client) workspaces.OrphanReport {
 
 // A main create lands and its reply is lost, then the main Agent's configuration changes before the
 // next send. The send replays the create with the new Agent and kagent refuses it (AlreadyExists),
-// so that one message fails. Nothing leaks: the resolve sweep settles the create, the Session that
-// landed on the old Agent is reclaimed by the orphan sweep, and the next message makes a new
-// Session on the renamed Agent.
-func TestAConfigChangeBetweenALostReplyAndTheNextSendFailsOneMessageAndLeaksNothing(t *testing.T) {
+// so the turn replaces the request id and the message completes on a new Session on the renamed
+// Agent. Nothing leaks: the orphan sweep reclaims the Session that landed on the old Agent. Messages
+// sent before the next resolve pass complete too.
+func TestAConfigChangeBetweenALostReplyAndTheNextSendCompletesOnTheRenamedAgent(t *testing.T) {
 	e, k := newFlakyEnv(t)
 	// The old Agent is not one of the provider Agents, so only the record of the create knows it.
 	e.renameAgent("main-old")
@@ -68,12 +68,20 @@ func TestAConfigChangeBetweenALostReplyAndTheNextSendFailsOneMessageAndLeaksNoth
 
 	e.renameAgent("main-renamed")
 	e.run()
-	failed := e.send("after the config change")
-	// The replay is refused each time; skip the retry backoff so the failure comes at once.
-	e.waitFor("the message fails", func() bool {
-		_, _ = e.pool.Exec(ctx, `UPDATE deliveries SET next_attempt_at = now() WHERE id = $1 AND lease_owner IS NULL`, failed)
-		return e.delivery(failed).State == dbstate.DeliveryFailed
-	})
+	// Three messages before any resolve pass: none fails, all land on the renamed Agent.
+	for _, text := range []string{"after the config change", "again, before the sweep", "and again"} {
+		if d := e.waitState(e.send(text), dbstate.DeliveryCompleted); d.CreateFailures != 0 {
+			t.Fatalf("%q: create failures = %d, want 0", text, d.CreateFailures)
+		}
+	}
+	ksid := e.bindingKsid(m.SessionID)
+	if ksid == "" || ksid == landed.GetId() {
+		t.Fatalf("bound %q, want a new Session", ksid)
+	}
+	now, ok := e.srv.Session(ksid)
+	if !ok || now.GetAgent().GetName() != "main-renamed" {
+		t.Fatalf("new Session %v, want one on main-renamed", now.GetAgent())
+	}
 	if _, ok := e.srv.Session(landed.GetId()); !ok {
 		t.Fatal("the Session on the old Agent was deleted by a send")
 	}
@@ -88,15 +96,9 @@ func TestAConfigChangeBetweenALostReplyAndTheNextSendFailsOneMessageAndLeaksNoth
 	if s, ok := e.srv.Session(landed.GetId()); ok && s.GetState() != kagentapi.RuntimeState_RUNTIME_STATE_DELETED {
 		t.Fatalf("the old-Agent Session is still %s", s.GetState())
 	}
-
-	e.waitState(e.send("and again"), dbstate.DeliveryCompleted)
-	ksid := e.bindingKsid(m.SessionID)
-	if ksid == "" || ksid == landed.GetId() {
-		t.Fatalf("bound %q, want a new Session", ksid)
-	}
-	now, ok := e.srv.Session(ksid)
-	if !ok || now.GetAgent().GetName() != "main-renamed" {
-		t.Fatalf("new Session %v, want one on main-renamed", now.GetAgent())
+	e.waitState(e.send("after the sweeps"), dbstate.DeliveryCompleted)
+	if got := e.bindingKsid(m.SessionID); got != ksid {
+		t.Fatalf("rebound to %q after the sweeps, want %q", got, ksid)
 	}
 }
 

@@ -85,7 +85,8 @@ commands:
   serve-mcp       MCP listener on :8002
   serve-git       git transport: read on :8003 (upload-pack proxy), push on :8004 (health only for now)
   migrate         up | status | reset the database schema
-  sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them)
+  sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them;
+                  --forget-agent ns/name drops an Agent from the swept set)
   smoke           not implemented yet
   kagent-probe    read-only check that kagent answers (GetAgent and ListSessions)
 `)

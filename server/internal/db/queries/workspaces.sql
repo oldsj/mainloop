@@ -191,3 +191,8 @@ WHERE s.archived_at IS NOT NULL AND b.kagent_session_id IS NULL
       SELECT 1 FROM workspace_ops o WHERE o.workspace_id = w.id AND o.state IN ('pending', 'retrying'))
 ORDER BY s.archived_at, b.session_id
 LIMIT $1;
+
+-- name: ForgetKnownAgent :execrows
+-- Removes an Agent from the orphan sweep's set (the operator's remedy for an Agent that was
+-- configured by mistake).
+DELETE FROM kagent_agents WHERE namespace = $1 AND name = $2;

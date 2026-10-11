@@ -55,8 +55,9 @@ func (s *Service) ResolveCreates(ctx context.Context) error {
 }
 
 func (s *Service) resolveCreate(ctx context.Context, q *dbq.Queries, r dbq.ListUnresolvedCreatesRow) error {
-	// The replay names the Agent the create named, stored with it, so a config change since cannot
-	// turn it into a different request.
+	// The replay names the Agent stored with the marker. A send that finds the id already taken
+	// replaces it (ensureKagentSession), so a Session that landed on an Agent since renamed is left
+	// to the orphan sweep rather than replayed here.
 	if r.AgentNamespace == nil || r.AgentName == nil {
 		return errors.New("the create recorded no Agent")
 	}

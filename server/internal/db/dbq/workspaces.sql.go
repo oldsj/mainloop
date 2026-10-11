@@ -131,6 +131,25 @@ func (q *Queries) FinishWorkspaceOp(ctx context.Context, arg FinishWorkspaceOpPa
 	return result.RowsAffected(), nil
 }
 
+const forgetKnownAgent = `-- name: ForgetKnownAgent :execrows
+DELETE FROM kagent_agents WHERE namespace = $1 AND name = $2
+`
+
+type ForgetKnownAgentParams struct {
+	Namespace string
+	Name      string
+}
+
+// Removes an Agent from the orphan sweep's set (the operator's remedy for an Agent that was
+// configured by mistake).
+func (q *Queries) ForgetKnownAgent(ctx context.Context, arg ForgetKnownAgentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, forgetKnownAgent, arg.Namespace, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getLatestCreateOp = `-- name: GetLatestCreateOp :one
 SELECT id, workspace_id, kind, idempotency_key, state, attempts, next_attempt_at, lease_owner, lease_until, failures, first_failed_at, last_error, quiet_since, created_at FROM workspace_ops
 WHERE workspace_id = $1 AND kind = 'create'

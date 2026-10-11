@@ -95,8 +95,13 @@ built; nothing here has been measured against a live kagent.
   deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
   scheduled pass logs a warning when it is blocked. kagent records every Session made with the
   control token as created by the same user, so the creator does not tell Mainloop instances
-  apart: only distinct Agent names do. Instances that share a kagent must not share Agents, or
-  one instance's sweep deletes the other's Sessions.
+  apart: only distinct Agent names do. Instances that share a kagent must never have shared
+  Agents, or one instance's sweep deletes the other's Sessions. An Agent a deployment once used
+  (a workspace row or a session create named it) stays in its orphan sweep (`kagent_agents`) after
+  the configuration stops naming it. `mainloop sweep-orphans` prints the Agent set it covers
+  (`agent   <namespace>/<name>`) before the orphans, and `--forget-agent <namespace>/<name>`
+  deletes one from that set and exits. It refuses an Agent the current configuration names, one
+  that is not in the set, and a combination with `--delete`.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
   event carries the workspace lifecycle; it is not a removal notice.
 - `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It waits

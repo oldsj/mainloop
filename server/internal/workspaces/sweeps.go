@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -141,6 +143,8 @@ type OrphanReport struct {
 	Failed map[string]string
 	// Blocked is why deletion was refused, empty when it was not.
 	Blocked string
+	// Agents is the set (namespace/name) the pass sweeps.
+	Agents []string
 }
 
 // SweepOrphans finds kagent Sessions that Mainloop created and no longer references, and with
@@ -151,6 +155,11 @@ type OrphanReport struct {
 // create whose Session id is unknown, since that Session would look like an orphan.
 func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanReport, error) {
 	rep := OrphanReport{Failed: map[string]string{}}
+	ours, err := s.ownAgents(ctx)
+	if err != nil {
+		return rep, err
+	}
+	rep.Agents = slices.Sorted(maps.Keys(ours))
 	sessions, err := s.Kagent.ListSessions(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("list kagent sessions: %w", err)
@@ -165,10 +174,6 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 		if id != nil {
 			boundSet[*id] = true
 		}
-	}
-	ours, err := s.ownAgents(ctx)
-	if err != nil {
-		return rep, err
 	}
 	cutoff := s.now().Add(-s.Config.Workspaces.OrphanMinAge.Duration())
 	for _, sess := range sessions {
@@ -223,13 +228,19 @@ func agentKey(r *kagentapi.ResourceReference) string { return r.GetNamespace() +
 // control token as created by the same constant user. Only distinct Agent names keep one
 // instance's sweep away from another's Sessions, so instances sharing a kagent must not share
 // Agents.
-func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
+// configAgents is the Agents the current configuration names.
+func (s *Service) configAgents() map[string]bool {
 	out := map[string]bool{}
 	for _, p := range s.Providers.Profiles() {
 		for _, ref := range p.Agents {
 			out[ref.Namespace+"/"+ref.Name] = true
 		}
 	}
+	return out
+}
+
+func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
+	out := s.configAgents()
 	known, err := dbq.New(s.Pool).ListKnownAgents(ctx)
 	if err != nil {
 		return nil, err
@@ -238,4 +249,25 @@ func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 		out[r.Namespace+"/"+r.Name] = true
 	}
 	return out, nil
+}
+
+// ForgetAgent removes an Agent ("namespace/name") from the set the orphan sweep covers, for an
+// Agent that was configured by mistake and would otherwise stay in the set for good. It refuses an
+// Agent the current configuration names. The Sessions already on it are then left alone.
+func (s *Service) ForgetAgent(ctx context.Context, key string) error {
+	ns, name, ok := strings.Cut(key, "/")
+	if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
+		return fmt.Errorf("agent %q is not namespace/name", key)
+	}
+	if s.configAgents()[key] {
+		return fmt.Errorf("agent %s is named by the current configuration; change the configuration first", key)
+	}
+	n, err := dbq.New(s.Pool).ForgetKnownAgent(ctx, dbq.ForgetKnownAgentParams{Namespace: ns, Name: name})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("agent %s is not in the swept set", key)
+	}
+	return nil
 }
