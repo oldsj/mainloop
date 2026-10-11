@@ -12,7 +12,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "build:design": "node design/build.ts && vite build --mode design",
+    "check:design": "node design/check-previews.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.1",

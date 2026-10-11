@@ -41,6 +41,12 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/workspace-manifest.md`
 - `guidelines/workspace-previews.md`
 
+## Previews
+
+Run `pnpm --dir web build:design` from the repository root to build `previews/index.html` and one page per `*.preview.tsx`. Serve this folder over HTTP to view the interactive fixtures.
+Previews are built in CI, not committed: hashed bundles would add churn without providing extra drift evidence. Theme and guideline outputs remain committed and drift-checked.
+Run `pnpm --dir web check:design` after building to check every page with axe in Chromium. Serious and critical violations fail; lower impacts are reported.
+
 ## Using it in Claude Design
 
 - Use this system as the default for Mainloop designs.

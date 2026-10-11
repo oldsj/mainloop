@@ -54,6 +54,20 @@ jobs:
       - name: Build
         working-directory: web
         run: node_modules/.bin/vite build
+      - name: Cache design-check Chromium
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.cache/ms-playwright
+          key: design-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install design-check Chromium
+        working-directory: web
+        run: node_modules/.bin/playwright install --with-deps chromium
+      - name: Build design previews
+        working-directory: web
+        run: pnpm build:design
+      - name: Check preview accessibility
+        working-directory: web
+        run: pnpm check:design
       - name: Build and tests left the tree clean
         # The router plugin rewrites routeTree.gen.ts on every vite run and writes it in the style
         # committed here; a diff means the committed file is stale. `git diff` alone would miss

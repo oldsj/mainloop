@@ -73,3 +73,20 @@ The behaviour comes from the specs in [`docs/specs/`](../../docs/specs/). Where 
 
 - Some tokens are proposed and not yet in `packages/ui`: the `motion.duration` values `fast` and `base`, the `motion.easing` value `standard`, and the focus ring width and offset. Their `$description` says so.
 - Font weights and `max-width` are not tokenised. The old `max-width` values had no effect in the current app.
+
+## Preview build and accessibility
+
+Run `pnpm --dir web build:design` to generate the theme and build every
+`src/**/*.preview.tsx` into `system/previews/`, with an index. The design build
+uses a separate Vite root and output directory; the app still builds into `web/dist`.
+The pages load interactive React fixtures and the same generated theme as the app.
+
+Previews are generated in CI and ignored by Git: committing hashed bundles would
+create churn without adding useful drift evidence. Tokens, theme and guidelines
+remain committed and drift-checked. Build previews after generating the tokens,
+because the token generator replaces `system/`.
+
+Run `pnpm --dir web check:design` after building. It serves the built pages locally
+and checks each with axe in Chromium, failing on serious or critical violations
+and printing moderate/minor findings. Chromium is cached in CI; no backend or live
+agent is used. Install it locally with `pnpm --dir web exec playwright install chromium`.

@@ -4,19 +4,24 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { designPreviews } from './design/previews';
 
 // The local Go `serve-api` listens here; override with MAINLOOP_API_PROXY.
 const apiProxy = process.env.MAINLOOP_API_PROXY ?? 'http://127.0.0.1:8000';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     // semicolons and quoteStyle match what the file already holds, so the plugin's output is stable
-    tanstackRouter({
-      target: 'react',
-      autoCodeSplitting: true,
-      semicolons: true,
-      quoteStyle: 'single'
-    }),
+    ...(mode === 'design'
+      ? [designPreviews()]
+      : [
+          tanstackRouter({
+            target: 'react',
+            autoCodeSplitting: true,
+            semicolons: true,
+            quoteStyle: 'single'
+          })
+        ]),
     react(),
     tailwindcss()
   ],
@@ -44,4 +49,4 @@ export default defineConfig({
     // Absolute, so requests resolve to a real URL under jsdom and MSW can match them.
     env: { VITE_API_URL: 'http://localhost:3000/api' }
   }
-});
+}));
