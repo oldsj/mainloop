@@ -9,6 +9,8 @@ export interface ComposerProps {
   draftKey: string;
   /** A turn is in flight, or a send is pending. */
   busy: boolean;
+  /** The thread has not been read yet, so the draft's conversation is not known. */
+  loading?: boolean;
   /** The backend is unreachable. The draft is kept and sending is off. */
   offline: boolean;
   /**
@@ -18,14 +20,15 @@ export interface ComposerProps {
   onSend: (text: string) => Promise<boolean>;
 }
 
-function placeholder(offline: boolean, busy: boolean) {
+function placeholder(offline: boolean, busy: boolean, loading: boolean) {
   if (offline) return 'Backend unreachable…';
+  if (loading) return 'Loading…';
   if (busy) return 'Working…';
   return 'Enter command...';
 }
 
 /** The text box and EXEC button. Enter sends, Shift+Enter adds a line, IME composition never sends. */
-export function Composer({ draftKey, busy, offline, onSend }: ComposerProps) {
+export function Composer({ draftKey, busy, loading = false, offline, onSend }: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
   const [shownKey, setShownKey] = useState(draftKey);
   const [sending, setSending] = useState(false);
@@ -38,7 +41,7 @@ export function Composer({ draftKey, busy, offline, onSend }: ComposerProps) {
     setText(loadDraft(draftKey));
   }
 
-  const disabled = busy || offline || sending;
+  const disabled = busy || loading || offline || sending;
 
   // Grow with the text up to a few lines, then scroll.
   useLayoutEffect(() => {
@@ -97,7 +100,7 @@ export function Composer({ draftKey, busy, offline, onSend }: ComposerProps) {
         rows={1}
         value={text}
         disabled={disabled}
-        placeholder={placeholder(offline, busy)}
+        placeholder={placeholder(offline, busy, loading)}
         aria-label="Message"
         onChange={(event) => change(event.target.value)}
         onKeyDown={keyDown}

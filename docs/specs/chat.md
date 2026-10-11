@@ -91,10 +91,16 @@ MSW fixtures typed from `api/openapi.yaml`.
 - The main thread is the only chat surface. There is no session picker, no thread replies, no
   zoom, and no fallback to an older conversation list.
 - A send shows the message at once. If the backend refuses it, the bubble goes away and the
-  text returns to the box; once it is recorded, a later failure to refresh does not undo it.
-- Drafts are kept per conversation in `sessionStorage` and cleared when a send is recorded.
-- While a turn is in flight the thread is re-read every two seconds, for about six minutes, as
-  a fallback to the `session:message` event. Reads pause while the tab is hidden.
+  text returns to the box; once it is recorded, a later failure to refresh does not undo it. The
+  bubble stays until the conversation lists the recorded message, matched on the response's
+  `delivery_message_id` (the native backend returns no message body), or its `message.id`.
+- The box is locked until the thread has loaded, so early typing cannot land in the wrong draft.
+- Drafts are kept per conversation in `sessionStorage`. Only a recorded composer send clears
+  its draft; Retry leaves whatever is in the box alone.
+- A conversation that fails to load shows a recovery message, even when it has no messages yet.
+- While a turn is in flight the thread is re-read every two seconds, for six minutes from when
+  the turn was first seen in flight, as a fallback to the `session:message` event. The
+  conversation is read once more when the turn ends. Reads pause while the tab is hidden.
 - Pending requests of the main session and `?hitl=<id>` render through `features/hitl`; the
   card itself arrives with the HITL slice.
 - The native identity strip in the header details is supplied by the sessions slice.

@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { deliveryFixture, mainThreadFixture, nativeFixture, type MainThreadInfo } from './fixtures';
+import { deliveryFixture, mainThreadFixture, nativeFixture } from './fixtures';
+import type { MainThreadInfo } from './types';
 import { MainThreadHeader } from './MainThreadHeader';
 
 const view = (

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
@@ -17,6 +17,7 @@ import {
   nativeFixture
 } from './fixtures';
 import { createChatBackend, type ChatBackendState } from './handlers';
+import { POLL_MS, POLL_WINDOW_MS } from './useMainThread';
 
 // The approval card is built in F3 and throws until then; these tests only check where it renders.
 vi.mock('@/features/hitl', () => ({
@@ -174,8 +175,8 @@ describe('sending', () => {
         })
       })
     );
-    await waitFor(() => expect(input()).toBeDisabled());
-    expect(input()).toHaveAttribute('placeholder', 'Working…');
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(input()).toBeDisabled();
     expect(screen.getByTestId('mt-state')).toHaveTextContent('ready');
   });
 
@@ -200,6 +201,113 @@ describe('sending', () => {
     setup(existing());
     await screen.findByText('build it');
     await waitFor(() => expect(input().value).toBe('half a thought'));
+  });
+});
+
+describe('the native /chat answer', () => {
+  it('locks the composer after a send and polls until the turn ends', async () => {
+    const { state, endTurn } = setup(existing());
+    await screen.findByText('build it');
+    await userEvent.type(input(), 'next step{Enter}');
+    // No message body came back, yet the bubble stays and the composer is locked.
+    expect(await screen.findByText('next step')).toBeInTheDocument();
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(input()).toBeDisabled();
+    expect(screen.getAllByText('next step')).toHaveLength(1);
+
+    // Started by the send alone: the backend finishes the turn and no SSE event arrives.
+    const reads = state.mainThreadReads;
+    endTurn('All done.');
+    await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
+    expect(state.mainThreadReads).toBeGreaterThan(reads);
+    expect(await screen.findByText('All done.')).toBeInTheDocument();
+    expect(screen.getAllByText('next step')).toHaveLength(1);
+  });
+
+  it('keeps the accepted message on screen when the refresh fails', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    server.use(
+      http.get(`${API_URL}/conversations/:id`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      ),
+      http.get(`${API_URL}/main-thread`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    await userEvent.type(input(), 'accepted{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    await waitFor(() => expect(input().value).toBe(''));
+    expect(screen.getByText('accepted')).toBeInTheDocument();
+    expect(screen.queryByTestId('send-error')).toBeNull();
+  });
+
+  it('stops polling six minutes after the turn was first seen in flight', async () => {
+    const { state } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + POLL_WINDOW_MS + 1);
+    try {
+      // One poll may already be queued; after that the window has closed.
+      await delay(POLL_MS * 2 + 500);
+      const settled = state.mainThreadReads;
+      await delay(POLL_MS * 2 + 500);
+      expect(state.mainThreadReads).toBe(settled);
+    } finally {
+      now.mockRestore();
+    }
+  }, 15000);
+});
+
+describe('loading the conversation', () => {
+  it('locks the composer until the thread is read', async () => {
+    server.use(
+      http.get(`${API_URL}/main-thread`, async () => {
+        await delay(150);
+        return HttpResponse.json(mainThreadFixture());
+      })
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatPage />
+      </QueryClientProvider>
+    );
+    expect(input()).toBeDisabled();
+    expect(input()).toHaveAttribute('placeholder', 'Loading…');
+    await waitFor(() => expect(input()).toBeEnabled());
+  });
+
+  it('is not an empty thread while the conversation is still loading', async () => {
+    setup(existing());
+    server.use(
+      http.get(`${API_URL}/conversations/:id`, async () => {
+        await delay(300);
+        return HttpResponse.json({ detail: 'down' }, { status: 500 });
+      })
+    );
+    await screen.findByTestId('mt-state');
+    expect(screen.queryByText('$ mainloop --help')).toBeNull();
+    expect(screen.getByText('$ connecting')).toBeInTheDocument();
+  });
+
+  it('says so when the conversation cannot be read, even with no messages', async () => {
+    setup(existing());
+    server.use(
+      http.get(`${API_URL}/conversations/:id`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    expect(await screen.findByText('Could not load the conversation')).toBeInTheDocument();
+    expect(screen.queryByText('$ mainloop --help')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 });
 
@@ -231,6 +339,17 @@ describe('delivery notices and retry', () => {
     await waitFor(() => expect(state.chatPosts).toHaveLength(1));
     expect(state.chatPosts[0]).toEqual({ message: 'build it', conversation_id: CONVERSATION_ID });
     expect(await screen.findAllByText('build it')).toHaveLength(2);
+  });
+
+  it('Retry leaves the text in the box and its stored draft alone', async () => {
+    const { state } = setup(failedThread());
+    await screen.findByTestId('delivery-retry');
+    await userEvent.type(input(), 'something else');
+    await userEvent.click(screen.getByTestId('delivery-retry'));
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(loadDraft(CONVERSATION_ID)).toBe('something else');
+    expect(input().value).toBe('something else');
   });
 
   it('Retry does nothing when the thread moved on since the page loaded', async () => {
@@ -322,7 +441,8 @@ describe('staying current', () => {
     ];
     // No SSE event: the poll alone picks it up.
     await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
-    expect(screen.getByText('Done.')).toBeInTheDocument();
+    // The turn ending also re-reads the conversation, so the last reply is not missed.
+    expect(await screen.findByText('Done.')).toBeInTheDocument();
   });
 });
 

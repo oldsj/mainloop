@@ -3,12 +3,13 @@ import { API_URL } from '@/api/config';
 import type { components } from '@/api/schema.gen';
 import {
   CONVERSATION_ID,
+  deliveryFixture,
   MAIN_SESSION_ID,
   mainThreadFixture,
   messageFixture,
-  type ChatMessage,
-  type MainThreadInfo
+  nativeFixture
 } from './fixtures';
+import type { ChatMessage, MainThreadInfo } from './types';
 
 type Schemas = components['schemas'];
 
@@ -21,6 +22,8 @@ export interface ChatBackendState {
   chatPosts: Schemas['ChatRequest'][];
   /** Every session id that got a stop-turn POST. */
   stopped: string[];
+  /** How many times `GET /main-thread` was read. */
+  mainThreadReads: number;
   /** The next `POST /chat` is refused with this status and detail, then the field clears. */
   rejectNextChat: { status: number; detail: string } | null;
 }
@@ -32,20 +35,56 @@ const url = (path: string) => `${API_URL}${path}`;
  * to set up a scenario (a failed delivery, a turn in flight) and to assert what was sent; the
  * local stack (`VITE_MSW=1`) can spread `handlers` for a working demo thread.
  */
-export function createChatBackend(initial: Partial<ChatBackendState> = {}) {
+export function createChatBackend(
+  initial: Partial<ChatBackendState> = {},
+  options: { autoEndTurnMs?: number } = {}
+) {
   const state: ChatBackendState = {
     mainThread: mainThreadFixture(),
     messages: [],
     hitlIds: [],
     chatPosts: [],
     stopped: [],
+    mainThreadReads: 0,
     rejectNextChat: null,
     ...initial
   };
   let counter = state.messages.length;
 
+  /**
+   * Ends the running turn the way the native backend does: the user message's delivery completes,
+   * and the agent's reply, when given, joins the conversation.
+   */
+  function endTurn(reply?: string) {
+    const native = state.mainThread.native ?? nativeFixture();
+    state.mainThread = {
+      ...state.mainThread,
+      native: {
+        ...native,
+        turn_in_flight: false,
+        deliveries: native.deliveries.map((delivery) =>
+          delivery.state === 'recorded' ? { ...delivery, state: 'completed' } : delivery
+        )
+      }
+    };
+    if (reply)
+      state.messages = [
+        ...state.messages,
+        messageFixture({
+          id: `reply-${++counter}`,
+          conversation_id: state.mainThread.conversation_id ?? CONVERSATION_ID,
+          role: 'assistant',
+          content: reply,
+          created_at: new Date().toISOString()
+        })
+      ];
+  }
+
   const handlers = [
-    http.get(url('/main-thread'), () => HttpResponse.json(state.mainThread)),
+    http.get(url('/main-thread'), () => {
+      state.mainThreadReads += 1;
+      return HttpResponse.json(state.mainThread);
+    }),
     http.get(url('/conversations/:conversationId'), ({ params }) => {
       if (params.conversationId !== state.mainThread.conversation_id)
         return HttpResponse.json({ detail: 'Conversation not found' }, { status: 404 });
@@ -75,22 +114,35 @@ export function createChatBackend(initial: Partial<ChatBackendState> = {}) {
       }
       if (state.mainThread.native?.turn_in_flight)
         return HttpResponse.json({ detail: 'A turn is already running.' }, { status: 409 });
-      state.mainThread = {
-        ...state.mainThread,
-        conversation_id: state.mainThread.conversation_id ?? CONVERSATION_ID
-      };
+      const conversationId = state.mainThread.conversation_id ?? CONVERSATION_ID;
       const message = messageFixture({
         id: `sent-${++counter}`,
-        conversation_id: state.mainThread.conversation_id ?? CONVERSATION_ID,
+        conversation_id: conversationId,
         content: body.message,
         created_at: new Date().toISOString()
       });
       state.messages = [...state.messages, message];
+      const native = state.mainThread.native ?? nativeFixture();
+      // Native answer: the message is recorded and the turn starts; the reply comes later.
+      state.mainThread = {
+        ...state.mainThread,
+        conversation_id: conversationId,
+        native: {
+          ...native,
+          turn_in_flight: true,
+          deliveries: [
+            ...native.deliveries,
+            deliveryFixture({ message_id: message.id, state: 'recorded' })
+          ]
+        }
+      };
+      if (options.autoEndTurnMs !== undefined)
+        setTimeout(() => endTurn(`Echo: ${body.message}`), options.autoEndTurnMs);
       const response: Schemas['ChatResponse'] = {
-        conversation_id: message.conversation_id,
-        message,
+        conversation_id: conversationId,
+        message: null,
         spawned_session_id: null,
-        pending: false,
+        pending: true,
         delivery_message_id: message.id
       };
       return HttpResponse.json(response);
@@ -105,5 +157,5 @@ export function createChatBackend(initial: Partial<ChatBackendState> = {}) {
     )
   ];
 
-  return { state, handlers };
+  return { state, handlers, endTurn };
 }

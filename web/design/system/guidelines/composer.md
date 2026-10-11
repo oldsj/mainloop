@@ -14,6 +14,7 @@ The text box and send button at the bottom of a conversation. It submits one use
 
 ## States
 
+- **Loading:** the thread has not been read yet. The box is locked with the placeholder "Loading…", so early typing cannot land in the wrong conversation's draft.
 - **Empty:** send button disabled; placeholder explains what the box is for.
 - **Ready:** text present; send enabled.
 - **Sending:** one delivery is in flight. Send is disabled with the reason visible ("Waiting for the current reply"). A second send is refused with `409`, so the UI must not offer one.

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { agentLabel } from '@/lib/agentLabel';
 import { threadStatus, type ThreadStatus } from '@/lib/delivery';
-import type { MainThreadInfo } from './fixtures';
+import type { MainThreadInfo } from './types';
 
 const DOT: Record<ThreadStatus, string> = {
   ready: 'bg-term-green',

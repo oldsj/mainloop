@@ -120,6 +120,13 @@ describe('formatting', () => {
     expect(screen.getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['1', '2']);
   });
 
+  it('scrolls a wide table inside a wrapper, keeping real table semantics', () => {
+    const container = view('| a | b |\n| - | - |\n| 1 | 2 |');
+    const table = container.querySelector('table');
+    expect(table?.parentElement?.className).toContain('overflow-x-auto');
+    expect(table?.className).not.toContain('block');
+  });
+
   it('renders a single newline as a line break', () => {
     const container = view('one\ntwo');
     expect(container.querySelectorAll('br')).toHaveLength(1);

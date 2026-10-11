@@ -37,9 +37,7 @@ const components: Components = {
   img: ({ alt }) => <>{alt}</>,
   p: ({ children }) => <p className="mb-sm last:mb-0">{children}</p>,
   code: ({ children }) => (
-    <code className="bg-background border-border px-xs border text-[0.9em] break-words">
-      {children}
-    </code>
+    <code className="bg-background border-border px-xs border text-xs break-words">{children}</code>
   ),
   pre: ({ children }) => (
     <pre className="bg-background border-border p-sm my-sm border break-words whitespace-pre-wrap [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0">
@@ -63,7 +61,9 @@ const components: Components = {
   hr: () => <hr className="border-border my-md border-0 border-t" />,
   // A wide table scrolls inside the message instead of stretching the page.
   table: ({ children }) => (
-    <table className="my-sm block max-w-full border-collapse overflow-x-auto">{children}</table>
+    <div className="my-sm max-w-full overflow-x-auto">
+      <table className="border-collapse">{children}</table>
+    </div>
   ),
   th: ({ children }) => (
     <th className="border-border px-sm py-xs bg-background text-primary border text-left">

@@ -53,7 +53,16 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
           />
         </div>
       ) : null}
-      {chat.conversationFailed && chat.messages.length > 0 ? (
+      {chat.conversationFailed && !chat.loaded ? (
+        <div className="p-md">
+          <ErrorRecovery
+            title="Could not load the conversation"
+            message="The messages did not load. Your drafts are kept."
+            onRetry={chat.reloadConversation}
+          />
+        </div>
+      ) : null}
+      {chat.conversationFailed && chat.loaded ? (
         <p className="text-muted-foreground px-md py-xs text-xs" role="status">
           Could not refresh the conversation. Showing the last messages.
         </p>
@@ -86,6 +95,7 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
       <Composer
         draftKey={chat.conversationId ?? NEW_CONVERSATION}
         busy={chat.busy || chat.sendPending}
+        loading={!chat.threadKnown}
         offline={offline}
         onSend={(text) => chat.send(text, chat.conversationId)}
       />

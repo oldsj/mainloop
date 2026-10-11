@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { $api, fetchClient, keys, SendError } from '@/api';
 import type { Message } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
@@ -8,8 +8,11 @@ import { clearDraft, NEW_CONVERSATION } from './drafts';
 
 /** While a turn is in flight the thread is re-read this often, as a fallback to `session:message`. */
 export const POLL_MS = 2000;
-/** About six minutes. After that only SSE and a manual refresh update the thread. */
-export const MAX_POLLS = 180;
+/**
+ * How long polling lasts, counted from when the turn is first seen in flight. After that only
+ * SSE and a manual refresh update the thread.
+ */
+export const POLL_WINDOW_MS = 6 * 60 * 1000;
 
 const BACK_IN_BOX = ' Your message is back in the box.';
 
@@ -34,17 +37,20 @@ interface Optimistic {
 export function useMainThread() {
   const queryClient = useQueryClient();
   const polling = useRef(false);
-  const polls = useRef(0);
+  // When polling for the current turn stops; null while no turn is in flight.
+  const pollDeadline = useRef<number | null>(null);
 
   const mainThread = $api.useQuery('get', '/main-thread', undefined, {
     refetchInterval: (query) => {
       const inFlight = query.state.data?.native?.turn_in_flight === true;
       if (!inFlight) {
-        polls.current = 0;
+        pollDeadline.current = null;
         polling.current = false;
         return false;
       }
-      polling.current = ++polls.current <= MAX_POLLS;
+      // The deadline is taken once per turn; the callback also runs on renders, so it cannot count.
+      pollDeadline.current ??= Date.now() + POLL_WINDOW_MS;
+      polling.current = Date.now() < pollDeadline.current;
       return polling.current ? POLL_MS : false;
     }
   });
@@ -89,70 +95,92 @@ export function useMainThread() {
    * for the composer, the text returns to the box. Once accepted, a later failure to refresh does
    * not undo it. Resolves true when the backend recorded the message.
    */
+  /** Posts one message and shows it at once; the caller holds the send guard. */
+  const submit = useCallback(
+    async (
+      text: string,
+      targetConversation: string | null,
+      composer: boolean
+    ): Promise<boolean> => {
+      let accepted = false;
+      const entry: Optimistic = {
+        message: {
+          id: `pending-${++sequence.current}`,
+          conversation_id: targetConversation ?? '',
+          role: 'user',
+          content: text,
+          created_at: new Date().toISOString()
+        }
+      };
+      setSendError(null);
+      setOptimistic((list) => [...list, entry]);
+      try {
+        const response = await chat.mutateAsync({
+          body: { message: text, conversation_id: targetConversation }
+        });
+        accepted = true;
+        // Only the composer's own text is a draft; a retry must not wipe what the owner is typing.
+        if (composer) clearDraft(targetConversation ?? NEW_CONVERSATION);
+        // The native backend answers with the delivery id and no message body.
+        const acceptedId = response.delivery_message_id ?? response.message?.id;
+        setOptimistic((list) =>
+          acceptedId
+            ? list.map((item) => (item === entry ? { ...item, acceptedId } : item))
+            : list.filter((item) => item !== entry)
+        );
+        await refresh().catch(() => undefined);
+      } catch (error) {
+        if (!accepted) {
+          setOptimistic((list) => list.filter((item) => item !== entry));
+          setSendError(sendErrorText(error, composer));
+        }
+      }
+      return accepted;
+    },
+    [chat, refresh]
+  );
+
+  /**
+   * Sends the composer's text. A message the backend refused is taken back: the bubble goes away
+   * and the text returns to the box. Once accepted, a later failure to refresh does not undo it.
+   * Resolves true when the backend recorded the message.
+   */
   const send = useCallback(
-    async (text: string, targetConversation: string | null, restored = true): Promise<boolean> => {
+    async (text: string, targetConversation: string | null): Promise<boolean> => {
       let accepted = false;
       await guard(async () => {
-        const entry: Optimistic = {
-          message: {
-            id: `pending-${++sequence.current}`,
-            conversation_id: targetConversation ?? '',
-            role: 'user',
-            content: text,
-            created_at: new Date().toISOString()
-          }
-        };
-        setSendError(null);
-        setOptimistic([...visibleOptimistic, entry]);
-        try {
-          const response = await chat.mutateAsync({
-            body: { message: text, conversation_id: targetConversation }
-          });
-          accepted = true;
-          clearDraft(targetConversation ?? NEW_CONVERSATION);
-          const acceptedId = response.message?.id;
-          setOptimistic((list) =>
-            acceptedId
-              ? list.map((item) => (item === entry ? { ...item, acceptedId } : item))
-              : list.filter((item) => item !== entry)
-          );
-          await refresh().catch(() => undefined);
-        } catch (error) {
-          if (!accepted) {
-            setOptimistic((list) => list.filter((item) => item !== entry));
-            setSendError(sendErrorText(error, restored));
-          }
-        }
+        accepted = await submit(text, targetConversation, true);
       });
       return accepted;
     },
-    [chat, guard, refresh, visibleOptimistic]
+    [guard, submit]
   );
 
   const retry = useCallback(
-    async (message: Message) => {
-      try {
-        await retryMessage(
-          message,
-          async () => {
-            const { data } = await fetchClient.GET('/main-thread');
-            return {
-              conversationId: data?.conversation_id ?? null,
-              deliveries: data?.native?.deliveries ?? [],
-              blocked: data?.native?.turn_in_flight ?? false
-            };
-          },
-          async (text, targetConversation) => {
-            await send(text, targetConversation, false);
-          }
-        );
-        // A retry the fresh read refused leaves the screen stale; catch it up.
-        await refresh().catch(() => undefined);
-      } catch {
-        setSendError('Could not check the delivery status. Try again.');
-      }
-    },
-    [refresh, send]
+    (message: Message) =>
+      guard(async () => {
+        try {
+          await retryMessage(
+            message,
+            async () => {
+              const { data } = await fetchClient.GET('/main-thread');
+              return {
+                conversationId: data?.conversation_id ?? null,
+                deliveries: data?.native?.deliveries ?? [],
+                blocked: data?.native?.turn_in_flight ?? false
+              };
+            },
+            async (text, targetConversation) => {
+              await submit(text, targetConversation, false);
+            }
+          );
+          // A retry the fresh read refused leaves the screen stale; catch it up.
+          await refresh().catch(() => undefined);
+        } catch {
+          setSendError('Could not check the delivery status. Try again.');
+        }
+      }),
+    [guard, refresh, submit]
   );
 
   const stop = useCallback(() => {
@@ -168,6 +196,17 @@ export function useMainThread() {
     );
   }, [info?.session_id, refresh, stopTurn]);
 
+  // The last poll of the conversation can predate the agent's reply; read it once more when the
+  // turn ends.
+  const busy = info?.native?.turn_in_flight === true;
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !busy) {
+      void queryClient.invalidateQueries({ queryKey: keys.conversation() });
+    }
+    wasBusy.current = busy;
+  }, [busy, queryClient]);
+
   const notices = useMemo(
     () => deliveryNotices(info?.native?.deliveries ?? []),
     [info?.native?.deliveries]
@@ -175,14 +214,17 @@ export function useMainThread() {
 
   return {
     info,
-    /** The first read of the thread finished. */
-    loaded: mainThread.isSuccess,
+    /** The thread is read: the main thread, and its conversation when there is one. */
+    loaded: mainThread.isSuccess && (conversationId === null || conversation.data !== undefined),
+    /** The thread itself is read, so the draft key is known. */
+    threadKnown: mainThread.isSuccess,
     loadFailed: mainThread.isError && !info,
     reload: () => void mainThread.refetch(),
     conversationId,
     messages: [...serverMessages, ...visibleOptimistic.map((entry) => entry.message)],
     conversationFailed: conversation.isError,
-    busy: info?.native?.turn_in_flight === true,
+    reloadConversation: () => void conversation.refetch(),
+    busy,
     sendPending,
     sendError,
     notices,
