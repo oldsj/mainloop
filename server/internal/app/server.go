@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
@@ -76,6 +78,8 @@ type Deps struct {
 	Registry environments.RegistryClient
 	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
 	GitHub projects.Remote
+	// TaskObserver reads PR and CI facts. Nil leaves task projection disconnected.
+	TaskObserver *github.TaskObserver
 	// Workspaces runs the workspace lifecycle. Nil answers the workspace routes with 503.
 	Workspaces *workspaces.Service
 	// Sessions is the main thread service, shared with the delivery loop. Nil builds one with no
@@ -122,6 +126,9 @@ func New(d Deps) *Server {
 			},
 			Log: d.Log,
 		}
+		if d.TaskObserver != nil {
+			taskSvc.Observer = taskObserver{remote: d.TaskObserver}
+		}
 		// An interface holding a nil pointer is not nil: set the runtimes only when they exist.
 		if d.Workspaces != nil {
 			taskSvc.Workspaces = d.Workspaces
@@ -162,6 +169,16 @@ func New(d Deps) *Server {
 		deps:            d,
 		initErr:         err,
 	}
+}
+
+// taskObserver bridges the GitHub facts without making github depend on its consumers.
+type taskObserver struct{ remote *github.TaskObserver }
+
+var _ tasks.Observer = taskObserver{}
+
+func (o taskObserver) Observe(ctx context.Context, repo, branch string) (tasks.Observation, error) {
+	obs, err := o.remote.Observe(ctx, repo, branch)
+	return tasks.Observation(obs), err
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap, then the

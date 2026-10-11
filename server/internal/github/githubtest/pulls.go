@@ -299,7 +299,10 @@ func (s *Server) pullList(w http.ResponseWriter, r *http.Request, repo *Reposito
 	if state == "" {
 		state = "open"
 	}
-	head := strings.TrimPrefix(q.Get("head"), repo.Owner+":")
+	head := q.Get("head")
+	if owner, ref, ok := strings.Cut(head, ":"); ok && strings.EqualFold(owner, repo.Owner) {
+		head = ref
+	}
 	s.mu.Lock()
 	var all []PullRequest
 	for _, p := range repo.PullRequests {

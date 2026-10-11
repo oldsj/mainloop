@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
@@ -124,6 +125,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	if gh != nil {
 		deps.GitHub = gh
+		deps.TaskObserver = &github.TaskObserver{App: gh}
 	}
 	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {

@@ -3,6 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -207,6 +208,14 @@ func projection(t dbq.Task) api.TaskProjection {
 		ObservedAt: t.ProjectedAt, Branch: t.CheckoutBranch,
 	}
 	out.PrNumber = intp(t.PrNumber)
+	// Reads stay DB-only. Every CI state needs an exact head and a fresh observation; a
+	// successful sweep timestamps projected_at, including when the facts did not change.
+	if t.ProjectedAt == nil || t.PrHeadSha == nil || *t.PrHeadSha == "" || t.CiHeadSha == nil ||
+		*t.CiHeadSha != *t.PrHeadSha {
+		out.CiState = api.TaskProjectionCiStateUnknown
+	} else if age := time.Since(*t.ProjectedAt); age < 0 || age > 5*time.Minute {
+		out.CiState = api.TaskProjectionCiStateUnknown
+	}
 	return out
 }
 

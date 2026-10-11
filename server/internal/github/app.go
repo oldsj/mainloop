@@ -333,9 +333,9 @@ func (a *App) opaque(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return context.DeadlineExceeded
 	case errors.As(err, &rl) && rl.Response != nil:
-		return &StatusError{Status: rl.Response.StatusCode}
+		return &StatusError{Status: http.StatusTooManyRequests}
 	case errors.As(err, &ab) && ab.Response != nil:
-		return &StatusError{Status: ab.Response.StatusCode}
+		return &StatusError{Status: http.StatusTooManyRequests}
 	case errors.As(err, &er) && er.Response != nil:
 		if er.Response.StatusCode == http.StatusNotFound {
 			return ErrNotFound
@@ -374,6 +374,10 @@ func (g *tokenGuard) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if he.Response != nil {
 		status := he.Response.StatusCode
+		if status == http.StatusForbidden && (he.Response.Header.Get("X-RateLimit-Remaining") == "0" ||
+			he.Response.Header.Get("Retry-After") != "") {
+			status = http.StatusTooManyRequests
+		}
 		if he.Response.Body != nil {
 			_ = he.Response.Body.Close()
 		}
