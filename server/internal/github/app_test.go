@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,15 +143,171 @@ func TestTokensAreCachedUntilNearExpiry(t *testing.T) {
 
 func TestTokensNearExpiryAreRefreshed(t *testing.T) {
 	fake, app := seeded(t)
-	fake.TokenTTL = 30 * time.Second // inside the one-minute refresh margin
+	// 62 s is just outside the one-minute refresh margin, so the token is accepted and cached,
+	// then due for refresh about a second later.
+	fake.TokenTTL = 62 * time.Second
 	ctx := context.Background()
-	for range 3 {
+	for range 2 {
 		if _, err := app.Metadata(ctx, repo); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := len(fake.Mints()); n < 3 {
-		t.Fatalf("%d mints, want a fresh one per use", n)
+	if n := len(fake.Mints()); n != 1 {
+		t.Fatalf("%d mints before the margin, want 1", n)
+	}
+	time.Sleep(2100 * time.Millisecond)
+	if _, err := app.Metadata(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fake.Mints()); n != 2 {
+		t.Fatalf("%d mints after the margin, want 2", n)
+	}
+}
+
+// A token answer without a usable token or a lasting expiry is refused with a typed error and
+// is not cached: the next use mints again.
+func TestUnusableTokenAnswersAreRefused(t *testing.T) {
+	past := func(token string, _ time.Time) map[string]any {
+		return map[string]any{"token": token, "expires_at": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}
+	}
+	for name, resp := range map[string]func(string, time.Time) map[string]any{
+		"empty token": func(_ string, e time.Time) map[string]any {
+			return map[string]any{"token": "", "expires_at": e.Format(time.RFC3339)}
+		},
+		"missing token": func(_ string, e time.Time) map[string]any {
+			return map[string]any{"expires_at": e.Format(time.RFC3339)}
+		},
+		"space in token": func(tok string, e time.Time) map[string]any {
+			return map[string]any{"token": tok + " x", "expires_at": e.Format(time.RFC3339)}
+		},
+		"newline in token": func(tok string, e time.Time) map[string]any {
+			return map[string]any{"token": tok + "\n", "expires_at": e.Format(time.RFC3339)}
+		},
+		"missing expiry": func(tok string, _ time.Time) map[string]any { return map[string]any{"token": tok} },
+		"bad expiry": func(tok string, _ time.Time) map[string]any {
+			return map[string]any{"token": tok, "expires_at": "tomorrow"}
+		},
+		"past expiry": past,
+		"inside margin": func(tok string, _ time.Time) map[string]any {
+			return map[string]any{"token": tok, "expires_at": time.Now().Add(30 * time.Second).UTC().Format(time.RFC3339)}
+		},
+		"non-string token": func(_ string, e time.Time) map[string]any {
+			return map[string]any{"token": 5, "expires_at": e.Format(time.RFC3339)}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, app := seeded(t)
+			fake.MintResponse = resp
+			ctx := context.Background()
+			for range 2 {
+				_, err := app.Metadata(ctx, repo)
+				if !errors.Is(err, github.ErrInvalidToken) || strings.Contains(err.Error(), "ghs_fake_") {
+					t.Fatalf("got %v", err)
+				}
+			}
+			if n := len(fake.Mints()); n != 2 {
+				t.Fatalf("%d mints for 2 refused answers, want 2 (nothing cached)", n)
+			}
+			fake.MintResponse = nil
+			if _, err := app.Metadata(ctx, repo); err != nil {
+				t.Fatalf("recovery: %v", err)
+			}
+		})
+	}
+}
+
+// A network failure on a data call is "unavailable", not a token problem.
+func TestTransportFailureOnDataCallIsUnavailable(t *testing.T) {
+	fake := githubtest.New(t)
+	fake.AddRepo(githubtest.Repository{Owner: "oldsj", Name: "mainloop"})
+	flaky := &flaky{next: http.DefaultTransport}
+	app, err := github.NewApp(github.Options{
+		AppID: fmt.Sprint(githubtest.AppID), PrivateKey: githubtest.PrivateKey(), BaseURL: fake.URL, Transport: flaky,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := app.Metadata(ctx, repo); err != nil { // token now cached
+		t.Fatal(err)
+	}
+	flaky.down.Store(true)
+	_, err = app.Metadata(ctx, repo)
+	var ae *github.AuthError
+	if !errors.Is(err, github.ErrUnavailable) || errors.As(err, &ae) || strings.Contains(err.Error(), "refused") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type flaky struct {
+	next http.RoundTripper
+	down atomic.Bool
+}
+
+func (f *flaky) RoundTrip(r *http.Request) (*http.Response, error) {
+	if f.down.Load() {
+		return nil, errors.New("dial tcp: connection refused")
+	}
+	return f.next.RoundTrip(r)
+}
+
+// 16 callers arriving together share one installation lookup and one token.
+func TestConcurrentFirstUseLooksUpAndMintsOnce(t *testing.T) {
+	fake, app := seeded(t)
+	var wg sync.WaitGroup
+	errs := make([]error, 16)
+	for i := range errs {
+		wg.Go(func() { _, errs[i] = app.Metadata(context.Background(), repo) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	lookups := 0
+	for _, r := range fake.Requests() {
+		if strings.HasSuffix(r.Path, "/installation") {
+			lookups++
+		}
+	}
+	if lookups != 1 || len(fake.Mints()) != 1 {
+		t.Fatalf("%d lookups and %d mints, want 1 and 1", lookups, len(fake.Mints()))
+	}
+}
+
+// Scopes of one repository (different permissions) still share the installation lookup.
+func TestScopesOfOneRepositoryShareTheInstallationLookup(t *testing.T) {
+	fake, app := seeded(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { _, _ = app.Metadata(ctx, repo) })
+		wg.Go(func() { _, _ = app.OpenPullRequests(ctx, repo, 5) })
+		wg.Go(func() { _, _ = app.RecentCommits(ctx, repo, "", 5) })
+	}
+	wg.Wait()
+	lookups := 0
+	for _, r := range fake.Requests() {
+		if strings.HasSuffix(r.Path, "/installation") {
+			lookups++
+		}
+	}
+	if lookups != 1 || len(fake.Mints()) != 3 {
+		t.Fatalf("%d lookups and %d mints, want 1 and 3", lookups, len(fake.Mints()))
+	}
+}
+
+// A caller that gives up stops waiting, but the shared work finishes for the others.
+func TestCancelledCallerDoesNotFailTheOthers(t *testing.T) {
+	_, app := seeded(t)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := app.Metadata(gone, repo); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := app.Metadata(context.Background(), repo); err != nil {
+		t.Fatal(err)
 	}
 }
 

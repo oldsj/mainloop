@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"testing"
 
@@ -72,6 +73,25 @@ func TestParseAppID(t *testing.T) {
 	for _, bad := range []string{"", "abc", "0", "-1", "1.5", "1 2"} {
 		if _, err := github.ParseAppID(bad); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// Python required at least 2048 bits (github_auth.py); a smaller key is refused as invalid.
+func TestParsePrivateKeyRefusesShortKeys(t *testing.T) {
+	for _, bits := range []int{1024, 2047} {
+		k, err := rsa.GenerateKey(rand.Reader, bits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkcs8, _ := x509.MarshalPKCS8PrivateKey(k)
+		for name, enc := range map[string]string{
+			"pkcs1": b64pem("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(k)),
+			"pkcs8": b64pem("PRIVATE KEY", pkcs8),
+		} {
+			if _, err := github.ParsePrivateKey(enc); !errors.Is(err, github.ErrInvalidCredentials) {
+				t.Errorf("%d-bit %s: got %v", bits, name, err)
+			}
 		}
 	}
 }

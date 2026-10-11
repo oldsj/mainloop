@@ -23,7 +23,9 @@ repository refresh and project upsert preserve owner choices. There is no reposi
 Policy mutation is **disabled by default**, returning 503 without updating policy or audit.
 An operator may set `MAINLOOP_OWNER_POLICY_WRITES_ENABLED=true` only after establishing
 owner-route isolation for both direct and external-gateway access. Only the exact value
-`true` enables writes; no development-mode bypass exists. This is a deployment opt-in,
+`true` enables writes (`TRUE`, `1`, `t` and an empty value leave them off without failing
+startup); no development-mode bypass exists. `MAINLOOP_OWNER_HITL_WRITES_ENABLED` and
+`MAINLOOP_MERGE_TOOLS_ENABLED` follow the same exact-value rule. This is a deployment opt-in,
 not requester authentication: once enabled the existing network boundary must exclude
 actors whether they omit Authorization or present an MCP bearer. No manifest enables it here.
 

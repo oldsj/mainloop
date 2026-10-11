@@ -2,13 +2,18 @@ package github
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
 )
 
 // Permission levels GitHub accepts for an installation token.
@@ -97,14 +102,25 @@ type Scope struct {
 // Allowlist is the RoundTripper every GitHub request passes through. It forwards a request to
 // Next only if its origin is the configured API, its method and path match a rule, and — for
 // repository calls — the path names the scoped repository and the scope's permissions cover the
-// rule. A token-minting call must ask for exactly the scoped repository and permissions. Anything
-// else fails with a [*NotAllowedError] and never reaches Next.
+// rule. A token-minting call must name the bound installation and ask for exactly the scoped
+// repository and permissions, and its answer must carry a usable token. Anything else fails
+// with a [*NotAllowedError] (or [ErrInvalidToken]) and never reaches Next.
 type Allowlist struct {
 	// Base is the API origin (and optional path prefix), such as https://api.github.com/.
 	Base  *url.URL
 	Scope Scope
 	Next  http.RoundTripper
+	// Now is the clock for judging a token's expiry; nil means time.Now.
+	Now func() time.Time
+
+	// installation is the id the App's installation on Scope.Repo resolved to. Until it is bound,
+	// every mint is refused.
+	installation atomic.Int64
 }
+
+// BindInstallation records the installation id found for the scoped repository. Token requests
+// for any other installation are refused.
+func (a *Allowlist) BindInstallation(id int64) { a.installation.Store(id) }
 
 // RoundTrip implements [http.RoundTripper].
 func (a *Allowlist) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -118,14 +134,21 @@ func (a *Allowlist) RoundTrip(req *http.Request) (*http.Response, error) {
 		closeBody()
 		return nil, err
 	}
-	if r.kind == kindApp && r.method == http.MethodPost {
-		// checkMint consumes and closes the original body itself.
-		if req, err = a.checkMint(req); err != nil {
-			return nil, err
-		}
+	if !isMint(r) {
+		return a.Next.RoundTrip(req)
 	}
-	return a.Next.RoundTrip(req)
+	// checkMint consumes and closes the original body itself.
+	if req, err = a.checkMint(req); err != nil {
+		return nil, err
+	}
+	resp, err := a.Next.RoundTrip(req)
+	if err != nil || resp.StatusCode/100 != 2 {
+		return resp, err
+	}
+	return a.checkToken(resp)
 }
+
+func isMint(r rule) bool { return r.kind == kindApp && r.method == http.MethodPost }
 
 func (a *Allowlist) deny(req *http.Request, reason string) error {
 	path := ""
@@ -170,6 +193,9 @@ func (a *Allowlist) match(req *http.Request) (rule, error) {
 		if !ok {
 			continue
 		}
+		if isMint(r) && segs[len(segs)-2] != strconv.FormatInt(a.installation.Load(), 10) {
+			return rule{}, a.deny(req, "outside the repository's installation")
+		}
 		if r.kind == kindRepo || owner != "" {
 			if !strings.EqualFold(owner, a.Scope.Repo.Owner) || !strings.EqualFold(name, a.Scope.Repo.Name) {
 				return rule{}, a.deny(req, "outside the token's repository")
@@ -207,11 +233,75 @@ func bind(pattern, segs []string) (owner, name string, ok bool) {
 
 // mintBody is the JSON body of POST /app/installations/{id}/access_tokens.
 type mintBody struct {
-	Repositories []string          `json:"repositories"`
-	Permissions  map[string]string `json:"permissions"`
+	Repositories []string
+	Permissions  map[string]string
 }
 
 const maxMintBody = 4 << 10
+
+var errMintBody = errors.New("malformed token request")
+
+// decodeMint parses a token request strictly: one JSON object, no unknown or repeated keys (also
+// among the permissions), and nothing after it. Go's decoder alone would take the last of two
+// repeated keys and ignore trailing values, so the check could disagree with the receiver.
+func decodeMint(raw []byte) (mintBody, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var out mintBody
+	seen := map[string]bool{}
+	err := walkObject(dec, func(key string) error {
+		if seen[key] {
+			return errMintBody
+		}
+		seen[key] = true
+		switch key {
+		case "repositories":
+			return dec.Decode(&out.Repositories)
+		case "permissions":
+			out.Permissions = map[string]string{}
+			return walkObject(dec, func(name string) error {
+				if _, dup := out.Permissions[name]; dup {
+					return errMintBody
+				}
+				var level string
+				if err := dec.Decode(&level); err != nil {
+					return err
+				}
+				out.Permissions[name] = level
+				return nil
+			})
+		default:
+			return errMintBody
+		}
+	})
+	if err != nil {
+		return mintBody{}, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return mintBody{}, errMintBody
+	}
+	return out, nil
+}
+
+// walkObject reads one JSON object, calling each with every key; each must consume the value.
+func walkObject(dec *json.Decoder, each func(key string) error) error {
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return errMintBody
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok {
+			return errMintBody
+		}
+		if err := each(key); err != nil {
+			return err
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return errMintBody
+	}
+	return nil
+}
 
 // checkMint reads the token request and refuses it unless it names exactly the scoped
 // repository and permissions. The body is restored for sending.
@@ -224,10 +314,8 @@ func (a *Allowlist) checkMint(req *http.Request) (*http.Request, error) {
 	if err != nil || len(raw) > maxMintBody {
 		return nil, a.deny(req, "token request unreadable")
 	}
-	var body mintBody
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil || len(body.Repositories) != 1 ||
+	body, err := decodeMint(raw)
+	if err != nil || len(body.Repositories) != 1 ||
 		body.Repositories[0] != a.Scope.Repo.Name || !Permissions(body.Permissions).equal(a.Scope.Permissions) {
 		return nil, a.deny(req, "token request is not scoped to the client's repository and permissions")
 	}
@@ -236,6 +324,50 @@ func (a *Allowlist) checkMint(req *http.Request) (*http.Request, error) {
 	out.ContentLength = int64(len(raw))
 	out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
 	return out, nil
+}
+
+// ErrInvalidToken means GitHub answered a token request with something unusable: no token, a token
+// with whitespace in it, or an expiry that is missing or already inside the refresh margin. The
+// answer is never passed on, so nothing caches it.
+var ErrInvalidToken = errors.New("github: installation token response invalid")
+
+const (
+	// refreshMargin is how long before expiry the token transport mints a new token.
+	refreshMargin = time.Minute
+	maxTokenBody  = 64 << 10
+)
+
+// checkToken validates a successful token answer and hands back a response whose body can be read again.
+func (a *Allowlist) checkToken(resp *http.Response) (*http.Response, error) {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenBody+1))
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, a.opaqueRead(err)
+	}
+	var got struct {
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	now := time.Now
+	if a.Now != nil {
+		now = a.Now
+	}
+	if len(raw) > maxTokenBody || json.Unmarshal(raw, &got) != nil || got.Token == "" ||
+		strings.IndexFunc(got.Token, unicode.IsSpace) >= 0 || !got.ExpiresAt.After(now().Add(refreshMargin)) {
+		return nil, ErrInvalidToken
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(raw))
+	return resp, nil
+}
+
+// opaqueRead keeps the size-cap and context errors typed and turns any other read failure into ErrUnavailable.
+func (a *Allowlist) opaqueRead(err error) error {
+	switch {
+	case errors.Is(err, ErrResponseTooLarge), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	default:
+		return ErrUnavailable
+	}
 }
 
 // IsNotAllowed reports whether err is an allowlist refusal.

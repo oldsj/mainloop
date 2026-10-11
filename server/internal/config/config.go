@@ -32,12 +32,11 @@ type Config struct {
 	// WorkspaceDevelopmentPlatform is the deployment's workspace image platform.
 	WorkspaceDevelopmentPlatform string `env:"WORKSPACE_DEVELOPMENT_PLATFORM" envDefault:"linux/arm64"`
 
-	// Feature flags that were read straight from os.environ in the Python backend.
-	OwnerHITLWritesEnabled   bool `env:"MAINLOOP_OWNER_HITL_WRITES_ENABLED"`
-	OwnerPolicyWritesEnabled bool `env:"MAINLOOP_OWNER_POLICY_WRITES_ENABLED"`
-	MergeToolsEnabled        bool `env:"MAINLOOP_MERGE_TOOLS_ENABLED"`
-	// UseMockGitHub swaps the GitHub client for a fixture-backed one in dev and test overlays.
-	UseMockGitHub bool `env:"USE_MOCK_GITHUB"`
+	// Feature flags that were read straight from os.environ in the Python backend. Each is on
+	// only for the exact value "true".
+	OwnerHITLWritesEnabled   ExactTrue `env:"MAINLOOP_OWNER_HITL_WRITES_ENABLED"`
+	OwnerPolicyWritesEnabled ExactTrue `env:"MAINLOOP_OWNER_POLICY_WRITES_ENABLED"`
+	MergeToolsEnabled        ExactTrue `env:"MAINLOOP_MERGE_TOOLS_ENABLED"`
 
 	// MergeConfigurations is the operator allowlist of protected merge tool mappings.
 	MergeConfigurations MergeConfigurations `env:"MAINLOOP_MERGE_CONFIGURATIONS"`

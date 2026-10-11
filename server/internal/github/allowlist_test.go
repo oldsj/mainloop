@@ -8,26 +8,33 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/github"
 )
 
 type counting struct{ n atomic.Int32 }
 
-func (c *counting) RoundTrip(*http.Request) (*http.Response, error) {
+func (c *counting) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.n.Add(1)
-	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("{}")), Header: http.Header{}}, nil
+	body := "{}"
+	if strings.HasSuffix(r.URL.Path, "/access_tokens") {
+		body = `{"token":"ghs_x","expires_at":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `"}`
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 }
 
 func newAllowlist(t *testing.T, perms github.Permissions) (*github.Allowlist, *counting) {
 	t.Helper()
 	base, _ := url.Parse("https://api.github.com/")
 	next := &counting{}
-	return &github.Allowlist{
+	a := &github.Allowlist{
 		Base:  base,
 		Scope: github.Scope{Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, Permissions: perms},
 		Next:  next,
-	}, next
+	}
+	a.BindInstallation(77)
+	return a, next
 }
 
 func do(t *testing.T, a *github.Allowlist, method, target, body string) error {
@@ -70,6 +77,7 @@ func TestAllowlistPassesTheKnownCalls(t *testing.T) {
 func TestAllowlistRefusesEverythingElseWithoutSending(t *testing.T) {
 	a, next := newAllowlist(t, github.Permissions{"metadata": github.Read, "pull_requests": github.Read})
 	const mint = "https://api.github.com/app/installations/77/access_tokens"
+	const perms = `{"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`
 	for name, c := range map[string]struct{ method, url, body string }{
 		"other host":          {"GET", "https://evil.example/repos/oldsj/mainloop", ""},
 		"other scheme":        {"GET", "http://api.github.com/repos/oldsj/mainloop", ""},
@@ -106,6 +114,20 @@ func TestAllowlistRefusesEverythingElseWithoutSending(t *testing.T) {
 		"mint no perms":       {"POST", mint, `{"repositories":["mainloop"]}`},
 		"mint extra field":    {"POST", mint, `{"repositories":["mainloop"],"repository_ids":[1],"permissions":{"metadata":"read","pull_requests":"read"}}`},
 		"mint get":            {"GET", mint, ""},
+		// Mint probes from the G3 review: the check must read the body the way the receiver does.
+		"mint trailing value":      {"POST", mint, perms + `{"repositories":["other"]}`},
+		"mint trailing garbage":    {"POST", mint, perms + ` x`},
+		"mint trailing array":      {"POST", mint, perms + `[]`},
+		"mint repeated repos":      {"POST", mint, `{"repositories":["other"],"repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated repos 2":    {"POST", mint, `{"repositories":["mainloop"],"repositories":["other"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated perms":      {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"read"},"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint repeated level":      {"POST", mint, `{"repositories":["mainloop"],"permissions":{"metadata":"write","metadata":"read","pull_requests":"read"}}`},
+		"mint key case":            {"POST", mint, `{"Repositories":["mainloop"],"permissions":{"metadata":"read","pull_requests":"read"}}`},
+		"mint array body":          {"POST", mint, `[]`},
+		"mint null perms":          {"POST", mint, `{"repositories":["mainloop"],"permissions":null}`},
+		"mint other installation":  {"POST", "https://api.github.com/app/installations/78/access_tokens", perms},
+		"mint zero installation":   {"POST", "https://api.github.com/app/installations/0/access_tokens", perms},
+		"mint sloppy installation": {"POST", "https://api.github.com/app/installations/077/access_tokens", perms},
 	} {
 		err := do(t, a, c.method, c.url, c.body)
 		if !github.IsNotAllowed(err) {
@@ -147,5 +169,21 @@ func TestAllowlistWriteCoversRead(t *testing.T) {
 	}
 	if next.n.Load() != 1 {
 		t.Fatal("not forwarded")
+	}
+}
+
+// Until the installation is resolved the allowlist has no id to bind, so no mint passes.
+func TestAllowlistRefusesMintsBeforeTheInstallationIsBound(t *testing.T) {
+	base, _ := url.Parse("https://api.github.com/")
+	next := &counting{}
+	a := &github.Allowlist{
+		Base:  base,
+		Scope: github.Scope{Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, Permissions: github.Permissions{"metadata": github.Read}},
+		Next:  next,
+	}
+	err := do(t, a, "POST", "https://api.github.com/app/installations/77/access_tokens",
+		`{"repositories":["mainloop"],"permissions":{"metadata":"read"}}`)
+	if !github.IsNotAllowed(err) || next.n.Load() != 0 {
+		t.Fatalf("err %v, forwarded %d", err, next.n.Load())
 	}
 }

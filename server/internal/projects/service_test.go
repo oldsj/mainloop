@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -358,5 +359,42 @@ func TestAuditRowsAreImmutable(t *testing.T) {
 	}
 	if _, err := svc.Pool.Exec(ctx, `DELETE FROM project_merge_policy_audit`); err == nil {
 		t.Fatal("audit row deleted")
+	}
+}
+
+// stuck is a Remote whose GitHub never answers until the caller gives up.
+type stuck struct{ calls atomic.Int32 }
+
+func (r *stuck) Metadata(ctx context.Context, _ github.Repo) (*github.Metadata, error) {
+	r.calls.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*stuck) OpenPullRequests(ctx context.Context, _ github.Repo, _ int) ([]github.PullRequest, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*stuck) RecentCommits(ctx context.Context, _ github.Repo, _ string, _ int) ([]github.Commit, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A slow GitHub costs the import one overall deadline, and the project is still recorded.
+func TestImportStopsWaitingForSlowGitHub(t *testing.T) {
+	remote := &stuck{}
+	svc := newService(t, remote, false)
+	svc.MetadataTimeout = 100 * time.Millisecond
+	start := time.Now()
+	p, err := svc.Import(context.Background(), "oldsj/mainloop")
+	if err != nil || p.FullName != "oldsj/mainloop" || p.MetadataUpdatedAt != nil {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("import took %v", took)
+	}
+	if remote.calls.Load() != 1 {
+		t.Fatalf("%d metadata calls", remote.calls.Load())
 	}
 }

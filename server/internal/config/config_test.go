@@ -60,7 +60,7 @@ func TestProdShapedEnvironment(t *testing.T) {
 	if got := cfg.DB.Password.Reveal(); got != "p@ss/word:with#odd chars" {
 		t.Errorf("password lost: %q", got)
 	}
-	if !cfg.Git.TransportEnabled || !cfg.Git.PushGateEnabled || !cfg.MergeToolsEnabled || !cfg.OwnerHITLWritesEnabled {
+	if !cfg.Git.TransportEnabled || !cfg.Git.PushGateEnabled || !bool(cfg.MergeToolsEnabled) || !bool(cfg.OwnerHITLWritesEnabled) {
 		t.Errorf("flags not read: %+v", cfg)
 	}
 	if cfg.OwnerPolicyWritesEnabled {
@@ -439,6 +439,32 @@ func TestGitHubAppSettingsComeTogether(t *testing.T) {
 		err := with(extra)
 		if err == nil || strings.Contains(err.Error(), "x\n") {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestGatesAreOnlyForTheExactValueTrue(t *testing.T) {
+	gates := map[string]func(*Config) bool{
+		"MAINLOOP_OWNER_POLICY_WRITES_ENABLED": func(c *Config) bool { return bool(c.OwnerPolicyWritesEnabled) },
+		"MAINLOOP_OWNER_HITL_WRITES_ENABLED":   func(c *Config) bool { return bool(c.OwnerHITLWritesEnabled) },
+		"MAINLOOP_MERGE_TOOLS_ENABLED":         func(c *Config) bool { return bool(c.MergeToolsEnabled) },
+	}
+	for name, on := range gates {
+		for value, want := range map[string]bool{
+			"true": true, "TRUE": false, "True": false, "1": false, "t": false, "T": false, "yes": false,
+			"false": false, "": false, " true": false, "true ": false, "junk": false,
+		} {
+			cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", name: value})
+			if err != nil {
+				t.Fatalf("%s=%q must not fail startup: %v", name, value, err)
+			}
+			if got := on(cfg); got != want {
+				t.Errorf("%s=%q: enabled = %v, want %v", name, value, got, want)
+			}
+		}
+		cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k"})
+		if err != nil || on(cfg) {
+			t.Errorf("%s unset: enabled = %v, err %v", name, on(cfg), err)
 		}
 	}
 }

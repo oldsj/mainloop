@@ -120,6 +120,10 @@ type Server struct {
 	// every token already due for refresh, which forces a fresh mint on each use.
 	TokenTTL time.Duration
 
+	// MintResponse, when set, builds the body of every successful token answer from the token
+	// and expiry the fake would have used, so a test can serve a malformed one.
+	MintResponse func(token string, expires time.Time) map[string]any
+
 	srv *httptest.Server
 
 	mu        sync.Mutex
@@ -297,10 +301,14 @@ func (s *Server) mint(w http.ResponseWriter, r *http.Request, id string) {
 	s.tokens[value] = token{repo: lower(found.Owner, found.Name), perms: body.Permissions, expires: expires}
 	s.mints = append(s.mints, Mint{InstallationID: n, Repositories: body.Repositories, Permissions: body.Permissions})
 	s.mu.Unlock()
-	writeJSON(w, http.StatusCreated, map[string]any{
+	answer := map[string]any{
 		"token": value, "expires_at": expires.Format(time.RFC3339),
 		"permissions": body.Permissions,
-	})
+	}
+	if s.MintResponse != nil {
+		answer = s.MintResponse(value, expires)
+	}
+	writeJSON(w, http.StatusCreated, answer)
 }
 
 // need is the permission an endpoint requires.

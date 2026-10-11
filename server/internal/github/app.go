@@ -13,6 +13,7 @@ import (
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	gh "github.com/google/go-github/v88/github"
+	"golang.org/x/sync/singleflight"
 )
 
 // DefaultBaseURL is the public GitHub API.
@@ -65,6 +66,9 @@ type App struct {
 	mu       sync.Mutex
 	installs map[string]int64
 	clients  map[string]*gh.Client
+	// flights collapses concurrent first uses: one client build per scope and one installation
+	// lookup per repository, however many callers arrive together.
+	flights singleflight.Group
 }
 
 // NewApp validates the credentials. Errors never include the key.
@@ -157,50 +161,74 @@ func (a *App) allowlist(s Scope) *Allowlist {
 	}
 }
 
+// once runs fn for key, sharing one execution among concurrent callers. fn runs detached from
+// the first caller's cancellation (every request in it is bounded by its own deadline), so one
+// caller giving up does not fail the others; each caller still stops waiting when its own ctx ends.
+func (a *App) once(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
+	ch := a.flights.DoChan(key, func() (any, error) { return fn(context.WithoutCancel(ctx)) })
+	select {
+	case r := <-ch:
+		return r.Val, r.Err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // client returns the cached client for a scope, creating it (and finding the installation) on
 // first use. The returned client carries a token scoped to repo with exactly perms.
 func (a *App) client(ctx context.Context, repo Repo, perms Permissions) (*gh.Client, error) {
 	scope := Scope{Repo: repo, Permissions: perms}
 	key := scopeKey(scope)
-	a.mu.Lock()
-	c := a.clients[key]
-	a.mu.Unlock()
-	if c != nil {
+	if c := a.cachedClient(key); c != nil {
 		return c, nil
 	}
-	fields, err := permissionFields(perms)
+	v, err := a.once(ctx, "client|"+key, func(ctx context.Context) (any, error) {
+		if c := a.cachedClient(key); c != nil {
+			return c, nil
+		}
+		return a.buildClient(ctx, scope, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*gh.Client), nil
+}
+
+func (a *App) cachedClient(key string) *gh.Client {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.clients[key]
+}
+
+func (a *App) buildClient(ctx context.Context, scope Scope, key string) (*gh.Client, error) {
+	fields, err := permissionFields(scope.Permissions)
 	if err != nil {
 		return nil, err
 	}
 	allow := a.allowlist(scope)
-	id, err := a.installation(ctx, allow, repo)
+	id, err := a.installation(ctx, allow, scope.Repo)
 	if err != nil {
 		return nil, err
 	}
+	allow.BindInstallation(id)
 	// One AppsTransport per token transport: ghinstallation mutates it while refreshing.
-	atr := ghinstallation.NewAppsTransportFromPrivateKey(allow, a.appID(), a.key)
+	atr := ghinstallation.NewAppsTransportFromPrivateKey(allow, a.id, a.key)
 	atr.BaseURL = strings.TrimSuffix(a.base.String(), "/")
 	itr := ghinstallation.NewFromAppsTransport(atr, id)
 	itr.BaseURL = atr.BaseURL
-	itr.InstallationTokenOptions = &gh.InstallationTokenOptions{Repositories: []string{repo.Name}, Permissions: fields}
-	c, err = a.newGitHub(&tokenGuard{app: a, key: scopeKey(scope), repo: repo, next: itr})
+	itr.InstallationTokenOptions = &gh.InstallationTokenOptions{Repositories: []string{scope.Repo.Name}, Permissions: fields}
+	c, err := a.newGitHub(&tokenGuard{app: a, key: key, repo: scope.Repo, next: itr})
 	if err != nil {
 		return nil, err
 	}
 	a.mu.Lock()
-	// A concurrent caller may have built the same client; keep the first so its token is shared.
-	if prev := a.clients[key]; prev != nil {
-		c = prev
-	} else {
-		a.clients[key] = c
-	}
+	a.clients[key] = c
 	a.mu.Unlock()
 	return c, nil
 }
 
-func (a *App) appID() int64 { return a.id }
-
-// installation finds the App's installation on repo, caching the id.
+// installation finds the App's installation on repo, caching the id. Concurrent first lookups of
+// one repository share a single request.
 func (a *App) installation(ctx context.Context, allow *Allowlist, repo Repo) (int64, error) {
 	k := strings.ToLower(repo.FullName())
 	a.mu.Lock()
@@ -209,6 +237,22 @@ func (a *App) installation(ctx context.Context, allow *Allowlist, repo Repo) (in
 	if ok {
 		return id, nil
 	}
+	v, err := a.once(ctx, "install|"+k, func(ctx context.Context) (any, error) {
+		a.mu.Lock()
+		id, ok := a.installs[k]
+		a.mu.Unlock()
+		if ok {
+			return id, nil
+		}
+		return a.lookupInstallation(ctx, allow, repo, k)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return v.(int64), nil
+}
+
+func (a *App) lookupInstallation(ctx context.Context, allow *Allowlist, repo Repo, k string) (int64, error) {
 	atr := ghinstallation.NewAppsTransportFromPrivateKey(allow, a.id, a.key)
 	atr.BaseURL = strings.TrimSuffix(a.base.String(), "/")
 	app, err := a.newGitHub(atr)
@@ -260,6 +304,8 @@ func (a *App) opaque(err error) error {
 		return ErrNotInstalled
 	case errors.Is(err, ErrNotFound):
 		return ErrNotFound
+	case errors.Is(err, ErrInvalidToken):
+		return ErrInvalidToken
 	case errors.As(err, &ae):
 		return ae
 	case errors.As(err, &se):
@@ -302,23 +348,26 @@ func (g *tokenGuard) RoundTrip(req *http.Request) (*http.Response, error) {
 	if errors.As(err, &na) {
 		return nil, na
 	}
+	if errors.Is(err, ErrInvalidToken) {
+		return nil, ErrInvalidToken
+	}
 	var he *ghinstallation.HTTPError
-	if errors.As(err, &he) {
-		status := 0
-		if he.Response != nil {
-			status = he.Response.StatusCode
-			if he.Response.Body != nil {
-				_ = he.Response.Body.Close()
-			}
+	if !errors.As(err, &he) {
+		// Not a failed mint: the data call itself could not complete.
+		return nil, g.app.opaque(err)
+	}
+	if he.Response != nil {
+		status := he.Response.StatusCode
+		if he.Response.Body != nil {
+			_ = he.Response.Body.Close()
 		}
 		if status == http.StatusNotFound {
 			g.app.forget(g.key, g.repo)
 			return nil, ErrNotInstalled
 		}
-		if status != 0 {
-			return nil, &AuthError{Status: status}
-		}
+		return nil, &AuthError{Status: status}
 	}
+	// The mint never got an answer.
 	if errors.Is(err, ErrResponseTooLarge) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, g.app.opaque(err)
 	}

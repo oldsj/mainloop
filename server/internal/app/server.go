@@ -67,7 +67,7 @@ func New(d Deps) *Server {
 		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
 		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
 			Pool: d.Pool, Remote: d.GitHub, OwnerID: d.Config.Identity.OwnerID,
-			PolicyWrites: d.Config.OwnerPolicyWritesEnabled, Log: d.Log,
+			PolicyWrites: bool(d.Config.OwnerPolicyWritesEnabled), Log: d.Log,
 		}},
 		ProvidersAPI:    prov,
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),

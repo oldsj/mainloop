@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,12 @@ type Remote interface {
 	RecentCommits(ctx context.Context, repo github.Repo, branch string, limit int) ([]github.Commit, error)
 }
 
+// defaultMetadataTimeout bounds the whole GitHub fetch of an import. A healthy import is four
+// short calls (installation, token, repository, pull requests) and finishes in a second or two;
+// ten seconds leaves room for a slow GitHub while the owner is still waiting on the response, and
+// keeps the worst case far under the 4 x 15 s the per-request limits would allow.
+const defaultMetadataTimeout = 10 * time.Second
+
 // detailLimit is how many pull requests and commits the detail view shows.
 const detailLimit = 10
 
@@ -50,7 +57,10 @@ type Service struct {
 	OwnerID string
 	// PolicyWrites is MAINLOOP_OWNER_POLICY_WRITES_ENABLED.
 	PolicyWrites bool
-	Log          *slog.Logger
+	// MetadataTimeout bounds the best-effort GitHub fetch during import; zero means
+	// [defaultMetadataTimeout].
+	MetadataTimeout time.Duration
+	Log             *slog.Logger
 	// NeedsOwner reports whether a session is waiting on the owner. The attention projection
 	// owns that answer; until it is wired every session reads false.
 	NeedsOwner func(ctx context.Context, sessionID string) bool
@@ -74,7 +84,13 @@ func (s *Service) Import(ctx context.Context, text string) (dbq.Project, error) 
 	if s.Remote == nil {
 		return p, nil
 	}
-	md, err := s.Remote.Metadata(ctx, repo)
+	timeout := s.MetadataTimeout
+	if timeout <= 0 {
+		timeout = defaultMetadataTimeout
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	md, err := s.Remote.Metadata(fetchCtx, repo)
 	if err != nil {
 		s.Log.WarnContext(ctx, "project metadata unavailable", "project_id", p.ID, "error", err.Error())
 		return p, nil
