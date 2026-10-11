@@ -94,9 +94,7 @@ func TestEnrollAgainAfterRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.enroller.Revoke(ctx, ws); err != nil {
-		t.Fatal(err)
-	}
+	e.revoke(ws)
 	// The old Secret still holds the name, so the new capability waits for the cleanup.
 	if _, err := e.enroller.Enroll(ctx, ws); !errors.Is(err, agentauth.ErrCleanupPending) {
 		t.Fatalf("enroll before cleanup = %v", err)
@@ -179,8 +177,16 @@ func TestStrandedEnrollmentsAreRevoked(t *testing.T) {
 }
 
 func TestReferenceNamesTheCapabilitySecret(t *testing.T) {
-	ref := gittransport.Reference("http://mainloop-git-read.mainloop.svc.cluster.local", gittransport.Enrollment{SecretName: "mainloop-git-read-w1"})
-	if ref.Header != "Authorization" || ref.Origin == "" || ref.SecretRef == nil || ref.SecretRef.Name != "mainloop-git-read-w1" || ref.SecretRef.Key != "authorization" {
-		t.Fatalf("reference = %+v", ref)
+	e := newGitEnv(t)
+	ws := e.workspace(repoA)
+	// Built before anything is issued, as a replayed CreateSession does, and equal to the Secret
+	// that Enroll then publishes.
+	ref := gittransport.Reference(e.auth.Creds, "http://mainloop-git-read.mainloop.svc.cluster.local", ws)
+	en, err := e.enroller.Enroll(context.Background(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Header != "Authorization" || ref.Origin == "" || ref.SecretRef == nil || ref.SecretRef.Name != en.SecretName || ref.SecretRef.Key != "authorization" {
+		t.Fatalf("reference = %+v, secret %s", ref, en.SecretName)
 	}
 }

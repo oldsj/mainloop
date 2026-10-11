@@ -5,11 +5,14 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/github"
@@ -186,5 +189,77 @@ func TestProbes(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("probe by IP: %d", resp.StatusCode)
+	}
+}
+
+// syncBuffer is a log sink the server and the test can share.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// failingBody yields one chunk, then fails.
+type failingBody struct {
+	sent bool
+	err  error
+}
+
+func (f *failingBody) Read(p []byte) (int, error) {
+	if f.sent {
+		return 0, f.err
+	}
+	f.sent = true
+	return copy(p, "0008NAK\n"), nil
+}
+
+func (*failingBody) Close() error { return nil }
+
+func TestUpstreamFailuresAreLoggedByClassNotText(t *testing.T) {
+	cases := []struct {
+		name  string
+		up    *stubUpstream
+		code  string
+		class string
+	}{
+		{"before the status", &stubUpstream{err: fmt.Errorf("mint: %w", &net.OpError{Op: "dial", Err: errors.New("secret detail")})}, "upstream_unavailable", "*net.OpError"},
+		{"mid-stream", &stubUpstream{reply: &failingBody{err: github.ErrGitTokenReflected}}, "upstream_invalid", "*errors.errorString"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs syncBuffer
+			srv := &gittransport.Server{
+				Auth:     fixedAuth{gittransport.Capability{WorkspaceID: "w", CredentialID: "c", Repository: "oldsj/alpha"}},
+				Upstream: tc.up, Log: slog.New(slog.NewTextHandler(&logs, nil)), Dev: true,
+			}
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+			req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/oldsj/alpha.git/git-upload-pack", strings.NewReader("x"))
+			req.Header.Set("Authorization", "Bearer ml_good")
+			req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+			req.Header.Set("X-Request-Id", "req-123")
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body) // a mid-stream abort surfaces here as an error
+				_ = resp.Body.Close()
+			}
+			out := logs.String()
+			if !strings.Contains(out, "code="+tc.code) || !strings.Contains(out, "request_id=") || !strings.Contains(out, "error_class=") || !strings.Contains(out, tc.class) {
+				t.Fatalf("log lacks request id, code %s or class %s:\n%s", tc.code, tc.class, out)
+			}
+			if strings.Contains(out, "secret detail") {
+				t.Fatalf("error text was logged:\n%s", out)
+			}
+		})
 	}
 }

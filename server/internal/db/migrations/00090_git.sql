@@ -42,12 +42,16 @@ CREATE TABLE git_push_grants (
 );
 
 -- Every push the gate dispatched: an intent row with an explicit state and the workspace's
--- request id as its idempotency key. 'dispatching' and 'unknown' are unresolved: the remote may
--- or may not have taken the update, so the gate reads GitHub before it acts again and never
--- replays the body.
+-- request id as its idempotency key (UNIQUE with the workspace). The gate claims rows through
+-- reconcile.Table, so the row carries the claim columns (plan §4.3). workspace_id is plain text,
+-- not a foreign key: this is the audit ledger and outlives the workspace, so deleting a session
+-- must not be blocked by (or erase) its publications.
+--
+-- 'dispatching' and 'unknown' are unresolved: the remote may or may not have taken the
+-- update, so the gate reads GitHub before it acts again and never replays the body.
 CREATE TABLE git_publications (
     id text PRIMARY KEY,
-    workspace_id text NOT NULL REFERENCES git_push_grants (workspace_id),
+    workspace_id text NOT NULL,
     request_id text NOT NULL,
     repository text NOT NULL,
     branch text NOT NULL,
@@ -58,12 +62,19 @@ CREATE TABLE git_publications (
     ),
     transport_evidence jsonb,
     transport_receipt jsonb,
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (workspace_id, request_id)
 );
 CREATE INDEX git_publications_unresolved ON git_publications (repository, branch)
 WHERE state IN ('dispatching', 'unknown');
+-- The claim index: only the states a loop works on (the same list as the reconcile.Table).
+CREATE INDEX git_publications_claim ON git_publications (next_attempt_at, id)
+WHERE state IN ('pending', 'dispatching', 'unknown');
 
 -- The branch rules of a project, versioned: a grant records the version it was made under.
 CREATE TABLE git_branch_policies (

@@ -171,6 +171,10 @@ type GitPublication struct {
 	State             dbstate.GitPublicationState
 	TransportEvidence json.RawMessage
 	TransportReceipt  json.RawMessage
+	Attempts          int32
+	NextAttemptAt     time.Time
+	LeaseOwner        *string
+	LeaseUntil        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }

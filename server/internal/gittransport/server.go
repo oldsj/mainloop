@@ -182,6 +182,11 @@ func (s *Server) parse(r *http.Request) (request, error) {
 	if err != nil {
 		return request{}, deny("path_invalid")
 	}
+	// One spelling per repository: ParseRepo drops a trailing ".git" from the name, so
+	// /o/n.git.git/... would otherwise be served as "n".
+	if path != "/"+repo.Owner+"/"+repo.Name+".git/"+m[3] {
+		return request{}, deny("path_invalid")
+	}
 	if m[3] == "git-receive-pack" || (m[3] == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack") {
 		return request{}, deny("push_not_served")
 	}
@@ -269,16 +274,35 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request, rq request) erro
 		if body != nil && body.err != nil {
 			return bodyRefusal(body.err)
 		}
+		s.logUpstream(r, "git upstream request failed", err)
 		return upstreamRefusal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return stream(w, resp)
+	return s.stream(w, r, resp)
+}
+
+// logUpstream records that an upstream call failed, by request id and error class. The error's
+// text can carry remote bytes, so it is never logged.
+func (s *Server) logUpstream(r *http.Request, msg string, err error) {
+	s.log().WarnContext(r.Context(), msg,
+		"request_id", httpx.RequestID(r.Context()),
+		"code", upstreamRefusal(err).code,
+		"error_class", errorClass(err))
+}
+
+// errorClass names the types in an error's chain, outermost first, with no message text.
+func errorClass(err error) string {
+	var classes []string
+	for e := err; e != nil && len(classes) < 6; e = errors.Unwrap(e) {
+		classes = append(classes, fmt.Sprintf("%T", e))
+	}
+	return strings.Join(classes, ">")
 }
 
 // stream sends the upstream answer. The first chunk is read before the status is written so a
 // failure there is still a clean refusal; after that a failure can only cut the connection, which
 // the client sees as a failed fetch rather than a truncated pack taken for a whole one.
-func stream(w http.ResponseWriter, resp *github.GitResponse) error {
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, resp *github.GitResponse) error {
 	buf := make([]byte, 32<<10)
 	var (
 		n   int
@@ -288,6 +312,7 @@ func stream(w http.ResponseWriter, resp *github.GitResponse) error {
 		n, err = resp.Body.Read(buf)
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
+		s.logUpstream(r, "git upstream response failed", err)
 		return upstreamRefusal(err)
 	}
 	w.Header().Set("Content-Type", resp.ContentType)
@@ -311,6 +336,9 @@ func stream(w http.ResponseWriter, resp *github.GitResponse) error {
 			return nil
 		}
 		if err != nil {
+			// The status is sent, so the connection is cut. Log first: the abort skips the access
+			// log, and a reflected token is a security event.
+			s.logUpstream(r, "git upstream response aborted", err)
 			panic(http.ErrAbortHandler)
 		}
 	}

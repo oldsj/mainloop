@@ -22,16 +22,17 @@ Routes (anything else is refused):
 
 Each workspace gets one read capability: a bearer token (`Authorization: Bearer ml_…`) issued
 through the existing credential service as kind `git_read`, stored in an immutable Secret via
-`k8ssecrets`, and referenced from the session by `gittransport.Reference`. Only the token hash is
+`k8ssecrets`, and referenced from the session by `gittransport.Reference`, which derives the
+Secret name from the workspace id alone, so it can be built without issuing anything. Only the token hash is
 stored. The capability is valid only while its credential is published, its `git_enrollments` row
 is published and the session is live, and it names exactly one repository (`owner/name`,
 compared case-insensitively) and one workspace.
 
 Lifecycle follows the reconcile rule: `Enroller.Enroll` writes a `planned` enrollment row,
 issues the credential (idempotent), then marks the row `published`. A replay or an interrupted
-run resumes without a second credential. Revoking the workspace revokes the credential and the
-enrollment; a sweep revokes enrollments whose credential ended, and the credential service
-deletes the Secret. No database lock is held across Kubernetes or GitHub calls.
+run resumes without a second credential. The capability is revoked with the workspace: the credential
+service revokes the `git_read` credential when the session ends and deletes its Secret, and a
+sweep marks the enrollment revoked. There is no separate revoke call. No database lock is held across Kubernetes or GitHub calls.
 
 ## Refusals
 
@@ -55,7 +56,14 @@ Errors are plain text `<code> <request_id>`, with no upstream text.
 Towards GitHub the proxy sends only the installation token (contents:read, scoped to the one
 repository), the Git protocol header and a fixed content type. It does not follow redirects, and
 it drops any response that is not a 200 with the exact Git media type or that reflects the token
-in a header or in the body (including a token split across reads).
+in a header or in the body. The token is looked for in three forms: raw, `base64(token)` and the
+Basic credential `base64("x-access-token:" + token)`, including when it is split across reads. A
+token that GitHub reflects split by pkt-line framing is not caught (as in the Python sidecar).
+A path must be the canonical spelling: `/<owner>/<repo>.git/...` with no doubled `.git`.
+
+When a response is cut off or an upstream call fails, the server logs the request id, the refusal
+code and the error types (never error text). A mid-stream abort is logged before the connection
+is cut.
 
 Difference from the Python sidecar: gzip request bodies are accepted and inflated under the same
 size cap; Python refused all compression.
@@ -78,4 +86,11 @@ resumable issuance; and the token-reflection guard in `internal/github`.
 
 Not proven: any run against github.com, a deployed image or manifests, or a live agent session.
 Nothing yet calls `Enroller.Enroll` when a workspace is created, nor adds the credential
-reference to the session; that wiring belongs to the workspace slice.
+reference to the session (create and replay); that wiring belongs to the workspace slice.
+
+## Schema notes
+
+`git_publications.workspace_id` is plain text, not a foreign key: the ledger outlives the
+workspace, so deleting a session is never blocked by its publications. The table carries the
+reconcile claim columns (`attempts`, `next_attempt_at`, `lease_owner`, `lease_until`) and a claim
+index over `pending`, `dispatching` and `unknown`, for the push slice.

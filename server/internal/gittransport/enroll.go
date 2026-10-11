@@ -51,7 +51,9 @@ type Enrollment struct {
 	SecretName   string
 }
 
-// Enroller enrolls workspaces for the git read transport and revokes them.
+// Enroller enrolls workspaces for the git read transport. The capability is revoked with the
+// workspace: the credential service revokes it when the session ends, and the sweep below keeps
+// the enrollment row in step.
 type Enroller struct {
 	Pool  *pgxpool.Pool
 	Creds *agentauth.Credentials
@@ -103,26 +105,18 @@ func (e *Enroller) Enroll(ctx context.Context, workspaceID string) (Enrollment, 
 	}, nil
 }
 
-// Reference returns the kagent credential reference for an enrollment: the agent's egress sends
-// the capability from the Secret to origin, the git read Service. The bearer travels in the
-// Authorization header.
-func Reference(origin string, en Enrollment) *kagentapi.SessionCredential {
+// Reference returns the kagent credential reference for a workspace's read capability: the agent's
+// egress sends the capability from the Secret to origin, the git read Service. The bearer travels
+// in the Authorization header. The Secret's name is derived from the workspace id alone, so the
+// reference can be built, with nothing issued, wherever a session's credentials are listed: on
+// create and on a replayed create alike.
+func Reference(creds *agentauth.Credentials, origin, workspaceID string) *kagentapi.SessionCredential {
 	return &kagentapi.SessionCredential{
 		Origin: origin, Header: "Authorization",
-		SecretRef: &kagentapi.SecretKeyReference{Name: en.SecretName, Key: k8ssecrets.DataKey},
+		SecretRef: &kagentapi.SecretKeyReference{
+			Name: creds.SecretName(dbstate.CredentialGitRead, workspaceID), Key: k8ssecrets.DataKey,
+		},
 	}
-}
-
-// Revoke revokes the workspace's credentials and its enrollment. The cleanup loop deletes the
-// Secrets afterwards. It is safe to repeat.
-func (e *Enroller) Revoke(ctx context.Context, workspaceID string) error {
-	if _, err := e.Creds.Revoke(ctx, workspaceID); err != nil {
-		return err
-	}
-	if _, err := dbq.New(e.Pool).RevokeGitEnrollment(ctx, workspaceID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("gittransport: revoke enrollment: %w", err)
-	}
-	return nil
 }
 
 // RevokeStranded marks revoked the enrollments whose credential is gone: the credential service

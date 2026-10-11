@@ -129,7 +129,7 @@ func (a *App) GitFetch(ctx context.Context, repo Repo, f GitFetch) (*GitResponse
 	}
 	return &GitResponse{
 		ContentType: accept,
-		Body:        &gitBody{rc: resp.Body, dog: dog, token: []byte(tok), cancel: cancel},
+		Body:        newGitBody(resp.Body, dog, tok, cancel),
 	}, nil
 }
 
@@ -145,45 +145,79 @@ func gitHeadersOK(resp *http.Response, want, token string) bool {
 	if len(resp.Header.Values("Content-Length")) > 1 {
 		return false
 	}
-	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	forms := tokenForms(token)
 	for _, vs := range resp.Header {
 		for _, v := range vs {
-			if strings.Contains(v, token) || strings.Contains(v, basic) {
-				return false
+			for _, f := range forms {
+				if strings.Contains(v, string(f)) {
+					return false
+				}
 			}
 		}
 	}
 	return true
 }
 
+// tokenForms are the shapes the token can take if GitHub echoes what it was sent: raw, as the
+// base64 of the token, and as the base64 of the Basic credential.
+func tokenForms(token string) [][]byte {
+	enc := base64.StdEncoding
+	return [][]byte{
+		[]byte(token),
+		[]byte(enc.EncodeToString([]byte(token))),
+		[]byte(enc.EncodeToString([]byte("x-access-token:" + token))),
+	}
+}
+
 // gitBody streams a response while resetting the idle watchdog on every read and refusing to
-// pass on any byte that could be part of the token. It holds back the last len(token)-1 bytes
-// until more data (or the end of the stream) shows they are not the start of the token, so a
-// token split across reads never leaves even partly.
+// pass on any byte that could be part of the token in any of its [tokenForms]. It holds back the
+// last max(len)-1 bytes until more data (or the end of the stream) shows they are not the start of
+// one, so a token split across reads never leaves even partly.
 type gitBody struct {
 	rc      io.ReadCloser
 	dog     *time.Timer
-	token   []byte
+	forms   [][]byte
+	hold    int // bytes held back: the longest form, less one
 	cancel  context.CancelFunc
+	buf     []byte // read buffer, reused
+	window  []byte // pending followed by the newest read, reused
 	pending []byte // scanned, held back
 	ready   []byte // scanned, releasable
 	done    error  // upstream's terminal error, delivered once ready drains
 }
 
+func newGitBody(rc io.ReadCloser, dog *time.Timer, token string, cancel context.CancelFunc) *gitBody {
+	forms := tokenForms(token)
+	hold := 0
+	for _, f := range forms {
+		hold = max(hold, len(f)-1)
+	}
+	return &gitBody{rc: rc, dog: dog, forms: forms, hold: hold, cancel: cancel, buf: make([]byte, 32<<10)}
+}
+
+func (b *gitBody) reflects(window []byte) bool {
+	for _, f := range b.forms {
+		if bytes.Contains(window, f) {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *gitBody) Read(p []byte) (int, error) {
-	buf := make([]byte, 32<<10)
 	for len(b.ready) == 0 && b.done == nil {
-		n, err := b.rc.Read(buf)
+		n, err := b.rc.Read(b.buf)
 		b.dog.Reset(gitIdleTimeout)
-		window := append(b.pending[:len(b.pending):len(b.pending)], buf[:n]...)
-		if bytes.Contains(window, b.token) {
+		b.window = append(append(b.window[:0], b.pending...), b.buf[:n]...)
+		window := b.window
+		if b.reflects(window) {
 			return 0, ErrGitTokenReflected
 		}
-		keep := min(len(b.token)-1, len(window))
+		keep := min(b.hold, len(window))
 		if err != nil {
 			keep, b.done = 0, err
 		}
-		b.ready = append(b.ready, window[:len(window)-keep]...)
+		b.ready = append(b.ready[:0], window[:len(window)-keep]...)
 		b.pending = append(b.pending[:0], window[len(window)-keep:]...)
 	}
 	if len(b.ready) > 0 {

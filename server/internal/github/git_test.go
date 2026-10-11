@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -127,28 +128,64 @@ func TestGitFetchRefusesOtherAnswers(t *testing.T) {
 }
 
 func TestGitFetchCutsOffAReflectedToken(t *testing.T) {
-	app, _ := gitApp(t, func(w http.ResponseWriter, r *http.Request) {
-		_, pass, _ := r.BasicAuth()
+	forms := map[string]func(pass string) string{
+		"raw":    func(pass string) string { return pass },
+		"base64": func(pass string) string { return base64.StdEncoding.EncodeToString([]byte(pass)) },
+		"basic": func(pass string) string {
+			return base64.StdEncoding.EncodeToString([]byte("x-access-token:" + pass))
+		},
+	}
+	for name, form := range forms {
+		for _, split := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/split=%v", name, split), func(t *testing.T) {
+				app, _ := gitApp(t, func(w http.ResponseWriter, r *http.Request) {
+					_, pass, _ := r.BasicAuth()
+					reflected := form(pass)
+					w.Header().Set("Content-Type", advert)
+					_, _ = io.WriteString(w, "0000")
+					w.(http.Flusher).Flush()
+					if split {
+						// The reflected form, split across two writes, behind innocent bytes.
+						_, _ = io.WriteString(w, "hello "+reflected[:5])
+						w.(http.Flusher).Flush()
+						_, _ = io.WriteString(w, reflected[5:]+" world")
+						return
+					}
+					_, _ = io.WriteString(w, "hello "+reflected+" world")
+				})
+				resp, err := app.GitFetch(context.Background(), repo, github.GitFetch{Discovery: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = resp.Body.Close() }()
+				var got strings.Builder
+				_, err = io.Copy(&got, resp.Body)
+				if !errors.Is(err, github.ErrGitTokenReflected) {
+					t.Fatalf("err = %v", err)
+				}
+				// Nothing of the reflected form may reach the caller, not even its start.
+				if strings.Contains(got.String(), "ghs_") || strings.Contains(got.String(), "hello") {
+					t.Fatalf("part of the token reached the caller: %q", got.String())
+				}
+			})
+		}
+	}
+}
+
+func TestGitFetchReleasesCleanBodiesWhole(t *testing.T) {
+	body := strings.Repeat("0032want abc\n", 5000)
+	app, _ := gitApp(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", advert)
-		// The token, split across two writes, behind innocent bytes.
-		_, _ = io.WriteString(w, "0000")
-		w.(http.Flusher).Flush()
-		_, _ = io.WriteString(w, "hello "+pass[:5])
-		w.(http.Flusher).Flush()
-		_, _ = io.WriteString(w, pass[5:]+" world")
+		_, _ = io.WriteString(w, body)
 	})
 	resp, err := app.GitFetch(context.Background(), repo, github.GitFetch{Discovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var got strings.Builder
-	_, err = io.Copy(&got, resp.Body)
-	if !errors.Is(err, github.ErrGitTokenReflected) {
-		t.Fatalf("err = %v", err)
-	}
-	if strings.Contains(got.String(), "ghs_") {
-		t.Fatalf("the token reached the caller: %q", got.String())
+	got, err := io.ReadAll(resp.Body)
+	if err != nil || string(got) != body {
+		t.Fatalf("read %d bytes, err %v; want %d", len(got), err, len(body))
 	}
 }
 

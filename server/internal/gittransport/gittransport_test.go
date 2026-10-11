@@ -167,6 +167,19 @@ func (e *gitEnv) workspace(repo string) string {
 	return s.SessionID
 }
 
+// revoke does what ending a workspace does to its read capability: the credential service revokes
+// the credential, and the enrollment row follows (here at once rather than through the sweep).
+func (e *gitEnv) revoke(workspaceID string) {
+	e.t.Helper()
+	ctx := context.Background()
+	if _, err := e.auth.Creds.Revoke(ctx, workspaceID); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := dbq.New(e.auth.Pool).RevokeGitEnrollment(ctx, workspaceID); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 // capability enrolls a workspace and returns its bearer, the way the agent's egress would send it.
 func (e *gitEnv) capability(workspaceID string) string {
 	e.t.Helper()
@@ -298,6 +311,8 @@ func TestProxyRefusals(t *testing.T) {
 		{"unknown path", "GET", "/oldsj/alpha.git/HEAD", bearerA, nil, 403, "path_invalid"},
 		{"encoded path", "GET", "/oldsj/alpha%2e.git/info/refs?service=git-upload-pack", bearerA, nil, 403, "path_invalid"},
 		{"traversal", "GET", "/oldsj/../alpha.git/info/refs?service=git-upload-pack", bearerA, nil, 403, "path_invalid"},
+		{"doubled suffix", "GET", "/oldsj/alpha.git.git/info/refs?service=git-upload-pack", bearerA, nil, 403, "path_invalid"},
+		{"upper-case suffix", "GET", "/oldsj/alpha.GIT.git/info/refs?service=git-upload-pack", bearerA, nil, 403, "path_invalid"},
 		{"root", "GET", "/", bearerA, nil, 403, "path_invalid"},
 		{"bad Host", "GET", disc, bearerA, map[string]string{"Host": "evil.example"}, 404, ""},
 		{"forwarded header", "GET", disc, bearerA, map[string]string{"X-Forwarded-For": "10.0.0.1"}, 403, "routing_header"},
@@ -365,9 +380,7 @@ func TestRevokedCapabilityStopsWorking(t *testing.T) {
 	if status, _ := e.do("GET", disc, bearer, nil, http.NoBody); status != 200 {
 		t.Fatalf("status %d", status)
 	}
-	if err := e.enroller.Revoke(context.Background(), ws); err != nil {
-		t.Fatal(err)
-	}
+	e.revoke(ws)
 	if status, body := e.do("GET", disc, bearer, nil, http.NoBody); status != 401 {
 		t.Fatalf("after revoke: %d %q", status, body)
 	}
@@ -434,5 +447,36 @@ func (e *gitEnv) gitEnvVars() []string {
 	return []string{
 		"PATH=" + filepath.Dir(e.gitBin) + ":/usr/bin:/bin", "HOME=" + e.t.TempDir(),
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
+	}
+}
+
+// The publication ledger outlives the workspace: deleting a session whose workspace has a push
+// grant and a publication must succeed and leave the publication behind.
+func TestDeletingASessionKeepsItsPublications(t *testing.T) {
+	e := newGitEnv(t)
+	ws := e.workspace(repoA)
+	ctx := context.Background()
+	if _, err := e.enroller.Enroll(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO git_push_grants (workspace_id, branch, policy_version, credential_id, state)
+		 VALUES ('` + ws + `', 'b', 1, 'c1', 'published')`,
+		`INSERT INTO git_publications (id, workspace_id, request_id, repository, branch, attempt)
+		 VALUES ('pub1', '` + ws + `', 'r1', 'oldsj/alpha', 'b', '{}')`,
+	} {
+		if _, err := e.auth.Pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.auth.Pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, ws); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	var n, grants int
+	if err := e.auth.Pool.QueryRow(ctx, `SELECT count(*) FROM git_publications WHERE id = 'pub1' AND workspace_id = $1`, ws).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("publication rows = %d, %v", n, err)
+	}
+	if err := e.auth.Pool.QueryRow(ctx, `SELECT count(*) FROM git_push_grants WHERE workspace_id = $1`, ws).Scan(&grants); err != nil || grants != 0 {
+		t.Fatalf("grant rows = %d, %v", grants, err)
 	}
 }
