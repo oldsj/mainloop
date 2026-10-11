@@ -2,6 +2,8 @@ package health_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -26,9 +28,8 @@ func discoveryStatement(t *testing.T) string {
 	return string(m[1])
 }
 
-// The discovery walk follows the deliveries that have no receipt yet: with a window full of
-// deliveries that all have one, the plan reads the partial index (which holds only the few that do
-// not) and never scans the deliveries table or sorts it.
+// The partial index excludes collected history. Even with more than a batch undiscovered, the
+// ordered candidate walk reads at most one batch and does not scan the retained receipt history.
 func TestDiscoveryWalksTheIndexOfDeliveriesWithoutAReceipt(t *testing.T) {
 	e := newEnv(t)
 	const tracked = 30000
@@ -37,39 +38,92 @@ func TestDiscoveryWalksTheIndexOfDeliveriesWithoutAReceipt(t *testing.T) {
 		FROM generate_series(1, $2::int) g`, runtimeSession, tracked)
 	e.exec(t, `INSERT INTO health_collection (owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, state)
 		SELECT $1, $2, session_id, task_id, id, created_at, 'collected' FROM deliveries WHERE id LIKE 'bulk-%'`, owner, gateway)
-	e.exec(t, `ANALYZE deliveries`)
-	e.exec(t, `ANALYZE health_collection`)
+	for _, backlog := range []int{2, 1002} {
+		if backlog == 1002 {
+			e.exec(t, `INSERT INTO deliveries (id, idempotency_key, session_id, state, task_id, kagent_session_id, created_at)
+				SELECT 'fresh-'||g, 'fresh-key-'||g, 'session-1', 'completed', 'fresh-task-'||g, $1, now()
+				FROM generate_series(1, 1000) g`, runtimeSession)
+		}
+		e.exec(t, `ANALYZE deliveries`)
+		e.exec(t, `ANALYZE health_collection`)
+		e.exec(t, `ANALYZE sessions`)
+		e.exec(t, `ANALYZE task_attempts`)
+		e.exec(t, `ANALYZE tasks`)
+		t.Run(fmt.Sprintf("%d_untracked", backlog), func(t *testing.T) {
+			checkDiscoveryPlan(t, e, tracked, backlog)
+		})
+	}
+}
 
+type discoveryPlanNode struct {
+	NodeType     string              `json:"Node Type"`
+	RelationName string              `json:"Relation Name"`
+	IndexName    string              `json:"Index Name"`
+	SubplanName  string              `json:"Subplan Name"`
+	ActualRows   int                 `json:"Actual Rows"`
+	ActualLoops  int                 `json:"Actual Loops"`
+	Plans        []discoveryPlanNode `json:"Plans"`
+}
+
+func checkDiscoveryPlan(t *testing.T, e *env, tracked, backlog int) {
+	t.Helper()
+	const batch = 500
 	tx, err := e.pool.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rows, err := tx.Query(context.Background(), "EXPLAIN (ANALYZE, BUFFERS) "+discoveryStatement(t), pgx.NamedArgs{
-		"since": time.Now().Add(-30 * 24 * time.Hour), "owner_id": owner, "gateway": gateway, "max_rows": 500,
-	})
+	var raw []byte
+	if err := tx.QueryRow(context.Background(), "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+discoveryStatement(t), pgx.NamedArgs{
+		"since": time.Now().Add(-30 * 24 * time.Hour), "owner_id": owner, "gateway": gateway, "max_rows": batch,
+	}).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var plan []struct{ Plan discoveryPlanNode }
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 {
+		t.Fatalf("expected one discovery plan, got %d", len(plan))
+	}
+	summary, err := json.MarshalIndent(plan[0].Plan, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var plan strings.Builder
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatal(err)
+	t.Logf("discovery plan over %d tracked and %d untracked deliveries:\n%s", tracked, backlog, summary)
+	var indexed, limited bool
+	var walk func(discoveryPlanNode)
+	walk = func(n discoveryPlanNode) {
+		if n.IndexName == "deliveries_health" {
+			indexed = true
+			if n.ActualRows*n.ActualLoops > batch {
+				t.Errorf("candidate index reads %d rows, batch is %d", n.ActualRows*n.ActualLoops, batch)
+			}
 		}
-		plan.WriteString(line + "\n")
+		if n.SubplanName == "CTE batch" && n.NodeType == "Limit" && n.ActualRows == min(batch, backlog) {
+			limited = true
+		}
+		if n.RelationName == "deliveries" && n.NodeType == "Seq Scan" {
+			t.Error("the plan scans the deliveries table")
+		}
+		if n.RelationName == "health_collection" && strings.Contains(n.NodeType, "Scan") {
+			t.Error("discovery scans retained receipts")
+		}
+		for _, child := range n.Plans {
+			walk(child)
+		}
 	}
-	if err := rows.Err(); err != nil {
+	walk(plan[0].Plan)
+	if !indexed || !limited {
+		t.Errorf("expected a limited candidate walk using deliveries_health: indexed %t, limited %t", indexed, limited)
+	}
+	var inserted, marked int
+	if err := tx.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM health_collection WHERE state = 'pending'),
+		(SELECT count(*) FROM deliveries WHERE health_tracked)`).Scan(&inserted, &marked); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("discovery plan over %d tracked deliveries:\n%s", tracked, plan.String())
-	if !strings.Contains(plan.String(), "deliveries_health") {
-		t.Errorf("the plan does not use deliveries_health")
-	}
-	if strings.Contains(plan.String(), "Seq Scan on deliveries") {
-		t.Errorf("the plan scans the deliveries table")
-	}
-	if strings.Contains(plan.String(), "Sort") {
-		t.Errorf("the plan sorts")
+	if want := min(batch, backlog); inserted != want || marked != tracked+want {
+		t.Errorf("inserted %d and marked %d, want %d and %d", inserted, marked, want, tracked+want)
 	}
 }

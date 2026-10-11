@@ -90,8 +90,13 @@ success.
 
 - Discovery starts tracking up to 500 new receipts per pass: each delivery that carries a kagent
   task, running (`delivered`) or finished. A receipt is written once. A delivery whose receipt
-  is written (by either path) is flagged `health_tracked`, and the partial index `deliveries_health`
-  holds only unflagged ones, so a pass costs what is still undiscovered, not the whole window.
+  is written (by either path) is flagged `health_tracked` in the same transaction. This flag is
+  authoritative for discovery; the partial index `deliveries_health` holds only unflagged candidates,
+  and discovery does not scan retained receipts to choose its batch. It locks candidates in creation
+  time and ID order, skips deliveries locked by terminal ingest, then inserts receipts from the
+  marked deliveries. Skipped deliveries remain eligible for a later pass if terminal ingest did not
+  track them. An existing receipt is preserved on conflict. Retention leaves the flag set; an
+  intentional rebuild of the derived health tables must also clear the affected deliveries' flags.
 - Each pass reads up to 50 due receipts. A running turn's receipt stays pending and is read again
   after 15 seconds, doubling per failed read up to one hour. A read of a finished delivery marks
   the receipt collected for good, and a collected receipt is never reopened.

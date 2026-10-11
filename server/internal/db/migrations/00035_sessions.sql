@@ -79,8 +79,9 @@ CREATE TABLE deliveries (
     -- sending so a later lookup asks the Session the message went to, not whatever the binding
     -- names by then.
     kagent_session_id text,
-    -- Set in the transaction that writes the delivery's health receipt (the terminal transaction, or
-    -- the recovery sweep's discovery), so the sweep walks only deliveries that have none.
+    -- Authoritative discovery marker, set atomically with the health receipt by ingest or discovery.
+    -- Retention leaves it set so a pruned receipt is not rediscovered; an intentional health rebuild
+    -- must clear it along with the derived health tables.
     health_tracked boolean NOT NULL DEFAULT false,
     attempts integer NOT NULL DEFAULT 0,
     -- How many times creating the kagent Session failed for this delivery. Claims (attempts) also
@@ -99,9 +100,8 @@ WHERE state IN ('recorded', 'sending', 'delivered');
 CREATE INDEX deliveries_claim ON deliveries (next_attempt_at, id)
 WHERE state IN ('recorded', 'sending', 'delivered', 'uncertain');
 CREATE INDEX deliveries_session ON deliveries (session_id, created_at DESC);
--- The health collector's discovery walk: deliveries that carry a kagent task and have no receipt
--- yet, in creation order. A delivery leaves the index when its receipt is written, so the walk
--- costs what is still to discover, not the whole event window.
+-- The health collector's ordered discovery candidates. Once tracked, a delivery leaves this index
+-- even if its receipt is later pruned; discovery need not scan retained receipt history.
 CREATE INDEX deliveries_health ON deliveries (created_at, id)
 WHERE task_id IS NOT NULL AND kagent_session_id IS NOT NULL AND NOT health_tracked
   AND state IN ('delivered', 'completed', 'failed', 'cancelled');

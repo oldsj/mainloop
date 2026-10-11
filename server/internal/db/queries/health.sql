@@ -78,35 +78,37 @@ ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO UPDATE SET
     collected_at = CASE WHEN @open::bool THEN health_collection.collected_at ELSE now() END,
     updated_at = now();
 
--- Deliveries that carry a kagent task, finished or still running, become receipts to collect. A
--- receipt is written once. Deliveries that already have one are excluded before the LIMIT, so a
--- window holding more than one batch of them never hides the newer ones; the walk follows the
--- deliveries_health index in created_at order and sorts nothing. That index holds only the deliveries
--- not yet marked health_tracked; the discovered batch is marked here, in the statement that writes
--- its receipts.
+-- Deliveries that carry a kagent task, finished or still running, become receipts to collect.
+-- health_tracked is the authoritative discovery marker: ingest and discovery set it in the same
+-- transaction as the receipt write, and retention does not clear it. No receipt-history anti-join
+-- is needed. The partial deliveries_health index supports the ordered, limited candidate walk;
+-- the planner may sort, but retained receipts are not scanned to choose the batch.
+-- Lock deliveries in creation/id order, skipping rows a terminal transaction owns, before writing
+-- any receipt. Reading marked's RETURNING rows makes each receipt depend on its delivery update,
+-- preserving terminal ingest's delivery-before-receipt lock order. A bounded ID array supports
+-- primary-key lookups for marking instead of a join against the delivery history.
 -- name: DiscoverHealthReceipts :execrows
-WITH batch AS (
-    SELECT d.id, d.session_id, d.task_id, d.created_at
+WITH batch AS MATERIALIZED (
+    SELECT d.id
     FROM deliveries AS d
     WHERE d.state IN ('delivered', 'completed', 'failed', 'cancelled')
       AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
       AND NOT d.health_tracked
       AND d.created_at > @since::timestamptz
       AND EXISTS (SELECT 1 FROM sessions AS o WHERE o.id = d.session_id AND o.user_id = @owner_id::text)
-      AND NOT EXISTS (
-          SELECT 1 FROM health_collection AS c
-          WHERE c.owner_id = @owner_id::text AND c.gateway = @gateway::text AND c.session_id = d.session_id
-            AND c.a2a_task_id = d.task_id)
     ORDER BY d.created_at, d.id
     LIMIT @max_rows::int
+    FOR UPDATE OF d SKIP LOCKED
 ),
 marked AS (
-    UPDATE deliveries SET health_tracked = true WHERE id IN (SELECT id FROM batch)
+    UPDATE deliveries AS d SET health_tracked = true
+    WHERE d.id = ANY(ARRAY(SELECT b.id FROM batch AS b))
+    RETURNING d.id, d.session_id, d.task_id, d.created_at
 )
 INSERT INTO health_collection (owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id)
 SELECT s.user_id, @gateway::text, b.session_id, b.task_id, b.id, b.created_at,
        (CASE WHEN a.id IS NULL THEN s.project_id ELSE t.project_id END)::text
-FROM batch AS b
+FROM marked AS b
 JOIN sessions AS s ON s.id = b.session_id
 LEFT JOIN task_attempts AS a ON a.session_id = s.id
 LEFT JOIN tasks AS t ON t.id = a.task_id
