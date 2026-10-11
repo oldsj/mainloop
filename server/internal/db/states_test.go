@@ -101,6 +101,17 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"task_event_deliveries", "state", strs(
 			string(dbstate.TaskDeliveryPending), string(dbstate.TaskDeliveryQueued), string(dbstate.TaskDeliveryDelivered),
 			string(dbstate.TaskDeliveryUncertain), string(dbstate.TaskDeliveryCancelled))},
+		{"hitl_requests", "kind", strs(string(dbstate.HITLToolApproval), string(dbstate.HITLAskUser))},
+		{"hitl_requests", "availability", strs(
+			string(dbstate.HITLPending), string(dbstate.HITLStale), string(dbstate.HITLUnavailable),
+			string(dbstate.HITLAnswered))},
+		{"hitl_responses", "state", strs(
+			string(dbstate.HITLRecorded), string(dbstate.HITLSending), string(dbstate.HITLAccepted),
+			string(dbstate.HITLUncertain), string(dbstate.HITLRejectedTransport))},
+		{"attention_items", "kind", strs(
+			string(dbstate.AttentionApproval), string(dbstate.AttentionQuestion), string(dbstate.AttentionOwnerDecision))},
+		{"attention_items", "state", strs(
+			string(dbstate.AttentionOpen), string(dbstate.AttentionResolved), string(dbstate.AttentionDismissed))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},

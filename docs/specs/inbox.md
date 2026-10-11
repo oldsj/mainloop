@@ -113,3 +113,48 @@ poll tests against MSW fakes. Nothing here is live-proven.
 - **Not built:** the `?inbox` URL parameter from the frozen app. Opening the inbox is local state, with no deep link.
 - **Not built:** skeleton loading, and the **Last checked** and offline timestamps. Loading shows a status line. A failed refresh keeps the rows already shown.
 - **Not proven:** the Playwright journeys for inbox (tabs, badge, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.
+
+## Go HITL observer and response dispatch
+
+Status: implemented in the Go server (G9a, `server/internal/hitl`, migration `00070_hitl`), with
+tests against an in-memory kagent. Nothing here has run against a live kagent. The Python
+observer above is frozen reference; the Go slice covers a subset of it.
+
+Built:
+
+- **Observer.** A sweep on `reconcile.Runner` lists each bound session's kagent tasks read-only,
+  keeping a task-cursor checkpoint per session. A task in `input-required` whose status message
+  carries the HITL extension becomes a `hitl_requests` row (`pending`), identified by a hash of
+  the session, task, status message and request body. Each open request gets an `attention_items`
+  row, and `inbox:updated` is published in the same transaction. A request appears within one scan
+  interval.
+- **Availability.** `pending` becomes `answered` when the task shows the response message,
+  `unavailable` when the task moves on or disappears or a newer ask replaces it, and `stale`
+  (not answerable) when kagent has not confirmed it for two minutes. A stale request reopens when
+  kagent confirms it again. Attention rows resolve when a request leaves `pending`/`stale`.
+- **Malformed asks** (no tools, a bad question list, an oversized payload) create no card; they
+  appear as diagnostics on `GET /hitl-observer/status`.
+- **Respond.** `POST /hitl/{id}/respond` validates the answer against the stored ask (every
+  top-level tool decided, question ids and counts matching, answers within the choices), then
+  writes a `hitl_responses` intent row keyed by the action id. The same action id with the same
+  answer returns the same receipt; a different answer or request is `409`. One live response per
+  request. With `MAINLOOP_OWNER_HITL_WRITES_ENABLED` off the route answers `503`.
+- **Dispatch.** A reconcile loop reads the task first and sends only while the task still asks
+  for exactly this request. The row is marked `sending` and committed before the call, and no
+  transaction is open across kagent I/O. A send that provably did not leave is retried; any other
+  failure records `uncertain`. An uncertain response is never resent: later passes look the
+  outbound message id up in the task and move to `accepted` when it appears. After ten minutes
+  with the ask still waiting and no message, it becomes `rejected_transport` and the owner may
+  answer again.
+- **Routes.** `GET /sessions/{id}/hitl`, `GET /hitl/{id}`, `POST /hitl/{id}/respond`,
+  `GET /hitl-observer/status`.
+
+Not built:
+
+- Sending to a real kagent. The kagent client cannot yet attach the HITL extension metadata to a
+  message, so the production sender reports "unsupported" and responses stay `recorded` until it
+  can.
+- Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do nested delegated requests and
+  task-tree attention links.
+- An uncertain response whose task has moved on without ever showing the message is rechecked
+  indefinitely rather than resolved.

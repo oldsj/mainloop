@@ -53,6 +53,27 @@ sql:
           - column: deliveries.state
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: DeliveryState }
+          - column: hitl_requests.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: HITLKind }
+          - column: hitl_requests.availability
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: HITLAvailability
+              }
+          - column: hitl_responses.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: HITLResponseState
+              }
+          - column: attention_items.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttentionKind }
+          - column: attention_items.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttentionState }
           - column: environment_versions.provenance_kind
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ProvenanceKind }

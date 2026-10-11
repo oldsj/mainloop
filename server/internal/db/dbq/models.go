@@ -34,6 +34,25 @@ type AgentBinding struct {
 	KagentCreateAgentName      *string
 }
 
+type AttentionItem struct {
+	ID         string
+	OwnerID    string
+	Kind       dbstate.AttentionKind
+	SourceKind string
+	SourceID   string
+	SessionID  *string
+	TaskID     *string
+	Title      string
+	Needed     string
+	Href       string
+	State      dbstate.AttentionState
+	Detail     json.RawMessage
+	ReadAt     *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	ResolvedAt *time.Time
+}
+
 type Credential struct {
 	ID              string
 	Kind            dbstate.CredentialKind
@@ -123,6 +142,68 @@ type Event struct {
 type EventFloor struct {
 	Singleton     bool
 	PrunedThrough int64
+}
+
+type HitlDiagnostic struct {
+	ID               int64
+	OwnerID          string
+	RuntimeSessionID string
+	Detail           string
+	ObservedAt       time.Time
+}
+
+type HitlRequest struct {
+	ID                string
+	OwnerID           string
+	SessionID         string
+	KagentSessionID   string
+	AgentNamespace    string
+	AgentName         string
+	ContextID         string
+	TaskID            string
+	StatusMessageID   string
+	RequestHash       string
+	Kind              dbstate.HITLKind
+	Payload           json.RawMessage
+	Availability      dbstate.HITLAvailability
+	UnavailableReason *string
+	ObservedAt        time.Time
+	CheckedAt         time.Time
+	AttemptedAt       time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type HitlResponse struct {
+	ID                string
+	RequestID         string
+	OwnerID           string
+	IdempotencyKey    string
+	Decision          json.RawMessage
+	DecisionHash      string
+	OutboundMessageID string
+	Receipt           json.RawMessage
+	State             dbstate.HITLResponseState
+	Detail            *string
+	Attempts          int32
+	NextAttemptAt     time.Time
+	LeaseOwner        *string
+	LeaseUntil        *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type HitlSession struct {
+	KagentSessionID string
+	SessionID       string
+	OwnerID         string
+	AgentNamespace  string
+	AgentName       string
+	ContextID       string
+	TaskCursor      *string
+	ScannedAt       *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type PreviewLease struct {

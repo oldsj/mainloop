@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/projects"
@@ -43,6 +44,7 @@ type Server struct {
 	*workspaces.WorkspacesAPI
 	*sessions.SessionsAPI
 	*tasks.TasksAPI
+	*hitl.API
 
 	fallback
 
@@ -77,6 +79,9 @@ type Deps struct {
 	// Preview routes preview hosts to workspace dev servers. Nil serves no previews, and a
 	// preview host is then refused by the Host guard like any unknown host.
 	Preview *preview.Proxy
+	// HITL observes kagent for tasks that wait for the owner and carries the answers back. Nil builds
+	// one with no kagent client: it serves what is recorded but observes and sends nothing.
+	HITL *hitl.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -105,6 +110,7 @@ func New(d Deps) *Server {
 		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
 		SessionsAPI:     sessions.NewAPI(d.Sessions, d.Config, d.Pool, d.Log),
 		TasksAPI:        &tasks.TasksAPI{Svc: taskSvc, OwnerID: d.Config.Identity.OwnerID},
+		API:             hitl.NewAPI(hitlService(d)),
 		deps:            d,
 		initErr:         err,
 	}
@@ -160,4 +166,11 @@ func (s *Server) Handler() (http.Handler, error) {
 		httpx.RequestIDMiddleware,
 		httpx.Recover(d.Log),
 	), nil
+}
+
+func hitlService(d Deps) *hitl.Service {
+	if d.HITL != nil {
+		return d.HITL
+	}
+	return hitl.NewService(d.Config, d.Pool, nil, d.Log)
 }

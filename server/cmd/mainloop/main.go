@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/preview"
@@ -153,6 +154,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	svc := sessions.NewService(cfg, pool, kc, log)
 	svc.Credentials = creds
 	deps.Sessions = svc
+	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), log)
+	deps.HITL = hitlSvc
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {
 		return err
@@ -185,6 +188,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	runner.AddSweep(svc.ResolveCreatesSweep())
+	runner.Add(hitlSvc.ResponseLoop())
+	runner.AddSweep(hitlSvc.ObserverSweep())
 	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })
