@@ -1,32 +1,27 @@
 -- The owner's attention: what needs them now (attention_items) and the Activity log around it.
--- The visibility rule is shared by the list, the count and the sessions behind the items: an item
--- of an archived or finished session is not shown, whatever its row says, so a late observer
--- cannot leave a badge behind. Items without a session (a task decision whose attempt has no
--- Mainloop session) are always shown.
+-- Every read of "what the owner should see" goes through the attention_visible view (migration
+-- 00070), the one visibility rule: the list, the unread count and a session's needs_owner cannot
+-- disagree.
 
 -- name: ListOpenAttention :many
 SELECT a.*
 FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open'
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
+JOIN attention_visible v ON v.id = a.id
+WHERE v.owner_id = $1
 ORDER BY a.created_at DESC, a.id;
 
--- name: CountOpenAttention :one
-SELECT count(*)::int
-FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open'
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')));
+-- The sessions that need the owner, in one read: those with a visible item, and whether one of
+-- them is a native input request (the session then reads waiting_on_user).
+-- name: ListSessionsNeedingOwner :many
+SELECT v.session_id::text AS session_id, bool_or(v.source_kind = 'hitl_request')::boolean AS waiting_on_input
+FROM attention_visible v
+WHERE v.owner_id = $1 AND v.session_id IS NOT NULL
+GROUP BY v.session_id;
 
 -- Whether a session has an open item the owner can see (the needs_owner rule).
 -- name: SessionNeedsOwner :one
 SELECT EXISTS (
-    SELECT 1
-    FROM attention_items a
-    JOIN sessions s ON s.id = a.session_id
-    WHERE a.owner_id = $1 AND a.session_id = $2 AND a.state = 'open'
-      AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+    SELECT 1 FROM attention_visible v WHERE v.owner_id = $1 AND v.session_id = $2
 ) AS needs_owner;
 
 -- name: GetAttentionBySource :one
@@ -120,3 +115,13 @@ FROM hitl_diagnostics
 WHERE owner_id = $1 AND dismissed_at IS NULL
 ORDER BY id DESC
 LIMIT 100;
+
+-- An item of a session that has finished or been archived can never come back: close it, so the
+-- row does not wait for a session that is gone.
+-- name: ResolveFinishedSessionAttention :many
+UPDATE attention_items a
+SET state = 'resolved', resolved_at = now(), updated_at = now()
+FROM sessions s
+WHERE s.id = a.session_id AND a.owner_id = $1 AND a.state = 'open'
+  AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled', 'superseded'))
+RETURNING a.id;

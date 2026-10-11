@@ -203,15 +203,26 @@ reference.
   on its current, unfinished attempt, and resolves it when the decision clears, the attempt is
   replaced or the task finishes. A new ask from the same task is a new item; an answered one is
   never reopened.
-- **needs_owner.** A session needs the owner when it has an open attention item and is neither
-  archived nor finished. The snapshot's `sessions` lists those sessions with `needs_owner: true`
-  and `waiting_on_user` status. `/sessions` still reports `needs_owner: false` until the sessions
-  package calls `attention.Service.NeedsOwner`; project detail already does.
+- **Visibility.** One rule (the `attention_visible` view) decides which open items the owner
+  sees; the list, `count`, the unread count and `needs_owner` all read it. An item is hidden when
+  its session is archived or finished, when a HITL request already has a live answer (recorded,
+  sending, accepted or uncertain), when its task is final, or when its attempt is not the task's
+  current attempt, or is archived or its native session deleted. A sweep also resolves the items of
+  finished or archived sessions, and publishes `inbox:updated` whenever the unread count moves.
+- **needs_owner and sessions.** A session needs the owner when it has a visible item. The
+  snapshot's `sessions` is the owner's session list as `/sessions` gives it (every unfinished
+  session plus the newest 100 finished ones, not the main thread), each row with its own
+  `needs_owner`; a session reads `waiting_on_user` only while a native input request waits on it.
+  Items, count and sessions are read in one read-only transaction. `/sessions` still reports
+  `needs_owner: false` until the sessions package calls `attention.Service.NeedsOwner`; project
+  detail already does.
 - **Count.** `count` is the number of open visible items. `inbox:updated.unread_count` is the open
   visible items not yet read; answering a queue item reads it. Activity never counts.
 - **Activity.** Provider reports ("Provider report (<outcome>; unverified): …", id `report:<id>`,
   not dismissible), answered queue items (`queue:<id>`, not dismissible) and input notices
-  (`queue:diag_<n>`, `queue_item_id` `diag_<n>`, dismissible), newest first, at most 100.
+  (`queue:diag_<n>`, `queue_item_id` `diag_<n>`, dismissible), newest first, at most 100. A question
+  the sweep closed with no answer reads "Closed: …", not "Answered". Queue ids cannot start with
+  `diag_`.
 - **Respond.** `POST /queue/{id}/respond` answers an open `queue` item: the answer is stored on the
   row, the item resolves and `inbox:updated` is published in the same transaction. The same answer
   again is `200` with no second event; a different answer, or an item that is no longer open, is

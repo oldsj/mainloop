@@ -35,13 +35,10 @@ func (q *Queries) ConfirmHITLRequest(ctx context.Context, id string) error {
 }
 
 const countUnreadAttention = `-- name: CountUnreadAttention :one
-SELECT count(*)::int
-FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open' AND a.read_at IS NULL
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
+SELECT count(*)::int FROM attention_visible v WHERE v.owner_id = $1 AND v.read_at IS NULL
 `
 
+// The unread count is the visible items the owner has not read (see attention_visible).
 func (q *Queries) CountUnreadAttention(ctx context.Context, ownerID string) (int32, error) {
 	row := q.db.QueryRow(ctx, countUnreadAttention, ownerID)
 	var column_1 int32

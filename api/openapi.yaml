@@ -3106,7 +3106,7 @@ components:
           title: Count
           default: 0
         sessions:
-          # no cap in the code: one entry per session behind an item; not paginated
+          # the owner's session list (every unfinished session and the newest finished ones, as GET /sessions), each with its own needs_owner; not paginated
           items:
             $ref: '#/components/schemas/Session'
           type: array

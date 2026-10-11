@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -170,8 +171,14 @@ func TestSnapshotListsEverySourceAndMarksSessions(t *testing.T) {
 	if len(snap.Sessions) != 2 {
 		t.Fatalf("sessions %d", len(snap.Sessions))
 	}
+	// s1 sits behind a native input request, s2 behind a task decision: both need the owner, but
+	// only s1 reads waiting_on_user.
 	for _, s := range snap.Sessions {
-		if !s.NeedsOwner || s.Status != api.SessionStatusWaitingOnUser {
+		wantStatus := api.SessionStatusActive
+		if s.Id == "s1" {
+			wantStatus = api.SessionStatusWaitingOnUser
+		}
+		if !s.NeedsOwner || s.Status != wantStatus {
 			t.Fatalf("session %+v", s)
 		}
 	}
@@ -197,7 +204,7 @@ func TestArchivedAndFinishedSessionsNeverCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Count != 1 || snap.Items[0].Id != "hitl:r-live" || len(snap.Sessions) != 1 {
+	if snap.Count != 1 || snap.Items[0].Id != "hitl:r-live" || len(snap.Sessions) != 2 { // live and done (history)
 		t.Fatalf("%+v", snap)
 	}
 	if e.svc.NeedsOwner(ctx, "done") || e.svc.NeedsOwner(ctx, "old") {
@@ -209,6 +216,204 @@ func TestArchivedAndFinishedSessionsNeverCount(t *testing.T) {
 	if len(evs) != 1 || unread(t, evs[0]) != 2 {
 		t.Fatalf("events %+v", evs)
 	}
+}
+
+// The snapshot's sessions are the owner's session list (F4 renders it whole), not only the sessions
+// behind an item: each row carries its own needs_owner, and waiting_on_user marks only a native input.
+func TestSnapshotSessionsAreTheSessionList(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	for id, status := range map[string]string{
+		"s-active": "active", "s-pending": "pending", "s-idle": "idle", "s-done": "completed", "s-need": "active",
+		"s-queue": "active",
+	} {
+		e.session(t, id, status)
+	}
+	e.session(t, "s-archived", "active")
+	e.exec(t, `UPDATE sessions SET archived_at = now() WHERE id = 's-archived'`)
+	e.hitl(t, "req1", "s-need")
+	e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C", SessionID: ptr("s-queue")})
+
+	snap, err := e.svc.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]api.Session{}
+	for _, s := range snap.Sessions {
+		got[s.Id] = s
+	}
+	if len(got) != 6 || len(snap.Sessions) != 6 {
+		t.Fatalf("sessions %d: %v", len(snap.Sessions), got)
+	}
+	for id, want := range map[string]struct {
+		status api.SessionStatus
+		needs  bool
+	}{
+		"s-active": {api.SessionStatusActive, false}, "s-pending": {api.SessionStatusPending, false},
+		"s-idle": {api.SessionStatusIdle, false}, "s-done": {api.SessionStatusCompleted, false},
+		"s-need":  {api.SessionStatusWaitingOnUser, true},
+		"s-queue": {api.SessionStatusActive, true}, // a queue question needs the owner, but is no native input
+	} {
+		if s, ok := got[id]; !ok || s.Status != want.status || s.NeedsOwner != want.needs {
+			t.Errorf("%s: %+v want %+v", id, s, want)
+		}
+	}
+	if snap.Count != 2 {
+		t.Fatalf("count %d", snap.Count)
+	}
+}
+
+// An answered HITL request does not prompt again while the answer travels (the rule hides a
+// request with a live response); a refused answer brings the request back.
+func TestAnsweredHITLRequestLeavesTheInbox(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.session(t, "s1", "active")
+	e.hitl(t, "req1", "s1")
+	e.exec(t, `INSERT INTO hitl_requests (id, owner_id, session_id, kagent_session_id, agent_namespace, agent_name, context_id, task_id,
+		status_message_id, request_hash, kind, payload) VALUES ('req1', $1, 's1', 'ks', 'ns', 'ag', 'ctx', 'a2a-task', 'sm', 'h', 'ask_user', '{}')`, owner)
+	for _, state := range []string{"recorded", "sending", "uncertain", "accepted"} {
+		e.exec(t, `DELETE FROM hitl_responses`)
+		e.exec(t, `INSERT INTO hitl_responses (id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state)
+			VALUES ('act', 'req1', $1, 'k', '{}', 'h', 'm', '{}', $2)`, owner, state)
+		snap, _ := e.svc.Snapshot(ctx)
+		if snap.Count != 0 || e.svc.NeedsOwner(ctx, "s1") {
+			t.Fatalf("%s: an answered request still prompts: %+v", state, snap)
+		}
+	}
+	e.exec(t, `UPDATE hitl_responses SET state = 'rejected_transport'`)
+	if snap, _ := e.svc.Snapshot(ctx); snap.Count != 1 || !e.svc.NeedsOwner(ctx, "s1") {
+		t.Fatalf("a refused answer should bring the request back: %+v", snap)
+	}
+}
+
+// Items of a task that has ended, of an attempt that is no longer the task's current one, and of an
+// archived or native-deleted attempt are hidden from the list, the count and needs_owner. A queue
+// question with a task but no session is tied to no attempt, so only the task ending hides it.
+func TestTaskAndAttemptStateHideItems(t *testing.T) {
+	for name, hide := range map[string]string{
+		"task cancelled":     `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`,
+		"task completed":     `UPDATE tasks SET status = 'completed', reason = NULL WHERE id = 't1'`,
+		"attempt replaced":   `UPDATE tasks SET current_attempt_id = NULL WHERE id = 't1'`,
+		"attempt superseded": `UPDATE task_attempts SET state = 'superseded' WHERE task_id = 't1'`,
+		"attempt archived":   `UPDATE task_attempts SET archived_at = now() WHERE task_id = 't1'`,
+		"native deleted":     `UPDATE task_attempts SET native_deleted_at = now() WHERE task_id = 't1'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			ctx := context.Background()
+			e.session(t, "s1", "active")
+			e.blockedTask(t, "t1", "s1", "rep1")
+			e.hitl(t, "req1", "s1")
+			e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C", SessionID: ptr("s1"), TaskID: ptr("t1")})
+			e.open(t, attention.NewQueueItem{ID: "q2", Title: "T", Content: "C", TaskID: ptr("t1")}) // no session
+			if err := e.svc.SyncTasks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if snap, _ := e.svc.Snapshot(ctx); snap.Count != 4 || !e.svc.NeedsOwner(ctx, "s1") {
+				t.Fatalf("before: %d items", snap.Count)
+			}
+			e.exec(t, hide)
+			snap, err := e.svc.Snapshot(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			left := 0
+			if !strings.HasPrefix(name, "task ") {
+				left = 1 // queue:q2
+			}
+			if snap.Count != left || e.svc.NeedsOwner(ctx, "s1") {
+				t.Fatalf("%d items still visible: %+v", snap.Count, snap.Items)
+			}
+		})
+	}
+}
+
+// A session that finishes or is archived hides its items without any write in this package; the
+// sweep closes them and publishes the new unread count.
+func TestSweepClosesItemsOfFinishedSessionsAndPublishes(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.session(t, "s1", "active")
+	e.session(t, "s2", "active")
+	e.hitl(t, "req1", "s1")
+	e.hitl(t, "req2", "s2")
+	if err := e.svc.SyncTasks(ctx); err != nil { // the first pass only learns the count
+		t.Fatal(err)
+	}
+	if n := len(e.inboxEvents(t)); n != 0 {
+		t.Fatalf("%d events from a quiet first pass", n)
+	}
+	e.exec(t, `UPDATE sessions SET status = 'cancelled' WHERE id = 's1'`)
+	e.exec(t, `UPDATE sessions SET archived_at = now() WHERE id = 's2'`)
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	evs := e.inboxEvents(t)
+	if len(evs) != 1 || unread(t, evs[0]) != 0 {
+		t.Fatalf("events %+v", evs)
+	}
+	var open int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM attention_items WHERE state = 'open'`).Scan(&open); err != nil || open != 0 {
+		t.Fatalf("open %d err %v", open, err)
+	}
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.inboxEvents(t)); n != 1 {
+		t.Fatalf("a quiet pass published: %d events", n)
+	}
+	// A task that ends moves the count with no item written: the sweep still publishes.
+	e.session(t, "s3", "active")
+	e.blockedTask(t, "t1", "s3", "rep1")
+	e.hitl(t, "req3", "s3")
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
+	before := len(e.inboxEvents(t))
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	evs = e.inboxEvents(t)
+	if len(evs) != before+1 || unread(t, evs[len(evs)-1]) != 0 {
+		t.Fatalf("events %+v", evs)
+	}
+}
+
+func TestOpenRejectsNoticeIDs(t *testing.T) {
+	e := newEnv(t)
+	err := events.InTxPublish(context.Background(), e.pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		return attention.Open(context.Background(), tx, owner, attention.NewQueueItem{ID: "diag_1", Title: "T", Content: "C"})
+	})
+	if !errors.Is(err, attention.ErrInvalid) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A question the sweep closed with no answer reads Closed, not Answered.
+func TestUnansweredClosedQuestionReadsClosed(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.blockedTask(t, "t1", "", "rep1")
+	e.open(t, attention.NewQueueItem{ID: "q1", Title: "Pick", Content: "C", Needed: "Pick one", TaskID: ptr("t1")})
+	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
+	if err := e.svc.SyncTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	items, err := e.svc.Activity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Id == "queue:q1" {
+			if it.Content != "Closed: Pick one" {
+				t.Fatalf("content %q", it.Content)
+			}
+			return
+		}
+	}
+	t.Fatalf("no activity for the closed question: %+v", items)
 }
 
 func TestTaskDecisionSweepOpensAndResolves(t *testing.T) {

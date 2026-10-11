@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/events"
 )
 
 const gateway = "kagent"
@@ -82,63 +82,67 @@ func (s *Service) Respond(ctx context.Context, requestID string, in api.HITLDeci
 	if err != nil {
 		return api.HITLView{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		req, err := q.LockHITLRequest(ctx, dbq.LockHITLRequestParams{ID: requestID, OwnerID: s.OwnerID})
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		obs, err := parseStored(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		// Before the answer is checked, so every form of answer gets the same 409 and the reason.
 		if isNested(obs) {
-			return fmt.Errorf("%w: %s", ErrConflict, reasonNested)
+			return nil, fmt.Errorf("%w: %s", ErrConflict, reasonNested)
 		}
 		if err := dec.validate(obs); err != nil {
-			return fmt.Errorf("%w: %w", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		hash, err := dec.hash()
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		prev, err := q.GetHITLResponse(ctx, dbq.GetHITLResponseParams{ID: in.ActionId, OwnerID: s.OwnerID})
 		switch {
 		case err == nil:
 			if prev.RequestID != req.ID || prev.DecisionHash != hash {
-				return fmt.Errorf("%w: action_id %q was used for a different answer", ErrConflict, in.ActionId)
+				return nil, fmt.Errorf("%w: action_id %q was used for a different answer", ErrConflict, in.ActionId)
 			}
-			return nil // the same action again: nothing to record
+			return nil, nil // the same action again: nothing to record
 		case !errors.Is(err, pgx.ErrNoRows):
-			return err
+			return nil, err
 		}
 		if req.Availability != dbstate.HITLPending {
-			return fmt.Errorf("%w: this request is %s and cannot be answered", ErrConflict, req.Availability)
+			return nil, fmt.Errorf("%w: this request is %s and cannot be answered", ErrConflict, req.Availability)
 		}
 		if _, err := q.GetLiveHITLResponse(ctx, req.ID); err == nil {
-			return fmt.Errorf("%w: this request already has an answer", ErrConflict)
+			return nil, fmt.Errorf("%w: this request already has an answer", ErrConflict)
 		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return err
+			return nil, err
 		}
 		receipt, err := buildReceipt(req, obs, dec, in.ActionId, outboundID(in.ActionId), hash)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		native, err := json.Marshal(dec.native)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := q.InsertHITLResponse(ctx, dbq.InsertHITLResponseParams{
 			ID: in.ActionId, RequestID: req.ID, OwnerID: s.OwnerID, IdempotencyKey: "hitl-response:" + in.ActionId,
 			Decision: native, DecisionHash: hash, OutboundMessageID: outboundID(in.ActionId), Receipt: receipt,
 		}); err != nil {
-			return err
+			return nil, err
 		}
-		return q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: ResponseChannel, Payload: in.ActionId})
+		if err := q.NotifyEvent(ctx, dbq.NotifyEventParams{Channel: ResponseChannel, Payload: in.ActionId}); err != nil {
+			return nil, err
+		}
+		// The request no longer asks the owner for anything, so the unread count moves.
+		return inboxDraft(ctx, q, req.OwnerID, attentionID(req.ID))
 	})
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23505" {

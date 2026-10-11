@@ -1407,3 +1407,43 @@ func TestInboxUnreadCountCountsUnread(t *testing.T) {
 		t.Fatalf("unread_count = %d, %v; three are open and one is read", n, err)
 	}
 }
+
+// The owner's answer takes the request out of the inbox, so the same transaction that records it
+// publishes inbox:updated with the new unread count.
+func TestRespondPublishesTheInboxEventWithTheAnswer(t *testing.T) {
+	e := newEnv(t)
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	inbox := func() []string {
+		rows, err := e.pool.Query(context.Background(), `SELECT payload::text FROM events WHERE type = 'inbox:updated' ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, p)
+		}
+		return out
+	}
+	before := len(inbox())
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	evs := inbox()
+	if len(evs) != before+1 || !strings.Contains(evs[len(evs)-1], `"unread_count": 0`) {
+		t.Fatalf("events %v", evs)
+	}
+	// The same action again records nothing and publishes nothing.
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(inbox()); n != before+1 {
+		t.Fatalf("a repeat published: %d events", n)
+	}
+}

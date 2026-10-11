@@ -123,12 +123,9 @@ UPDATE attention_items
 SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE source_kind = 'hitl_request' AND source_id = $1 AND state = 'open';
 
+-- The unread count is the visible items the owner has not read (see attention_visible).
 -- name: CountUnreadAttention :one
-SELECT count(*)::int
-FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open' AND a.read_at IS NULL
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')));
+SELECT count(*)::int FROM attention_visible v WHERE v.owner_id = $1 AND v.read_at IS NULL;
 
 -- name: InsertHITLDiagnostic :exec
 INSERT INTO hitl_diagnostics (owner_id, runtime_session_id, detail)

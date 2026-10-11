@@ -11,9 +11,11 @@
 //   - queue: written by [Open], for questions other slices put to the owner. The owner's answer is
 //     stored on the row (detail.response) for that slice to read; nothing is delivered from here.
 //
-// needs_owner: a session needs the owner when it has an open, visible attention item. Visible
-// means the session is not archived and has not finished. The same rule decides the snapshot, its
-// count, the unread count and [Service.NeedsOwner], so they cannot disagree.
+// needs_owner: a session needs the owner when it has a visible attention item. Visibility is one
+// rule, the attention_visible view of migration 00070 (the session is neither archived nor
+// finished, a HITL request has no live answer, and the item's task and attempt are still current).
+// The snapshot, its count, the unread count and [Service.NeedsOwner] all read it, so they cannot
+// disagree.
 //
 // Every change that moves the unread count publishes inbox:updated in its own transaction.
 package attention
@@ -25,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -67,6 +70,10 @@ type Service struct {
 	Log     *slog.Logger
 	// SweepEvery is the period of the task-decision sweep. Zero means 3 seconds.
 	SweepEvery time.Duration
+
+	mu         sync.Mutex
+	lastUnread int  // the unread count the sweep last saw
+	known      bool // whether the sweep has made its first pass
 }
 
 func (s *Service) log() *slog.Logger {
@@ -86,13 +93,20 @@ func (s *Service) Sweep() reconcile.Sweep {
 }
 
 // SyncTasks opens an item for each task that waits for the owner's decision and resolves the
-// items whose need has ended. It publishes one inbox:updated when anything changed.
+// items whose need has ended: a decision that cleared, a question of a finished task, an item of a
+// finished or archived session. It publishes one inbox:updated when it changed an item or when the
+// unread count differs from the one it last saw, since a session or task that ends hides items
+// without any write here.
 func (s *Service) SyncTasks(ctx context.Context) error {
-	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int
+	err := events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		var changed []string
 		for _, step := range []func(context.Context, string) ([]string, error){
 			q.OpenTaskDecisionAttention, q.ResolveStaleTaskDecisions, q.ResolveQueueForFinishedTasks,
+			q.ResolveFinishedSessionAttention,
 		} {
 			ids, err := step(ctx, s.OwnerID)
 			if err != nil {
@@ -100,11 +114,24 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 			}
 			changed = append(changed, ids...)
 		}
-		if len(changed) == 0 {
+		n, err := q.CountUnreadAttention(ctx, s.OwnerID)
+		if err != nil {
+			return nil, err
+		}
+		count = int(n)
+		if len(changed) == 0 && (!s.known || count == s.lastUnread) {
 			return nil, nil
 		}
-		return inboxDraft(ctx, q, s.OwnerID, changed[0])
+		item := ""
+		if len(changed) > 0 {
+			item = changed[0]
+		}
+		return []events.Draft{inboxEvent(s.OwnerID, item, count)}, nil
 	})
+	if err == nil {
+		s.lastUnread, s.known = count, true
+	}
+	return err
 }
 
 // NewQueueItem is a question put to the owner by another slice.
@@ -140,6 +167,9 @@ type queueDetail struct {
 func Open(ctx context.Context, tx pgx.Tx, ownerID string, in NewQueueItem) ([]events.Draft, error) {
 	if in.ID == "" || in.Title == "" {
 		return nil, fmt.Errorf("%w: a queue item needs an id and a title", ErrInvalid)
+	}
+	if strings.HasPrefix(in.ID, noticePrefix) {
+		return nil, fmt.Errorf("%w: a queue item id cannot start with %q", ErrInvalid, noticePrefix)
 	}
 	if in.ItemType == "" {
 		in.ItemType = api.QueueItemTypeQuestion
@@ -183,11 +213,15 @@ func inboxDraft(ctx context.Context, q *dbq.Queries, ownerID, item string) ([]ev
 	if err != nil {
 		return nil, err
 	}
-	count := int(n)
-	return []events.Draft{{
-		UserID: ownerID, Type: events.TypeInboxUpdated,
-		Payload: api.EventInboxUpdated{ItemId: &item, UnreadCount: &count},
-	}}, nil
+	return []events.Draft{inboxEvent(ownerID, item, int(n))}, nil
+}
+
+func inboxEvent(ownerID, item string, count int) events.Draft {
+	ev := api.EventInboxUpdated{UnreadCount: &count}
+	if item != "" {
+		ev.ItemId = &item
+	}
+	return events.Draft{UserID: ownerID, Type: events.TypeInboxUpdated, Payload: ev}
 }
 
 // NeedsOwner reports whether the session has an open item the owner can see. It is the
@@ -204,35 +238,46 @@ func (s *Service) NeedsOwner(ctx context.Context, sessionID string) bool {
 	return ok
 }
 
-// Snapshot is the Needs-you view: the open items, their count, and the sessions behind them.
+// Snapshot is the Needs-you view: the open items, their count, and the owner's session list. The
+// sessions are every unfinished session plus the newest finished ones (ListSessionRows), each with
+// its own needs_owner; a session reads waiting_on_user only while a native input request waits on it.
+// Items, sessions and the sessions needing the owner come from one read-only transaction, so they
+// agree. Every session behind a visible item is unarchived and unfinished, so the session list
+// already holds it, apart from the owner's main thread, which is not a session of the list.
 func (s *Service) Snapshot(ctx context.Context) (api.AttentionSnapshot, error) {
-	q := dbq.New(s.Pool)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return api.AttentionSnapshot{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := dbq.New(tx)
 	rows, err := q.ListOpenAttention(ctx, s.OwnerID)
 	if err != nil {
 		return api.AttentionSnapshot{}, err
 	}
-	snap := api.AttentionSnapshot{Items: []api.AttentionItem{}, Sessions: []api.Session{}}
-	seen := map[string]bool{}
+	needing, err := q.ListSessionsNeedingOwner(ctx, s.OwnerID)
+	if err != nil {
+		return api.AttentionSnapshot{}, err
+	}
+	listed, err := q.ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: s.OwnerID})
+	if err != nil {
+		return api.AttentionSnapshot{}, err
+	}
+	snap := api.AttentionSnapshot{Items: []api.AttentionItem{}, Sessions: make([]api.Session, 0, len(listed))}
 	for _, r := range rows {
-		item, ok := s.item(r)
-		if !ok {
-			continue
+		if item, ok := s.item(r); ok {
+			snap.Items = append(snap.Items, item)
 		}
-		snap.Items = append(snap.Items, item)
-		if r.SessionID == nil || seen[*r.SessionID] {
-			continue
-		}
-		seen[*r.SessionID] = true
-		sess, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: *r.SessionID, UserID: s.OwnerID})
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return api.AttentionSnapshot{}, err
-		}
-		snap.Sessions = append(snap.Sessions, waitingSession(sess))
 	}
 	snap.Count = len(snap.Items)
+	waiting := make(map[string]bool, len(needing)) // session id -> behind a native input request
+	for _, n := range needing {
+		waiting[n.SessionID] = n.WaitingOnInput
+	}
+	for _, r := range listed {
+		onInput, needs := waiting[r.ID]
+		snap.Sessions = append(snap.Sessions, sessionOf(dbq.GetSessionRowRow(r), needs, needs && onInput))
+	}
 	return snap, nil
 }
 
@@ -317,13 +362,14 @@ func (s *Service) baseQueueItem(r dbq.AttentionItem) api.QueueItem {
 	}
 }
 
-// waitingSession is the wire shape of a session that needs the owner: needs_owner is true, and a
-// session that has not finished reads waiting_on_user.
-func waitingSession(r dbq.GetSessionRowRow) api.Session {
+// sessionOf is the wire shape of a session row. needsOwner is the session's needs_owner; waitingOnUser
+// is whether a native input request waits on it, which makes an unfinished session read
+// waiting_on_user.
+func sessionOf(r dbq.GetSessionRowRow, needsOwner, waitingOnUser bool) api.Session {
 	sess := api.Session{
 		AgentKind: r.AgentKind, ArchivedAt: r.ArchivedAt, BaseBranch: r.BaseBranch, BranchName: r.BranchName,
 		Color: r.Color, CommitSha: r.CommitSha, CompletedAt: r.CompletedAt, CreatedAt: r.CreatedAt,
-		Description: r.Description, Error: r.Error, Id: r.ID, Model: r.Model, NeedsOwner: true,
+		Description: r.Description, Error: r.Error, Id: r.ID, Model: r.Model, NeedsOwner: needsOwner,
 		ParentSessionId: r.ParentSessionID, ProjectId: r.ProjectID, Prompt: r.Prompt, RepoUrl: r.RepoURL,
 		StartedAt: r.StartedAt, Status: api.SessionStatus(r.Status), Summary: r.Summary, Title: r.Title,
 		Topic: r.Topic, UserId: r.UserID,
@@ -334,10 +380,12 @@ func waitingSession(r dbq.GetSessionRowRow) api.Session {
 			sess.Result = &m
 		}
 	}
-	switch r.Status {
-	case dbstate.SessionCompleted, dbstate.SessionFailed, dbstate.SessionCancelled, dbstate.SessionSuperseded:
-	default:
-		sess.Status = api.SessionStatusWaitingOnUser
+	if waitingOnUser {
+		switch r.Status {
+		case dbstate.SessionCompleted, dbstate.SessionFailed, dbstate.SessionCancelled, dbstate.SessionSuperseded:
+		default:
+			sess.Status = api.SessionStatusWaitingOnUser
+		}
 	}
 	return sess
 }
@@ -369,7 +417,7 @@ func (s *Service) Activity(ctx context.Context) ([]api.ActivityItem, error) {
 	for _, r := range answered {
 		var d queueDetail
 		_ = json.Unmarshal(r.Detail, &d)
-		content := "Answered: " + r.Needed
+		content := "Closed: " + r.Needed
 		if d.Response != nil {
 			content = r.Needed + "\nYou answered: " + *d.Response
 		}

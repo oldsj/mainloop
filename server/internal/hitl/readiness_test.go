@@ -3,10 +3,13 @@ package hitl_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"connectrpc.com/connect"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/hitl"
@@ -292,5 +295,46 @@ func TestACancelledSendLeavesTheResponseRecorded(t *testing.T) {
 	<-done
 	if got := e.response("act-1"); got.State != dbstate.HITLRecorded {
 		t.Fatalf("state = %s (detail %q); a send that provably did not leave must go back to recorded", got.State, deref(got.Detail))
+	}
+}
+
+type failingReady struct{ err error }
+
+func (f failingReady) ReadySession(context.Context, string, *string, string) error { return f.err }
+
+// kagent's own text never reaches the card: its errors are worded by code, and a code nobody
+// described reads as a fixed phrase.
+func TestTheCardDoesNotEchoKagentText(t *testing.T) {
+	const untrusted = "UNTRUSTED text from kagent"
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"not found":    {&kagent.SessionError{Op: "GetSession", Code: connect.CodeNotFound, Detail: untrusted}, "kagent has no such session"},
+		"refused":      {&kagent.SessionError{Op: "GetSession", Code: connect.CodeFailedPrecondition, Detail: untrusted}, "kagent refused the session request"},
+		"unclassified": {&kagent.SessionError{Op: "GetSession", Code: connect.CodeResourceExhausted, Detail: untrusted}, "the request failed"},
+		"wrapped":      {fmt.Errorf("wake the workspace: %w", &kagent.SessionError{Op: "x", Code: connect.CodeDataLoss, Detail: untrusted}), "the request failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, func(s *hitl.Service) { s.Ready = failingReady{tc.err} })
+			e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+			e.observe()
+			req := e.requestFor("task-a")
+			e.run()
+			if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if d := e.response("act-1").Detail; d != nil && *d != "" {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			got := e.response("act-1")
+			if got.Detail == nil || strings.Contains(*got.Detail, "UNTRUSTED") || !strings.HasSuffix(*got.Detail, tc.want) {
+				t.Fatalf("detail %v, want it to end %q", got.Detail, tc.want)
+			}
+		})
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -244,6 +245,7 @@ func errDetail(err error) string {
 		proto       *kagent.ProtocolError
 		notFound    *kagent.TaskNotFound
 		a2aErr      *kagent.A2AError
+		sessErr     *kagent.SessionError
 	)
 	switch {
 	case errors.As(err, &cfg):
@@ -260,6 +262,14 @@ func errDetail(err error) string {
 		return "kagent has no such task"
 	case errors.As(err, &a2aErr):
 		return "kagent refused the request"
+	case errors.As(err, &sessErr):
+		// By code only: the error's Detail is kagent's own text.
+		switch sessErr.Code {
+		case connect.CodeNotFound:
+			return "kagent has no such session"
+		case connect.CodeInvalidArgument, connect.CodeFailedPrecondition, connect.CodeAlreadyExists:
+			return "kagent refused the session request"
+		}
 	}
 	return detailUnclassified
 }

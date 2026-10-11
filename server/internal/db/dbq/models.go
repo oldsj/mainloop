@@ -53,6 +53,14 @@ type AttentionItem struct {
 	ResolvedAt *time.Time
 }
 
+type AttentionVisible struct {
+	ID         string
+	OwnerID    string
+	SourceKind string
+	SessionID  *string
+	ReadAt     *time.Time
+}
+
 type Credential struct {
 	ID              string
 	Kind            dbstate.CredentialKind

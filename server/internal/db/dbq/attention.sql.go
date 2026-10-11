@@ -13,21 +13,6 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
-const countOpenAttention = `-- name: CountOpenAttention :one
-SELECT count(*)::int
-FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open'
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
-`
-
-func (q *Queries) CountOpenAttention(ctx context.Context, ownerID string) (int32, error) {
-	row := q.db.QueryRow(ctx, countOpenAttention, ownerID)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const dismissNotice = `-- name: DismissNotice :one
 UPDATE hitl_diagnostics SET dismissed_at = now()
 WHERE owner_id = $1 AND id = $2 AND dismissed_at IS NULL
@@ -269,17 +254,15 @@ const listOpenAttention = `-- name: ListOpenAttention :many
 
 SELECT a.id, a.owner_id, a.kind, a.source_kind, a.source_id, a.session_id, a.task_id, a.title, a.needed, a.href, a.state, a.detail, a.read_at, a.created_at, a.updated_at, a.resolved_at
 FROM attention_items a
-LEFT JOIN sessions s ON s.id = a.session_id
-WHERE a.owner_id = $1 AND a.state = 'open'
-  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
+JOIN attention_visible v ON v.id = a.id
+WHERE v.owner_id = $1
 ORDER BY a.created_at DESC, a.id
 `
 
 // The owner's attention: what needs them now (attention_items) and the Activity log around it.
-// The visibility rule is shared by the list, the count and the sessions behind the items: an item
-// of an archived or finished session is not shown, whatever its row says, so a late observer
-// cannot leave a badge behind. Items without a session (a task decision whose attempt has no
-// Mainloop session) are always shown.
+// Every read of "what the owner should see" goes through the attention_visible view (migration
+// 00070), the one visibility rule: the list, the unread count and a session's needs_owner cannot
+// disagree.
 func (q *Queries) ListOpenAttention(ctx context.Context, ownerID string) ([]AttentionItem, error) {
 	rows, err := q.db.Query(ctx, listOpenAttention, ownerID)
 	if err != nil {
@@ -317,6 +300,40 @@ func (q *Queries) ListOpenAttention(ctx context.Context, ownerID string) ([]Atte
 	return items, nil
 }
 
+const listSessionsNeedingOwner = `-- name: ListSessionsNeedingOwner :many
+SELECT v.session_id::text AS session_id, bool_or(v.source_kind = 'hitl_request')::boolean AS waiting_on_input
+FROM attention_visible v
+WHERE v.owner_id = $1 AND v.session_id IS NOT NULL
+GROUP BY v.session_id
+`
+
+type ListSessionsNeedingOwnerRow struct {
+	SessionID      string
+	WaitingOnInput bool
+}
+
+// The sessions that need the owner, in one read: those with a visible item, and whether one of
+// them is a native input request (the session then reads waiting_on_user).
+func (q *Queries) ListSessionsNeedingOwner(ctx context.Context, ownerID string) ([]ListSessionsNeedingOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listSessionsNeedingOwner, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionsNeedingOwnerRow{}
+	for rows.Next() {
+		var i ListSessionsNeedingOwnerRow
+		if err := rows.Scan(&i.SessionID, &i.WaitingOnInput); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const openTaskDecisionAttention = `-- name: OpenTaskDecisionAttention :many
 INSERT INTO attention_items (id, owner_id, kind, source_kind, source_id, session_id, task_id, title, needed, href)
 SELECT 'attn_task_' || t.decision_report_id, t.owner_id, 'owner_decision', 'task_decision', t.decision_report_id,
@@ -336,6 +353,37 @@ RETURNING id
 // decision that was answered is never reopened and a new ask is a new item.
 func (q *Queries) OpenTaskDecisionAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openTaskDecisionAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveFinishedSessionAttention = `-- name: ResolveFinishedSessionAttention :many
+UPDATE attention_items a
+SET state = 'resolved', resolved_at = now(), updated_at = now()
+FROM sessions s
+WHERE s.id = a.session_id AND a.owner_id = $1 AND a.state = 'open'
+  AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled', 'superseded'))
+RETURNING a.id
+`
+
+// An item of a session that has finished or been archived can never come back: close it, so the
+// row does not wait for a session that is gone.
+func (q *Queries) ResolveFinishedSessionAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveFinishedSessionAttention, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -455,11 +503,7 @@ func (q *Queries) RespondQueueAttention(ctx context.Context, arg RespondQueueAtt
 
 const sessionNeedsOwner = `-- name: SessionNeedsOwner :one
 SELECT EXISTS (
-    SELECT 1
-    FROM attention_items a
-    JOIN sessions s ON s.id = a.session_id
-    WHERE a.owner_id = $1 AND a.session_id = $2 AND a.state = 'open'
-      AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+    SELECT 1 FROM attention_visible v WHERE v.owner_id = $1 AND v.session_id = $2
 ) AS needs_owner
 `
 

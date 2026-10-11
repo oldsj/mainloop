@@ -206,6 +206,10 @@ func readyDetail(err error) string {
 	if d := errDetail(err); d != detailUnclassified {
 		return d
 	}
+	var kagentErr *kagent.SessionError
+	if errors.As(err, &kagentErr) {
+		return detailUnclassified // kagent's code is not one we describe; its text stays out of the card
+	}
 	return clip(err.Error(), 200)
 }
 

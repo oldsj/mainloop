@@ -172,7 +172,37 @@ CREATE TABLE attention_items (
 CREATE INDEX attention_items_open ON attention_items (owner_id, created_at DESC, id)
 WHERE state = 'open';
 
+-- The one visibility rule (G9b): the open attention items the owner should see now. The snapshot,
+-- its count, the unread count and a session's needs_owner all read this view, so they cannot
+-- disagree. An open item is hidden when
+--   * its session is archived or finished;
+--   * a HITL request already has a live answer (recorded, sending, accepted or uncertain), so
+--     an answered request does not prompt again while the answer travels;
+--   * its session belongs to a task attempt that is not the task's current, unfinished attempt
+--     (replaced, ended, archived or its native session deleted), or its task is final.
+-- The task join is read-only. A HITL item's task_id is kagent's A2A task, so only a queue or
+-- task-decision item uses its own task_id.
+CREATE VIEW attention_visible AS
+SELECT a.id, a.owner_id, a.source_kind, a.session_id, a.read_at
+FROM attention_items a
+LEFT JOIN sessions s ON s.id = a.session_id
+LEFT JOIN task_attempts ta ON ta.session_id = a.session_id
+LEFT JOIN tasks t ON t.id = CASE
+    WHEN ta.id IS NOT NULL THEN ta.task_id
+    WHEN a.source_kind <> 'hitl_request' THEN a.task_id
+END
+WHERE a.state = 'open'
+  AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
+  AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
+      SELECT 1 FROM hitl_responses r
+      WHERE r.request_id = a.source_id AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')))
+  AND (t.id IS NULL OR t.status NOT IN ('completed', 'failed', 'cancelled'))
+  AND (ta.id IS NULL OR (
+      ta.archived_at IS NULL AND ta.native_deleted_at IS NULL
+      AND ta.state IN ('creating', 'active', 'draining') AND t.current_attempt_id = ta.id));
+
 -- +goose Down
+DROP VIEW IF EXISTS attention_visible;
 DROP TABLE IF EXISTS attention_items;
 DROP TABLE IF EXISTS hitl_diagnostics;
 DROP TABLE IF EXISTS hitl_responses;
