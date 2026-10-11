@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
@@ -30,7 +32,7 @@ func (r *templateRuntime) AgentTemplate(context.Context, kagent.AgentRef) (strin
 
 var mergeConfig = config.MergeConfiguration{TemplateName: "trusted-template", Provider: config.NativeClaude, CompiledAlias: "merge", Tool: config.MergeToolName, RequireApproval: true}
 
-func mergeEnv(t *testing.T) (*env, *templateRuntime) {
+func mergeEnv(t *testing.T, edits ...func(*api.MergeSummary)) (*env, *templateRuntime) {
 	t.Helper()
 	runtime := &templateRuntime{template: mergeConfig.TemplateName, ref: agent}
 	e := newEnv(t, func(s *hitl.Service) {
@@ -44,6 +46,9 @@ func mergeEnv(t *testing.T) (*env, *templateRuntime) {
 	summary := api.MergeSummary{Version: 1, ProposalId: "proposal", Title: &title, Repository: &repository,
 		PrNumber: &pr, Head: &head, HeadSha: &sha, Base: &base, BaseSha: &baseSHA,
 		Availability: api.MergeSummaryAvailabilityReady, Policy: &policy, PathsPreview: []string{}, ProtectedMatches: []string{}, ApprovalReasons: []api.MergeApprovalReason{}, UnavailableReasons: []string{}}
+	for _, edit := range edits {
+		edit(&summary)
+	}
 	presentation, err := json.Marshal(summary)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +118,9 @@ func TestHITLMergeViewSerializationAndTemplateBinding(t *testing.T) {
 			if !tc.want && c.Availability != api.VerifiedMergeContextAvailabilityUnavailable {
 				t.Fatalf("untrusted context: %+v", c)
 			}
+			if !tc.want && (c.PrUrl != nil || c.CompareUrl != nil) {
+				t.Fatalf("untrusted context has review links: %+v", c)
+			}
 			if tc.want {
 				raw, err := json.Marshal(view)
 				if err != nil {
@@ -129,6 +137,140 @@ func TestHITLMergeViewSerializationAndTemplateBinding(t *testing.T) {
 				if merge["summary"].(map[string]any)["title"] != "<script>proposal</script>" {
 					t.Fatalf("summary: %s", raw)
 				}
+				if merge["pr_url"] != "https://github.com/owner/repo/pull/7" || merge["compare_url"] != "https://github.com/owner/repo/compare/main...feature" {
+					t.Fatalf("review links: %s", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestReviewA1TrustedMergeHasReviewLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		value       any
+		wantPR      bool
+		wantCompare string
+	}{
+		{"ready", "head", "feature", true, "main...feature"},
+		{"encoded head", "head", "feature/retry#one%two", true, "main...feature%2Fretry%23one%25two"},
+		{"encoded base", "base", "release/2026", true, "release%2F2026...feature"},
+		{"reserved ref characters", "head", "feature/retry+build@one=two&three$four", true, "main...feature%2Fretry%2Bbuild%40one%3Dtwo%26three%24four"},
+		{"missing repository", "repository", nil, false, ""},
+		{"repository URL", "repository", "https://github.com/owner/repo", false, ""},
+		{"repository query", "repository", "owner/repo?tab=files", false, ""},
+		{"extra repository segment", "repository", "owner/repo/other", false, ""},
+		{"repository traversal", "repository", "owner/..", false, ""},
+		{"repository whitespace", "repository", " owner/repo ", false, ""},
+		{"missing number", "pr_number", nil, false, "main...feature"},
+		{"zero number", "pr_number", 0, false, "main...feature"},
+		{"negative number", "pr_number", -1, false, "main...feature"},
+		{"missing head", "head", nil, true, ""},
+		{"empty head", "head", "", true, ""},
+		{"invalid head", "head", "feature...other", true, ""},
+		{"head query", "head", "feature?tab=files", true, ""},
+		{"missing base", "base", nil, true, ""},
+		{"invalid base", "base", "release/../main", true, ""},
+		{"base control character", "base", "main\n", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, err := json.Marshal(map[string]any{tc.field: tc.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, _ := mergeEnv(t, func(summary *api.MergeSummary) {
+				if err := json.Unmarshal(patch, summary); err != nil {
+					t.Fatal(err)
+				}
+			})
+			e.k.put(waitingTask("merge-task", "merge-msg", mergeAsk()))
+			e.observe()
+			view, err := e.svc.View(context.Background(), e.requestFor("merge-task").ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Merge []map[string]any `json:"merge"`
+			}
+			if err := json.Unmarshal(raw, &wire); err != nil || len(wire.Merge) != 1 {
+				t.Fatalf("wire: %s: %v", raw, err)
+			}
+			links := wire.Merge[0]
+			prURL, hasPR := links["pr_url"]
+			compareURL, hasCompare := links["compare_url"]
+			if hasPR != tc.wantPR || (hasPR && prURL != "https://github.com/owner/repo/pull/7") {
+				t.Fatalf("PR link: %s", raw)
+			}
+			if hasCompare != (tc.wantCompare != "") || (hasCompare && compareURL != "https://github.com/owner/repo/compare/"+tc.wantCompare) {
+				t.Fatalf("compare link: %s", raw)
+			}
+		})
+	}
+}
+
+func TestReviewA1EndedProposalKeepsUnansweredNativeInput(t *testing.T) {
+	for _, ending := range []string{"expired", "superseded", "blocked"} {
+		t.Run(ending, func(t *testing.T) {
+			e, _ := mergeEnv(t)
+			ctx := context.Background()
+			e.k.put(waitingTask("merge-task", "merge-msg", mergeAsk()))
+			e.observe()
+			r := e.requestFor("merge-task")
+			svc := &attention.Service{Pool: e.pool, OwnerID: owner}
+			if err := svc.SyncTasks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := svc.Snapshot(ctx)
+			if err != nil || snap.Count != 1 || snap.Items[0].Id != "merge:proposal" {
+				t.Fatalf("proposal attention: %+v: %v", snap, err)
+			}
+			mergeExec(t, e, `UPDATE merge_candidates SET state = $1`, ending)
+			for range 3 {
+				if err := svc.SyncTasks(ctx); err != nil {
+					t.Fatal(err)
+				}
+				snap, err = svc.Snapshot(ctx)
+				if err != nil || snap.Count != 1 || snap.Items[0].Id != "hitl:"+r.ID || snap.Items[0].QueueItem == nil || *snap.Items[0].QueueItem.HitlRequestId != r.ID {
+					t.Fatalf("unanswered native input hidden after %s: %+v: %v", ending, snap, err)
+				}
+			}
+			view, err := e.svc.View(ctx, r.ID)
+			if err != nil || !view.Answerable || view.Request.Availability != api.HITLProjectionAvailabilityPending || view.Response != nil {
+				t.Fatalf("native request no longer answerable: %+v: %v", view, err)
+			}
+			var generic, proposal string
+			if err := e.pool.QueryRow(ctx, `SELECT
+                (SELECT state FROM attention_items WHERE source_kind = 'hitl_request'),
+                (SELECT state FROM attention_items WHERE source_kind = 'merge_proposal')`).Scan(&generic, &proposal); err != nil || generic != "open" || proposal != "resolved" {
+				t.Fatalf("attention states: generic %s, proposal %s: %v", generic, proposal, err)
+			}
+			in := decision("reject-ended-proposal", api.ToolApprovalResponse{Type: api.ToolApprovalResponseTypeToolApprovalResponse, Approvals: []api.ToolApproval{{Id: "merge-tool", Approved: false}}})
+			if _, err := e.svc.Respond(ctx, r.ID, in); err != nil {
+				t.Fatal(err)
+			}
+			snap, err = svc.Snapshot(ctx)
+			if err != nil || snap.Count != 0 {
+				t.Fatalf("recorded native response still prompts: %+v: %v", snap, err)
+			}
+			mergeExec(t, e, `UPDATE hitl_responses SET state = 'rejected_transport'`)
+			if err := svc.SyncTasks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			snap, err = svc.Snapshot(ctx)
+			if err != nil || snap.Count != 1 || snap.Items[0].Id != "hitl:"+r.ID {
+				t.Fatalf("native response rejection did not restore attention: %+v: %v", snap, err)
+			}
+			mergeExec(t, e, `UPDATE sessions SET status = 'completed'`)
+			if err := svc.SyncTasks(ctx); err != nil {
+				t.Fatal(err)
+			}
+			snap, err = svc.Snapshot(ctx)
+			if err != nil || snap.Count != 0 {
+				t.Fatalf("final session still prompts: %+v: %v", snap, err)
 			}
 		})
 	}
@@ -143,8 +285,12 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 			e.observe()
 			r := e.requestFor("merge-task")
 			svc := &attention.Service{Pool: e.pool, OwnerID: owner}
-			sweep := func(want int) {
+			sweep := func(wantID string) {
 				t.Helper()
+				want := 0
+				if wantID != "" {
+					want = 1
+				}
 				if err := svc.SyncTasks(ctx); err != nil {
 					t.Fatal(err)
 				}
@@ -152,11 +298,14 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 				if err != nil || snap.Count != want {
 					t.Fatalf("snapshot %+v %v", snap, err)
 				}
-				if want == 1 && (snap.Items[0].Id != "merge:proposal" || snap.Items[0].QueueItem == nil || *snap.Items[0].QueueItem.HitlRequestId != r.ID || snap.Items[0].ReasonCode == nil || *snap.Items[0].ReasonCode != api.AttentionItemReasonCodeMergeApproval) {
+				if want == 1 && (snap.Items[0].Id != wantID || snap.Items[0].QueueItem == nil || *snap.Items[0].QueueItem.HitlRequestId != r.ID) {
 					t.Fatalf("item %+v", snap.Items[0])
 				}
+				if wantID == "merge:proposal" && (snap.Items[0].ReasonCode == nil || *snap.Items[0].ReasonCode != api.AttentionItemReasonCodeMergeApproval) {
+					t.Fatalf("merge reason: %+v", snap.Items[0])
+				}
 			}
-			unchanged := func(want int) {
+			unchanged := func(wantID string) {
 				t.Helper()
 				var before, after time.Time
 				var eventsBefore, eventsAfter int
@@ -165,7 +314,7 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				for range 3 {
-					sweep(want)
+					sweep(wantID)
 				}
 				if err := e.pool.QueryRow(ctx, query).Scan(&after, &eventsAfter); err != nil {
 					t.Fatal(err)
@@ -174,8 +323,8 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 					t.Fatal("unchanged merge attention churned")
 				}
 			}
-			sweep(1)
-			unchanged(1)
+			sweep("merge:proposal")
+			unchanged("merge:proposal")
 			switch ending {
 			case "approved", "refused":
 				in := decision("decision", api.ToolApprovalResponse{Type: api.ToolApprovalResponseTypeToolApprovalResponse, Approvals: []api.ToolApproval{{Id: "merge-tool", Approved: ending == "approved"}}})
@@ -185,22 +334,31 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 			case "deadline":
 				mergeExec(t, e, `UPDATE merge_candidates SET deadline = now() - interval '1 second'`)
 			case "request unavailable":
-				mergeExec(t, e, `UPDATE hitl_requests SET availability = 'unavailable'`)
+				e.k.set(func() { e.k.tasks["merge-task"].Status.State = a2a.TaskStateWorking })
+				e.observe()
+				view, err := e.svc.View(ctx, r.ID)
+				if err != nil || view.Request.Availability != api.HITLProjectionAvailabilityUnavailable {
+					t.Fatalf("native request availability: %+v: %v", view, err)
+				}
 			case "merged":
 				mergeExec(t, e, `UPDATE merge_candidates SET state = 'merged', merge_sha = repeat('d', 40)`)
 			default:
 				mergeExec(t, e, `UPDATE merge_candidates SET state = $1`, ending)
 			}
-			sweep(0)
-			unchanged(0)
+			wantID := "hitl:" + r.ID
+			if ending == "approved" || ending == "refused" || ending == "request unavailable" {
+				wantID = ""
+			}
+			sweep(wantID)
+			unchanged(wantID)
 			var state string
 			if err := e.pool.QueryRow(ctx, `SELECT state FROM attention_items WHERE source_kind = 'merge_proposal'`).Scan(&state); err != nil || state != "resolved" {
 				t.Fatalf("state %s: %v", state, err)
 			}
 			if ending == "approved" || ending == "refused" {
 				mergeExec(t, e, `UPDATE hitl_responses SET state = 'rejected_transport'`)
-				sweep(1)
-				unchanged(1)
+				sweep("merge:proposal")
+				unchanged("merge:proposal")
 			}
 		})
 	}

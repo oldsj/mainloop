@@ -261,8 +261,10 @@ Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no 
   then stores their owner/session/project-scoped proposal associations. The attention sweep opens
   one `merge_proposal` item per approval-route proposal (`merge:<proposal id>`, reason
   `merge_approval`), linked to its canonical HITL request. The card remains a structured HITL
-  response, not an ordinary queue answer. A pure merge request suppresses its generic native inbox
-  item; a mixed batch shows its generic item for the other tools when no proposal item remains.
+  response, not an ordinary queue answer. While a proposal item is open, it suppresses the generic
+  native inbox duplicate for the entire request. Once the last proposal item resolves, the generic
+  item reappears for any still-unanswered native input, including pure merge requests and mixed
+  batches. Only the native request's own response and finality rules can close that remaining need.
 - Recording approval or refusal resolves proposal attention, as do supersession, expiry, a passed
   deadline, a request becoming unavailable, or the candidate leaving `prepared`. A response rejected
   by transport can reopen attention while the same proposal still waits. Final or archived sessions

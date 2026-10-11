@@ -424,7 +424,10 @@ Implemented with scratch PostgreSQL, fake kagent identity reads and React compon
 head/base names and SHAs, candidate state/deadline, summary digest and the bounded immutable
 `MergeSummary` already stored at preparation. This includes title/description excerpt, path
 preview and counts, policy/protected-path reasons, and captured CI. These values render as text;
-full description, paths and checks still load through `GetHITLMergeDetails` paging.
+full description, paths and checks still load through `GetHITLMergeDetails` paging. **Open PR** and
+**Compare diff** use canonical GitHub links built from the server's stored repository, PR number
+and refs. The repository must be a valid full name, the PR number positive, and compare refs valid
+and path-encoded; malformed or missing values withhold the affected link.
 
 The runtime Session must still run on the recorded Agent. That Agent's named `template_name`
 and the binding's provider must select exactly one merge configuration, whose public tool name

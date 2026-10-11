@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { API_URL } from '@/api/config';
 import { keys } from '@/api';
-import { approvalRequest, hitlView, mergeContext, mergeSummary } from '@/test/fixtures/hitl';
+import { approvalRequest, hitlView, mergeSummary } from '@/test/fixtures/hitl';
 import { projection, view as taskView } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { createFakeHITL } from './handlers';
@@ -43,13 +43,31 @@ describe('HITLCard', () => {
         })
       },
       merge: [
-        mergeContext({
-          state: 'prepared',
+        {
+          tool_id: 'a',
+          proposal_id: 'proposal-1',
+          availability: 'ready',
+          summary_digest: 'a'.repeat(64),
           summary: mergeSummary({
             title: '<img src=x onerror=alert(1)>',
-            description_excerpt: '<script>run()</script>'
-          })
-        })
+            description_excerpt: '<script>run()</script>',
+            head: 'feature/retry'
+          }),
+          repository: 'owner/repo',
+          pr_number: 7,
+          head: 'feature/retry',
+          head_sha: 'b'.repeat(40),
+          base: 'main',
+          base_sha: 'c'.repeat(40),
+          pr_url: 'https://github.com/owner/repo/pull/7',
+          compare_url: 'https://github.com/owner/repo/compare/main...feature%2Fretry',
+          protected_matches: [],
+          stale: false,
+          state: 'prepared',
+          deadline: null,
+          freshness_reason: null,
+          details_url: null
+        }
       ]
     });
     const details: string[] = [];
@@ -76,11 +94,19 @@ describe('HITLCard', () => {
     expect(container.querySelector('img, script')).toBeNull();
     expect(container).toHaveTextContent('<script>run()</script>');
     expect(container).toHaveTextContent('owner/repo #7');
-    expect(container).toHaveTextContent('Head: feature');
+    expect(container).toHaveTextContent('Head: feature/retry');
     expect(container).toHaveTextContent('b'.repeat(40));
     expect(container).toHaveTextContent('Base: main');
     expect(container).toHaveTextContent('Proposal proposal-1');
     expect(container).toHaveTextContent('Merge state: prepared');
+    expect(screen.getByRole('link', { name: 'Open PR' })).toHaveAttribute(
+      'href',
+      'https://github.com/owner/repo/pull/7'
+    );
+    expect(screen.getByRole('link', { name: 'Compare diff' })).toHaveAttribute(
+      'href',
+      'https://github.com/owner/repo/compare/main...feature%2Fretry'
+    );
     expect(details).toHaveLength(0);
     await user.click(screen.getByText('Changed paths'));
     expect(await screen.findByText('src/retry.ts')).toBeInTheDocument();

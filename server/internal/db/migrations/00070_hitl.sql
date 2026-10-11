@@ -219,18 +219,11 @@ END
 WHERE a.state = 'open'
   AND (a.source_kind <> 'task_reconciliation' OR EXISTS (
       SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id))
-  -- Proposal items render their entire native request. Suppress a generic duplicate while one is
-  -- open; pure merge requests stay suppressed after their proposals end. A mixed batch's other
-  -- input becomes visible again when its last proposal item resolves.
+  -- Proposal items render their entire native request. Suppress a generic duplicate only while
+  -- one is open; unanswered native input becomes visible again when the last proposal resolves.
   AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
       SELECT 1 FROM attention_items m WHERE m.source_kind = 'merge_proposal' AND m.state = 'open'
         AND m.owner_id = a.owner_id AND m.detail->>'hitl_request_id' = a.source_id))
-  AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
-      SELECT 1 FROM hitl_requests r WHERE r.id = a.source_id
-        AND r.kind = 'tool_approval' AND r.payload->>'nested' IS NULL
-        AND jsonb_array_length(r.payload->'tools') > 0
-        AND jsonb_array_length(r.payload->'tools') = (
-            SELECT count(*) FROM hitl_merge_tools m WHERE m.request_id = r.id)))
   AND (a.source_kind <> 'merge_proposal' OR NOT EXISTS (
       SELECT 1 FROM hitl_responses r WHERE r.request_id = a.detail->>'hitl_request_id'
         AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')))

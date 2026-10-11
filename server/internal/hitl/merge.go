@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,6 +16,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gitref"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 )
 
@@ -97,6 +102,7 @@ func (s *Service) mergeContexts(ctx context.Context, r dbq.HitlRequest, o *obser
 		context.ProposalId, context.Summary, context.SummaryDigest = &row.ProposalID, &summary, &row.SummaryDigest
 		context.Repository, context.PrNumber = summary.Repository, summary.PrNumber
 		context.Head, context.HeadSha, context.Base, context.BaseSha = summary.Head, summary.HeadSha, summary.Base, summary.BaseSha
+		context.PrUrl, context.CompareUrl = mergeReviewLinks(summary)
 		context.ProtectedMatches = summary.ProtectedMatches
 		state := string(row.State)
 		context.State = &state
@@ -118,6 +124,31 @@ func (s *Service) mergeContexts(ctx context.Context, r dbq.HitlRequest, o *obser
 		out = append(out, context)
 	}
 	return out, nil
+}
+
+// mergeReviewLinks uses the server's stored summary, never URL hints from the native request.
+func mergeReviewLinks(summary api.MergeSummary) (prURL, compareURL *string) {
+	if summary.Repository == nil {
+		return nil, nil
+	}
+	repo, err := github.ParseRepo(*summary.Repository)
+	if err != nil || repo.FullName() != *summary.Repository {
+		return nil, nil
+	}
+	if summary.PrNumber != nil && *summary.PrNumber > 0 {
+		link := repo.HTMLURL() + "/pull/" + strconv.Itoa(*summary.PrNumber)
+		prURL = &link
+	}
+	if summary.Base != nil && summary.Head != nil && gitref.Valid(*summary.Base) && gitref.Valid(*summary.Head) {
+		link := repo.HTMLURL() + "/compare/" + mergeRefPath(*summary.Base) + "..." + mergeRefPath(*summary.Head)
+		compareURL = &link
+	}
+	return prURL, compareURL
+}
+
+// Escape reserved path characters as the frozen card does for GitHub compare links.
+func mergeRefPath(ref string) string {
+	return strings.ReplaceAll(url.QueryEscape(ref), "+", "%20")
 }
 
 // bindMerges is observer work, so a browser never has to open a card to create proposal attention.
