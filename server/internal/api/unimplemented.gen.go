@@ -34,6 +34,11 @@ func (Unimplemented) CancelTask(context.Context, CancelTaskRequestObject) (Cance
 	return nil, httpx.ErrNotImplemented
 }
 
+// CreateSchedule is not implemented yet.
+func (Unimplemented) CreateSchedule(context.Context, CreateScheduleRequestObject) (CreateScheduleResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
 // CreateSession is not implemented yet.
 func (Unimplemented) CreateSession(context.Context, CreateSessionRequestObject) (CreateSessionResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
@@ -46,6 +51,11 @@ func (Unimplemented) CreateTask(context.Context, CreateTaskRequestObject) (Creat
 
 // CreateWorkspace is not implemented yet.
 func (Unimplemented) CreateWorkspace(context.Context, CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
+// DeleteSchedule is not implemented yet.
+func (Unimplemented) DeleteSchedule(context.Context, DeleteScheduleRequestObject) (DeleteScheduleResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
 }
 
@@ -139,6 +149,11 @@ func (Unimplemented) GetProjectSmokeObservations(context.Context, GetProjectSmok
 	return nil, httpx.ErrNotImplemented
 }
 
+// GetSchedule is not implemented yet.
+func (Unimplemented) GetSchedule(context.Context, GetScheduleRequestObject) (GetScheduleResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
 // GetSession is not implemented yet.
 func (Unimplemented) GetSession(context.Context, GetSessionRequestObject) (GetSessionResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
@@ -206,6 +221,16 @@ func (Unimplemented) ListProjects(context.Context, ListProjectsRequestObject) (L
 
 // ListProviders is not implemented yet.
 func (Unimplemented) ListProviders(context.Context, ListProvidersRequestObject) (ListProvidersResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
+// ListScheduleExecutions is not implemented yet.
+func (Unimplemented) ListScheduleExecutions(context.Context, ListScheduleExecutionsRequestObject) (ListScheduleExecutionsResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
+// ListSchedules is not implemented yet.
+func (Unimplemented) ListSchedules(context.Context, ListSchedulesRequestObject) (ListSchedulesResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
 }
 
@@ -309,6 +334,11 @@ func (Unimplemented) SuspendWorkspace(context.Context, SuspendWorkspaceRequestOb
 	return nil, httpx.ErrNotImplemented
 }
 
+// TriggerSchedule is not implemented yet.
+func (Unimplemented) TriggerSchedule(context.Context, TriggerScheduleRequestObject) (TriggerScheduleResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
 // UpdateMergePolicy is not implemented yet.
 func (Unimplemented) UpdateMergePolicy(context.Context, UpdateMergePolicyRequestObject) (UpdateMergePolicyResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
@@ -316,5 +346,10 @@ func (Unimplemented) UpdateMergePolicy(context.Context, UpdateMergePolicyRequest
 
 // UpdateProjectDefaultProvider is not implemented yet.
 func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProjectDefaultProviderRequestObject) (UpdateProjectDefaultProviderResponseObject, error) {
+	return nil, httpx.ErrNotImplemented
+}
+
+// UpdateSchedule is not implemented yet.
+func (Unimplemented) UpdateSchedule(context.Context, UpdateScheduleRequestObject) (UpdateScheduleResponseObject, error) {
 	return nil, httpx.ErrNotImplemented
 }
