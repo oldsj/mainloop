@@ -314,8 +314,8 @@ identity. Routes that fetch a row by id (threads, conversations, queue items, pr
 notifications) also check that the row belongs to that user and answer `404` otherwise. A later
 multi-user setup reads the identity a trusted gateway sets, in `current_user()` only.
 Access to the tailnet, plus the in-cluster NetworkPolicy, is the security boundary. The API also
-refuses a non-GET request that carries an `Origin` other than the frontend's, a localhost
-development origin (development mode only) or its own, so another origin's page (the agent's preview page, for one)
+refuses a non-GET request that carries an `Origin` other than the frontend's, a loopback
+development origin (`localhost`, `127.0.0.1` or `[::1]`, any port; development mode only) or its own, so another origin's page (the agent's preview page, for one)
 cannot make a browser post a cancel, archive, suspend or resume.
 
 **Host check.** The API answers `404` to any `Host` that is not the frontend domain

@@ -760,7 +760,8 @@ func (t *turn) parkedDelay() time.Duration {
 	return backoff(o.FollowPoll, o.ParkedMax, t.c.Attempts)
 }
 
-// hintHITL marks the session due for the HITL observer's next sweep. It is only a hint: it is one
+// hintHITL marks the session due for the HITL observer's next sweep. It is called for input-required parks only,
+// the state a HITL ask parks in. It is only a hint: it is one
 // short write with no transaction open, and a failure is logged, not returned, since the observer's
 // periodic scan finds the request anyway.
 func (t *turn) hintHITL(ctx context.Context, task *a2a.Task) {
@@ -796,9 +797,12 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		return t.settle(ctx, dbstate.DeliveryFailed, "task "+st+": "+statusText(task), task, st == "failed")
 	case st == "input_required" || st == "auth_required":
 		// Parked for someone else: it keeps the session's turn open until it is answered, which can
-		// take long, so look again less and less often. Tell the HITL observer to list this
-		// session's tasks now, so the owner sees the request at once instead of after its scan period.
-		t.hintHITL(ctx, task)
+		// take long, so look again less and less often. An input-required park may be a HITL ask: tell
+		// the observer to list this session's tasks now, so the owner sees the request at once instead
+		// of after its scan period. The observer adopts nothing for auth-required, so that one is not hinted.
+		if st == "input_required" {
+			t.hintHITL(ctx, task)
+		}
 		return reconcile.RetryAfter(t.parkedDelay()), nil
 	case !follow:
 		// Still running after we followed it to the end of its stream: look again soon.

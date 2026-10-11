@@ -167,7 +167,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, log)
-	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, log)
+	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, svc, log)
 	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {

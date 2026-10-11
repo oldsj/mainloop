@@ -906,6 +906,31 @@ func (q *Queries) PruneHITLDiagnostics(ctx context.Context, ownerID string) erro
 	return err
 }
 
+const requestHITLScan = `-- name: RequestHITLScan :exec
+UPDATE hitl_sessions hs
+SET scanned_at = NULL, updated_at = now()
+WHERE hs.kagent_session_id = $1
+  AND hs.scanned_at IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM hitl_requests r
+      WHERE r.kagent_session_id = hs.kagent_session_id AND r.task_id = $2
+        AND r.availability IN ('pending', 'stale')
+  )
+`
+
+type RequestHITLScanParams struct {
+	KagentSessionID string
+	TaskID          string
+}
+
+// A hint that a task of this kagent session just parked: the session is due at the next sweep
+// (scanned_at NULL sorts first). next_scan_at is not touched, so a session in failure backoff keeps
+// its delay. A task that already has a live request is left alone, since the refresh loop keeps it.
+func (q *Queries) RequestHITLScan(ctx context.Context, arg RequestHITLScanParams) error {
+	_, err := q.db.Exec(ctx, requestHITLScan, arg.KagentSessionID, arg.TaskID)
+	return err
+}
+
 const resolveHITLAttention = `-- name: ResolveHITLAttention :execrows
 UPDATE attention_items
 SET state = 'resolved', resolved_at = now(), updated_at = now()
@@ -1059,4 +1084,39 @@ func (q *Queries) UpsertHITLAttention(ctx context.Context, arg UpsertHITLAttenti
 		arg.Href,
 	)
 	return err
+}
+
+const wakeParkedDeliveries = `-- name: WakeParkedDeliveries :many
+UPDATE deliveries
+SET next_attempt_at = now()
+WHERE kagent_session_id = $1 AND task_id = $2 AND state = 'delivered'
+  AND (lease_until IS NULL OR lease_until <= now())
+RETURNING id
+`
+
+type WakeParkedDeliveriesParams struct {
+	KagentSessionID *string
+	TaskID          *string
+}
+
+// The owner's answer was accepted: the delivery that follows this parked task is due now. A delivery
+// a claimer holds is not touched; it ends its pass with its own delay.
+func (q *Queries) WakeParkedDeliveries(ctx context.Context, arg WakeParkedDeliveriesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, wakeParkedDeliveries, arg.KagentSessionID, arg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -82,6 +82,12 @@ type SessionReadier interface {
 	ReadySession(ctx context.Context, sessionID string, workspaceID *string, kagentSessionID string) error
 }
 
+// TurnWaker wakes the delivery that follows a task, once kagent has accepted the owner's answer to it.
+// The sessions package implements it.
+type TurnWaker interface {
+	WakeTurn(ctx context.Context, kagentSessionID, taskID string) error
+}
+
 // Options tunes the observer and the dispatcher. Zero values take the defaults.
 type Options struct {
 	// ObserveEvery is the period of the observer sweep.
@@ -166,6 +172,9 @@ type Service struct {
 	// Ready makes a session's kagent Session ready before an answer is sent. Without it the answer is
 	// sent as it is.
 	Ready SessionReadier
+	// Turns is woken when an answer is accepted, so the delivery that follows the task reads it at once.
+	// Without it the delivery finds the resumed task on its own parked backoff.
+	Turns TurnWaker
 	// Agent is the main Agent: the one sessions run on when Agents is nil.
 	Agent kagent.AgentRef
 	// WritesEnabled gates answering. Reading and observing work either way.
@@ -178,13 +187,14 @@ type Service struct {
 }
 
 // NewService builds the service from the configuration. agents resolves the Agent that runs each
-// session and ready makes a session ready before an answer is sent; both are the session service in
-// the server, and nil in a test that has no sessions (every session is then taken to run on the main
-// Agent and the answer is sent as it is).
-func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, agents AgentResolver, ready SessionReadier, log *slog.Logger) *Service {
+// session, ready makes a session ready before an answer is sent and turns wakes the delivery of an
+// answered task; all three are the session service in the server, and nil in a test that has no
+// sessions (every session is then taken to run on the main Agent, the answer is sent as it is and no
+// delivery is woken).
+func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, agents AgentResolver, ready SessionReadier, turns TurnWaker, log *slog.Logger) *Service {
 	runtime, _ := k.(MergeRuntime)
 	return &Service{
-		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log, Agents: agents, Ready: ready,
+		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log, Agents: agents, Ready: ready, Turns: turns,
 		Agent:         kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		WritesEnabled: bool(cfg.OwnerHITLWritesEnabled),
 		MergeConfigs:  cfg.MergeConfigurations, MergeRuntime: runtime,

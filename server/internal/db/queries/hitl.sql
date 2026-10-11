@@ -227,3 +227,26 @@ WHERE p.id = $1 AND p.owner_id = $2 AND p.session_id = $3 AND b.kagent_session_i
 INSERT INTO hitl_merge_tools (request_id, tool_id, proposal_id)
 VALUES ($1, $2, $3)
 ON CONFLICT (request_id, tool_id) DO NOTHING;
+
+-- name: RequestHITLScan :exec
+-- A hint that a task of this kagent session just parked: the session is due at the next sweep
+-- (scanned_at NULL sorts first). next_scan_at is not touched, so a session in failure backoff keeps
+-- its delay. A task that already has a live request is left alone, since the refresh loop keeps it.
+UPDATE hitl_sessions hs
+SET scanned_at = NULL, updated_at = now()
+WHERE hs.kagent_session_id = sqlc.arg(kagent_session_id)
+  AND hs.scanned_at IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM hitl_requests r
+      WHERE r.kagent_session_id = hs.kagent_session_id AND r.task_id = sqlc.arg(task_id)
+        AND r.availability IN ('pending', 'stale')
+  );
+
+-- name: WakeParkedDeliveries :many
+-- The owner's answer was accepted: the delivery that follows this parked task is due now. A delivery
+-- a claimer holds is not touched; it ends its pass with its own delay.
+UPDATE deliveries
+SET next_attempt_at = now()
+WHERE kagent_session_id = sqlc.arg(kagent_session_id) AND task_id = sqlc.arg(task_id) AND state = 'delivered'
+  AND (lease_until IS NULL OR lease_until <= now())
+RETURNING id;

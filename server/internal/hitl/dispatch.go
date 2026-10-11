@@ -118,6 +118,14 @@ func (d *dispatch) finish(ctx context.Context, state dbstate.HITLResponseState, 
 				d.s.log().WarnContext(ctx, "mark hitl request answered", "request_id", d.w.RequestID, "error", err)
 			}
 		}
+		// The task runs again: the delivery that follows it sleeps on its parked backoff and would find
+		// the next ask, or the reply, late. This is one short write after the send; a failure only
+		// leaves the delivery on that backoff.
+		if d.s.Turns != nil {
+			if err := d.s.Turns.WakeTurn(ctx, d.w.KagentSessionID, d.w.TaskID); err != nil && ctx.Err() == nil {
+				d.s.log().WarnContext(ctx, "wake the delivery of an answered task", "request_id", d.w.RequestID, "error", err)
+			}
+		}
 	}
 	return reconcile.Recorded(), nil
 }

@@ -63,7 +63,7 @@ func Deps(t testing.TB, cfg *config.Config, log *slog.Logger, pool *pgxpool.Pool
 		Providers: reg,
 		Projects:  projects.NewService(cfg, pool, o.remote, nil, attn.NeedsOwner, log),
 		Sessions:  sessSvc,
-		HITL:      hitl.NewService(cfg, pool, nil, sessSvc, sessSvc, log),
+		HITL:      hitl.NewService(cfg, pool, nil, sessSvc, sessSvc, sessSvc, log),
 		Attention: attn,
 		Health:    healthSvc,
 		Schedules: schedules.NewService(cfg, pool, nil, reg, log),

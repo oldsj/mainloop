@@ -1,7 +1,11 @@
 package hitl_test
 
 import (
+	"errors"
+	"sync"
+
 	"context"
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"testing"
 	"time"
 
@@ -73,5 +77,84 @@ func TestAParkHintLeavesBackoffAndLiveRequestsAlone(t *testing.T) {
 	e.observe()
 	if e.k.listed(ksid) != before {
 		t.Fatal("a hint scanned a session that is backed off")
+	}
+}
+
+// wakes records the tasks the dispatcher asked to wake.
+type wakes struct {
+	mu    sync.Mutex
+	calls [][2]string
+	err   error
+}
+
+func (w *wakes) WakeTurn(_ context.Context, kagentSessionID, taskID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.calls = append(w.calls, [2]string{kagentSessionID, taskID})
+	return w.err
+}
+
+func (w *wakes) got() [][2]string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([][2]string(nil), w.calls...)
+}
+
+// An accepted answer wakes the delivery of its task, after the send and the state change.
+func TestAnAcceptedAnswerWakesTheTasksDelivery(t *testing.T) {
+	w := &wakes{}
+	e := newEnv(t, func(s *hitl.Service) { s.Turns = w })
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLAccepted)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(w.got()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := w.got(); len(got) != 1 || got[0] != [2]string{ksid, "task-a"} {
+		t.Fatalf("wakes = %v, want one for (%s, task-a)", got, ksid)
+	}
+}
+
+// An answer kagent has not taken wakes nothing, and a wake that fails does not undo the answer.
+func TestAnUncertainAnswerWakesNothingAndAFailedWakeIsOnlyLogged(t *testing.T) {
+	w := &wakes{}
+	e := newEnv(t, func(s *hitl.Service) { s.Turns = w })
+	e.k.onSend = func(*fakeKagent, hitl.Send) error { return context.DeadlineExceeded }
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLUncertain)
+	time.Sleep(150 * time.Millisecond)
+	if got := w.got(); len(got) != 0 {
+		t.Fatalf("wakes for an unconfirmed answer = %v", got)
+	}
+
+	// The message turns out to have arrived; the wake fails, and the answer is accepted anyway.
+	w.mu.Lock()
+	w.err = errors.New("db down")
+	w.mu.Unlock()
+	e.k.set(func() {
+		task := e.k.tasks["task-a"]
+		task.History = append(task.History, userMessage(e.k.sends[0]))
+		task.Status = a2a.TaskStatus{State: a2a.TaskStateWorking}
+	})
+	e.waitResponse("act-1", dbstate.HITLAccepted)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(w.got()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := w.got(); len(got) == 0 {
+		t.Fatal("no wake after the answer was confirmed")
 	}
 }
