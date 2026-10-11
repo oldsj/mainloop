@@ -138,6 +138,10 @@ type MainThread struct {
 	NativeChildKinds  string `env:"NATIVE_CHILD_KINDS" envDefault:"claude,codex"`
 }
 
+// PushGateDiskBytes leaves room for filesystem overhead and the free-space reserve on the
+// gate's 3 GiB spool volume. It bounds both each quarantine and process-wide body reservations.
+const PushGateDiskBytes int64 = 2 << 30
+
 // Git configures the push gate and git transport.
 type Git struct {
 	PushGateEnabled         bool  `env:"PUSH_GATE_ENABLED"`
@@ -296,6 +300,9 @@ func (c *Config) validate() error {
 	}
 	if c.Git.PushGateMaxCommandBytes < 1 || c.Git.PushGateMaxBodyBytes < 1 {
 		fail("PUSH_GATE_MAX_COMMAND_BYTES and PUSH_GATE_MAX_BODY_BYTES must be at least 1")
+	}
+	if c.Git.PushGateMaxBodyBytes > PushGateDiskBytes {
+		fail("PUSH_GATE_MAX_BODY_BYTES must not exceed the 2 GiB scratch disk budget")
 	}
 	if c.Health.EventRetentionDays < 1 || c.Health.EventRetentionDays > 365 {
 		fail("HEALTH_EVENT_RETENTION_DAYS must be between 1 and 365")

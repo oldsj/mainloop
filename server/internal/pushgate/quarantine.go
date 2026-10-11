@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,11 +13,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/github"
 )
 
@@ -43,7 +46,7 @@ func (l Limits) defaults() Limits {
 		l.ExpandedBytes = 512 << 20
 	}
 	if l.DiskBytes <= 0 {
-		l.DiskBytes = 2 << 30
+		l.DiskBytes = config.PushGateDiskBytes
 	}
 	if l.Timeout <= 0 {
 		l.Timeout = 60 * time.Second
@@ -79,9 +82,9 @@ func newSpool(ctx context.Context, root string, source io.Reader, l Limits) (*sp
 	if err = unix.Statfs(root, &fs); err != nil || fs.Type == unix.TMPFS_MAGIC || fs.Type == unix.RAMFS_MAGIC {
 		return nil, denial("disk_spool_required")
 	}
-	if fs.Bavail*uint64(fs.Bsize) < uint64(l.DiskBytes)+(64<<20) { //nolint:gosec // positive statfs block size and normalized positive limits
+	if fs.Bsize <= 0 || fs.Bavail*uint64(fs.Bsize) < freeReserve { //nolint:gosec // positive statfs block size checked above
 		return nil, denial("disk_unavailable")
-	} //nolint:gosec // positive statfs block size
+	}
 	work, err := os.MkdirTemp(root, "receive-")
 	if err != nil {
 		return nil, denial("disk_unavailable")
@@ -92,27 +95,68 @@ func newSpool(ctx context.Context, root string, source io.Reader, l Limits) (*sp
 		return nil, err
 	}
 	s := &spool{root: work, body: body}
+	kept := false
+	defer func() {
+		if !kept {
+			s.close()
+		}
+	}()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(body, h), io.LimitReader(&contextReader{ctx, source}, l.BodyBytes+1))
+	writer := &scratchWriter{ctx: ctx, w: body, available: func() (uint64, error) { return diskAvailable(work) }}
+	n, err := io.Copy(io.MultiWriter(writer, h), io.LimitReader(&contextReader{ctx, source}, min(l.BodyBytes, l.DiskBytes)+1))
 	if err != nil {
-		s.close()
+		var d denial
+		if errors.As(err, &d) {
+			return nil, d
+		}
 		return nil, denial("http_disconnected")
 	}
 	if n > l.BodyBytes || n > l.DiskBytes {
-		s.close()
 		return nil, denial("body_limit")
 	}
 	s.Size = n
 	s.Digest = hex.EncodeToString(h.Sum(nil))
 	if err = body.Chmod(0400); err != nil {
-		s.close()
 		return nil, err
 	}
 	if _, err = body.Seek(0, io.SeekStart); err != nil {
-		s.close()
 		return nil, err
 	}
+	kept = true
 	return s, nil
+}
+
+const freeReserve uint64 = 64 << 20
+
+// Serialize our free-space check and allocation across handlers in this pod. Other filesystem
+// users can still change available space; check again for each bounded copy chunk.
+var scratchWrites sync.Mutex
+
+type scratchWriter struct {
+	ctx       context.Context
+	w         io.Writer
+	available func() (uint64, error)
+}
+
+func (w *scratchWriter) Write(b []byte) (int, error) {
+	scratchWrites.Lock()
+	defer scratchWrites.Unlock()
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	free, err := w.available()
+	if err != nil || free < freeReserve || uint64(len(b)) > free-freeReserve {
+		return 0, denial("disk_unavailable")
+	}
+	return w.w.Write(b)
+}
+
+func diskAvailable(root string) (uint64, error) {
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil || fs.Bsize <= 0 {
+		return 0, denial("disk_unavailable")
+	}
+	return fs.Bavail * uint64(fs.Bsize), nil //nolint:gosec // positive block size checked above
 }
 
 type contextReader struct {
@@ -196,7 +240,8 @@ func (s *spool) validate(ctx context.Context, c commands, repo github.Repo, poli
 	if err = guard(ctx); err != nil {
 		return v, err
 	}
-	if err = u.Seed(ctx, repo, wants, &limitedWriter{w: seed, left: min(l.BodyBytes, l.DiskBytes-s.Size)}); err != nil {
+	seedWriter := &scratchWriter{ctx: ctx, w: seed, available: func() (uint64, error) { return diskAvailable(s.root) }}
+	if err = u.Seed(ctx, repo, wants, &limitedWriter{w: seedWriter, left: min(l.BodyBytes, l.DiskBytes-s.Size)}); err != nil {
 		return v, err
 	}
 	if _, err = seed.Seek(0, io.SeekStart); err != nil {

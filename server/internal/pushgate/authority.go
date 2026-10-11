@@ -301,6 +301,18 @@ func (s *Service) check(ctx context.Context, c capability, skip string) (authori
 		if !sameAuthority(a, cur) {
 			return denial("authority_changed")
 		}
+		if skip != "" {
+			if err = requireAdmission(ctx, q, skip); err != nil {
+				return err
+			}
+		}
+		busy, err := q.PushAdmissionHeld(ctx, dbq.PushAdmissionHeldParams{Repository: a.W.Repository, Branch: a.W.Branch, ID: skip})
+		if err != nil {
+			return err
+		}
+		if busy {
+			return denial("admission_busy")
+		}
 		held, err := q.PushBranchHeld(ctx, dbq.PushBranchHeldParams{OwnerID: a.W.UserID, Repository: a.W.Repository, Branch: a.W.Branch, ID: skip})
 		if err != nil {
 			return err

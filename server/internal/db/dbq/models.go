@@ -191,6 +191,13 @@ type GitPublication struct {
 	OwnerID           string
 }
 
+type GitPushAdmission struct {
+	Repository string
+	Branch     string
+	ID         string
+	LeaseUntil time.Time
+}
+
 type GitPushGrant struct {
 	WorkspaceID      string
 	Branch           string

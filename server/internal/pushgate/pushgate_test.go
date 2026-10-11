@@ -501,6 +501,12 @@ func TestAuthorizedProbeAndInvalidNeighbours(t *testing.T) {
 			if !regexpID(w.Header().Get("x-mainloop-request-id")) {
 				t.Fatal("correlation id absent")
 			}
+			admissionClean(t, e)
+			if tc.ok {
+				if _, err := os.Stat(e.server.SpoolRoot); !os.IsNotExist(err) {
+					t.Fatal("exact probe allocated a spool root")
+				}
+			}
 		})
 	}
 }
@@ -517,7 +523,7 @@ func regexpID(s string) bool {
 }
 
 func TestProbeRechecksAuthorityAndFence(t *testing.T) {
-	for _, kind := range []string{"revoked", "policy", "writer", "runtime", "fence", "late writer"} {
+	for _, kind := range []string{"revoked", "policy", "writer", "runtime", "fence", "late writer fenced", "late revocation"} {
 		t.Run(kind, func(t *testing.T) {
 			e := newEnv(t)
 			switch kind {
@@ -534,20 +540,25 @@ func TestProbeRechecksAuthorityAndFence(t *testing.T) {
 				e.native.session.RuntimeAssociation.CurrentActive = false
 			case "fence":
 				e.exec(`INSERT INTO git_publications (id,workspace_id,request_id,owner_id,repository,branch,attempt,state) VALUES ('held','ws','held','owner','oldsj/alpha','feature/test','{}','unknown')`)
-			case "late writer":
+			case "late writer fenced", "late revocation":
 				count := 0
 				e.native.before = func() {
 					count++
 					if count == 2 {
-						e.exec(`UPDATE workspace_writer_claims SET held=false`)
-						e.exec(`UPDATE workspace_writer_claims SET held=true,generation=2`)
+						if kind == "late writer fenced" {
+							if _, err := e.pool.Exec(context.Background(), `UPDATE workspace_writer_claims SET held=false`); err == nil {
+								t.Fatal("admitted probe allowed writer release")
+							}
+						} else if _, err := e.creds.Revoke(context.Background(), "ws"); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
 			}
 			before, _ := e.upstream.counts()
 			w := e.request([]byte("0000"), nil)
 			after, _ := e.upstream.counts()
-			if w.Code == 200 || after != before {
+			if (w.Code == 200) != (kind == "late writer fenced") || after != before {
 				t.Fatalf("probe authorization: %d %s", w.Code, w.Body.String())
 			}
 		})
@@ -594,6 +605,16 @@ func TestUnknownResolverObservesWithoutResend(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				claim, err := e.svc.admit(context.Background(), c, a, "dead-handler", e.server.Limits.defaults())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer e.svc.releaseAdmission(context.Background(), claim)
+				release, err := reserveScratch(e.server.Limits.defaults())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
 				sp, err := newSpool(context.Background(), e.server.SpoolRoot, bytes.NewReader(e.body(zeroOID, e.head, "refs/heads/feature/test")), e.server.Limits.defaults())
 				if err != nil {
 					t.Fatal(err)
@@ -612,6 +633,9 @@ func TestUnknownResolverObservesWithoutResend(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				// A crashed handler cannot retain live admission when the abandoned intent
+				// is eligible for resolution. Simulate both leases expiring independently.
+				e.exec(`UPDATE git_push_admissions SET lease_until=now()-interval '1 second'`)
 			} else {
 				w := e.request(e.body(zeroOID, e.head, "refs/heads/feature/test"), nil)
 				if w.Code != 503 || e.state() != dbstate.PublicationUnknown {
@@ -680,7 +704,19 @@ func TestNoDatabaseTransactionDuringNetworkIO(t *testing.T) {
 			t.Fatal("connection held across native observation")
 		}
 	}
-	w := e.request(e.body(zeroOID, e.head, "refs/heads/feature/test"), nil)
+	body := e.body(zeroOID, e.head, "refs/heads/feature/test")
+	w := e.request(body, func(r *http.Request) {
+		source := bytes.NewReader(body)
+		r.Body = io.NopCloser(readerFunc(func(b []byte) (int, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var n int
+			if err := single.QueryRow(ctx, "SELECT 1").Scan(&n); err != nil {
+				t.Fatal("connection held across receive body I/O")
+			}
+			return source.Read(b)
+		}))
+	})
 	if w.Code != 200 {
 		t.Fatalf("push: %d %s", w.Code, w.Body.String())
 	}

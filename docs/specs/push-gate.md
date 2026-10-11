@@ -40,6 +40,16 @@ checked before processing and again after seed reads and remote-ref discovery, b
 dispatch. Short transactions serialize admission against writer release and credential/policy
 changes; no database transaction or row lock spans native, Secret or GitHub I/O.
 
+Before reading a receive body, the gate commits a leased admission claim for its repository and
+branch, then reserves `min(body limit, disk budget)` bytes from a process-wide scratch budget.
+Separate pods share the branch claim; each pod has its own disk budget. Another live admission
+for that branch or insufficient unreserved scratch returns HTTP 503 with the closed
+`admission_busy` code and `Retry-After: 1`, before reading the body or creating any spool file.
+Admission also blocks writer release/transfer. Claims and reservations remain held through
+scratch cleanup and are released on every outcome. A crashed handler's claim expires after the
+bounded request/dispatch/persistence window; stale handlers cannot reserve or dispatch a
+publication, and their cleanup cannot release a successor's claim.
+
 Policy requires a known default branch. That branch, every previously observed default and
 protected patterns override the allowed patterns. Patterns match case sensitively, with `*`
 covering nested branch names as in Python's `fnmatchcase`; malformed patterns refuse. An empty
@@ -66,14 +76,19 @@ fields, plus standard log metadata. Unknown classifications become `transport_un
 Git's exact complete four-byte `0000` receive-pack probe returns HTTP 200 with an empty
 `application/x-git-receive-pack-result`, after route, framing, authentication, binding, policy,
 runtime, writer-generation and unresolved-publication checks. It creates no publication, seeds no
-objects, mints no App token and sends no upstream traffic. Empty, truncated, extra-byte and
+objects, mints no App token and sends no upstream traffic. It holds normal admission while
+checking at most five bytes in memory and creates no spool file. Empty, truncated, extra-byte and
 shallow-only bodies remain invalid. The subsequent real POST passes independent validation.
 
 Receive bodies spool privately on disk under `/var/lib/mainloop/git`, with mode 0700 and current
 process ownership; tmpfs/ramfs and symlink roots refuse. Spool files are removed on every outcome.
 Defaults are 256 MiB body, 256 KiB commands, 100,000 objects, 512 MiB reconstructed objects, 2 GiB
 scratch disk and 64 MiB free reserve. Spooling, validation and dispatch each have a 60-second bound.
-The configured body and command limits are used by the listener.
+The configured body and command limits are used by the listener. The fixed configuration disk
+budget is sized below the 3 GiB spool volume; configuration rejects a body limit above 2 GiB.
+Each copy stops at `min(body limit, disk budget) + 1` bytes, and checks remaining free space
+before each body/seed allocation to preserve the 64 MiB reserve. A non-commit branch head
+returns HTTP 403 with `commit_required`.
 
 Strict pkt-lines require lowercase SHA-1 OIDs, one command and supported report-status
 capabilities. Distinct nonzero `shallow <oid>` lines are accepted only before commands and are
@@ -97,12 +112,15 @@ report and bounded receipt classification reach the client or ledger.
 ## Publication ledger and uncertainty
 
 A validated command and immutable body/authority identity reserve a `pending` intent before
-seed/CPU work. This durable per-owner/repository/branch fence replaces process-local serialization.
+seed/CPU work while the earlier admission claim still holds the branch. The publication fence
+retains unresolved durable outcomes after transient admission is released.
 The workspace and server-generated request ID supply the operation's idempotency key; the ID is
 also retained for correlation with refusal logs. A confirmed identical body and credential return
 the recorded result without dispatching again. An explicit retry after rejection creates a new
 intent and independently checks the current remote head before any publication. Pending, dispatching and unknown
 publications block another push or probe, and a database trigger blocks writer release/transfer.
+After an active handler has released admission, an unresolved publication continues to refuse
+with `publication_unresolved` until the resolver establishes its outcome.
 The audit ledger survives workspace/session deletion.
 
 After measured validation and fresh authority/ref checks, the handler commits `dispatching`

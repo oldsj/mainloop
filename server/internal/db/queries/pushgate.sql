@@ -74,6 +74,22 @@ SELECT EXISTS (SELECT 1 FROM git_publications
 WHERE (owner_id = $1 OR owner_id = '') AND repository = $2 AND branch = $3
     AND id <> $4 AND state IN ('pending', 'dispatching', 'unknown'));
 
+-- name: PushAdmissionHeld :one
+SELECT EXISTS (SELECT 1 FROM git_push_admissions
+WHERE repository = $1 AND branch = $2 AND id <> $3 AND lease_until > clock_timestamp());
+
+-- name: AcquirePushAdmission :execrows
+INSERT INTO git_push_admissions (repository, branch, id, lease_until)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (repository, branch) DO UPDATE SET id = EXCLUDED.id, lease_until = EXCLUDED.lease_until
+WHERE git_push_admissions.lease_until <= clock_timestamp();
+
+-- name: LockPushAdmission :one
+SELECT id FROM git_push_admissions WHERE id = $1 AND lease_until > clock_timestamp() FOR UPDATE;
+
+-- name: ReleasePushAdmission :exec
+DELETE FROM git_push_admissions WHERE id = $1;
+
 -- name: InsertPushPublication :one
 INSERT INTO git_publications (id, workspace_id, request_id, owner_id, repository, branch, attempt,
     transport_evidence, lease_owner, lease_until, next_attempt_at)

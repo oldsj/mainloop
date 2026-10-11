@@ -134,6 +134,18 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestPushBodyFitsScratchBudget(t *testing.T) {
+	for _, tc := range []struct {
+		bytes int64
+		valid bool
+	}{{1, true}, {PushGateDiskBytes, true}, {PushGateDiskBytes + 1, false}} {
+		_, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "PUSH_GATE_MAX_BODY_BYTES": fmt.Sprint(tc.bytes)})
+		if (err == nil) != tc.valid {
+			t.Fatalf("body bytes %d: %v", tc.bytes, err)
+		}
+	}
+}
+
 func TestAgentTokenKeyIsRequired(t *testing.T) {
 	// There is no fallback to the database password, even in dev.
 	for _, vars := range []map[string]string{

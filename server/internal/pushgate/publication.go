@@ -49,6 +49,9 @@ func (s *Service) reserve(ctx context.Context, c capability, a authority, cmd co
 		if !sameAuthority(a, cur) {
 			return denial("authority_changed")
 		}
+		if err = requireAdmission(ctx, q, id); err != nil {
+			return err
+		}
 		existing, err := q.GetPushPublication(ctx, id)
 		if err == nil {
 			row = existing
@@ -182,6 +185,9 @@ func (s *Service) receive(ctx context.Context, c capability, a authority, cmd co
 		}
 		if !sameAuthority(a, cur) {
 			return denial("authority_changed")
+		}
+		if err = requireAdmission(ctx, q, row.ID); err != nil {
+			return err
 		}
 		n, err := q.DispatchPushPublication(ctx, dbq.DispatchPushPublicationParams{ID: row.ID, LeaseOwner: &owner})
 		if err != nil {

@@ -13,6 +13,33 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
+const acquirePushAdmission = `-- name: AcquirePushAdmission :execrows
+INSERT INTO git_push_admissions (repository, branch, id, lease_until)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (repository, branch) DO UPDATE SET id = EXCLUDED.id, lease_until = EXCLUDED.lease_until
+WHERE git_push_admissions.lease_until <= clock_timestamp()
+`
+
+type AcquirePushAdmissionParams struct {
+	Repository string
+	Branch     string
+	ID         string
+	LeaseUntil time.Time
+}
+
+func (q *Queries) AcquirePushAdmission(ctx context.Context, arg AcquirePushAdmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, acquirePushAdmission,
+		arg.Repository,
+		arg.Branch,
+		arg.ID,
+		arg.LeaseUntil,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const dispatchPushPublication = `-- name: DispatchPushPublication :execrows
 UPDATE git_publications SET state = 'dispatching', updated_at = now(), lease_until = now() + interval '3 minutes',
     next_attempt_at = now() + interval '3 minutes'
@@ -381,6 +408,17 @@ func (q *Queries) InsertPushPublication(ctx context.Context, arg InsertPushPubli
 	return i, err
 }
 
+const lockPushAdmission = `-- name: LockPushAdmission :one
+SELECT id FROM git_push_admissions WHERE id = $1 AND lease_until > clock_timestamp() FOR UPDATE
+`
+
+func (q *Queries) LockPushAdmission(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, lockPushAdmission, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockPushWriter = `-- name: LockPushWriter :one
 SELECT owner_id, repository, branch, generation, attempt_id, binding_id, held, fence_evidence_ref, fenced_at FROM workspace_writer_claims
 WHERE owner_id = $1 AND repository = $2 AND branch = $3 FOR UPDATE
@@ -476,6 +514,24 @@ func (q *Queries) PublishPushGrant(ctx context.Context, arg PublishPushGrantPara
 	return result.RowsAffected(), nil
 }
 
+const pushAdmissionHeld = `-- name: PushAdmissionHeld :one
+SELECT EXISTS (SELECT 1 FROM git_push_admissions
+WHERE repository = $1 AND branch = $2 AND id <> $3 AND lease_until > clock_timestamp())
+`
+
+type PushAdmissionHeldParams struct {
+	Repository string
+	Branch     string
+	ID         string
+}
+
+func (q *Queries) PushAdmissionHeld(ctx context.Context, arg PushAdmissionHeldParams) (bool, error) {
+	row := q.db.QueryRow(ctx, pushAdmissionHeld, arg.Repository, arg.Branch, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const pushBranchHeld = `-- name: PushBranchHeld :one
 SELECT EXISTS (SELECT 1 FROM git_publications
 WHERE (owner_id = $1 OR owner_id = '') AND repository = $2 AND branch = $3
@@ -518,6 +574,15 @@ func (q *Queries) RecordPushValidation(ctx context.Context, arg RecordPushValida
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const releasePushAdmission = `-- name: ReleasePushAdmission :exec
+DELETE FROM git_push_admissions WHERE id = $1
+`
+
+func (q *Queries) ReleasePushAdmission(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, releasePushAdmission, id)
+	return err
 }
 
 const resolvePushPublication = `-- name: ResolvePushPublication :execrows

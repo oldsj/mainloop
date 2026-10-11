@@ -9,6 +9,15 @@ ALTER TABLE git_push_grants
     ADD COLUMN native_session_id text NOT NULL DEFAULT '',
     ADD COLUMN runtime jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE git_publications ADD COLUMN owner_id text NOT NULL DEFAULT '';
+-- Admission precedes reading a body, including the bounded probe. Expired rows can be replaced
+-- after a crashed handler; request IDs prevent its eventual cleanup from releasing a successor.
+CREATE TABLE git_push_admissions (
+    repository text NOT NULL,
+    branch text NOT NULL,
+    id text NOT NULL UNIQUE,
+    lease_until timestamptz NOT NULL,
+    PRIMARY KEY (repository, branch)
+);
 -- Pending rows also fence the branch: they are validated intents, never a queue of push bodies.
 DROP INDEX git_publications_unresolved;
 CREATE UNIQUE INDEX git_publications_unresolved ON git_publications (owner_id, repository, branch)
@@ -23,7 +32,9 @@ CREATE FUNCTION pushgate_writer_fence() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM git_publications
         WHERE (owner_id = OLD.owner_id OR owner_id = '') AND repository = OLD.repository AND branch = OLD.branch
-          AND state IN ('pending', 'dispatching', 'unknown')) THEN
+          AND state IN ('pending', 'dispatching', 'unknown')) OR EXISTS (
+        SELECT 1 FROM git_push_admissions WHERE repository = OLD.repository AND branch = OLD.branch
+          AND lease_until > clock_timestamp()) THEN
         RAISE EXCEPTION 'branch publication unresolved';
     END IF;
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
@@ -80,6 +91,7 @@ DROP TRIGGER pushgate_grant_identity ON git_push_grants;
 DROP FUNCTION pushgate_grant_identity();
 DROP TRIGGER pushgate_writer_fence ON workspace_writer_claims;
 DROP FUNCTION pushgate_writer_fence();
+DROP TABLE git_push_admissions;
 DROP INDEX git_publications_unresolved;
 CREATE INDEX git_publications_unresolved ON git_publications (repository, branch)
 WHERE state IN ('dispatching', 'unknown');

@@ -104,8 +104,49 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(advertisement(a.W.Branch, oid)) //nolint:gosec // validated Git pkt-lines, Git media type and nosniff; never HTML
 		return
 	}
+	stage = "admission"
+	claim, err := s.Service.admit(ctx, c, a, id, l)
+	if err != nil {
+		s.fail(w, r, id, stage, err)
+		return
+	}
+	defer s.Service.releaseAdmission(ctx, claim)
+	releaseScratch, err := reserveScratch(l)
+	if err != nil {
+		s.fail(w, r, id, stage, err)
+		return
+	}
+	defer releaseScratch()
 	stage = "body"
-	sp, err := newSpool(ctx, s.SpoolRoot, r.Body, l)
+	bctx, bcancel := context.WithTimeout(ctx, l.Timeout)
+	defer bcancel()
+	// Read only enough to distinguish the complete probe from a real body. This happens after
+	// admission and never allocates a spool; the fifth byte excludes all extra-byte neighbours.
+	prefix, err := io.ReadAll(io.LimitReader(&contextReader{bctx, r.Body}, 5))
+	if err != nil {
+		s.refuse(w, r, id, "http_disconnected", stage)
+		return
+	}
+	if bytes.Equal(prefix, []byte("0000")) {
+		if r.ContentLength >= 0 && r.ContentLength != 4 {
+			s.refuse(w, r, id, "http_body_length", stage)
+			return
+		}
+		stage = "probe_authority"
+		current, err := s.Service.check(ctx, c, claim)
+		if err != nil {
+			s.fail(w, r, id, stage, err)
+			return
+		}
+		if !sameAuthority(a, current) {
+			s.refuse(w, r, id, "authority_changed", stage)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	sp, err := newSpool(bctx, s.SpoolRoot, io.MultiReader(bytes.NewReader(prefix), r.Body), l)
 	if err != nil {
 		s.fail(w, r, id, stage, err)
 		return
@@ -114,26 +155,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength >= 0 && sp.Size != r.ContentLength {
 		s.refuse(w, r, id, "http_body_length", stage)
 		return
-	}
-	if sp.Size == 4 {
-		var b [4]byte
-		_, err = io.ReadFull(sp.body, b[:])
-		if err == nil && bytes.Equal(b[:], []byte("0000")) {
-			stage = "probe_authority"
-			current, err := s.Service.check(ctx, c, "")
-			if err != nil {
-				s.fail(w, r, id, stage, err)
-				return
-			}
-			if !sameAuthority(a, current) {
-				s.refuse(w, r, id, "authority_changed", stage)
-				return
-			}
-			w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		_, _ = sp.body.Seek(0, io.SeekStart)
 	}
 	stage = "commands"
 	cmd, err := receiveCommands(sp.body, l.CommandBytes)
@@ -218,8 +239,8 @@ func (s *Server) parse(r *http.Request) (github.Repo, bool, error) {
 
 // Closed vocabularies are defense in depth: even an injected dependency cannot log its error
 // message as a code or stage. Responses and logs share the same safe classification.
-var denialCodes = strings.Fields(`transport_unavailable git_transport_disabled host_denied path_invalid route_denied duplicate_header routing_header http_compression git_protocol http_framing content_type body_limit authentication_required writer_claim_lost grant_revoked credential_revoked stale_writer_generation binding_scope policy_mismatch metadata_unavailable repository_mismatch runtime_unattested runtime_changed authority_changed publication_unresolved private_spool_required disk_spool_required disk_unavailable http_disconnected http_body_length pkt_header pkt_length pkt_truncated command_limit shallow_invalid single_ref_required capability_placement capability_duplicate unsupported_capability command_invalid invalid_branch default_branch protected_branch branch_mismatch ref_namespace deletion non_fast_forward body_identity_changed pack_checksum pack_header pack_limit pack_object_size pack_truncated pack_compression pack_expansion_limit pack_trailing_or_truncated delta_header remote_ref_changed default_objects_unavailable git_inventory validated_object_limit validation_timeout git_validation disk_limit response_limit upstream_advertisement upstream_object_format upstream_unavailable seed_framing upstream_http upstream_receipt upstream_reflection repository_unavailable publication_unknown`)
-var denialStages = strings.Fields(`configuration listener_flags request authentication binding body probe_authority commands dispatch upstream_read`)
+var denialCodes = strings.Fields(`transport_unavailable git_transport_disabled host_denied path_invalid route_denied duplicate_header routing_header http_compression git_protocol http_framing content_type body_limit authentication_required writer_claim_lost grant_revoked credential_revoked stale_writer_generation binding_scope policy_mismatch metadata_unavailable repository_mismatch runtime_unattested runtime_changed authority_changed publication_unresolved admission_busy private_spool_required disk_spool_required disk_unavailable http_disconnected http_body_length pkt_header pkt_length pkt_truncated command_limit shallow_invalid single_ref_required capability_placement capability_duplicate unsupported_capability command_invalid invalid_branch default_branch protected_branch branch_mismatch ref_namespace deletion non_fast_forward body_identity_changed pack_checksum pack_header pack_limit pack_object_size pack_truncated pack_compression pack_expansion_limit pack_trailing_or_truncated delta_header remote_ref_changed default_objects_unavailable git_inventory validated_object_limit validation_timeout git_validation commit_required disk_limit response_limit upstream_advertisement upstream_object_format upstream_unavailable seed_framing upstream_http upstream_receipt upstream_reflection repository_unavailable publication_unknown`)
+var denialStages = strings.Fields(`configuration listener_flags request authentication binding admission body probe_authority commands dispatch upstream_read`)
 
 func closed(v string, set []string, fallback string) string {
 	for _, s := range set {
@@ -254,6 +275,10 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, id, code, stage 
 	}
 	if code == "transport_unavailable" || code == "publication_unknown" || strings.HasPrefix(code, "upstream_") || code == "disk_unavailable" || code == "metadata_unavailable" {
 		status = http.StatusServiceUnavailable
+	}
+	if code == "admission_busy" {
+		status = http.StatusServiceUnavailable
+		w.Header().Set("Retry-After", "1")
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
