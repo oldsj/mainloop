@@ -124,7 +124,8 @@ type OrphanReport struct {
 // SweepOrphans finds kagent Sessions that Mainloop created and no longer references, and with
 // Delete removes them. Only Sessions created by this deployment's kagent user, on the configured
 // provider agents, and older than the minimum age are considered, so another tenant's Sessions and
-// a create still being recorded are never touched. Deletion is refused while any binding has a
+// a create still being recorded are never touched. The creator is a constant for every instance
+// of Mainloop on this kagent, so the Agent names are what keep instances apart (see ownAgents). Deletion is refused while any binding has a
 // create whose Session id is unknown, since that Session would look like an orphan.
 func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanReport, error) {
 	rep := OrphanReport{Failed: map[string]string{}}
@@ -143,7 +144,10 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 			boundSet[*id] = true
 		}
 	}
-	ours := s.ownAgents()
+	ours, err := s.ownAgents(ctx)
+	if err != nil {
+		return rep, err
+	}
 	cutoff := s.now().Add(-s.Config.Workspaces.OrphanMinAge.Duration())
 	for _, sess := range sessions {
 		id := sess.GetId()
@@ -188,13 +192,26 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 
 func agentKey(r *kagentapi.ResourceReference) string { return r.GetNamespace() + "/" + r.GetName() }
 
-// ownAgents is every provider Agent this deployment can create Sessions on.
-func (s *Service) ownAgents() map[string]bool {
+// ownAgents is every Agent this deployment's Sessions can be on: the configured provider Agents
+// and those recorded on workspaces, which may predate a config change.
+//
+// The creator does not tell Mainloop instances apart: kagent records every Session made with the
+// control token as created by the same constant user. Only distinct Agent names keep one
+// instance's sweep away from another's Sessions, so instances sharing a kagent must not share
+// Agents.
+func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, p := range s.Providers.Profiles() {
 		for _, ref := range p.Agents {
 			out[ref.Namespace+"/"+ref.Name] = true
 		}
 	}
-	return out
+	rows, err := dbq.New(s.Pool).ListWorkspaceAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.AgentNamespace+"/"+r.AgentName] = true
+	}
+	return out, nil
 }

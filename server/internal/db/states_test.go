@@ -2,11 +2,13 @@ package db_test
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"slices"
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -124,6 +126,21 @@ func TestWatchedTagCheck(t *testing.T) {
 			"env-"+tag, tag)
 		if (err == nil) != ok {
 			t.Errorf("watched_tag %q: err = %v, want accepted = %v", tag, err, ok)
+		}
+	}
+}
+
+// Op kind and state columns come out of sqlc as the dbstate types, so the compiler checks every
+// comparison and assignment against the constants that the CHECK test holds to the schema.
+func TestWorkspaceOpColumnsAreTyped(t *testing.T) {
+	typ := reflect.TypeFor[dbq.WorkspaceOp]()
+	for field, want := range map[string]reflect.Type{
+		"Kind":  reflect.TypeFor[dbstate.WorkspaceOpKind](),
+		"State": reflect.TypeFor[dbstate.WorkspaceOpState](),
+	} {
+		f, ok := typ.FieldByName(field)
+		if !ok || f.Type != want {
+			t.Errorf("dbq.WorkspaceOp.%s is %v, want %v", field, f.Type, want)
 		}
 	}
 }

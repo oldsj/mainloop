@@ -2,9 +2,9 @@ package workspaces
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,7 +52,26 @@ func (d *deliveries) setOpen(id string, v bool) {
 	d.open[id] = v
 }
 
+// logBuf is a log sink a test can read while the service writes to it.
+type logBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *logBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 type harness struct {
+	logs   logBuf
 	t      *testing.T
 	svc    *Service
 	fake   *kagenttest.Server
@@ -111,7 +130,7 @@ func newHarness(t *testing.T, extra map[string]string) *harness {
 	h.dq = dbq.New(pool)
 	h.svc = &Service{
 		Pool: pool, Kagent: client, Providers: mustRegistry(t, cfg), Config: cfg,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), OwnerID: owner, Deliveries: h.dl,
+		Log: slog.New(slog.NewTextHandler(&h.logs, nil)), OwnerID: owner, Deliveries: h.dl,
 		PollEvery: 5 * time.Millisecond,
 	}
 	return h

@@ -27,6 +27,9 @@ built; nothing here has been measured against a live kagent.
   inserts the row, wakes the reconcile loop and waits up to `WORKSPACE_OPERATION_WAIT_SECONDS`
   (default 30) for the result; if the operation is still going it answers with the workspace as
   it stands and the loop carries on.
+- The Agent (namespace and name) is resolved when the workspace is made and stored on its row.
+  Every replay and the orphan sweep use that stored reference, so a config change between
+  attempts cannot turn a replay into a different request.
 - The workspace id is the kagent Session id. The row stores a stable `request_id`, which
   `CreateSession` sends on every attempt, so a retry, a refresh or a restarted process can only
   get the one Session back. The loop records `attempts` before it calls kagent and holds no
@@ -36,8 +39,13 @@ built; nothing here has been measured against a live kagent.
   seconds have passed since the first failure, then the operation is `gave_up` and the workspace
   is `failed` until **refresh**. A permanent error (`INVALID_ARGUMENT`, `NOT_FOUND`,
   `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNIMPLEMENTED`, `UNAUTHENTICATED`, a kagent
-  configuration refusal) is `rejected` at once, and a rejected create removes the rows and returns
-  `422`. Refresh sends a new create operation with a fresh window. The three timings are
+  configuration refusal) is `rejected` at once. So is `FAILED_PRECONDITION`, which kagent returns
+  when the request id belongs to a Session that was deleted: a replay cannot bring it back.
+  Refusal of the first attempt removes the rows, publishes `workspace:updated` with the failed
+  state (there is no removal event; clients drop the workspace when they next list) and returns
+  `422`. A refusal after earlier attempts of unknown outcome keeps the rows, so a Session an
+  earlier attempt made can still be found and deleted; the workspace shows as failed. Refresh
+  sends a new create operation with a fresh window. The three timings are
   `WORKSPACE_CREATE_RETRY_INITIAL_SECONDS`, `_MAX_SECONDS` and `_WINDOW_SECONDS`.
 - Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
   cancelled if activity arrived after the idle check picked the workspace. Resume touches the
@@ -47,23 +55,33 @@ built; nothing here has been measured against a live kagent.
   as deleted, or answer not found. Anything else keeps the rows and returns `502`; the operation
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
   whose create may have been sent replays the idempotent create first and deletes whatever comes
-  back. Delete is refused (`409`) while a delivery is open.
+  back. If the replay is refused for good (or kagent says the request id belongs to a deleted
+  Session) there is no Session to delete and the rows are removed; a reply without a Session id
+  is not trusted and the delete retries. Delete is refused (`409`) while a delivery is open.
 - Archiving a session deletes its kagent Session: a sweep (`WORKSPACE_ARCHIVED_DELETE_SECONDS`,
   default 60) deletes the Session of every archived binding that has no open delivery, and marks
   `kagent_deleted_at` only after kagent confirms. A failed delete is tried again on the next pass.
 - Idle suspend: a sweep (`WORKSPACE_IDLE_CHECK_SECONDS`, default 60) suspends a running workspace that has been quiet for its idle timeout (1
   to 1440 minutes, default 30). Quiet means no preview traffic (`Touch`), no resume and no
-  delivery activity, and no open delivery.
+  delivery activity, and no open delivery. A Session kagent no longer has, or that is failed or
+  being deleted, rejects the idle suspend and marks the workspace as handled until it is used
+  again, so it is not queued every pass; a Session that is mid-change is looked at again shortly.
+  The sweep is not registered while the delivery ledger is missing (see below), and the server
+  logs once that idle suspend is off.
 - Orphan sweep: a Session in kagent that was created for `KAGENT_USER_ID`, belongs to one of the
-  configured provider profiles' Agents, is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
+  configured provider profiles' Agents or to an Agent recorded on a workspace row, is not deleted, is at least `WORKSPACE_ORPHAN_MIN_AGE_SECONDS`
   old (default 600) and that no binding names, is an orphan. It runs on a schedule
   (`WORKSPACE_ORPHAN_SWEEP_SECONDS`, default 3600) and deletes; the command
   `mainloop sweep-orphans` lists them and `--delete` removes them. Both refuse to delete while a
   binding exists that has no Session id yet and whose create was sent, because that create may own
   a listed Session. Each Session is checked against the database again just before it is
-  deleted. The exit status is non-zero if a delete failed or deletion was blocked.
+  deleted. The exit status is non-zero if a delete failed or deletion was blocked, and the
+  scheduled pass logs a warning when it is blocked. kagent records every Session made with the
+  control token as created by the same user, so the creator does not tell Mainloop instances
+  apart: only distinct Agent names do. Instances that share a kagent must not share Agents, or
+  one instance's sweep deletes the other's Sessions.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
-  event carries the workspace lifecycle; the Session is not removed by it.
+  event carries the workspace lifecycle; it is not a removal notice.
 - `WakeForPreview(workspaceID)` and `Touch(workspaceID)` are the entry points the preview proxy
   will call: a running workspace is only touched; otherwise a resume operation is queued once for
   any number of concurrent callers, and the call returns when the Session is ready or fails with
@@ -76,8 +94,9 @@ built; nothing here has been measured against a live kagent.
 - The preview proxy itself (G12), the git gate (SHA resolution, credentials, publication) and the
   per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
 - The delivery ledger (G6a). Open-turn and delivery-activity checks go through an optional
-  `Deliveries` interface that is unset until then, so in the server today a workspace is never
-  considered to have an open delivery.
+  `Deliveries` interface that is unset until then. Interim: with it unset the idle-suspend sweep is
+  not registered, so nothing is suspended for being idle (explicit suspends and archived deletes
+  still work, but their open-delivery guards see nothing). This ends when the ledger is wired.
 
 ## Lifecycle
 

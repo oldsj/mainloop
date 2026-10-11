@@ -64,7 +64,7 @@ func TestCreateBindsOneSessionAndPublishes(t *testing.T) {
 	if n := h.events(); n != 2 { // accepted, then bound
 		t.Fatalf("workspace:updated events: %d", n)
 	}
-	if h.op(w.WorkspaceId, "create").State != string(dbstate.OpSucceeded) {
+	if h.op(w.WorkspaceId, "create").State != dbstate.OpSucceeded {
 		t.Fatal("create op not succeeded")
 	}
 }
@@ -78,11 +78,7 @@ func TestCrashMidCreateResumesWithoutSecondSession(t *testing.T) {
 	if err != nil || w.ObservedState != api.WorkspaceObservedStateResuming {
 		t.Fatalf("%v %+v", err, w)
 	}
-	req, err := h.svc.createRequest(h.row(w.WorkspaceId))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := h.client.CreateSession(bg, req) // the lost attempt
+	first, err := h.client.CreateSession(bg, h.row(w.WorkspaceId).createRequest()) // the lost attempt
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +159,13 @@ func TestRetriesGiveUpAfterTheWindowAndRefreshRestartsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	op := h.op(w.WorkspaceId, "create")
-	if op.State != string(dbstate.OpRetrying) || op.FirstFailedAt == nil {
+	if op.State != dbstate.OpRetrying || op.FirstFailedAt == nil {
 		t.Fatalf("%+v", op)
 	}
 	h.exec(`UPDATE workspace_ops SET first_failed_at = now() - interval '601 seconds'`)
 	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
 	h.due()
-	eventually(t, "gave up", func() bool { return h.op(w.WorkspaceId, "create").State == string(dbstate.OpGaveUp) })
+	eventually(t, "gave up", func() bool { return h.op(w.WorkspaceId, "create").State == dbstate.OpGaveUp })
 	got, err := h.svc.Get(bg, w.WorkspaceId)
 	if err != nil || got.ObservedState != api.WorkspaceObservedStateFailed || !strings.Contains(*got.Detail, "Refresh") {
 		t.Fatalf("%v %+v", err, got)
@@ -182,7 +178,7 @@ func TestRetriesGiveUpAfterTheWindowAndRefreshRestartsThem(t *testing.T) {
 		t.Fatalf("%v %+v", err, got)
 	}
 	op = h.op(w.WorkspaceId, "create")
-	if op.State != string(dbstate.OpRetrying) || op.Failures != 1 {
+	if op.State != dbstate.OpRetrying || op.Failures != 1 {
 		t.Fatalf("%+v", op)
 	}
 	h.due()
@@ -359,8 +355,7 @@ func TestDeleteOfAnUnknownCreateDeletesTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := h.svc.createRequest(h.row(w.WorkspaceId))
-	if _, err := h.client.CreateSession(bg, req); err != nil { // the attempt whose reply was lost
+	if _, err := h.client.CreateSession(bg, h.row(w.WorkspaceId).createRequest()); err != nil { // the attempt whose reply was lost
 		t.Fatal(err)
 	}
 	h.exec(`UPDATE workspace_ops SET attempts = 1`)

@@ -18,6 +18,11 @@ CREATE TABLE workspaces (
     branch text NOT NULL,
     depth integer NOT NULL DEFAULT 0 CHECK (depth BETWEEN 0 AND 1000),
     agent_kind text NOT NULL CHECK (agent_kind ~ '^[a-z][a-z0-9_-]{0,79}$'),
+    -- The kagent Agent resolved from agent_kind when the workspace was created. Every replay of
+    -- the create reuses it, so a config change cannot turn a retry into a different request, and
+    -- the orphan sweep still recognises Sessions made under an earlier config.
+    agent_namespace text NOT NULL,
+    agent_name text NOT NULL,
     -- The ports the preview URL may reach: [{"name": ..., "number": ...}].
     ports jsonb NOT NULL DEFAULT '[]',
     idle_timeout_minutes integer NOT NULL DEFAULT 30 CHECK (idle_timeout_minutes BETWEEN 1 AND 1440),

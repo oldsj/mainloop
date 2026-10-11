@@ -163,7 +163,7 @@ func (s *Service) insertOp(ctx context.Context, q *dbq.Queries, workspaceID stri
 	open, err := q.GetOpenWorkspaceOp(ctx, workspaceID)
 	switch {
 	case err == nil:
-		if open.Kind == string(kind) {
+		if open.Kind == kind {
 			return open, nil
 		}
 		return dbq.WorkspaceOp{}, ErrBusy
@@ -172,7 +172,7 @@ func (s *Service) insertOp(ctx context.Context, q *dbq.Queries, workspaceID stri
 	}
 	id := uuid.NewString()
 	op, err := q.InsertWorkspaceOp(ctx, dbq.InsertWorkspaceOpParams{
-		ID: id, WorkspaceID: workspaceID, Kind: string(kind), IdempotencyKey: string(kind) + ":" + id,
+		ID: id, WorkspaceID: workspaceID, Kind: kind, IdempotencyKey: string(kind) + ":" + id,
 		QuietSince: quietSince,
 	})
 	var pg *pgconn.PgError
@@ -188,8 +188,8 @@ func (s *Service) insertOp(ctx context.Context, q *dbq.Queries, workspaceID stri
 	return op, nil
 }
 
-func isOpen(state string) bool {
-	return state == string(dbstate.OpPending) || state == string(dbstate.OpRetrying)
+func isOpen(state dbstate.WorkspaceOpState) bool {
+	return state == dbstate.OpPending || state == dbstate.OpRetrying
 }
 
 // await waits for the operation to leave the open states, up to the configured wait. It returns
@@ -202,7 +202,7 @@ func (s *Service) await(ctx context.Context, op dbq.WorkspaceOp) (dbq.WorkspaceO
 		cur, err := q.GetWorkspaceOp(ctx, op.ID)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			op.State = string(dbstate.OpSucceeded)
+			op.State = dbstate.OpSucceeded
 			return op, nil
 		case err != nil:
 			return op, err
@@ -407,9 +407,11 @@ func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (
 	if err != nil {
 		return api.WorkspaceLifecycle{}, err
 	}
-	if dbstate.WorkspaceOpState(final.State) == dbstate.OpRejected {
-		// kagent refused the request itself: nothing was made, so nothing is kept.
-		if _, err := dbq.New(s.Pool).DeleteSession(context.WithoutCancel(ctx), p.id); err != nil {
+	if final.State == dbstate.OpRejected && final.Attempts == 1 {
+		// kagent refused the very first request: nothing was made, so nothing is kept. A refusal
+		// after earlier attempts of unknown outcome keeps the rows (the workspace shows as
+		// failed) so a Session an earlier attempt made can still be found and deleted.
+		if err := s.dropRejected(context.WithoutCancel(ctx), p.id, final); err != nil {
 			s.Log.WarnContext(ctx, "could not remove a rejected workspace", "workspace", p.id, "error", err)
 		}
 		return api.WorkspaceLifecycle{}, outcome(final)
@@ -419,6 +421,26 @@ func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (
 		return api.WorkspaceLifecycle{}, err
 	}
 	return s.lifecycle(ctx, w), nil
+}
+
+// dropRejected removes a workspace whose create kagent refused and publishes its failed state.
+// The event contract has no removal event; clients drop the workspace when they next list.
+func (s *Service) dropRejected(ctx context.Context, id string, create dbq.WorkspaceOp) error {
+	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		q := dbq.New(tx)
+		row, err := q.GetWorkspaceForOp(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, err := q.DeleteSession(ctx, id); err != nil {
+			return nil, err
+		}
+		lc := project(wsRow(row), nil, &create, time.Time{})
+		return []events.Draft{{UserID: row.UserID, Type: events.TypeWorkspaceUpdated, Payload: api.EventWorkspaceUpdated{Workspace: lc}}}, nil
+	})
 }
 
 func baseBranch(ref string) string {
@@ -448,9 +470,11 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 	if body.AgentKind != nil && *body.AgentKind != "" {
 		kind = *body.AgentKind
 	}
-	if _, err := s.Providers.Resolve(kind, "agent", true); err != nil {
+	profile, err := s.Providers.Resolve(kind, "agent", true)
+	if err != nil {
 		return plan{}, &InvalidError{err.Error()}
 	}
+	agent := profile.Agents["agent"]
 	depth := 0
 	if body.Depth != nil {
 		depth = *body.Depth
@@ -481,7 +505,6 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 
 	q := dbq.New(s.Pool)
 	var project dbq.Project
-	var err error
 	if hasProject {
 		project, err = q.GetOwnedProject(ctx, dbq.GetOwnedProjectParams{ID: *body.ProjectId, UserID: s.OwnerID})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -528,7 +551,8 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 		id: id, kind: kind, project: project, repoURL: project.HTMLURL, ref: ref, branch: branch,
 		insert: dbq.InsertWorkspaceParams{
 			ID: id, UserID: s.OwnerID, ProjectID: project.ID, RepoURL: project.HTMLURL, Ref: ref,
-			Branch: branch, Depth: int32(depth), AgentKind: kind, Ports: portJSON,
+			Branch: branch, Depth: int32(depth), AgentKind: kind, AgentNamespace: agent.Namespace, AgentName: agent.Name,
+			Ports:              portJSON,
 			IdleTimeoutMinutes: int32(idle), Environment: env, RequestID: uuid.NewString(),
 		},
 	}, nil

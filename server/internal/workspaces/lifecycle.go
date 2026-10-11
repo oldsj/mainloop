@@ -80,14 +80,14 @@ func project(w wsRow, sess *kagentapi.Session, create *dbq.WorkspaceOp, delivery
 		state, detail = stateOf(sess)
 	case w.KagentSessionID == nil && create != nil:
 		switch create.State {
-		case string(dbstate.OpRejected), string(dbstate.OpGaveUp):
+		case dbstate.OpRejected, dbstate.OpGaveUp:
 			msg := "Creating the workspace stopped"
 			if create.LastError != nil {
 				msg += ": " + *create.LastError
 			}
 			msg += ". Refresh to try again."
 			state, detail = api.WorkspaceObservedStateFailed, &msg
-		case string(dbstate.OpPending), string(dbstate.OpRetrying):
+		case dbstate.OpPending, dbstate.OpRetrying:
 			state = api.WorkspaceObservedStateResuming
 			msg := "Starting."
 			if create.LastError != nil {

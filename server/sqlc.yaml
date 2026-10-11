@@ -68,6 +68,18 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: GrantPermission
               }
+          - column: workspace_ops.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: WorkspaceOpKind
+              }
+          - column: workspace_ops.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: WorkspaceOpState
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

@@ -40,14 +40,40 @@ func (s *Service) Loop() reconcile.Loop {
 
 // Register adds the lifecycle loop and the periodic sweeps to the runner.
 func (s *Service) Register(r *reconcile.Runner) {
-	w := s.Config.Workspaces
 	r.Add(s.Loop())
-	r.AddSweep(reconcile.Sweep{Name: "workspace-idle", Every: w.IdleCheckInterval.Duration(), Run: s.SuspendIdle})
-	r.AddSweep(reconcile.Sweep{Name: "workspace-archived", Every: w.ArchivedDeleteInterval.Duration(), Run: s.DeleteArchived})
-	r.AddSweep(reconcile.Sweep{Name: "workspace-orphans", Every: w.OrphanSweepInterval.Duration(), Run: func(ctx context.Context) error {
-		_, err := s.SweepOrphans(ctx, OrphanOptions{Delete: true})
-		return err
-	}})
+	for _, sw := range s.sweeps() {
+		r.AddSweep(sw)
+	}
+}
+
+func (s *Service) sweeps() []reconcile.Sweep {
+	w := s.Config.Workspaces
+	out := []reconcile.Sweep{
+		{Name: "workspace-archived", Every: w.ArchivedDeleteInterval.Duration(), Run: s.DeleteArchived},
+		{Name: "workspace-orphans", Every: w.OrphanSweepInterval.Duration(), Run: s.scheduledOrphanSweep},
+	}
+	// Without the delivery ledger neither the open-turn check nor delivery activity exists, so the
+	// sweep would suspend a workspace in the middle of a turn. Interim: it stays off until the
+	// ledger is wired.
+	if s.Deliveries == nil {
+		s.Log.Warn("idle suspend is off: no delivery ledger is wired, so a running turn cannot be seen")
+	} else {
+		out = append(out, reconcile.Sweep{Name: "workspace-idle", Every: w.IdleCheckInterval.Duration(), Run: s.SuspendIdle})
+	}
+	return out
+}
+
+// scheduledOrphanSweep deletes orphans and says so when it could not, since nothing else is
+// watching the scheduled pass.
+func (s *Service) scheduledOrphanSweep(ctx context.Context) error {
+	rep, err := s.SweepOrphans(ctx, OrphanOptions{Delete: true})
+	if rep.Blocked != "" {
+		s.Log.WarnContext(ctx, "orphan sweep blocked", "reason", rep.Blocked, "orphans", len(rep.Orphans))
+	}
+	if len(rep.Deleted) > 0 {
+		s.Log.InfoContext(ctx, "orphan sessions deleted", "count", len(rep.Deleted))
+	}
+	return err
 }
 
 // result is what a handler learned. A zero state with err set is a transient failure.
@@ -71,7 +97,7 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	if err != nil {
 		return reconcile.Retry(), err
 	}
-	if op.State != string(dbstate.OpPending) && op.State != string(dbstate.OpRetrying) {
+	if op.State != dbstate.OpPending && op.State != dbstate.OpRetrying {
 		return reconcile.Recorded(), nil // cancelled while queued
 	}
 	row, err := q.GetWorkspaceForOp(ctx, op.WorkspaceID)
@@ -80,7 +106,7 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	}
 	w := wsRow(row)
 	var res result
-	switch dbstate.WorkspaceOpKind(op.Kind) {
+	switch op.Kind {
 	case dbstate.OpCreate:
 		res = s.doCreate(ctx, w)
 	case dbstate.OpSuspend:
@@ -101,7 +127,7 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 // finalize records the outcome fenced on the claim, with the domain change and the event in one
 // transaction. A claim that no longer holds the row (cancelled, lease lost) records nothing.
 func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.WorkspaceOp, w wsRow, res result) error {
-	kind := dbstate.WorkspaceOpKind(op.Kind)
+	kind := op.Kind
 	retry, delay := false, time.Duration(0)
 	if res.state == "" {
 		perm, reason := classify(res.err)
@@ -135,7 +161,7 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 		} else {
 			n, err = q.FinishWorkspaceOp(ctx, dbq.FinishWorkspaceOpParams{
 				ID: c.ID, LeaseOwner: &c.Owner, Attempts: attempts,
-				State: string(res.state), LastError: lastError,
+				State: res.state, LastError: lastError,
 			})
 		}
 		if err != nil || n == 0 {
@@ -246,6 +272,9 @@ func classify(err error) (permanent bool, reason string) {
 			return true, "kagent already used the request id for a different workspace"
 		case connect.CodeUnimplemented:
 			return true, "kagent does not support the request"
+		case connect.CodeFailedPrecondition:
+			// The request id belongs to a Session that was deleted; a replay cannot bring it back.
+			return true, "the runtime session for this request was deleted"
 		}
 		return false, "kagent reported an error"
 	case errors.As(err, &un):
@@ -265,19 +294,28 @@ func clip(s string) string {
 	return s
 }
 
+// refused is kagent rejecting a create outright: an answer about the request, not about whether
+// kagent or the network is healthy. Credential and configuration refusals say nothing about
+// whether an earlier attempt made a Session, so they are not refusals here.
+func refused(err error) bool {
+	var se *kagent.SessionError
+	if !errors.As(err, &se) {
+		return false
+	}
+	perm, _ := classify(err)
+	return perm
+}
+
 func notFoundErr(err error) bool {
 	var se *kagent.SessionError
 	return errors.As(err, &se) && se.Code == connect.CodeNotFound
 }
 
-func (s *Service) createRequest(w wsRow) (*kagentapi.CreateSessionRequest, error) {
-	profile, err := s.Providers.Resolve(w.AgentKind, "agent", false)
-	if err != nil {
-		return nil, err
-	}
-	ref := profile.Agents["agent"]
+// createRequest is the one request every attempt sends: the agent was resolved and stored when the
+// workspace was created, so later config changes cannot make a replay a different request.
+func (w wsRow) createRequest() *kagentapi.CreateSessionRequest {
 	req := &kagentapi.CreateSessionRequest{
-		Agent:     &kagentapi.ResourceReference{Namespace: ref.Namespace, Name: ref.Name},
+		Agent:     &kagentapi.ResourceReference{Namespace: w.AgentNamespace, Name: w.AgentName},
 		RequestId: w.RequestID,
 		Workspace: &kagentapi.Workspace{Repo: w.RepoURL, Ref: w.Ref, Branch: w.Branch, Depth: w.Depth},
 	}
@@ -286,18 +324,14 @@ func (s *Service) createRequest(w wsRow) (*kagentapi.CreateSessionRequest, error
 			Image: e.Image, Platform: e.Platform, PolicyIdentity: e.PolicyIdentity,
 		}
 	}
-	return req, nil
+	return req
 }
 
 func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 	if w.KagentSessionID != nil {
 		return result{state: dbstate.OpSucceeded, sess: s.observe(ctx, w.sessionID())}
 	}
-	req, err := s.createRequest(w)
-	if err != nil {
-		return result{state: dbstate.OpRejected, reason: "the provider is not available: " + err.Error()}
-	}
-	sess, err := s.Kagent.CreateSession(ctx, req)
+	sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
 	if err != nil {
 		return result{err: err}
 	}
@@ -350,16 +384,21 @@ func (s *Service) doSuspend(ctx context.Context, op dbq.WorkspaceOp, w wsRow) re
 	} else if open {
 		return result{state: dbstate.OpRejected, reason: "a turn is open"}
 	}
+	idle := op.QuietSince != nil // queued by the idle sweep, not asked for
 	sess, err := s.Kagent.GetSession(ctx, w.sessionID())
 	if err != nil {
+		if idle && notFoundErr(err) {
+			// Mark the workspace so the sweep does not queue the same doomed suspend every pass.
+			return result{state: dbstate.OpRejected, reason: "kagent no longer has the session", idle: true}
+		}
 		return result{err: err}
 	}
+	busy := sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND ||
+		sess.GetOperation() == kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME
 	switch {
 	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED:
 		return result{state: dbstate.OpSucceeded, sess: sess, idle: true}
-	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY &&
-		sess.GetOperation() != kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND &&
-		sess.GetOperation() != kagentapi.RuntimeOperation_RUNTIME_OPERATION_RESUME:
+	case sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_READY && !busy:
 		sess, err = s.Kagent.SuspendSession(ctx, w.sessionID())
 		if err != nil {
 			return result{err: err}
@@ -369,8 +408,12 @@ func (s *Service) doSuspend(ctx context.Context, op dbq.WorkspaceOp, w wsRow) re
 			return result{state: dbstate.OpSucceeded, sess: sess, idle: true}
 		}
 		return result{err: &unconfirmed{"kagent did not confirm the suspend"}}
+	case idle && (busy || sess.GetState() == kagentapi.RuntimeState_RUNTIME_STATE_CREATING):
+		return result{err: &unconfirmed{"the workspace is changing state"}} // look again shortly
 	}
-	return result{state: dbstate.OpRejected, reason: "the workspace is not in a state that can be suspended", sess: sess}
+	// Failed, deleting or otherwise unsuitable: an idle suspend marks the workspace, so the sweep
+	// leaves it alone until it is used again.
+	return result{state: dbstate.OpRejected, reason: "the workspace is not in a state that can be suspended", sess: sess, idle: idle}
 }
 
 func (s *Service) doResume(ctx context.Context, w wsRow) result {
@@ -418,15 +461,19 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		}
 		// A create may have reached kagent without the reply being recorded. The idempotent
 		// create returns that Session, so the delete removes it rather than leaking it.
-		req, err := s.createRequest(w)
-		if err != nil {
-			return result{err: &transient{err}}
+		sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
+		if refused(err) {
+			// kagent refuses the request for good (or its id belongs to a deleted Session), so
+			// no Session exists to delete; Create drops the rows on the same refusal.
+			return result{state: dbstate.OpSucceeded, purge: true}
 		}
-		sess, err := s.Kagent.CreateSession(ctx, req)
 		if err != nil {
 			return result{err: &transient{err}}
 		}
 		sid = sess.GetId()
+		if sid == "" {
+			return result{err: &unconfirmed{"kagent returned no session id"}}
+		}
 		if n, err := q.BindWorkspaceSession(ctx, dbq.BindWorkspaceSessionParams{SessionID: w.ID, KagentSessionID: &sid}); err != nil || n == 0 {
 			return result{err: &unconfirmed{"could not record the runtime session before deleting it"}}
 		}

@@ -2,9 +2,9 @@
 
 -- name: InsertWorkspace :one
 INSERT INTO workspaces (
-    id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, ports, idle_timeout_minutes,
-    environment, request_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name,
+    ports, idle_timeout_minutes, environment, request_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING *;
 
 -- name: GetWorkspaceRow :one
@@ -160,3 +160,7 @@ WHERE sel.project_id = $1 AND v.validation_status = 'static_validated';
 -- Whether a create was ever sent: kagent may then own a Session Mainloop has not recorded.
 SELECT EXISTS (
     SELECT 1 FROM workspace_ops WHERE workspace_id = $1 AND kind = 'create' AND attempts > 0);
+
+-- name: ListWorkspaceAgents :many
+-- Every Agent a workspace was created on, which may no longer be the configured one.
+SELECT DISTINCT agent_namespace, agent_name FROM workspaces;

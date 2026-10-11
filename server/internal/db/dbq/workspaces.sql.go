@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 const bindWorkspaceSession = `-- name: BindWorkspaceSession :execrows
@@ -32,7 +34,7 @@ func (q *Queries) BindWorkspaceSession(ctx context.Context, arg BindWorkspaceSes
 }
 
 const bumpWorkspace = `-- name: BumpWorkspace :one
-UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, ports, idle_timeout_minutes, environment, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, request_id, last_active_at, idle_suspended_at, created_at, updated_at
 `
 
 func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, error) {
@@ -47,6 +49,8 @@ func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, erro
 		&i.Branch,
 		&i.Depth,
 		&i.AgentKind,
+		&i.AgentNamespace,
+		&i.AgentName,
 		&i.Ports,
 		&i.IdleTimeoutMinutes,
 		&i.Environment,
@@ -104,7 +108,7 @@ type FinishWorkspaceOpParams struct {
 	ID         string
 	LeaseOwner *string
 	Attempts   int32
-	State      string
+	State      dbstate.WorkspaceOpState
 	LastError  *string
 }
 
@@ -229,7 +233,7 @@ func (q *Queries) GetWorkspaceEnvironmentVersion(ctx context.Context, projectID 
 }
 
 const getWorkspaceForOp = `-- name: GetWorkspaceForOp :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.id = $1
@@ -244,6 +248,8 @@ type GetWorkspaceForOpRow struct {
 	Branch             string
 	Depth              int32
 	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
@@ -269,6 +275,8 @@ func (q *Queries) GetWorkspaceForOp(ctx context.Context, id string) (GetWorkspac
 		&i.Branch,
 		&i.Depth,
 		&i.AgentKind,
+		&i.AgentNamespace,
+		&i.AgentName,
 		&i.Ports,
 		&i.IdleTimeoutMinutes,
 		&i.Environment,
@@ -310,7 +318,7 @@ func (q *Queries) GetWorkspaceOp(ctx context.Context, id string) (WorkspaceOp, e
 }
 
 const getWorkspaceRow = `-- name: GetWorkspaceRow :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -331,6 +339,8 @@ type GetWorkspaceRowRow struct {
 	Branch             string
 	Depth              int32
 	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
@@ -356,6 +366,8 @@ func (q *Queries) GetWorkspaceRow(ctx context.Context, arg GetWorkspaceRowParams
 		&i.Branch,
 		&i.Depth,
 		&i.AgentKind,
+		&i.AgentNamespace,
+		&i.AgentName,
 		&i.Ports,
 		&i.IdleTimeoutMinutes,
 		&i.Environment,
@@ -373,10 +385,10 @@ func (q *Queries) GetWorkspaceRow(ctx context.Context, arg GetWorkspaceRowParams
 const insertWorkspace = `-- name: InsertWorkspace :one
 
 INSERT INTO workspaces (
-    id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, ports, idle_timeout_minutes,
-    environment, request_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, ports, idle_timeout_minutes, environment, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+    id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name,
+    ports, idle_timeout_minutes, environment, request_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, request_id, last_active_at, idle_suspended_at, created_at, updated_at
 `
 
 type InsertWorkspaceParams struct {
@@ -388,6 +400,8 @@ type InsertWorkspaceParams struct {
 	Branch             string
 	Depth              int32
 	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
@@ -405,6 +419,8 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 		arg.Branch,
 		arg.Depth,
 		arg.AgentKind,
+		arg.AgentNamespace,
+		arg.AgentName,
 		arg.Ports,
 		arg.IdleTimeoutMinutes,
 		arg.Environment,
@@ -420,6 +436,8 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 		&i.Branch,
 		&i.Depth,
 		&i.AgentKind,
+		&i.AgentNamespace,
+		&i.AgentName,
 		&i.Ports,
 		&i.IdleTimeoutMinutes,
 		&i.Environment,
@@ -441,7 +459,7 @@ RETURNING id, workspace_id, kind, idempotency_key, state, attempts, next_attempt
 type InsertWorkspaceOpParams struct {
 	ID             string
 	WorkspaceID    string
-	Kind           string
+	Kind           dbstate.WorkspaceOpKind
 	IdempotencyKey string
 	QuietSince     *time.Time
 }
@@ -631,8 +649,38 @@ func (q *Queries) ListLatestCreateOps(ctx context.Context, userID string) ([]Wor
 	return items, nil
 }
 
+const listWorkspaceAgents = `-- name: ListWorkspaceAgents :many
+SELECT DISTINCT agent_namespace, agent_name FROM workspaces
+`
+
+type ListWorkspaceAgentsRow struct {
+	AgentNamespace string
+	AgentName      string
+}
+
+// Every Agent a workspace was created on, which may no longer be the configured one.
+func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]ListWorkspaceAgentsRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWorkspaceAgentsRow{}
+	for rows.Next() {
+		var i ListWorkspaceAgentsRow
+		if err := rows.Scan(&i.AgentNamespace, &i.AgentName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceRows = `-- name: ListWorkspaceRows :many
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -649,6 +697,8 @@ type ListWorkspaceRowsRow struct {
 	Branch             string
 	Depth              int32
 	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
@@ -679,6 +729,8 @@ func (q *Queries) ListWorkspaceRows(ctx context.Context, userID string) ([]ListW
 			&i.Branch,
 			&i.Depth,
 			&i.AgentKind,
+			&i.AgentNamespace,
+			&i.AgentName,
 			&i.Ports,
 			&i.IdleTimeoutMinutes,
 			&i.Environment,

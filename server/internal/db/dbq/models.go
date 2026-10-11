@@ -194,6 +194,8 @@ type Workspace struct {
 	Branch             string
 	Depth              int32
 	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
@@ -207,9 +209,9 @@ type Workspace struct {
 type WorkspaceOp struct {
 	ID             string
 	WorkspaceID    string
-	Kind           string
+	Kind           dbstate.WorkspaceOpKind
 	IdempotencyKey string
-	State          string
+	State          dbstate.WorkspaceOpState
 	Attempts       int32
 	NextAttemptAt  time.Time
 	LeaseOwner     *string
