@@ -2,6 +2,7 @@
 
 import asyncio
 import atexit
+import hashlib
 import os
 import shutil
 import signal
@@ -280,6 +281,7 @@ class GitBackedUpstream:
             if service == "git-receive-pack":
                 if (
                     not self.authority.lock.locked()
+                    or not self.authority.records
                     or self.authority.history[-1] != PublicationState.DISPATCHING
                 ):
                     raise AssertionError(
@@ -387,6 +389,7 @@ class GitFixtureCase(unittest.IsolatedAsyncioTestCase):
         self.fake = GitBackedUpstream(self.repo, self.authority)
         self.gate_responses = []
         self.client_bodies = []
+        self.post_requests = []
 
     async def commit(self, message):
         with (self.client / "file").open("a") as target:
@@ -413,7 +416,13 @@ class GitFixtureCase(unittest.IsolatedAsyncioTestCase):
             )
 
             async def observed(scope, receive, send):
+                incoming = bytearray()
+                status = None
+
                 async def capture(message):
+                    nonlocal status
+                    if message["type"] == "http.response.start":
+                        status = message["status"]
                     if message["type"] == "http.response.body":
                         self.gate_responses.append(message.get("body", b""))
                     await send(message)
@@ -422,9 +431,21 @@ class GitFixtureCase(unittest.IsolatedAsyncioTestCase):
                     message = await receive()
                     if scope["method"] == "POST":
                         self.client_bodies.append(message.get("body", b""))
+                        incoming.extend(message.get("body", b""))
                     return message
 
                 await push(scope, capture_receive, capture)
+                if scope["method"] == "POST":
+                    self.post_requests.append(
+                        {
+                            "body": bytes(incoming),
+                            "status": status,
+                            "records": len(self.authority.records),
+                            "writes": len(self.fake.receives),
+                            "upstream_requests": len(self.fake.requests),
+                            "states": tuple(self.authority.history),
+                        }
+                    )
 
             async with server(read) as (read_origin, read_host), server(observed) as (
                 push_origin,
@@ -472,6 +493,65 @@ class GitFixtureCase(unittest.IsolatedAsyncioTestCase):
 
 
 class RealGitTransportTests(GitFixtureCase):
+    async def test_large_push_probes_without_publication_then_dispatches_exact_body(
+        self,
+    ):
+        # Incompressible fixture exceeds Git's default HTTP buffer without changing it.
+        (self.client / "payload").write_bytes(
+            b"".join(
+                hashlib.sha256(index.to_bytes(4, "big")).digest()
+                for index in range(65536)
+            )
+        )
+        head = await self.commit("large fixture")
+        async with self.transport() as (_, url, _):
+            code, _, _ = await self.push(url)
+            self.assertEqual(code, 0)
+            self.assertEqual(len(self.post_requests), 2)
+            probe, actual = self.post_requests
+            self.assertEqual(
+                probe,
+                {
+                    "body": b"0000",
+                    "status": 200,
+                    "records": 0,
+                    "writes": 0,
+                    "upstream_requests": 1,  # Initial GET only, no probe upstream I/O.
+                    "states": (),
+                },
+            )
+            self.assertGreater(len(actual["body"]), 1024 * 1024)
+            self.assertEqual(actual["status"], 200)
+            self.assertEqual((actual["records"], actual["writes"]), (1, 1))
+            self.assertEqual(
+                actual["states"],
+                (
+                    PublicationState.PENDING,
+                    PublicationState.DISPATCHING,
+                    PublicationState.CONFIRMED,
+                ),
+            )
+            self.assertEqual(self.fake.receives, [actual["body"]])
+            evidence = self.authority.records[0]
+            self.assertEqual(
+                evidence.body_sha256, hashlib.sha256(actual["body"]).hexdigest()
+            )
+            self.assertEqual(evidence.body_bytes, len(actual["body"]))
+            self.assertEqual(evidence.attempt.update.new_oid, head)
+            self.assertEqual(
+                (
+                    await command(
+                        "/usr/bin/git",
+                        "--git-dir=" + str(self.repo),
+                        "rev-parse",
+                        "feature",
+                    )
+                )[1]
+                .strip()
+                .decode(),
+                head,
+            )
+
     async def test_clone_fetch_versions_shallow_exact_sha_and_create_fast_forward(self):
         async with self.transport() as (read_url, push_url, _):
             first = await self.commit("one")

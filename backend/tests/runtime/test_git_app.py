@@ -455,6 +455,124 @@ class GitListenerTests(AppUpstreamFixture, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.auth_requests)
         self.assertFalse(self.git_requests)
 
+    async def test_probe_through_listener_never_mints_or_dispatches(self):
+        self.authority = Authority()
+        with (
+            tempfile.TemporaryDirectory(dir=fixture_root()) as directory,
+            patch.multiple(
+                settings, git_transport_enabled=True, push_gate_enabled=True
+            ),
+        ):
+            _, push = git_app.create_applications(
+                self.authority,
+                Path(directory),
+                upstream_factory=lambda repository, limits: self.upstream(repository),
+            )
+            status, body, _ = await asgi(
+                push,
+                body=b"0000",
+                headers=[
+                    (b"host", b"mainloop-git-push.mainloop.svc.cluster.local"),
+                    (b"authorization", f"Bearer {PUSH}".encode()),
+                    (b"content-type", b"application/x-git-receive-pack-request"),
+                    (b"content-length", b"4"),
+                ],
+            )
+            self.assertEqual((status, body), (200, b""))
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(self.authority.records, [])
+        self.assertEqual(self.authority.history, [])
+        self.assertFalse(self.auth_requests)
+        self.assertFalse(self.git_requests)
+
+    async def test_wrapper_denials_keep_responses_and_log_only_closed_fields(self):
+        _, push = self.applications()
+        self.authority.authenticate = AsyncMock(
+            side_effect=AssertionError("fixture_exception_secret")
+        )
+        headers = [
+            (b"host", b"mainloop-git-push.mainloop.svc.cluster.local"),
+            (b"authorization", f"Bearer {PUSH}".encode()),
+            (b"cookie", b"fixture_header_secret"),
+            (b"x-mainloop-request-id", b"f" * 32),
+        ]
+        records = []
+        with (
+            patch.multiple(
+                settings, git_transport_enabled=False, push_gate_enabled=False
+            ),
+            self.assertLogs(
+                "mainloop.push_gate.transport", level="WARNING"
+            ) as disabled,
+        ):
+            status, body, messages = await asgi(
+                push, body=b"fixture_body_secret", headers=headers
+            )
+        self.assertEqual((status, body), (403, b"git_transport_disabled\n"))
+        request_id = dict(messages[0]["headers"])[b"x-mainloop-request-id"].decode()
+        self.assertRegex(request_id, r"^[0-9a-f]{32}$")
+        self.assertNotEqual(request_id, "f" * 32)
+        self.assertEqual(
+            disabled.records[0].args,
+            (request_id, "git_transport_disabled", "listener_flags"),
+        )
+        records.extend(disabled.records)
+        with patch.multiple(
+            settings, git_transport_enabled=True, push_gate_enabled=True
+        ):
+            with self.assertLogs(
+                "mainloop.push_gate.transport", level="WARNING"
+            ) as route:
+                status, body, messages = await asgi(
+                    push,
+                    path=b"/fixture_path_secret",
+                    body=b"fixture_body_secret",
+                    headers=headers,
+                )
+            self.assertEqual((status, body), (403, b"route_denied\n"))
+            request_id = dict(messages[0]["headers"])[b"x-mainloop-request-id"].decode()
+            self.assertEqual(
+                route.records[0].args, (request_id, "path_invalid", "listener_route")
+            )
+            records.extend(route.records)
+            for error, code in (
+                (TransportError("fixture_log_secret"), "transport_unavailable"),
+                (ValueError("fixture_exception_secret", PUSH), "route_denied"),
+            ):
+                with (
+                    patch.object(push.template, "request", side_effect=error),
+                    self.assertLogs(
+                        "mainloop.push_gate.transport", level="WARNING"
+                    ) as unknown,
+                ):
+                    status, body, messages = await asgi(push, headers=headers)
+                self.assertEqual((status, body), (403, b"route_denied\n"))
+                request_id = dict(messages[0]["headers"])[
+                    b"x-mainloop-request-id"
+                ].decode()
+                self.assertEqual(
+                    unknown.records[0].args, (request_id, code, "listener_route")
+                )
+                records.extend(unknown.records)
+        self.authority.authenticate.assert_not_awaited()
+        self.assertFalse(self.auth_requests)
+        self.assertFalse(self.git_requests)
+        self.assertEqual(len(records), 4)
+        rendered = "\n".join(record.getMessage() for record in records)
+        for secret in (
+            PUSH,
+            READ,
+            "fixture_header_secret",
+            "fixture_body_secret",
+            "fixture_path_secret",
+            "fixture_log_secret",
+            "fixture_exception_secret",
+        ):
+            self.assertNotIn(secret, rendered)
+        for record in records:
+            self.assertIsNone(record.exc_info)
+            self.assertIsNone(record.stack_info)
+
     async def test_enabled_listeners_use_correct_purpose_and_share_slot(self):
         read, push = self.applications()
         self.assertIs(read.slot, push.slot)
