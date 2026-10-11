@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { Plus } from 'lucide-react';
+import { Activity, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -23,6 +23,14 @@ export function DesktopShell({ children }: { children: ReactNode }) {
           >
             <Plus aria-hidden="true" />
             new agent session
+          </Link>
+          <Link
+            to="/health"
+            data-testid="header-health"
+            className={cn(buttonVariants({ variant: 'ghost' }))}
+          >
+            <Activity aria-hidden="true" />
+            health
           </Link>
           <ThemeSelector />
         </nav>

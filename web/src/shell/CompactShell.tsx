@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
+import { Activity, Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
@@ -47,6 +47,14 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
           $ mainloop
         </Link>
         <nav className="gap-xs ml-auto flex items-center" aria-label="Primary">
+          <Link
+            to="/health"
+            data-testid="header-health"
+            aria-label="Orchestration health"
+            className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
+          >
+            <Activity aria-hidden="true" />
+          </Link>
           <Link
             to="/agents"
             data-testid="header-new-agent"
@@ -97,10 +105,11 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
               tab === id ? 'bg-accent text-primary' : 'text-muted-foreground'
             )}
           >
-            <span className="relative inline-flex">
+            {/* The badges sit in the row with the icon, so none can spill into the next tab's label. */}
+            <span className="gap-xs flex items-center">
               <Icon className="size-4" aria-hidden="true" />
               {id === 'inbox' && (
-                <span className="absolute -top-2 -right-3 flex items-center gap-0.5">
+                <span className="flex items-center gap-0.5">
                   <InboxBadge />
                   <TasksBadge compact />
                 </span>
