@@ -1,12 +1,27 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router';
-import { render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { HttpResponse } from 'msw';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { createAppRouter } from '@/router';
 import { server } from '@/test/msw/server';
-import { session } from './test/fixtures';
-import { otherListReads, serveSession } from './test/handlers';
+import { attentionSnapshot, native, session, type SessionFixture } from './test/fixtures';
+import {
+  attentionRead,
+  nativeReadWith,
+  otherListReads,
+  sessionAction,
+  sessionRead,
+  serveSession
+} from './test/handlers';
+
+// The session reads here would otherwise queue behind the app's read limiter. See fastReads.ts.
+vi.mock('@/api/middleware', async (importOriginal) => {
+  const { withFastReads } = await import('./test/fastReads');
+  return withFastReads(await importOriginal());
+});
 
 afterEach(async () => {
   await connection.check();
@@ -24,8 +39,26 @@ function renderApp(url: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>
   );
-  return router;
+  return { router, queryClient };
 }
+
+/** Attention and the page's reads for several sessions, each answered for its own id. */
+function servePages(items: SessionFixture[]) {
+  return [
+    attentionRead(() => HttpResponse.json(attentionSnapshot(items))),
+    sessionRead(({ params }) => {
+      const item = items.find((candidate) => candidate.id === params.session_id);
+      return item ? HttpResponse.json(item) : new HttpResponse(null, { status: 404 });
+    }),
+    nativeReadWith(({ params }) =>
+      HttpResponse.json(native({ session_id: String(params.session_id) }))
+    ),
+    ...otherListReads()
+  ];
+}
+
+const FIRST = session({ id: 's1', title: 'First job', status: 'active' });
+const SECOND = session({ id: 's2', title: 'Second job', status: 'active' });
 
 describe('sessions routes', () => {
   it('serves the new-agent form at /agents', async () => {
@@ -42,5 +75,57 @@ describe('sessions routes', () => {
       await screen.findByRole('heading', { level: 1, name: 'Routed session' })
     ).toBeInTheDocument();
     expect(screen.getByTestId('session-chat-slot')).toBeInTheDocument();
+  });
+});
+
+describe('moving between sessions', () => {
+  it('does not carry a finished action notice over to the next session', async () => {
+    server.use(
+      sessionAction('stop-turn', () => HttpResponse.json({ status: 'stopped' })),
+      ...servePages([FIRST, SECOND])
+    );
+    const { router } = renderApp('/sessions/s1?view=compact');
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('session-stop-turn'));
+    expect(await screen.findByTestId('session-action-notice')).toHaveTextContent('Turn stopped.');
+
+    await act(() =>
+      router.navigate({ to: '/sessions/$id', params: { id: 's2' }, search: (prev) => prev })
+    );
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Second job' })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('session-action-notice')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-stop-turn')).toBeEnabled();
+  });
+
+  it('does not carry a pending action over: the next session keeps its buttons enabled', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      sessionAction('stop-turn', async () => {
+        await released;
+        return HttpResponse.json({ status: 'stopped' });
+      }),
+      ...servePages([FIRST, SECOND])
+    );
+    const { router, queryClient } = renderApp('/sessions/s1?view=compact');
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('session-stop-turn'));
+    expect(await screen.findByRole('button', { name: 'Stopping…' })).toBeDisabled();
+
+    await act(() =>
+      router.navigate({ to: '/sessions/$id', params: { id: 's2' }, search: (prev) => prev })
+    );
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Second job' })
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('session-stop-turn')).toBeEnabled();
+    expect(screen.getByTestId('session-stop-turn')).toHaveTextContent(/^Stop turn$/);
+
+    release();
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
   });
 });

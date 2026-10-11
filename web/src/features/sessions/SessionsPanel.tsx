@@ -52,19 +52,38 @@ export function SessionsPanel() {
           variant="outline"
           size="sm"
           data-testid="show-finished"
+          aria-pressed={showFinished}
           onClick={() => setShowFinished((value) => !value)}
         >
-          {showFinished ? 'Hide' : 'Show'} finished ({counts.finished})
+          Finished ({counts.finished})
         </Button>
         <Button
           variant="outline"
           size="sm"
           data-testid="show-idle"
+          aria-pressed={showIdle}
           onClick={() => setShowIdle((value) => !value)}
         >
-          {showIdle ? 'Hide' : 'Show'} idle ({counts.idle})
+          Idle ({counts.idle})
         </Button>
       </div>
+
+      {attention.isError && attention.data ? (
+        <div
+          data-testid="sessions-refresh-error"
+          className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs"
+        >
+          <span>Could not refresh sessions. Showing the last list.</span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={attention.isFetching}
+            onClick={() => void attention.refetch()}
+          >
+            Retry loading sessions
+          </Button>
+        </div>
+      ) : null}
 
       {attention.isError && !attention.data ? (
         <div data-testid="sessions-error">

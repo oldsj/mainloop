@@ -8,6 +8,7 @@ import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
 import { delivery, native, session } from './test/fixtures';
 import {
+  nativeReadWith,
   otherListReads,
   problem,
   sessionAction,
@@ -18,18 +19,19 @@ import {
 } from './test/handlers';
 import { renderSessions } from './test/render';
 
+// The page's reads would otherwise queue behind the app's read limiter, so an action's re-read
+// would take seconds. See fastReads.ts for why this mock sits in each test file.
+vi.mock('@/api/middleware', async (importOriginal) => {
+  const { withFastReads } = await import('./test/fastReads');
+  return withFastReads(await importOriginal());
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await connection.check();
 });
 
 const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
-
-/**
- * An action's result shows only after the session, native state and attention are re-read, so
- * the wait covers that chain of requests rather than the single POST.
- */
-const SETTLED = { timeout: 5000 };
 
 describe('session page', () => {
   it('shows the title, description, status and back link', async () => {
@@ -73,14 +75,44 @@ describe('session page', () => {
     expect(screen.getByText('Found and fixed the loop.')).toBeInTheDocument();
   });
 
-  it('shows the error of a failed session, with Stop turn but no Cancel', async () => {
+  it('shows the error of a failed session, with Clear but no Stop turn or Cancel', async () => {
     server.use(...serveSession(session({ id: 's1', status: 'failed', error: 'boom' })));
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     expect(screen.getByRole('heading', { level: 3, name: 'Error' })).toBeInTheDocument();
     expect(screen.getByText('boom')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archive-session')).toBeInTheDocument();
+  });
+
+  it('hides Stop turn for a cancelled session, and offers Clear', async () => {
+    server.use(...serveSession(session({ id: 's1', status: 'cancelled' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archive-session')).toHaveTextContent('Clear');
+  });
+
+  it('hides Stop turn for an archived session', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'completed', archived_at: '2026-01-02T09:00:00Z' })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.queryByTestId('session-stop-turn')).not.toBeInTheDocument();
+  });
+
+  it('offers Stop turn for a superseded session, but not Clear', async () => {
+    server.use(...serveSession(session({ id: 's1', status: 'superseded' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
     expect(screen.getByTestId('session-stop-turn')).toBeInTheDocument();
     expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('archive-session')).not.toBeInTheDocument();
   });
 
   it('shows the chat slot as a placeholder until F2 fills it', async () => {
@@ -159,7 +191,7 @@ describe('cancel', () => {
 
     await user.click(screen.getByTestId('session-cancel'));
     await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
-    expect(await screen.findByText('Session cancelled.', {}, SETTLED)).toBeInTheDocument();
+    expect(await screen.findByText('Session cancelled.')).toBeInTheDocument();
     expect(posts).toBe(1);
     expect(confirmSpy).not.toHaveBeenCalled();
   });
@@ -174,7 +206,7 @@ describe('cancel', () => {
     await heading('Fix login redirect');
     await user.click(screen.getByTestId('session-cancel'));
     await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
-    const notice = await screen.findByTestId('session-action-notice', {}, SETTLED);
+    const notice = await screen.findByTestId('session-action-notice');
     expect(notice).toHaveTextContent("couldn't confirm the agent stopped");
     expect(notice).toHaveClass('text-term-yellow');
   });
@@ -197,8 +229,9 @@ describe('cancel', () => {
     await user.click(screen.getByTestId('session-cancel'));
     await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
 
-    expect(await screen.findByText('A task is still running.', {}, SETTLED)).toBeInTheDocument();
-    expect(reads).toBeGreaterThan(readsBefore);
+    expect(await screen.findByText('A task is still running.')).toBeInTheDocument();
+    // The re-read runs after the notice is set, so wait for it rather than checking once.
+    await waitFor(() => expect(reads).toBeGreaterThan(readsBefore));
   });
 
   it('is disabled while the backend is unreachable', async () => {
@@ -225,9 +258,7 @@ describe('stop turn and clear', () => {
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     await user.click(screen.getByTestId('session-stop-turn'));
-    expect(
-      await screen.findByText('Turn stopped. The session is still open.', {}, SETTLED)
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Turn stopped. The session is still open.')).toBeInTheDocument();
     expect(posts).toBe(1);
   });
 
@@ -245,7 +276,7 @@ describe('stop turn and clear', () => {
     await heading('Fix login redirect');
     await user.click(screen.getByTestId('archive-session'));
 
-    expect(await screen.findByRole('heading', { name: 'Sessions' }, SETTLED)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sessions' })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/');
     expect(archived).toBe(1);
   });
@@ -272,11 +303,14 @@ describe('identity strip', () => {
 
     const toggle = await screen.findByTestId('identity-toggle');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
     expect(screen.queryByTestId('id-kind')).not.toBeInTheDocument();
     expect(screen.getByTestId('identity-strip')).toHaveTextContent('sonnet-5-5');
 
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'identity-details');
+    expect(document.getElementById('identity-details')).toBeInTheDocument();
     expect(screen.getByTestId('id-kind')).toHaveTextContent('claude');
     expect(screen.getByTestId('id-agent')).toHaveTextContent('claude-child');
     expect(screen.getByTestId('id-session')).toHaveTextContent('kagent-s');
@@ -301,6 +335,19 @@ describe('identity strip', () => {
     expect(within(strip).getByText('last message failed')).toBeInTheDocument();
     expect(strip).not.toHaveTextContent(/\bready\b/);
     expect(screen.getByTestId('id-delivery-problem')).toHaveTextContent('Failed: refused');
+  });
+
+  it('keeps Cancel and Stop turn when the native payload is malformed', async () => {
+    server.use(
+      nativeReadWith(() => HttpResponse.json({ session_id: 's1', kind: 'claude', turns: 1 })),
+      ...serveSession(session({ id: 's1', status: 'active' }))
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    expect(await screen.findByTestId('panel-error-identity')).toBeInTheDocument();
+    expect(screen.getByTestId('session-cancel')).toBeEnabled();
+    expect(screen.getByTestId('session-stop-turn')).toBeEnabled();
   });
 });
 

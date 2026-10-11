@@ -7,5 +7,6 @@ export const Route = createFileRoute('/sessions/$id')({
 
 function Session() {
   const { id } = Route.useParams();
-  return <SessionPage id={id} />;
+  // Keyed so that moving to another session remounts the page, and its notice and pending actions do not carry over.
+  return <SessionPage key={id} id={id} />;
 }

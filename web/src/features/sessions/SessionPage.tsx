@@ -6,10 +6,11 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import type { SessionStatus } from '@/lib/contract';
-import { isFinished, statusLabel } from '@/lib/sessionStatus';
+import { statusLabel } from '@/lib/sessionStatus';
 import { taskForSession } from '@/lib/taskState';
 import { zoomSession } from '@/lib/zoomSession';
 import { useConnection } from '@/shell/ConnectionBanner';
+import { PanelBoundary } from '@/shell/PanelBoundary';
 import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
@@ -33,6 +34,9 @@ import { WorkspaceLifecycleBadge, WorkspacePublicationBadge } from './WorkspaceB
 
 /** A session can be cancelled while it is live. Finished sessions cannot be cancelled again. */
 const CANCELLABLE: SessionStatus[] = ['active', 'pending', 'idle', 'waiting_on_user'];
+
+/** Clear is offered for these endings, as in the frozen app. A superseded attempt is not cleared here. */
+const CLEARABLE: SessionStatus[] = ['completed', 'failed', 'cancelled'];
 
 /**
  * One session: its status, identity, actions, workspace and the chat slot. The session comes from
@@ -76,12 +80,13 @@ export function SessionPage({ id }: { id: string }) {
     );
   }
 
-  const finished = isFinished(session);
   const archived = Boolean(session.archived_at);
   const workspace = workspaceFor(workspaces.data ?? [], session.id);
   const task = taskForSession(tasks.data ?? [], session.id);
+  // Stop turn is hidden for archived, failed and cancelled sessions, as in the frozen app.
+  const canStop = !archived && session.status !== 'failed' && session.status !== 'cancelled';
   const canCancel = CANCELLABLE.includes(session.status);
-  const canArchive = finished && !archived;
+  const canArchive = CLEARABLE.includes(session.status);
 
   function runStop() {
     setNotice(null);
@@ -141,18 +146,23 @@ export function SessionPage({ id }: { id: string }) {
         ) : null}
       </header>
 
-      <IdentityStrip session={session} />
+      {/* A malformed native payload breaks only this strip; the actions above and below still work. */}
+      <PanelBoundary name="Identity">
+        <IdentityStrip session={session} />
+      </PanelBoundary>
 
-      {/* Stop turn is offered on every session page, independently of Cancel (see the spec). */}
+      {/* Stop turn is offered independently of Cancel, except where the spec hides it. */}
       <section aria-label="Session actions" className="gap-sm p-md flex flex-wrap items-center">
-        <Button
-          variant="outline"
-          data-testid="session-stop-turn"
-          onClick={runStop}
-          disabled={offline || actions.stopTurn.isPending}
-        >
-          {actions.stopTurn.isPending ? 'Stopping…' : 'Stop turn'}
-        </Button>
+        {canStop ? (
+          <Button
+            variant="outline"
+            data-testid="session-stop-turn"
+            onClick={runStop}
+            disabled={offline || actions.stopTurn.isPending}
+          >
+            {actions.stopTurn.isPending ? 'Stopping…' : 'Stop turn'}
+          </Button>
+        ) : null}
         {canCancel ? (
           <Button
             variant="destructive"

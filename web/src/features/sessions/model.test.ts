@@ -170,9 +170,12 @@ describe('liveWord', () => {
     expect(liveWord({ native: uncertain, offline: false })).toBe('last message unconfirmed');
   });
 
-  it('shows working while a delivery is in flight', () => {
-    const sending = native({ deliveries: [delivery({ state: 'sending' })] });
-    expect(liveWord({ native: sending, offline: false })).toBe('working');
+  it('shows the agent state while a delivery is in flight, as the frozen app does', () => {
+    const sending = native({
+      deliveries: [delivery({ state: 'sending' })],
+      session_state: 'busy'
+    });
+    expect(liveWord({ native: sending, offline: false })).toBe('busy');
   });
 
   it('shows unknown before any native read, or with no agent state', () => {
@@ -180,10 +183,10 @@ describe('liveWord', () => {
     expect(liveWord({ native: native({ session_state: null }), offline: false })).toBe('unknown');
   });
 
-  it('maps ready and suspended, and shows any other agent state as it is', () => {
-    expect(liveWord({ native: native({ session_state: 'ready' }), offline: false })).toBe('ready');
+  it('shows live for ready, and any other agent state as it is', () => {
+    expect(liveWord({ native: native({ session_state: 'ready' }), offline: false })).toBe('live');
     expect(liveWord({ native: native({ session_state: 'suspended' }), offline: false })).toBe(
-      'idle'
+      'suspended'
     );
     expect(liveWord({ native: native({ session_state: 'busy' }), offline: false })).toBe('busy');
   });

@@ -15,7 +15,8 @@ import { SessionsPanel } from '../SessionsPanel';
 
 function SessionRoute() {
   const { id } = useParams({ strict: false });
-  return <SessionPage id={id ?? ''} />;
+  // Keyed as the app's route is, so moving to another session starts a fresh page.
+  return <SessionPage key={id} id={id ?? ''} />;
 }
 
 function Stub({ label }: { label: string }) {

@@ -20,6 +20,10 @@ export const sessionRead = (resolve: HttpResponseResolver) =>
 export const nativeRead = (info: NativeFixture) =>
   http.get(url('/sessions/:session_id/native'), () => HttpResponse.json(info));
 
+/** A native read with a resolver of its own: a body the client does not expect, or one per session. */
+export const nativeReadWith = (resolve: HttpResponseResolver) =>
+  http.get(url('/sessions/:session_id/native'), resolve);
+
 export const sessionAction = (action: Action, resolve: HttpResponseResolver) =>
   http.post(url(`/sessions/:session_id/${action}`), resolve);
 

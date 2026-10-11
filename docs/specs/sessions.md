@@ -10,11 +10,11 @@ session view. Task detail scrolls within the available pane; workspace controls 
 
 The list defaults to active/pending work and sessions with server-projected owner attention,
 including standalone sessions created on `/agents` and delegated child sessions. The native
-main thread and archived sessions are excluded. **Show finished (N)** reveals completed,
-cancelled, failed and superseded sessions on desktop and mobile; **Hide finished (N)** hides
-them again. **Show idle (N)** exposes available idle sessions. These filters retain history and
-do not archive sessions. The ambiguous bulk **clear** action is removed. With no current work,
-the list says **No active sessions** and points to **+ agent** or delegation.
+main thread and archived sessions are excluded. **Finished (N)** reveals completed,
+cancelled, failed and superseded sessions on desktop and mobile; the button shows as pressed
+while they are visible, and pressing it again hides them. **Idle (N)** exposes available idle
+sessions, with the same pressed state. These filters retain history and do not archive sessions.
+The ambiguous bulk **clear** action is removed. With no current work, the list says **No active sessions** and points to **+ agent** or delegation.
 
 Each session shows its title, native runtime kind, and status. The server derives owner
 attention from the same durable snapshot as the inbox. Task finality and attempt ownership
@@ -69,7 +69,7 @@ the conversation's old attention flag. An unavailable session disables message i
 
 - Cancel ends the session and cancels its open A2A tasks. If Mainloop cannot confirm the stop, it reports that result and does not repeat the stop blindly.
 - A cancelled session no longer accepts messages.
-- Stop turn (`POST /sessions/{id}/stop-turn`, owner only) cancels the open A2A task with CancelTask and keeps the session and its kagent Session, so a parked (`input-required`, `auth-required`) or runaway turn can be cleared. It works for the main thread and for every other native session. The main thread has a `stop` button next to its working indicator; every session detail page offers **Stop turn** independently of Cancel session.
+- Stop turn (`POST /sessions/{id}/stop-turn`, owner only) cancels the open A2A task with CancelTask and keeps the session and its kagent Session, so a parked (`input-required`, `auth-required`) or runaway turn can be cleared. It works for the main thread and for every other native session. The main thread has a `stop` button next to its working indicator; every session detail page offers **Stop turn** independently of Cancel session, except archived, failed and cancelled sessions, where it is hidden.
   - The delivery ends as `cancelled`, the queue is held, and the conversation gets the partial reply followed by "This turn was stopped before it finished.", in one transaction. Streamed text is retained durably even if the cancellation response omits artifacts. The reply is visibly marked as stopped. Cancellation is recorded only after kagent confirms it (or before sending a still-recorded message).
   - Queued reports stay queued across refreshes and restarts. The owner's next explicit message releases the hold and starts a new task on the same Session, ahead of the held reports. The reports follow once that turn finishes. A report alone never releases the hold.
   - Stopping with no open turn changes nothing (`no_open_turn`). If the turn completed or failed first, that outcome is recorded and the response is `finished`.
@@ -127,13 +127,14 @@ Fresh cutover deletes old sessions; there is no old-shape migration, legacy work
 or transcript conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
 there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.
 
-## React status (F4)
+## React status
 
 Labels: **implemented** means built in `web/` and covered by component or route tests against a fake backend. Nothing here is live-proven.
 
-- **Implemented:** the session list, built from attention, with the finished and idle filters and their counts; session rows; the `/agents` form (Claude Code or Codex, Ctrl/Cmd+Enter submits, blocked while offline); and the session page. The page offers **Stop turn** on every session, **Cancel session** through an in-app confirmation (never `window.confirm`), and **Clear** for finished sessions, which returns to the list. It also shows the task link, workspace badges, summary or error, the identity strip, and the not-found, server error and unreachable states.
+- **Implemented:** the session list, built from attention, with the finished and idle filters and their counts; session rows; the `/agents` form (Claude Code or Codex, Ctrl/Cmd+Enter submits, blocked while offline); and the session page. The page offers **Stop turn** except on archived, failed and cancelled sessions, **Cancel session** through an in-app confirmation (never `window.confirm`), and **Clear** for completed, failed and cancelled sessions, which returns to the list. It also shows the task link, workspace badges, summary or error, the identity strip, and the not-found, server error and unreachable states.
 - **Implemented:** after any session action, the page re-reads the session, its native state and attention before it shows the result. A `409` therefore shows the current state.
-- **Wording:** the identity strip's live word is `ready`, `working`, `idle`, `busy`, `unknown` or `unreachable`. A failed or unconfirmed last delivery shows as `last message failed` or `last message unconfirmed`, never `ready`. These words differ from the frozen app's, so a wording decision is needed before cutover.
-- **Unreachable:** the state offers a manual retry. It does not retry on its own. The spec's "the page retries" holds only through that action, unless the shared connection module refetches on reconnect, which is not verified.
-- **Not built here:** the chat panel (F2 fills `session-chat-slot`); attention polling and the notification toast (F5); and wiring the list into the shell's Sessions slot, which is a supervisor item in `web/src/shell/slots.tsx`.
+- **Implemented:** when a list refresh fails after the list has loaded, the list keeps its last rows and shows a **Retry loading sessions** line. Only a failed first load replaces the list with an error.
+- **Wording:** the identity strip's live word follows the frozen app. It shows `live` when the agent is ready, otherwise the agent's own state (for example `busy` or `suspended`), or `unknown` when there is no state yet. A failed or unconfirmed last delivery takes priority and shows as `last message failed` or `last message unconfirmed`, so it never reads `live`. When the backend cannot be reached the word is `unreachable`; the frozen strip has no such word, so the React page adds it.
+- **Unreachable:** the page recovers in two ways. When the connection comes back, the shared live-updates module (`web/src/shell/LiveUpdates.tsx`) refetches open queries without a click. The state also offers a manual **Try again** button.
+- **Not built here:** the session chat (the page shows a placeholder where it will go); attention polling and the notification toast. The shell's Sessions panel still shows its placeholder (`web/src/shell/slots.tsx`).
 - **Not proven:** the 3-second native poll while a turn is in flight (not cheap to test with MSW), and any run against a live backend.

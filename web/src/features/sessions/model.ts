@@ -6,7 +6,7 @@
 import { ApiError, type components } from '@/api';
 import { sessionStatusTone } from '@/components/shared/status-tokens';
 import type { NativeDelivery, ProviderProfile, Session } from '@/lib/contract';
-import { threadStatus, type ThreadStatus } from '@/lib/delivery';
+import { threadStatus } from '@/lib/delivery';
 import { isCurrent, isFinished } from '@/lib/sessionStatus';
 import type { Tone } from '@/lib/taskState';
 
@@ -121,34 +121,23 @@ export function stopNotice(result: StopTurnResult): Notice {
   return { tone: 'ok', text: STOP_NOTICES[result.status] };
 }
 
-const DELIVERY_WORDS: Partial<Record<ThreadStatus, string>> = {
-  unreachable: 'unreachable',
-  working: 'working',
-  failed: 'last message failed',
-  unconfirmed: 'last message unconfirmed'
-};
-
 /**
- * The one-word state in the identity strip. A failed or unconfirmed last delivery is never shown
- * as ready, whatever the agent session reports. Otherwise the agent's own state shows, with
- * "ready" for the usual case and "idle" for a suspended session. With no native read yet, or no
- * state from the agent, the word is "unknown".
+ * The one-word state in the identity strip, worded as the frozen app words it. Offline shows
+ * `unreachable`. A failed or unconfirmed last delivery is never shown as live, whatever the agent
+ * session reports. Otherwise the agent's own state shows: `live` for ready, and the raw state for
+ * anything else. With no state from the agent, the word is `unknown`.
  */
 export function liveWord(opts: {
   native: { deliveries: NativeDelivery[]; session_state: string | null } | undefined;
   offline: boolean;
 }): string {
-  const status = threadStatus({
-    offline: opts.offline,
-    deliveries: opts.native?.deliveries ?? [],
-    sessionState: opts.native?.session_state
-  });
-  const word = DELIVERY_WORDS[status];
-  if (word) return word;
+  if (opts.offline) return 'unreachable';
+  const status = threadStatus({ offline: false, deliveries: opts.native?.deliveries ?? [] });
+  if (status === 'failed') return 'last message failed';
+  if (status === 'unconfirmed') return 'last message unconfirmed';
   const state = opts.native?.session_state;
   if (!state) return 'unknown';
-  if (state === 'suspended') return 'idle';
-  return state === 'ready' ? 'ready' : state;
+  return state === 'ready' ? 'live' : state;
 }
 
 /** Turn-in-flight drives polling; a settled session is read once and left alone. */

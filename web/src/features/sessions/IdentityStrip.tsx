@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { agentLabel } from '@/lib/agentLabel';
 import type { Session } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
@@ -7,8 +7,7 @@ import { liveWord, nativeProviderFor } from './model';
 import { useNativeSession, useProviders } from './queries';
 
 const DOT_CLASS: Record<string, string> = {
-  ready: 'bg-term-green',
-  working: 'bg-term-cyan',
+  live: 'bg-term-green',
   'last message failed': 'bg-term-red',
   'last message unconfirmed': 'bg-term-yellow'
 };
@@ -55,7 +54,7 @@ export function IdentityStrip({ session }: { session: Session }) {
           type="button"
           data-testid="identity-toggle"
           aria-expanded={open}
-          aria-controls="identity-details"
+          aria-controls={open ? 'identity-details' : undefined}
           onClick={() => setOpen((value) => !value)}
           className="hover:text-accent-foreground px-sm ml-auto min-h-11 shrink-0"
         >
@@ -64,63 +63,38 @@ export function IdentityStrip({ session }: { session: Session }) {
       </div>
 
       {open ? (
-        <div id="identity-details" className="gap-x-md gap-y-xs flex flex-wrap">
-          <span>
-            agent{' '}
-            <b data-testid="id-kind" className="text-foreground">
-              {info.kind}
-            </b>
-          </span>
-          <span>
-            model{' '}
-            <b data-testid="id-model" className="text-foreground">
-              {model ?? 'unknown yet'}
-            </b>
-          </span>
-          <span>
-            kagent agent{' '}
-            <b data-testid="id-agent" className="text-foreground">
-              {info.agent_name}
-            </b>
-          </span>
-          <span>
-            session{' '}
-            <b data-testid="id-session" className="text-foreground">
-              {info.kagent_session_id?.slice(0, 8) ?? 'pending'}
-            </b>{' '}
-            {info.session_state ?? 'unknown'}
-          </span>
-          <span>
-            turns{' '}
-            <b data-testid="id-turns" className="text-foreground">
-              {info.turns}
-            </b>
-          </span>
+        <dl id="identity-details" className="gap-x-md gap-y-xs flex flex-wrap">
+          <Field label="agent" testId="id-kind">
+            {info.kind}
+          </Field>
+          <Field label="model" testId="id-model">
+            {model ?? 'unknown yet'}
+          </Field>
+          <Field label="kagent agent" testId="id-agent">
+            {info.agent_name}
+          </Field>
+          <Field label="session" testId="id-session">
+            {info.kagent_session_id?.slice(0, 8) ?? 'pending'} {info.session_state ?? 'unknown'}
+          </Field>
+          <Field label="turns" testId="id-turns">
+            {info.turns}
+          </Field>
           {info.role && info.role !== 'agent' ? (
-            <span>
-              role{' '}
-              <b data-testid="id-role" className="text-foreground">
-                {info.role}
-              </b>
-            </span>
+            <Field label="role" testId="id-role">
+              {info.role}
+            </Field>
           ) : null}
           {info.parent_session_id ? (
-            <span>
-              parent{' '}
-              <b data-testid="id-parent" className="text-foreground">
-                {info.parent_session_id.slice(0, 8)}
-              </b>
-            </span>
+            <Field label="parent" testId="id-parent">
+              {info.parent_session_id.slice(0, 8)}
+            </Field>
           ) : null}
           {info.topic ? (
-            <span>
-              topic{' '}
-              <b data-testid="id-topic" className="text-foreground">
-                {info.topic}
-              </b>
-            </span>
+            <Field label="topic" testId="id-topic">
+              {info.topic}
+            </Field>
           ) : null}
-        </div>
+        </dl>
       ) : null}
 
       {info.note ? (
@@ -154,5 +128,25 @@ export function IdentityStrip({ session }: { session: Session }) {
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** One label and value pair in the details list, so a screen reader reads each value with its label. */
+function Field({
+  label,
+  testId,
+  children
+}: {
+  label: string;
+  testId: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="gap-xs flex">
+      <dt>{label}</dt>
+      <dd data-testid={testId} className="text-foreground">
+        {children}
+      </dd>
+    </div>
   );
 }

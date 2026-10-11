@@ -1,12 +1,18 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { server } from '@/test/msw/server';
 import { attentionSnapshot, session } from './test/fixtures';
 import { attentionRead, otherListReads, problem, serveList, serveSession } from './test/handlers';
 import { renderSessions } from './test/render';
+
+// The list's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
+vi.mock('@/api/middleware', async (importOriginal) => {
+  const { withFastReads } = await import('./test/fastReads');
+  return withFastReads(await importOriginal());
+});
 
 afterEach(async () => {
   await connection.check();
@@ -31,7 +37,8 @@ describe('sessions list', () => {
     expect(await screen.findByText('Fix login redirect')).toBeInTheDocument();
     expect(screen.getByText('Write docs')).toBeInTheDocument();
     expect(screen.getByText('2 current')).toBeInTheDocument();
-    expect(screen.getByTestId('show-finished')).toHaveTextContent('Show finished (1)');
+    expect(screen.getByTestId('show-finished')).toHaveTextContent(/^Finished \(1\)$/);
+    expect(screen.getByTestId('show-finished')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('labels each status, and shows a failed session with its error', async () => {
@@ -78,11 +85,17 @@ describe('sessions list', () => {
 
     await user.click(screen.getByTestId('show-finished'));
     expect(screen.getByText('Done job')).toBeInTheDocument();
-    expect(screen.getByTestId('show-finished')).toHaveTextContent('Hide finished (1)');
+    expect(screen.getByTestId('show-finished')).toHaveTextContent(/^Finished \(1\)$/);
+    expect(screen.getByTestId('show-finished')).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(screen.getByTestId('show-idle'));
     expect(screen.getByText('Parked job')).toBeInTheDocument();
-    expect(screen.getByTestId('show-idle')).toHaveTextContent('Hide idle (1)');
+    expect(screen.getByTestId('show-idle')).toHaveTextContent(/^Idle \(1\)$/);
+    expect(screen.getByTestId('show-idle')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByTestId('show-finished'));
+    expect(screen.queryByText('Done job')).not.toBeInTheDocument();
+    expect(screen.getByTestId('show-finished')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('marks a child session and shows its topic', async () => {
@@ -151,5 +164,36 @@ describe('sessions list', () => {
     renderSessions('/');
     const failure = await screen.findByTestId('sessions-error');
     expect(within(failure).getByText('Attention is down')).toBeInTheDocument();
+  });
+
+  it('keeps the list and offers a retry when a refresh fails', async () => {
+    let failing = false;
+    server.use(
+      attentionRead(() =>
+        failing
+          ? HttpResponse.json({ detail: 'Attention is down' }, { status: 500 })
+          : HttpResponse.json(attentionSnapshot([session({ title: 'Cached job' })]))
+      ),
+      ...otherListReads()
+    );
+    const user = userEvent.setup();
+    renderSessions('/');
+    expect(await screen.findByText('Cached job')).toBeInTheDocument();
+
+    failing = true;
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    const notice = await screen.findByTestId('sessions-refresh-error');
+    expect(
+      within(notice).getByText('Could not refresh sessions. Showing the last list.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Cached job')).toBeInTheDocument();
+    expect(screen.queryByTestId('sessions-error')).not.toBeInTheDocument();
+
+    failing = false;
+    await user.click(within(notice).getByRole('button', { name: 'Retry loading sessions' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('sessions-refresh-error')).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Cached job')).toBeInTheDocument();
   });
 });
