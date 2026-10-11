@@ -29,6 +29,8 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/message.md`
 - `guidelines/session-summary.md`
 - `guidelines/status-badge.md`
+- `guidelines/task-actions.md`
+- `guidelines/task-tree-row.md`
 - `guidelines/workspace-action.md`
 
 ## Using it in Claude Design

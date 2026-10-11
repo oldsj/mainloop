@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutePlaceholder } from '@/shell/RoutePlaceholder';
+import { TaskPage } from '@/features/tasks';
 
 export const Route = createFileRoute('/tasks/$id')({
   component: Task
@@ -7,5 +7,6 @@ export const Route = createFileRoute('/tasks/$id')({
 
 function Task() {
   const { id } = Route.useParams();
-  return <RoutePlaceholder title="Task" slice="F6" detail={`${id}: not built yet (F6).`} />;
+  // Keyed so that moving to another task remounts the page, and its notice and pending requests do not carry over.
+  return <TaskPage key={id} id={id} />;
 }
