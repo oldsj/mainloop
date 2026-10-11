@@ -39,8 +39,15 @@ export function sendErrorText(error: unknown, restored: boolean): string {
     error.message &&
     (error.status === 0 || isClientError(error.status))
   )
-    return `${error.message}${suffix}`;
+    return `${capDetail(error.message)}${suffix}`;
   return `Could not send the message.${suffix}`;
+}
+
+const DETAIL_MAX = 300;
+
+/** Keeps a server-supplied reason to one readable line or two. */
+function capDetail(detail: string): string {
+  return detail.length > DETAIL_MAX ? `${detail.slice(0, DETAIL_MAX - 1)}…` : detail;
 }
 
 /** A send that got no reply at all: the backend may still have recorded it. */

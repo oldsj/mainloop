@@ -41,6 +41,12 @@ describe('sendErrorText', () => {
     );
   });
 
+  it('caps a long server reason', () => {
+    const text = sendErrorText(new SendError('x'.repeat(5000), 403), false);
+    expect(text).toHaveLength(300);
+    expect(text.endsWith('…')).toBe(true);
+  });
+
   it('keeps the generic line for a failure with no reason', () => {
     expect(sendErrorText(new SendError('Server error.', 500), false)).toBe(
       'Could not send the message.'
