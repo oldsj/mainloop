@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { attempt, projection, view } from '@/test/fixtures/tasks';
-import { isTaskView, mergeTaskCache, mergeTaskListCache, tasksNeedingOwner } from './cache';
+import {
+  isTaskView,
+  mergeTaskCache,
+  mergeTaskListCache,
+  readableTaskRows,
+  tasksNeedingOwner,
+  unreadableTaskCount
+} from './cache';
 
 describe('isTaskView', () => {
   it('accepts a complete view', () => {
@@ -85,14 +92,24 @@ describe('mergeTaskListCache', () => {
     expect(merged[0]).toBe(heldRow);
   });
 
-  it('drops invalid rows rather than failing the list', () => {
+  it('keeps invalid rows in the cache, so the list can count them, without failing the list', () => {
     const merged = mergeTaskListCache(undefined, [
       view({ id: 'a' }),
       { task: { id: 'broken' } },
       null
     ]) as unknown[];
-    expect(merged).toHaveLength(1);
-    expect(merged[0]).toMatchObject({ task: { id: 'a' } });
+    expect(merged).toHaveLength(3);
+    expect(readableTaskRows(merged)).toEqual([merged[0]]);
+    expect(unreadableTaskCount(merged)).toBe(2);
+  });
+
+  it('counts a malformed row that arrives for a held task, rather than showing the old row', () => {
+    const heldRow = view({ id: 'a', version: 3 });
+    const malformed = { task: { id: 'a' } };
+    const merged = mergeTaskListCache([heldRow], [malformed]) as unknown[];
+    expect(merged).toEqual([malformed]);
+    expect(readableTaskRows(merged)).toEqual([]);
+    expect(unreadableTaskCount(merged)).toBe(1);
   });
 
   it('keeps the previous list reference when nothing changed', () => {

@@ -6,7 +6,13 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { $api, fetchClient, keys } from '@/api';
 import type { TaskOperation } from '@/lib/contract';
 import type { ActionIntent } from '@/lib/taskActions';
-import { isTaskView, mergeTaskCache, mergeTaskListCache } from './cache';
+import {
+  isTaskView,
+  mergeTaskCache,
+  mergeTaskListCache,
+  readableTaskRows,
+  unreadableTaskCount
+} from './cache';
 
 /**
  * A 200 whose body is not the payload this page reads. The held data stays on screen and the query
@@ -18,8 +24,9 @@ export class UnreadablePayloadError extends Error {}
  * One task's owner read. The version gate keeps a late, older read from replacing a newer view,
  * including the view an SSE event already pushed. A malformed body fails the read instead of
  * replacing the held view, so the page can say the refresh failed and keep showing the last one.
+ * `enabled` lets a page read a task only once it knows the id, such as a parent.
  */
-export function useTask(taskId: string) {
+export function useTask(taskId: string, enabled = true) {
   return useQuery({
     queryKey: keys.task(taskId),
     queryFn: async () => {
@@ -31,19 +38,22 @@ export function useTask(taskId: string) {
       }
       return data;
     },
-    structuralSharing: mergeTaskCache
+    structuralSharing: mergeTaskCache,
+    enabled
   });
 }
 
+export type TaskListFilter = { project_id?: string; parent_task_id?: string };
+
 /**
- * The task list, for the project tree, parent and child context, and the inbox count. Its key
+ * The task list's cache entry. Both readers below share it, so the list is fetched once. Its key
  * sits under `keys.tasks()`, so invalidation reaches it, but it is not the sessions page's
  * `['get', '/tasks']` query: the per-row version gate here must not change what sessions reads.
  */
-export function useTaskList(filter: { project_id?: string; parent_task_id?: string } = {}) {
-  return useQuery({
+function taskListQuery(filter: TaskListFilter) {
+  return {
     queryKey: [...keys.tasks(), filter],
-    queryFn: async () => {
+    queryFn: async (): Promise<unknown[]> => {
       const { data } = await fetchClient.GET('/tasks', { params: { query: filter } });
       if (!Array.isArray(data)) {
         throw new UnreadablePayloadError('Mainloop sent a task list this page cannot read.');
@@ -51,7 +61,17 @@ export function useTaskList(filter: { project_id?: string; parent_task_id?: stri
       return data;
     },
     structuralSharing: mergeTaskListCache
-  });
+  };
+}
+
+/** The task list, for the project tree, the owner count and the badge. Only readable rows. */
+export function useTaskList(filter: TaskListFilter = {}) {
+  return useQuery({ ...taskListQuery(filter), select: readableTaskRows });
+}
+
+/** How many rows of the same list this page cannot read, so the list can say so. */
+export function useUnreadableTaskCount(filter: TaskListFilter = {}) {
+  return useQuery({ ...taskListQuery(filter), select: unreadableTaskCount });
 }
 
 export function useProviders() {

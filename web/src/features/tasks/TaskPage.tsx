@@ -21,13 +21,17 @@ import { TaskActions } from './TaskActions';
 
 /**
  * One task: its status, facts, owner actions and history. The detail is the owner read for this
- * task; the list supplies parent and child context and is read separately, so a failed list does
- * not put the detail into a failed state. Each action re-reads the task once it settles.
+ * task. The parent is read by its own id and the children through the list's parent filter, so the
+ * page never reads the whole list. A failed parent or child read does not put the detail into a
+ * failed state. Each action re-reads the task once it settles.
  */
 export function TaskPage({ id }: { id: string }) {
   const offline = useConnection().status === 'offline';
   const detail = useTask(id);
-  const list = useTaskList();
+  // Known only once the detail has landed. A failed refresh keeps the last parent id, as the view does.
+  const parentId = isTaskView(detail.data) ? (detail.data.task.parent_task_id ?? null) : null;
+  const parentRead = useTask(parentId ?? '', parentId !== null);
+  const children = useTaskList({ parent_task_id: id });
   const providers = useProviders();
   // One tracker per page: a lost reply stays resendable while this task is on screen.
   const [tracker] = useState(() => createActionTracker(sendTaskAction));
@@ -72,10 +76,8 @@ export function TaskPage({ id }: { id: string }) {
   if (!isTaskView(raw)) return <UnreadableTask retrying={detail.isFetching} onRetry={onRetry} />;
 
   const view = readableView(raw);
-  const views = [...(list.data ?? []).filter((row) => row.task.id !== id), view];
-  const parentId = view.task.parent_task_id;
-  const parent = parentId ? views.find((row) => row.task.id === parentId) : undefined;
-  const childTasks = childrenOf(views, id);
+  const parent = parentRead.data;
+  const childTasks = childrenOf(children.data ?? [], id);
 
   return (
     <article className="flex min-h-0 flex-col">
@@ -132,7 +134,7 @@ export function TaskPage({ id }: { id: string }) {
         </div>
       ) : null}
 
-      {list.isError ? (
+      {children.isError || parentRead.isError ? (
         <p role="status" className="px-md pt-sm text-muted-foreground text-xs">
           Parent and child tasks could not be loaded.
         </p>

@@ -59,6 +59,13 @@ export function actingOn(view: TaskView): string {
   return `Acting on version ${view.task.version}${at}.`;
 }
 
+/** The list's line for rows this page cannot read. Such a row is not shown, and the line says so. */
+export function unreadableTasksText(count: number): string {
+  return count === 1
+    ? '1 task could not be read and is not shown.'
+    : `${count} tasks could not be read and are not shown.`;
+}
+
 /** Depth 0 is flush; depth 1 and 2 step in; anything deeper stops at the last step. */
 export function indentClass(depth: number): string {
   if (depth <= 0) return '';

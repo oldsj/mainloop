@@ -235,6 +235,37 @@ describe('task tree', () => {
   });
 });
 
+describe('task rows this page cannot read', () => {
+  it('shows the readable rows and says how many it could not show', async () => {
+    server.use(
+      tasksList(() =>
+        HttpResponse.json([
+          view({ id: 'task-1', title: 'Readable work' }),
+          { task: { id: 'broken' } }
+        ])
+      ),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    expect(await screen.findByText('Readable work')).toBeInTheDocument();
+    expect(screen.getByText('1 task could not be read and is not shown.')).toBeInTheDocument();
+  });
+
+  it('does not say there are no tasks when every row is unreadable', async () => {
+    server.use(
+      tasksList(() => HttpResponse.json([{ task: { id: 'broken' } }, null])),
+      providersRead()
+    );
+    renderTasks('/', () => <TaskTree />);
+
+    expect(
+      await screen.findByText('2 tasks could not be read and are not shown.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No tasks yet.')).not.toBeInTheDocument();
+  });
+});
+
 describe('tasks badge', () => {
   it('counts the tasks that need the owner, with the right wording', async () => {
     server.use(
@@ -260,6 +291,20 @@ describe('tasks badge', () => {
     renderTasks('/', () => <TasksBadge />);
 
     expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1 task needs you');
+  });
+
+  it('caps the compact count at 99+, as the inbox badge does', async () => {
+    server.use(
+      tasksList(() =>
+        HttpResponse.json(
+          Array.from({ length: 100 }, (_, index) => view({ id: `t${index}`, reason: 'approval' }))
+        )
+      ),
+      providersRead()
+    );
+    renderTasks('/', () => <TasksBadge compact />);
+
+    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent(/^99\+$/);
   });
 
   it('renders nothing when no task needs the owner', async () => {

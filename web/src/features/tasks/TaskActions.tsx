@@ -64,6 +64,8 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   // The task as the owner saw it when the cancel dialog opened. The request is built from this, not
   // from the live view, so a change that lands while the dialog is open cannot retarget it.
   const [cancelSeen, setCancelSeen] = useState<TaskView | null>(null);
+  // Set when the task moved on before the owner confirmed. It stays until the owner acts again.
+  const [cancelChanged, setCancelChanged] = useState(false);
 
   const targets = reassignTargets(profiles ?? [], view, currentAttempt(view));
   // Derived, not synced: the first target stands in until the owner picks another.
@@ -79,6 +81,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   ) {
     if (tracker.busy(taskId, kind)) return;
     setNotice(null);
+    setCancelChanged(false);
     setSending(kind);
     let outcome: ActionOutcome;
     try {
@@ -132,6 +135,12 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
       currentAttempt(cancelSeen)?.id !== currentAttempt(view)?.id ||
       !actionAvailability(view, 'cancel', { busy: false }).enabled);
   const cancelOpen = cancelSeen !== null && !cancelMoved;
+  // The dialog's target is dropped once the task has moved on; only the status line is kept. Our own
+  // cancel also moves the task, so the check waits until no action is in flight.
+  if (cancelMoved && sending === null) {
+    setCancelSeen(null);
+    setCancelChanged(true);
+  }
   const reassignGate = gate('reassign');
   const reassign =
     reassignGate.enabled && selected !== ''
@@ -267,13 +276,16 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
             variant="destructive"
             data-testid="task-action-cancel"
             disabled={!cancel.enabled}
-            onClick={() => setCancelSeen(view)}
+            onClick={() => {
+              setCancelSeen(view);
+              setCancelChanged(false);
+            }}
             className="self-start"
           >
             {LABELS.cancel}
           </Button>
           {cancel.reason ? <p className="text-muted-foreground text-xs">{cancel.reason}</p> : null}
-          {cancelMoved && sending === null ? (
+          {cancelChanged ? (
             <p role="status" className="text-muted-foreground text-xs">
               The task changed before you confirmed, so nothing was cancelled. Check it, then cancel
               again.

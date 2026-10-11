@@ -132,8 +132,18 @@ describe('task page layout', () => {
   it('links a child to its parent and lists its children', async () => {
     const parent = view({ id: 'task-parent', title: 'Parent work' });
     const child = view({ id: 'task-child', title: 'Child work', parent_task_id: 'task-1' });
+    const page = taskScreen(view({ parent_task_id: 'task-parent' }), [parent, child]);
+    const filters: (string | null)[] = [];
     server.use(
-      ...serveTaskPage(taskScreen(view({ parent_task_id: 'task-parent' }), [parent, child]))
+      // The parent is read by its own id, so the read answers with the parent for that id.
+      taskRead(({ params }) =>
+        HttpResponse.json(params.task_id === 'task-parent' ? parent : page.view)
+      ),
+      tasksList(({ request }) => {
+        filters.push(new URL(request.url).searchParams.get('parent_task_id'));
+        return HttpResponse.json(page.list);
+      }),
+      providersRead(page.providers)
     );
     renderTasks('/tasks/task-1');
 
@@ -145,6 +155,9 @@ describe('task page layout', () => {
       'href',
       '/tasks/task-child'
     );
+    // The children come from the list's parent filter; the page never asks for the whole list.
+    expect(filters).toContain('task-1');
+    expect(filters).not.toContain(null);
   });
 
   it('keeps every button a button and every target at least 44px', async () => {
@@ -319,6 +332,48 @@ describe('owner actions', () => {
       )
     ).toBeInTheDocument();
     expect(bodies).toEqual([]);
+  });
+
+  it('keeps the status line after the task moves on, and cancels the new version when asked again', async () => {
+    const bodies: unknown[] = [];
+    const page = taskScreen(view({ version: 3 }));
+    server.use(
+      ...serveTaskPage(page),
+      taskAction('cancel', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(operation({ kind: 'cancel' }));
+      })
+    );
+    const user = userEvent.setup();
+    const { queryClient } = renderTasks('/tasks/task-1');
+    const status =
+      'The task changed before you confirmed, so nothing was cancelled. Check it, then cancel again.';
+
+    await user.click(await screen.findByTestId('task-action-cancel'));
+    await screen.findByRole('alertdialog');
+    page.view = view({ version: 4 });
+    const apply = createSseApplier(queryClient);
+    apply({ event: 'connected', data: '' });
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'cancel-moved-2', task_id: 'task-1', version: 4 })
+    });
+
+    // The dialog closes, and the status line stays until the owner acts again.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByText(status)).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('task-action-cancel'));
+    expect(screen.queryByText(status)).not.toBeInTheDocument();
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Confirm cancel' })
+    );
+
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { request_id: REQUEST_ID, expected_version: 4, expected_attempt_id: 'attempt-1' }
+      ])
+    );
   });
 
   it('shows not-found when the re-read after an action finds the task gone', async () => {

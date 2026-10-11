@@ -62,8 +62,8 @@ export function mergeTaskCache(prev: unknown, next: unknown): unknown {
 
 /**
  * The task list. Membership comes from the latest read, so a task that left the list leaves it.
- * Each row is version-gated against the row already held. Rows that fail validation are dropped
- * rather than failing the whole list.
+ * Each readable row is version-gated against the row already held. A row that fails validation is
+ * kept as it arrived, so the list can count it; `readableTaskRows` leaves it out of what is shown.
  */
 export function mergeTaskListCache(prev: unknown, next: unknown): unknown {
   if (!Array.isArray(next)) return next;
@@ -71,10 +71,20 @@ export function mergeTaskListCache(prev: unknown, next: unknown): unknown {
   if (Array.isArray(prev)) {
     for (const row of prev) if (isTaskView(row)) held.set(row.task.id, row);
   }
-  const rows = next
-    .filter(isTaskView)
-    .map((row) => mergeTaskCache(held.get(row.task.id), row) as TaskView);
+  const rows = next.map((row) =>
+    isTaskView(row) ? mergeTaskCache(held.get(row.task.id), row) : row
+  );
   return replaceEqualDeep(prev, rows);
+}
+
+/** The rows the list shows: those that pass validation. */
+export function readableTaskRows(rows: unknown[]): TaskView[] {
+  return rows.filter(isTaskView);
+}
+
+/** How many rows of a list read this page cannot show. */
+export function unreadableTaskCount(rows: unknown[]): number {
+  return rows.length - readableTaskRows(rows).length;
 }
 
 const OWNER_REASONS = new Set<string>(['owner_decision', 'approval']);

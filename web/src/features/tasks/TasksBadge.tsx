@@ -1,3 +1,4 @@
+import { badgeText } from '@/features/inbox/model';
 import { tasksNeedingOwner } from './cache';
 import { useTaskList } from './queries';
 
@@ -20,7 +21,7 @@ export function TasksBadge({ compact = false }: { compact?: boolean }) {
         data-testid="tasks-badge"
         className="border-term-yellow text-term-yellow bg-background inline-flex min-w-5 items-center justify-center border px-1 text-xs tabular-nums"
       >
-        {count}
+        {badgeText(count)}
       </span>
     );
   return (
