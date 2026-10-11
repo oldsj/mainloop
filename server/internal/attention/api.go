@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
 // AttentionAPI serves the attention, activity and queue routes. The type name is unique because
@@ -15,12 +16,6 @@ type AttentionAPI struct {
 
 // NewAPI builds the API.
 func NewAPI(svc *Service) *AttentionAPI { return &AttentionAPI{Svc: svc} }
-
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
-}
 
 // message is an error's text without its sentinel prefix.
 func message(err, sentinel error) string {
@@ -52,16 +47,16 @@ func (a *AttentionAPI) ListActivity(ctx context.Context, _ api.ListActivityReque
 // RespondToQueueItem implements api.StrictServerInterface.
 func (a *AttentionAPI) RespondToQueueItem(ctx context.Context, r api.RespondToQueueItemRequestObject) (api.RespondToQueueItemResponseObject, error) {
 	if r.Body == nil {
-		return api.RespondToQueueItem422JSONResponse(invalid("the body is required")), nil
+		return nil, apierr.Invalid("the body is required")
 	}
 	err := a.Svc.Respond(ctx, r.ItemId, *r.Body)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.RespondToQueueItem404JSONResponse(api.HTTPError{Detail: "Queue item not found"}), nil
+		return nil, apierr.NotFound("Queue item not found")
 	case errors.Is(err, ErrConflict):
-		return api.RespondToQueueItem409JSONResponse(api.HTTPError{Detail: message(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(message(err, ErrConflict))
 	case errors.Is(err, ErrInvalid):
-		return api.RespondToQueueItem422JSONResponse(invalid(message(err, ErrInvalid))), nil
+		return nil, apierr.Invalid(message(err, ErrInvalid))
 	case err != nil:
 		return nil, err
 	}
@@ -75,9 +70,9 @@ func (a *AttentionAPI) DismissQueueDiagnostic(ctx context.Context, r api.Dismiss
 	err := a.Svc.Dismiss(ctx, r.ItemId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.DismissQueueDiagnostic404JSONResponse(api.HTTPError{Detail: "Queue item not found"}), nil
+		return nil, apierr.NotFound("Queue item not found")
 	case errors.Is(err, ErrConflict):
-		return api.DismissQueueDiagnostic409JSONResponse(api.HTTPError{Detail: message(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(message(err, ErrConflict))
 	case err != nil:
 		return nil, err
 	}

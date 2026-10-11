@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
@@ -95,7 +96,7 @@ func (s stream) VisitGetEventsResponse(w http.ResponseWriter) error {
 // GetEvents implements the contract operation. See the package comment for the rules.
 func (a *EventsAPI) GetEvents(ctx context.Context, req api.GetEventsRequestObject) (api.GetEventsResponseObject, error) {
 	if a.pool == nil || a.hub == nil {
-		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
+		return nil, apierr.Unavailable("Events unavailable")
 	}
 	// Subscribe before reading the database: an event dispatched after this point reaches the
 	// subscription, and one dispatched before it is committed and so visible to the reads below.
@@ -103,7 +104,7 @@ func (a *EventsAPI) GetEvents(ctx context.Context, req api.GetEventsRequestObjec
 	if err != nil {
 		// Not ready (the outbox reader is starting) or closed (shutting down). Clients retry with
 		// backoff; native EventSource does not retry a 503.
-		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
+		return nil, apierr.Unavailable("Events unavailable")
 	}
 	lastEventID := ""
 	if req.Params.LastEventID != nil {
@@ -113,7 +114,7 @@ func (a *EventsAPI) GetEvents(ctx context.Context, req api.GetEventsRequestObjec
 	if err != nil {
 		sub.Close()
 		a.log.ErrorContext(ctx, "events: start stream", "request_id", httpx.RequestID(ctx), "error", err)
-		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
+		return nil, apierr.Unavailable("Events unavailable")
 	}
 	return stream{run: func(w http.ResponseWriter) {
 		defer sub.Close()

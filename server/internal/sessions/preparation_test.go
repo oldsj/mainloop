@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
@@ -343,12 +344,8 @@ func TestCredentialsConfigurationAndRuntimeDataNeverSerialize(t *testing.T) {
 func TestAnUnknownSessionAndAnotherOwnerNeverReachKagent(t *testing.T) {
 	p := newPrep(t)
 	before := len(p.e.srv.Requests())
-	resp, err := p.e.API().GetSessionNative(context.Background(), api.GetSessionNativeRequestObject{SessionId: "nope"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := resp.(api.GetSessionNative404JSONResponse); !ok {
-		t.Fatalf("got %T", resp)
+	if _, err := p.e.API().GetSessionNative(context.Background(), api.GetSessionNativeRequestObject{SessionId: "nope"}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("got %v", err)
 	}
 	if n := len(p.e.srv.Requests()) - before; n != 0 {
 		t.Fatalf("a 404 made %d kagent requests", n)

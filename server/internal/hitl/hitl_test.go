@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/hitl"
@@ -790,12 +791,9 @@ func TestRespondFlagOff(t *testing.T) {
 	e.observe()
 	req := e.requestFor("task-a")
 	body := approveAll("t1")
-	got, err := e.api.RespondHITL(context.Background(), api.RespondHITLRequestObject{RequestId: req.ID, Body: &body})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.(api.RespondHITL503JSONResponse); !ok {
-		t.Fatalf("response = %T, want 503", got)
+	_, err := e.api.RespondHITL(context.Background(), api.RespondHITLRequestObject{RequestId: req.ID, Body: &body})
+	if apierr.StatusOf(err) != 503 {
+		t.Fatalf("err = %v, want 503", err)
 	}
 	if n := e.count(`SELECT count(*) FROM hitl_responses`); n != 0 {
 		t.Fatalf("responses = %d", n)
@@ -818,12 +816,15 @@ func TestRespondValidation(t *testing.T) {
 	a, b := e.requestFor("task-a"), e.requestFor("task-b")
 	ctx := context.Background()
 
-	respond := func(reqID string, in api.HITLDecisionInput) api.RespondHITLResponseObject {
+	respond := func(reqID string, in api.HITLDecisionInput) (api.RespondHITLResponseObject, int) {
 		got, err := e.api.RespondHITL(ctx, api.RespondHITLRequestObject{RequestId: reqID, Body: &in})
 		if err != nil {
-			t.Fatal(err)
+			if _, ok := apierr.As(err); !ok {
+				t.Fatal(err)
+			}
+			return nil, apierr.StatusOf(err)
 		}
-		return got
+		return got, 200
 	}
 	tools := func(actionID string, ids ...string) api.HITLDecisionInput {
 		in := approveAll(ids...)
@@ -849,11 +850,11 @@ func TestRespondValidation(t *testing.T) {
 			},
 		})},
 	} {
-		if _, ok := respond(tc.req, tc.in).(api.RespondHITL422JSONResponse); !ok {
+		if _, status := respond(tc.req, tc.in); status != 422 {
 			t.Errorf("%s: want 422", name)
 		}
 	}
-	if _, ok := respond("hitl_nope", tools("v9", "t1")).(api.RespondHITL404JSONResponse); !ok {
+	if _, status := respond("hitl_nope", tools("v9", "t1")); status != 404 {
 		t.Error("unknown request: want 404")
 	}
 	if n := e.count(`SELECT count(*) FROM hitl_responses`); n != 0 {
@@ -867,7 +868,8 @@ func TestRespondValidation(t *testing.T) {
 			{Id: "t1", Approved: false, RejectionReason: new("too risky")}, {Id: "t2", Approved: true},
 		},
 	})
-	got, ok2 := respond(a.ID, ok).(api.RespondHITL200JSONResponse)
+	resp, _ := respond(a.ID, ok)
+	got, ok2 := resp.(api.RespondHITL200JSONResponse)
 	if !ok2 {
 		t.Fatal("valid answer: want 200")
 	}
@@ -875,19 +877,19 @@ func TestRespondValidation(t *testing.T) {
 	if len(calls) != 2 || *calls[0].Approved || !*calls[1].Approved || calls[0].ArgumentsHash == "" {
 		t.Fatalf("calls = %+v", calls)
 	}
-	if _, isConflict := respond(a.ID, tools("ok-1", "t1", "t2")).(api.RespondHITL409JSONResponse); !isConflict {
+	if _, status := respond(a.ID, tools("ok-1", "t1", "t2")); status != 409 {
 		t.Error("action id reused for a different answer: want 409")
 	}
-	if _, isConflict := respond(b.ID, decision("ok-1", answer("q1", "main"))).(api.RespondHITL409JSONResponse); !isConflict {
+	if _, status := respond(b.ID, decision("ok-1", answer("q1", "main"))); status != 409 {
 		t.Error("action id reused on another request: want 409")
 	}
-	if _, isConflict := respond(a.ID, tools("ok-2", "t1", "t2")).(api.RespondHITL409JSONResponse); !isConflict {
+	if _, status := respond(a.ID, tools("ok-2", "t1", "t2")); status != 409 {
 		t.Error("second answer to a request that has one: want 409")
 	}
 	// A request that is no longer pending cannot be answered.
 	e.k.set(func() { e.k.tasks["task-b"].Status = a2a.TaskStatus{State: a2a.TaskStateWorking} })
 	e.observe()
-	if _, isConflict := respond(b.ID, decision("ok-3", answer("q1", "main"))).(api.RespondHITL409JSONResponse); !isConflict {
+	if _, status := respond(b.ID, decision("ok-3", answer("q1", "main"))); status != 409 {
 		t.Error("unavailable request: want 409")
 	}
 }

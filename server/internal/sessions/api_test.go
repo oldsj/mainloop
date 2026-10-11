@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/sessions"
@@ -46,12 +47,8 @@ func TestGetsAreReadsOnly(t *testing.T) {
 	if len(info.Topics) != 1 || info.Topics[0].Name != "Infra" || info.Topics[0].StatusLine != "quiet" || info.Topics[0].Pending != 0 {
 		t.Fatalf("topics %+v", info.Topics)
 	}
-	conv, err := a.GetConversation(ctx, api.GetConversationRequestObject{ConversationId: "nope"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := conv.(api.GetConversation404JSONResponse); !ok {
-		t.Fatalf("got %T", conv)
+	if _, err := a.GetConversation(ctx, api.GetConversationRequestObject{ConversationId: "nope"}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("got %v", err)
 	}
 	if s, b, d, m := e.counts(); s+b+d+m != 0 {
 		t.Fatalf("GETs wrote rows: %d %d %d %d", s, b, d, m)
@@ -122,28 +119,28 @@ func TestSendMessageStatuses(t *testing.T) {
 	e := newEnv(t)
 	a := e.API()
 	ctx := context.Background()
-	call := func(msg string, conv *string) api.SendMessageResponseObject {
-		r, err := a.SendMessage(ctx, api.SendMessageRequestObject{Body: &api.ChatRequest{Message: msg, ConversationId: conv}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return r
+	call := func(msg string, conv *string) (api.SendMessageResponseObject, error) {
+		return a.SendMessage(ctx, api.SendMessageRequestObject{Body: &api.ChatRequest{Message: msg, ConversationId: conv}})
 	}
-	ok, isOK := call("hello", nil).(api.SendMessage200JSONResponse)
+	first, err := call("hello", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, isOK := first.(api.SendMessage200JSONResponse)
 	if !isOK || !ok.Pending || ok.Message != nil || ok.SpawnedSessionId != nil || ok.DeliveryMessageId == nil {
 		t.Fatalf("%+v", ok)
 	}
 	if _, err := uuid.Parse(*ok.DeliveryMessageId); err != nil {
 		t.Fatal(err)
 	}
-	if _, is := call("again", &ok.ConversationId).(api.SendMessage409JSONResponse); !is {
+	if _, err := call("again", &ok.ConversationId); apierr.StatusOf(err) != 409 {
 		t.Fatal("want 409 while the turn is open")
 	}
 	other := "elsewhere"
-	if _, is := call("hello", &other).(api.SendMessage404JSONResponse); !is {
+	if _, err := call("hello", &other); apierr.StatusOf(err) != 404 {
 		t.Fatal("want 404 for another conversation")
 	}
-	if r, is := call("   ", nil).(api.SendMessage422JSONResponse); !is || r.Detail == nil || (*r.Detail)[0].Msg == "" {
-		t.Fatalf("want 422, got %+v", r)
+	if _, err := call("   ", nil); apierr.StatusOf(err) != 422 {
+		t.Fatalf("want 422, got %v", err)
 	}
 }

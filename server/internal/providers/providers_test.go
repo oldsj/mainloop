@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -166,7 +167,7 @@ func newHarness(t *testing.T, extra map[string]string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, db: d, handler: h}
+	return &harness{t: t, db: d, handler: apicheck.Wrap(t, h)}
 }
 
 type reply struct {

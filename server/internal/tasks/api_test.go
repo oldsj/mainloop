@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -35,7 +36,7 @@ func newRest(t *testing.T) *rest {
 		`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('p1', 'local-dev-user', 'o', 'p1', 'o/p1', 'https://example.test/p1')`); err != nil {
 		t.Fatal(err)
 	}
-	return &rest{t: t, handler: h}
+	return &rest{t: t, handler: apicheck.Wrap(t, h)}
 }
 
 func (r *rest) do(method, path string, body any, want int) map[string]any {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/environments/fakeregistry"
@@ -44,7 +45,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	svc := environments.NewAPI(cfg, d.Pool, reg).Service
-	return &fixture{t: t, db: d, handler: h, registry: reg, service: svc}
+	return &fixture{t: t, db: d, handler: apicheck.Wrap(t, h), registry: reg, service: svc}
 }
 
 type response struct {

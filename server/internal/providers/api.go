@@ -9,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
-	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
 // Task error reasons for the default-provider routes.
@@ -45,11 +45,7 @@ func (a *ProvidersAPI) GetProjectDefaultProvider(ctx context.Context, req api.Ge
 	q := dbq.New(a.Pool)
 	if err := a.requireOwnedProject(ctx, q, req.ProjectId); err != nil {
 		if errors.Is(err, errProjectNotFound) {
-			var body api.GetProjectDefaultProvider404JSONResponseBody
-			if err := body.FromTaskError(taskError(reasonProjectNotFound)); err != nil {
-				return nil, err
-			}
-			return api.GetProjectDefaultProvider404JSONResponse(body), nil
+			return nil, apierr.Reason(http.StatusNotFound, reasonProjectNotFound)
 		}
 		return nil, err
 	}
@@ -66,7 +62,7 @@ func (a *ProvidersAPI) UpdateProjectDefaultProvider(ctx context.Context, req api
 	body := req.Body
 	if body.ProfileId != nil {
 		if _, err := a.Registry.Resolve(*body.ProfileId, RoleSupervisor, true); err != nil {
-			return nil, httpx.NewError(http.StatusUnprocessableEntity, err.Error())
+			return nil, apierr.New(http.StatusUnprocessableEntity, err.Error())
 		}
 	}
 	var pref api.ProjectProviderPreference
@@ -97,13 +93,9 @@ func (a *ProvidersAPI) UpdateProjectDefaultProvider(ctx context.Context, req api
 	})
 	switch {
 	case errors.Is(err, errProjectNotFound):
-		var b api.UpdateProjectDefaultProvider404JSONResponseBody
-		if err := b.FromTaskError(taskError(reasonProjectNotFound)); err != nil {
-			return nil, err
-		}
-		return api.UpdateProjectDefaultProvider404JSONResponse(b), nil
+		return nil, apierr.Reason(http.StatusNotFound, reasonProjectNotFound)
 	case errors.Is(err, errStalePreference):
-		return api.UpdateProjectDefaultProvider409JSONResponse(taskError(reasonStalePreference)), nil
+		return nil, apierr.Reason(http.StatusConflict, reasonStalePreference)
 	case err != nil:
 		return nil, err
 	}
@@ -114,10 +106,6 @@ var (
 	errProjectNotFound = errors.New("project not found")
 	errStalePreference = errors.New("stale provider preference")
 )
-
-func taskError(reason string) api.TaskError {
-	return api.TaskError{Detail: api.TaskErrorDetail{Reason: reason}}
-}
 
 // requireOwnedProject returns errProjectNotFound for a missing project and for one that belongs
 // to another owner, so the two cannot be told apart.

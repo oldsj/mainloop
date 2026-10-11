@@ -3,13 +3,12 @@ package merge
 import (
 	"context"
 	"errors"
-	"net/http"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
-var errUnavailable = httpx.NewError(http.StatusServiceUnavailable, "merge details are not available")
+var errUnavailable = apierr.Unavailable("merge details are not available")
 
 // MergeAPI serves the owner's read of a merge proposal's details.
 type MergeAPI struct {
@@ -32,9 +31,9 @@ func (a *MergeAPI) GetHITLMergeDetails(ctx context.Context, req api.GetHITLMerge
 	out, err := a.Svc.Details(ctx, in)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.GetHITLMergeDetails404JSONResponse(api.HTTPError{Detail: "Merge proposal not found"}), nil
+		return nil, apierr.NotFound("Merge proposal not found")
 	case errors.Is(err, ErrTooLarge):
-		return api.GetHITLMergeDetails409JSONResponse(api.HTTPError{Detail: "A single entry of the details is too large to show"}), nil
+		return nil, apierr.Conflict("A single entry of the details is too large to show")
 	case err != nil:
 		return nil, err
 	}

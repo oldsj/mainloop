@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
 // WorkspacesAPI serves the workspace operations of the strict server interface.
@@ -14,38 +14,24 @@ type WorkspacesAPI struct {
 	Svc *Service
 }
 
-var errUnavailable = httpx.NewError(http.StatusServiceUnavailable, "Workspaces unavailable")
+var errUnavailable = apierr.Unavailable("Workspaces unavailable")
 
-func notFound() api.HTTPError { return api.HTTPError{Detail: "Workspace not found"} }
-
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
-}
-
-// failure is a service error as an HTTP answer; the per-operation closures place it in the
-// response type that operation declares. Errors that are not domain errors are returned as such
-// and become a 500.
-type failure struct {
-	status int
-	detail string
-}
-
-func asFailure(err error) (failure, bool) {
+// failure maps a service error to the answer every workspace operation shares: 404, 409 or 502.
+// Errors that are not domain errors are returned as such and become a 500.
+func failure(err error) error {
 	var rej *RejectedError
 	var unc *UnconfirmedError
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrProjectNotFound):
-		return failure{404, notFoundMessage(err)}, true
+		return apierr.NotFound(notFoundMessage(err))
 	case errors.Is(err, ErrBusy):
-		return failure{409, "Another change to this workspace is in progress"}, true
+		return apierr.Conflict("Another change to this workspace is in progress")
 	case errors.As(err, &rej):
-		return failure{409, rej.Detail}, true
+		return apierr.Conflict(rej.Detail)
 	case errors.As(err, &unc):
-		return failure{502, unc.Detail}, true
+		return apierr.BadGateway(unc.Detail)
 	}
-	return failure{}, false
+	return err
 }
 
 func notFoundMessage(err error) string {
@@ -75,7 +61,7 @@ func (a *WorkspacesAPI) GetWorkspace(ctx context.Context, r api.GetWorkspaceRequ
 	w, err := a.Svc.Get(ctx, r.WorkspaceId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.GetWorkspace404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Workspace not found")
 	case err != nil:
 		return nil, err
 	}
@@ -90,7 +76,7 @@ func (a *WorkspacesAPI) ListWorkspacePreviewPorts(ctx context.Context, r api.Lis
 	ports, err := a.Svc.Ports(ctx, r.WorkspaceId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.ListWorkspacePreviewPorts404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Workspace not found")
 	case err != nil:
 		return nil, err
 	}
@@ -103,11 +89,7 @@ func (a *WorkspacesAPI) CreateWorkspace(ctx context.Context, r api.CreateWorkspa
 		return nil, errUnavailable
 	}
 	if r.Body == nil {
-		var body api.CreateWorkspace422JSONResponseBody
-		if err := body.FromHTTPValidationError(invalid("A JSON body is required")); err != nil {
-			return nil, err
-		}
-		return api.CreateWorkspace422JSONResponse(body), nil
+		return nil, apierr.Invalid("A JSON body is required")
 	}
 	w, err := a.Svc.Create(ctx, *r.Body)
 	var inv *InvalidError
@@ -116,34 +98,12 @@ func (a *WorkspacesAPI) CreateWorkspace(ctx context.Context, r api.CreateWorkspa
 	case err == nil:
 		return api.CreateWorkspace201JSONResponse(w), nil
 	case errors.As(err, &inv):
-		return create422(func(b *api.CreateWorkspace422JSONResponseBody) error {
-			return b.FromHTTPValidationError(invalid(inv.Msg))
-		})
+		return nil, apierr.Invalid(inv.Msg)
 	case errors.As(err, &rej):
 		// kagent refused the request itself, so the request is what is wrong.
-		return create422(func(b *api.CreateWorkspace422JSONResponseBody) error {
-			return b.FromHTTPError(api.HTTPError{Detail: rej.Detail})
-		})
+		return nil, apierr.New(http.StatusUnprocessableEntity, rej.Detail)
 	}
-	f, ok := asFailure(err)
-	if !ok {
-		return nil, err
-	}
-	switch f.status {
-	case 404:
-		return api.CreateWorkspace404JSONResponse{Detail: f.detail}, nil
-	case 409:
-		return api.CreateWorkspace409JSONResponse{Detail: f.detail}, nil
-	}
-	return api.CreateWorkspace502JSONResponse{Detail: f.detail}, nil
-}
-
-func create422(fill func(*api.CreateWorkspace422JSONResponseBody) error) (api.CreateWorkspaceResponseObject, error) {
-	var b api.CreateWorkspace422JSONResponseBody
-	if err := fill(&b); err != nil {
-		return nil, err
-	}
-	return api.CreateWorkspace422JSONResponse(b), nil
+	return nil, failure(err)
 }
 
 // DeleteWorkspace implements api.StrictServerInterface.
@@ -151,21 +111,10 @@ func (a *WorkspacesAPI) DeleteWorkspace(ctx context.Context, r api.DeleteWorkspa
 	if a.Svc == nil {
 		return nil, errUnavailable
 	}
-	err := a.Svc.Delete(ctx, r.WorkspaceId)
-	if err == nil {
-		return api.DeleteWorkspace204Response{}, nil
+	if err := a.Svc.Delete(ctx, r.WorkspaceId); err != nil {
+		return nil, failure(err)
 	}
-	f, ok := asFailure(err)
-	if !ok {
-		return nil, err
-	}
-	switch f.status {
-	case 404:
-		return api.DeleteWorkspace404JSONResponse{Detail: f.detail}, nil
-	case 409:
-		return api.DeleteWorkspace409JSONResponse{Detail: f.detail}, nil
-	}
-	return api.DeleteWorkspace502JSONResponse{Detail: f.detail}, nil
+	return api.DeleteWorkspace204Response{}, nil
 }
 
 // RefreshWorkspace implements api.StrictServerInterface.
@@ -175,27 +124,13 @@ func (a *WorkspacesAPI) RefreshWorkspace(ctx context.Context, r api.RefreshWorks
 	}
 	w, err := a.Svc.Refresh(ctx, r.WorkspaceId)
 	var rej *RejectedError
-	if errors.As(err, &rej) {
-		var b api.RefreshWorkspace422JSONResponseBody
-		if err := b.FromHTTPError(api.HTTPError{Detail: rej.Detail}); err != nil {
-			return nil, err
-		}
-		return api.RefreshWorkspace422JSONResponse(b), nil
+	switch {
+	case errors.As(err, &rej):
+		return nil, apierr.New(http.StatusUnprocessableEntity, rej.Detail)
+	case err != nil:
+		return nil, failure(err)
 	}
-	if err == nil {
-		return api.RefreshWorkspace200JSONResponse(w), nil
-	}
-	f, ok := asFailure(err)
-	if !ok {
-		return nil, err
-	}
-	switch f.status {
-	case 404:
-		return api.RefreshWorkspace404JSONResponse{Detail: f.detail}, nil
-	case 409:
-		return api.RefreshWorkspace409JSONResponse{Detail: f.detail}, nil
-	}
-	return api.RefreshWorkspace502JSONResponse{Detail: f.detail}, nil
+	return api.RefreshWorkspace200JSONResponse(w), nil
 }
 
 // ResumeWorkspace implements api.StrictServerInterface.
@@ -204,20 +139,10 @@ func (a *WorkspacesAPI) ResumeWorkspace(ctx context.Context, r api.ResumeWorkspa
 		return nil, errUnavailable
 	}
 	w, err := a.Svc.Resume(ctx, r.WorkspaceId)
-	if err == nil {
-		return api.ResumeWorkspace200JSONResponse(w), nil
+	if err != nil {
+		return nil, failure(err)
 	}
-	f, ok := asFailure(err)
-	if !ok {
-		return nil, err
-	}
-	switch f.status {
-	case 404:
-		return api.ResumeWorkspace404JSONResponse{Detail: f.detail}, nil
-	case 409:
-		return api.ResumeWorkspace409JSONResponse{Detail: f.detail}, nil
-	}
-	return api.ResumeWorkspace502JSONResponse{Detail: f.detail}, nil
+	return api.ResumeWorkspace200JSONResponse(w), nil
 }
 
 // SuspendWorkspace implements api.StrictServerInterface.
@@ -226,18 +151,8 @@ func (a *WorkspacesAPI) SuspendWorkspace(ctx context.Context, r api.SuspendWorks
 		return nil, errUnavailable
 	}
 	w, err := a.Svc.Suspend(ctx, r.WorkspaceId)
-	if err == nil {
-		return api.SuspendWorkspace200JSONResponse(w), nil
+	if err != nil {
+		return nil, failure(err)
 	}
-	f, ok := asFailure(err)
-	if !ok {
-		return nil, err
-	}
-	switch f.status {
-	case 404:
-		return api.SuspendWorkspace404JSONResponse{Detail: f.detail}, nil
-	case 409:
-		return api.SuspendWorkspace409JSONResponse{Detail: f.detail}, nil
-	}
-	return api.SuspendWorkspace502JSONResponse{Detail: f.detail}, nil
+	return api.SuspendWorkspace200JSONResponse(w), nil
 }

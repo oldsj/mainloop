@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 )
 
@@ -21,40 +21,29 @@ func TestCreateValidation(t *testing.T) {
 		"idle":      {Repo: ptr("oldsj/mainloop"), Dev: &api.WorkspaceDev{IdleTimeoutMinutes: ptr(0)}},
 	}
 	for name, body := range cases {
-		res, err := a.CreateWorkspace(bg, api.CreateWorkspaceRequestObject{Body: &body})
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if _, ok := res.(api.CreateWorkspace422JSONResponse); !ok {
-			t.Errorf("%s: %T", name, res)
+		if _, err := a.CreateWorkspace(bg, api.CreateWorkspaceRequestObject{Body: &body}); apierr.StatusOf(err) != 422 {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 	if h.workspaceCount() != 0 || h.fake.Count(kagent.ProcCreateSession) != 0 {
 		t.Fatal("a rejected request left state behind")
 	}
-	res, err := a.CreateWorkspace(bg, api.CreateWorkspaceRequestObject{Body: &api.CreateWorkspaceRequest{ProjectId: ptr("nope")}})
-	if _, ok := res.(api.CreateWorkspace404JSONResponse); !ok || err != nil {
-		t.Fatalf("%T %v", res, err)
+	if _, err := a.CreateWorkspace(bg, api.CreateWorkspaceRequestObject{Body: &api.CreateWorkspaceRequest{ProjectId: ptr("nope")}}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("%v", err)
 	}
 }
 
 func TestUnknownWorkspaceIs404(t *testing.T) {
 	h := newHarness(t, nil)
 	a := &WorkspacesAPI{Svc: h.svc}
-	if res, _ := a.GetWorkspace(bg, api.GetWorkspaceRequestObject{WorkspaceId: "x"}); res == nil {
-		t.Fatal("nil")
-	} else if _, ok := res.(api.GetWorkspace404JSONResponse); !ok {
-		t.Fatalf("%T", res)
+	if _, err := a.GetWorkspace(bg, api.GetWorkspaceRequestObject{WorkspaceId: "x"}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("GetWorkspace: %v", err)
 	}
-	if res, _ := a.DeleteWorkspace(bg, api.DeleteWorkspaceRequestObject{WorkspaceId: "x"}); res == nil {
-		t.Fatal("nil")
-	} else if _, ok := res.(api.DeleteWorkspace404JSONResponse); !ok {
-		t.Fatalf("%T", res)
+	if _, err := a.DeleteWorkspace(bg, api.DeleteWorkspaceRequestObject{WorkspaceId: "x"}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("DeleteWorkspace: %v", err)
 	}
-	if res, _ := a.ListWorkspacePreviewPorts(bg, api.ListWorkspacePreviewPortsRequestObject{WorkspaceId: "x"}); res == nil {
-		t.Fatal("nil")
-	} else if _, ok := res.(api.ListWorkspacePreviewPorts404JSONResponse); !ok {
-		t.Fatalf("%T", res)
+	if _, err := a.ListWorkspacePreviewPorts(bg, api.ListWorkspacePreviewPortsRequestObject{WorkspaceId: "x"}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("ListWorkspacePreviewPorts: %v", err)
 	}
 }
 
@@ -119,7 +108,7 @@ func TestContractShapes(t *testing.T) {
 func TestNilServiceIs503(t *testing.T) {
 	a := &WorkspacesAPI{}
 	_, err := a.ListWorkspaces(bg, api.ListWorkspacesRequestObject{})
-	var he *httpx.Error
+	var he *apierr.Error
 	if !errors.As(err, &he) || he.Status != 503 {
 		t.Fatalf("%v", err)
 	}

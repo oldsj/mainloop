@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/preview"
 )
@@ -40,7 +41,7 @@ func previewHandler(t *testing.T, withPreview bool) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	return apicheck.Wrap(t, h)
 }
 
 func TestPreviewHostsAreRoutedAheadOfTheAPIHostGuard(t *testing.T) {

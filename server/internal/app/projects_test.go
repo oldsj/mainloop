@@ -13,6 +13,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
@@ -51,7 +52,7 @@ func projectServer(t *testing.T, policyWrites bool) (http.Handler, *githubtest.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, fake
+	return apicheck.Wrap(t, h), fake
 }
 
 // strict decodes a response body into v and fails on any field the contract type lacks.

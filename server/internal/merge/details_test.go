@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
 	"github.com/oldsj/mainloop/server/internal/merge"
 )
@@ -116,16 +117,12 @@ func TestDetailsOnlyFromACardThatNamesTheProposal(t *testing.T) {
 func TestDetailsAPIMapsErrors(t *testing.T) {
 	e := newEnv(t)
 	a := &merge.MergeAPI{Svc: e.svc, OwnerID: owner}
-	res, err := a.GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{
+	if _, err := a.GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{
 		RequestId: "missing", ProposalId: "p", Params: api.GetHITLMergeDetailsParams{Section: api.GetHITLMergeDetailsParamsSectionFiles},
-	})
-	if err != nil {
-		t.Fatal(err)
+	}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("err = %v", err)
 	}
-	if _, ok := res.(api.GetHITLMergeDetails404JSONResponse); !ok {
-		t.Fatalf("res = %T", res)
-	}
-	if _, err := (&merge.MergeAPI{}).GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{}); err == nil {
+	if _, err := (&merge.MergeAPI{}).GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{}); apierr.StatusOf(err) != 503 {
 		t.Fatal("a nil service answered")
 	}
 }

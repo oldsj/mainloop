@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -243,29 +242,6 @@ func TestRecoverRepanicsAbortHandler(t *testing.T) {
 		}
 	}()
 	do(h, "GET", "/", nil)
-}
-
-func TestWriteErr(t *testing.T) {
-	tests := []struct {
-		name   string
-		err    error
-		status int
-		detail string
-	}{
-		{"typed", httpx.NewError(http.StatusConflict, "Session is archived"), 409, "Session is archived"},
-		{"wrapped", fmt.Errorf("outer: %w", httpx.NewError(http.StatusNotFound, "Session not found")), 404, "Session not found"},
-		{"not implemented", httpx.ErrNotImplemented, 501, "Not implemented"},
-		{"unknown", errors.New("pq: password authentication failed for hunter2"), 500, "Internal server error"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			httpx.WriteErr(rec, tt.err)
-			if rec.Code != tt.status || detail(t, rec) != tt.detail {
-				t.Errorf("got %d %q", rec.Code, rec.Body.String())
-			}
-		})
-	}
 }
 
 func TestChainOrder(t *testing.T) {

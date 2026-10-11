@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
@@ -20,14 +22,6 @@ var protectedGlobs = []string{"k8s/**", ".github/**", "**/migrations/**"}
 // ProjectsAPI serves the project operations of the strict server interface.
 type ProjectsAPI struct {
 	Svc *Service
-}
-
-func notFound() api.HTTPError { return api.HTTPError{Detail: "Project not found"} }
-
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
 }
 
 func toProject(p dbq.Project) api.Project {
@@ -71,7 +65,7 @@ func (a *ProjectsAPI) ImportProject(ctx context.Context, r api.ImportProjectRequ
 	p, err := a.Svc.Import(ctx, r.Body.Repo)
 	switch {
 	case errors.Is(err, ErrInvalidRepo):
-		return api.ImportProject400JSONResponse{Detail: "Invalid GitHub repository"}, nil
+		return nil, apierr.New(http.StatusBadRequest, "Invalid GitHub repository")
 	case err != nil:
 		return nil, err
 	}
@@ -83,7 +77,7 @@ func (a *ProjectsAPI) GetProject(ctx context.Context, r api.GetProjectRequestObj
 	p, err := a.Svc.Get(ctx, r.ProjectId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.GetProject404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Project not found")
 	case err != nil:
 		return nil, err
 	}
@@ -95,7 +89,7 @@ func (a *ProjectsAPI) GetProjectDetail(ctx context.Context, r api.GetProjectDeta
 	d, err := a.Svc.Detail(ctx, r.ProjectId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.GetProjectDetail404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Project not found")
 	case err != nil:
 		return nil, err
 	}
@@ -146,7 +140,7 @@ func (a *ProjectsAPI) GetMergePolicy(ctx context.Context, r api.GetMergePolicyRe
 	m, err := a.Svc.MergePolicy(ctx, r.ProjectId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.GetMergePolicy404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Project not found")
 	case err != nil:
 		return nil, err
 	}
@@ -158,13 +152,13 @@ func (a *ProjectsAPI) UpdateMergePolicy(ctx context.Context, r api.UpdateMergePo
 	m, err := a.Svc.SetMergePolicy(ctx, r.ProjectId, dbstate.MergePolicy(r.Body.MergePolicy), int64(r.Body.ExpectedVersion))
 	switch {
 	case errors.Is(err, ErrWritesDisabled):
-		return api.UpdateMergePolicy503JSONResponse{Detail: "Owner policy writes are disabled"}, nil
+		return nil, apierr.Unavailable("Owner policy writes are disabled")
 	case errors.Is(err, ErrInvalidPolicy):
-		return api.UpdateMergePolicy422JSONResponse(invalid("Unknown merge policy")), nil
+		return nil, apierr.Invalid("Unknown merge policy")
 	case errors.Is(err, ErrNotFound):
-		return api.UpdateMergePolicy404JSONResponse(notFound()), nil
+		return nil, apierr.NotFound("Project not found")
 	case errors.Is(err, ErrVersionConflict):
-		return api.UpdateMergePolicy409JSONResponse{Detail: "Merge policy version changed"}, nil
+		return nil, apierr.Conflict("Merge policy version changed")
 	case err != nil:
 		return nil, err
 	}

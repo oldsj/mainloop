@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
@@ -18,7 +19,7 @@ func StubHandler(cfg *config.Config, log *slog.Logger, allowedHosts map[string]b
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		httpx.WriteErr(w, httpx.ErrNotImplemented)
+		apierr.Write(w, apierr.NotImplemented)
 	})
 	return httpx.Chain(mux,
 		httpx.AccessLog(log),

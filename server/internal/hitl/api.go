@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
 // API serves the HITL routes. The merge package serves the paged merge details route.
@@ -15,17 +16,11 @@ type API struct {
 // NewAPI builds the API.
 func NewAPI(svc *Service) *API { return &API{Svc: svc} }
 
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
-}
-
 // ListSessionHITL implements api.StrictServerInterface.
 func (a *API) ListSessionHITL(ctx context.Context, r api.ListSessionHITLRequestObject) (api.ListSessionHITLResponseObject, error) {
 	ids, err := a.Svc.SessionRequests(ctx, r.SessionId)
 	if errors.Is(err, ErrNotFound) {
-		return api.ListSessionHITL404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	}
 	if err != nil {
 		return nil, err
@@ -37,7 +32,7 @@ func (a *API) ListSessionHITL(ctx context.Context, r api.ListSessionHITLRequestO
 func (a *API) GetHITL(ctx context.Context, r api.GetHITLRequestObject) (api.GetHITLResponseObject, error) {
 	v, err := a.Svc.View(ctx, r.RequestId)
 	if errors.Is(err, ErrNotFound) {
-		return api.GetHITL404JSONResponse(api.HTTPError{Detail: "HITL request not found"}), nil
+		return nil, apierr.NotFound("HITL request not found")
 	}
 	if err != nil {
 		return nil, err
@@ -49,21 +44,21 @@ func (a *API) GetHITL(ctx context.Context, r api.GetHITLRequestObject) (api.GetH
 // looks at the request.
 func (a *API) RespondHITL(ctx context.Context, r api.RespondHITLRequestObject) (api.RespondHITLResponseObject, error) {
 	if !a.Svc.WritesEnabled {
-		return api.RespondHITL503JSONResponse(api.HTTPError{Detail: "Owner HITL writes are disabled"}), nil
+		return nil, apierr.Unavailable("Owner HITL writes are disabled")
 	}
 	if r.Body == nil {
-		return api.RespondHITL422JSONResponse(invalid("the body is required")), nil
+		return nil, apierr.Invalid("the body is required")
 	}
 	v, err := a.Svc.Respond(ctx, r.RequestId, *r.Body)
 	switch {
 	case errors.Is(err, ErrDisabled):
-		return api.RespondHITL503JSONResponse(api.HTTPError{Detail: "Owner HITL writes are disabled"}), nil
+		return nil, apierr.Unavailable("Owner HITL writes are disabled")
 	case errors.Is(err, ErrNotFound):
-		return api.RespondHITL404JSONResponse(api.HTTPError{Detail: "HITL request not found"}), nil
+		return nil, apierr.NotFound("HITL request not found")
 	case errors.Is(err, ErrConflict):
-		return api.RespondHITL409JSONResponse(api.HTTPError{Detail: invalidDetail(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(invalidDetail(err, ErrConflict))
 	case errors.Is(err, ErrInvalid):
-		return api.RespondHITL422JSONResponse(invalid(invalidMessage(err))), nil
+		return nil, apierr.Invalid(invalidMessage(err))
 	case err != nil:
 		return nil, err
 	}

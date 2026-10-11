@@ -11,6 +11,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
@@ -197,11 +198,11 @@ func (s *Server) Handler() (http.Handler, error) {
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: requestDecodeError(d.Log),
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
-			var he *httpx.Error
+			var he *apierr.Error
 			if !errors.As(err, &he) {
 				d.Log.ErrorContext(r.Context(), "handler error", "request_id", httpx.RequestID(r.Context()), "error", err)
 			}
-			httpx.WriteErr(w, err)
+			apierr.Write(w, err)
 		},
 	})
 	routes := api.HandlerWithOptions(strict, api.StdHTTPServerOptions{

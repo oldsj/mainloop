@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/schedules"
@@ -91,7 +91,7 @@ func create(t *testing.T, e *env, request string) api.ScheduledRunOutput {
 
 func status(t *testing.T, err error) int {
 	t.Helper()
-	var he *httpx.Error
+	var he *apierr.Error
 	if !errors.As(err, &he) {
 		t.Fatalf("want an httpx error, got %v", err)
 	}

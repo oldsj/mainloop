@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -715,23 +716,14 @@ func TestAnswersMatchTheFrontendFixtures(t *testing.T) {
 	if ok["status"] != "ok" || ok["message"] != "Response sent" {
 		t.Fatalf("%v", ok)
 	}
-	dr, err := e.api.DismissQueueDiagnostic(ctx, api.DismissQueueDiagnosticRequestObject{ItemId: "q1"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := e.api.DismissQueueDiagnostic(ctx, api.DismissQueueDiagnosticRequestObject{ItemId: "q1"}); apierr.StatusOf(err) != 409 {
+		t.Fatalf("%v", err)
 	}
-	if _, isConflict := dr.(api.DismissQueueDiagnostic409JSONResponse); !isConflict {
-		t.Fatalf("%T", dr)
+	if _, err := e.api.RespondToQueueItem(ctx, api.RespondToQueueItemRequestObject{ItemId: "nope", Body: &api.QueueItemResponse{Response: "a"}}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("%v", err)
 	}
-	nr, err := e.api.RespondToQueueItem(ctx, api.RespondToQueueItemRequestObject{ItemId: "nope", Body: &api.QueueItemResponse{Response: "a"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, isNotFound := nr.(api.RespondToQueueItem404JSONResponse); !isNotFound {
-		t.Fatalf("%T", nr)
-	}
-	er, _ := e.api.RespondToQueueItem(ctx, api.RespondToQueueItemRequestObject{ItemId: "q1", Body: &api.QueueItemResponse{}})
-	if _, isInvalid := er.(api.RespondToQueueItem422JSONResponse); !isInvalid {
-		t.Fatalf("%T", er)
+	if _, err := e.api.RespondToQueueItem(ctx, api.RespondToQueueItemRequestObject{ItemId: "q1", Body: &api.QueueItemResponse{}}); apierr.StatusOf(err) != 422 {
+		t.Fatalf("%v", err)
 	}
 }
 

@@ -13,14 +13,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
-	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
 // Service holds the environment rules. Every method takes the acting owner explicitly; the API
-// passes the one configured owner. Failures the caller should see are [httpx.Error]s.
+// passes the one configured owner. Failures the caller should see are [apierr.Error]s.
 //
 // Registry I/O never runs inside a transaction (the reconciler rule): refresh reads, validates
 // and then writes in a separate transaction.
@@ -41,10 +41,10 @@ func (s *Service) id() string {
 	return hex.EncodeToString(b[:])
 }
 
-func notFound(detail string) error { return httpx.NewError(http.StatusNotFound, detail) }
+func notFound(detail string) error { return apierr.NotFound(detail) }
 
 func unprocessable(detail string) error {
-	return httpx.NewError(http.StatusUnprocessableEntity, detail)
+	return apierr.New(http.StatusUnprocessableEntity, detail)
 }
 
 // registryFailure turns a validator error into a 422; anything else (a database problem, the
@@ -360,7 +360,7 @@ func (s *Service) Select(ctx context.Context, owner, projectID string, req api.S
 		if ok, err := hasAccess(ctx, q, env, owner, projectID); err != nil {
 			return err
 		} else if !ok {
-			return httpx.NewError(http.StatusForbidden, "Environment use grant required")
+			return apierr.Forbidden("Environment use grant required")
 		}
 		var revision int64
 		if current, err := q.GetEnvironmentSelection(ctx, projectID); err == nil {
@@ -369,7 +369,7 @@ func (s *Service) Select(ctx context.Context, owner, projectID string, req api.S
 			return err
 		}
 		if revision != int64(req.ExpectedVersion) {
-			return httpx.NewError(http.StatusConflict, "Stale expected version")
+			return apierr.Conflict("Stale expected version")
 		}
 		target := req.VersionId
 		if follow {

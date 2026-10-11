@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
-	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
 // TasksAPI serves the task operations of the strict server interface. All requests are the
@@ -18,24 +19,21 @@ type TasksAPI struct {
 	OwnerID string
 }
 
-var errUnavailable = httpx.NewError(http.StatusServiceUnavailable, "Tasks unavailable")
+var errUnavailable = apierr.Unavailable("Tasks unavailable")
 
 func (a *TasksAPI) principal() Principal { return OwnerPrincipal(a.OwnerID) }
 
-func taskError(reason string) api.TaskError {
-	return api.TaskError{Detail: api.TaskErrorDetail{Reason: reason}}
-}
+// actionRefusals are the statuses the task actions declare.
+var actionRefusals = []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity}
 
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
-}
-
-// refusalOf extracts a domain refusal; any other error is an internal failure.
-func refusalOf(err error) (*Error, bool) {
+// taskReply answers a domain refusal whose status the operation declares with the task error body. A
+// refusal with another status, or any other error, is an internal failure.
+func taskReply(err error, declared ...int) error {
 	var e *Error
-	return e, errors.As(err, &e)
+	if errors.As(err, &e) && slices.Contains(declared, e.Status) {
+		return apierr.Reason(e.Status, e.Reason)
+	}
+	return err
 }
 
 // ListTasks implements api.StrictServerInterface.
@@ -63,14 +61,8 @@ func (a *TasksAPI) GetTask(ctx context.Context, req api.GetTaskRequestObject) (a
 		return nil, errUnavailable
 	}
 	view, err := a.Svc.Get(ctx, a.principal(), req.TaskId)
-	if e, ok := refusalOf(err); ok && e.Status == http.StatusNotFound {
-		var b api.GetTask404JSONResponseBody
-		if err := b.FromTaskError(taskError(e.Reason)); err != nil {
-			return nil, err
-		}
-		return api.GetTask404JSONResponse(b), nil
-	} else if err != nil {
-		return nil, err
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound)
 	}
 	return api.GetTask200JSONResponse(view), nil
 }
@@ -81,14 +73,8 @@ func (a *TasksAPI) GetTaskOperation(ctx context.Context, req api.GetTaskOperatio
 		return nil, errUnavailable
 	}
 	op, err := a.Svc.Operation(ctx, a.principal(), req.OperationId)
-	if e, ok := refusalOf(err); ok && e.Status == http.StatusNotFound {
-		var b api.GetTaskOperation404JSONResponseBody
-		if err := b.FromTaskError(taskError(e.Reason)); err != nil {
-			return nil, err
-		}
-		return api.GetTaskOperation404JSONResponse(b), nil
-	} else if err != nil {
-		return nil, err
+	if err != nil {
+		return nil, taskReply(err, http.StatusNotFound)
 	}
 	return api.GetTaskOperation200JSONResponse(op), nil
 }
@@ -99,11 +85,7 @@ func (a *TasksAPI) CreateTask(ctx context.Context, req api.CreateTaskRequestObje
 		return nil, errUnavailable
 	}
 	if req.Body == nil {
-		var b api.CreateTask422JSONResponseBody
-		if err := b.FromHTTPValidationError(invalid("Request body is required")); err != nil {
-			return nil, err
-		}
-		return api.CreateTask422JSONResponse(b), nil
+		return nil, apierr.Invalid("Request body is required")
 	}
 	body := req.Body
 	in := CreateInput{
@@ -118,34 +100,7 @@ func (a *TasksAPI) CreateTask(ctx context.Context, req api.CreateTaskRequestObje
 	}
 	op, err := a.Svc.Create(ctx, a.principal(), in)
 	if err != nil {
-		e, ok := refusalOf(err)
-		if !ok {
-			return nil, err
-		}
-		te := taskError(e.Reason)
-		switch e.Status {
-		case http.StatusForbidden:
-			var b api.CreateTask403JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CreateTask403JSONResponse(b), nil
-		case http.StatusNotFound:
-			var b api.CreateTask404JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CreateTask404JSONResponse(b), nil
-		case http.StatusConflict:
-			return api.CreateTask409JSONResponse(te), nil
-		case http.StatusUnprocessableEntity:
-			var b api.CreateTask422JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CreateTask422JSONResponse(b), nil
-		}
-		return nil, err
+		return nil, taskReply(err, actionRefusals...)
 	}
 	return api.CreateTask202JSONResponse(op), nil
 }
@@ -163,42 +118,11 @@ func (a *TasksAPI) CancelTask(ctx context.Context, req api.CancelTaskRequestObje
 		return nil, errUnavailable
 	}
 	if req.Body == nil {
-		var b api.CancelTask422JSONResponseBody
-		if err := b.FromHTTPValidationError(invalid("Request body is required")); err != nil {
-			return nil, err
-		}
-		return api.CancelTask422JSONResponse(b), nil
+		return nil, apierr.Invalid("Request body is required")
 	}
 	op, err := a.Svc.Cancel(ctx, a.principal(), action(req.TaskId, *req.Body))
 	if err != nil {
-		e, ok := refusalOf(err)
-		if !ok {
-			return nil, err
-		}
-		te := taskError(e.Reason)
-		switch e.Status {
-		case http.StatusForbidden:
-			var b api.CancelTask403JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CancelTask403JSONResponse(b), nil
-		case http.StatusNotFound:
-			var b api.CancelTask404JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CancelTask404JSONResponse(b), nil
-		case http.StatusConflict:
-			return api.CancelTask409JSONResponse(te), nil
-		case http.StatusUnprocessableEntity:
-			var b api.CancelTask422JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.CancelTask422JSONResponse(b), nil
-		}
-		return nil, err
+		return nil, taskReply(err, actionRefusals...)
 	}
 	return api.CancelTask202JSONResponse(op), nil
 }
@@ -209,42 +133,11 @@ func (a *TasksAPI) RetryTask(ctx context.Context, req api.RetryTaskRequestObject
 		return nil, errUnavailable
 	}
 	if req.Body == nil {
-		var b api.RetryTask422JSONResponseBody
-		if err := b.FromHTTPValidationError(invalid("Request body is required")); err != nil {
-			return nil, err
-		}
-		return api.RetryTask422JSONResponse(b), nil
+		return nil, apierr.Invalid("Request body is required")
 	}
 	op, err := a.Svc.Retry(ctx, a.principal(), action(req.TaskId, *req.Body))
 	if err != nil {
-		e, ok := refusalOf(err)
-		if !ok {
-			return nil, err
-		}
-		te := taskError(e.Reason)
-		switch e.Status {
-		case http.StatusForbidden:
-			var b api.RetryTask403JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.RetryTask403JSONResponse(b), nil
-		case http.StatusNotFound:
-			var b api.RetryTask404JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.RetryTask404JSONResponse(b), nil
-		case http.StatusConflict:
-			return api.RetryTask409JSONResponse(te), nil
-		case http.StatusUnprocessableEntity:
-			var b api.RetryTask422JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.RetryTask422JSONResponse(b), nil
-		}
-		return nil, err
+		return nil, taskReply(err, actionRefusals...)
 	}
 	return api.RetryTask202JSONResponse(op), nil
 }
@@ -255,11 +148,7 @@ func (a *TasksAPI) ReassignTask(ctx context.Context, req api.ReassignTaskRequest
 		return nil, errUnavailable
 	}
 	if req.Body == nil {
-		var b api.ReassignTask422JSONResponseBody
-		if err := b.FromHTTPValidationError(invalid("Request body is required")); err != nil {
-			return nil, err
-		}
-		return api.ReassignTask422JSONResponse(b), nil
+		return nil, apierr.Invalid("Request body is required")
 	}
 	in := action(req.TaskId, api.TaskAction{
 		ExpectedAttemptId: req.Body.ExpectedAttemptId, ExpectedVersion: req.Body.ExpectedVersion, RequestId: req.Body.RequestId,
@@ -267,34 +156,7 @@ func (a *TasksAPI) ReassignTask(ctx context.Context, req api.ReassignTaskRequest
 	in.TargetProfileID = req.Body.TargetProfileId
 	op, err := a.Svc.Reassign(ctx, a.principal(), in)
 	if err != nil {
-		e, ok := refusalOf(err)
-		if !ok {
-			return nil, err
-		}
-		te := taskError(e.Reason)
-		switch e.Status {
-		case http.StatusForbidden:
-			var b api.ReassignTask403JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.ReassignTask403JSONResponse(b), nil
-		case http.StatusNotFound:
-			var b api.ReassignTask404JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.ReassignTask404JSONResponse(b), nil
-		case http.StatusConflict:
-			return api.ReassignTask409JSONResponse(te), nil
-		case http.StatusUnprocessableEntity:
-			var b api.ReassignTask422JSONResponseBody
-			if err := b.FromTaskError(te); err != nil {
-				return nil, err
-			}
-			return api.ReassignTask422JSONResponse(b), nil
-		}
-		return nil, err
+		return nil, taskReply(err, actionRefusals...)
 	}
 	return api.ReassignTask202JSONResponse(op), nil
 }

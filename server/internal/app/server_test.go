@@ -15,7 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/httpx"
@@ -46,7 +48,7 @@ func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Hand
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	return apicheck.Wrap(t, h)
 }
 
 // Every contract operation has a domain handler. Exercise the app's embedded fallback explicitly
@@ -57,7 +59,7 @@ func newUnimplementedHandler(t *testing.T, vars map[string]string) http.Handler 
 	stub := (&app.Server{}).Unimplemented
 	strict := api.NewStrictHandlerWithOptions(stub, nil, api.StrictHTTPServerOptions{
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			httpx.WriteErr(w, err)
+			apierr.Write(w, err)
 		},
 	})
 	routes := api.HandlerWithOptions(strict, api.StdHTTPServerOptions{})
@@ -324,6 +326,7 @@ func TestHealthLogsPingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h = apicheck.Wrap(t, h)
 	if r := send(h, "GET", "/health", "", nil); r.status != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", r.status)
 	}

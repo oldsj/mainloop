@@ -5,7 +5,7 @@ package api
 import (
 	"context"
 
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
 // Unimplemented answers 501 to every operation in the contract. Embed it below the per-domain
@@ -16,340 +16,340 @@ var _ StrictServerInterface = Unimplemented{}
 
 // AcceptEnvironmentDefault is not implemented yet.
 func (Unimplemented) AcceptEnvironmentDefault(context.Context, AcceptEnvironmentDefaultRequestObject) (AcceptEnvironmentDefaultResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ArchiveSession is not implemented yet.
 func (Unimplemented) ArchiveSession(context.Context, ArchiveSessionRequestObject) (ArchiveSessionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CancelSession is not implemented yet.
 func (Unimplemented) CancelSession(context.Context, CancelSessionRequestObject) (CancelSessionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CancelTask is not implemented yet.
 func (Unimplemented) CancelTask(context.Context, CancelTaskRequestObject) (CancelTaskResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CreateSchedule is not implemented yet.
 func (Unimplemented) CreateSchedule(context.Context, CreateScheduleRequestObject) (CreateScheduleResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CreateSession is not implemented yet.
 func (Unimplemented) CreateSession(context.Context, CreateSessionRequestObject) (CreateSessionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CreateTask is not implemented yet.
 func (Unimplemented) CreateTask(context.Context, CreateTaskRequestObject) (CreateTaskResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // CreateWorkspace is not implemented yet.
 func (Unimplemented) CreateWorkspace(context.Context, CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // DeleteSchedule is not implemented yet.
 func (Unimplemented) DeleteSchedule(context.Context, DeleteScheduleRequestObject) (DeleteScheduleResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // DeleteWorkspace is not implemented yet.
 func (Unimplemented) DeleteWorkspace(context.Context, DeleteWorkspaceRequestObject) (DeleteWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // DismissQueueDiagnostic is not implemented yet.
 func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnosticRequestObject) (DismissQueueDiagnosticResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetAttention is not implemented yet.
 func (Unimplemented) GetAttention(context.Context, GetAttentionRequestObject) (GetAttentionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetConversation is not implemented yet.
 func (Unimplemented) GetConversation(context.Context, GetConversationRequestObject) (GetConversationResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetEnvironment is not implemented yet.
 func (Unimplemented) GetEnvironment(context.Context, GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetEnvironmentVersion is not implemented yet.
 func (Unimplemented) GetEnvironmentVersion(context.Context, GetEnvironmentVersionRequestObject) (GetEnvironmentVersionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetEvents is not implemented yet.
 func (Unimplemented) GetEvents(context.Context, GetEventsRequestObject) (GetEventsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetHITL is not implemented yet.
 func (Unimplemented) GetHITL(context.Context, GetHITLRequestObject) (GetHITLResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetHITLMergeDetails is not implemented yet.
 func (Unimplemented) GetHITLMergeDetails(context.Context, GetHITLMergeDetailsRequestObject) (GetHITLMergeDetailsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetHITLObserverStatus is not implemented yet.
 func (Unimplemented) GetHITLObserverStatus(context.Context, GetHITLObserverStatusRequestObject) (GetHITLObserverStatusResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetHealth is not implemented yet.
 func (Unimplemented) GetHealth(context.Context, GetHealthRequestObject) (GetHealthResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetMainThread is not implemented yet.
 func (Unimplemented) GetMainThread(context.Context, GetMainThreadRequestObject) (GetMainThreadResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetMergePolicy is not implemented yet.
 func (Unimplemented) GetMergePolicy(context.Context, GetMergePolicyRequestObject) (GetMergePolicyResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetProject is not implemented yet.
 func (Unimplemented) GetProject(context.Context, GetProjectRequestObject) (GetProjectResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetProjectDefaultProvider is not implemented yet.
 func (Unimplemented) GetProjectDefaultProvider(context.Context, GetProjectDefaultProviderRequestObject) (GetProjectDefaultProviderResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetProjectDetail is not implemented yet.
 func (Unimplemented) GetProjectDetail(context.Context, GetProjectDetailRequestObject) (GetProjectDetailResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetProjectEnvironment is not implemented yet.
 func (Unimplemented) GetProjectEnvironment(context.Context, GetProjectEnvironmentRequestObject) (GetProjectEnvironmentResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetProjectSmokeObservations is not implemented yet.
 func (Unimplemented) GetProjectSmokeObservations(context.Context, GetProjectSmokeObservationsRequestObject) (GetProjectSmokeObservationsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetSchedule is not implemented yet.
 func (Unimplemented) GetSchedule(context.Context, GetScheduleRequestObject) (GetScheduleResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetSession is not implemented yet.
 func (Unimplemented) GetSession(context.Context, GetSessionRequestObject) (GetSessionResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetSessionConversation is not implemented yet.
 func (Unimplemented) GetSessionConversation(context.Context, GetSessionConversationRequestObject) (GetSessionConversationResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetSessionNative is not implemented yet.
 func (Unimplemented) GetSessionNative(context.Context, GetSessionNativeRequestObject) (GetSessionNativeResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetTask is not implemented yet.
 func (Unimplemented) GetTask(context.Context, GetTaskRequestObject) (GetTaskResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetTaskOperation is not implemented yet.
 func (Unimplemented) GetTaskOperation(context.Context, GetTaskOperationRequestObject) (GetTaskOperationResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GetWorkspace is not implemented yet.
 func (Unimplemented) GetWorkspace(context.Context, GetWorkspaceRequestObject) (GetWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // GrantEnvironmentToProject is not implemented yet.
 func (Unimplemented) GrantEnvironmentToProject(context.Context, GrantEnvironmentToProjectRequestObject) (GrantEnvironmentToProjectResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // HealthEvents is not implemented yet.
 func (Unimplemented) HealthEvents(context.Context, HealthEventsRequestObject) (HealthEventsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ImportProject is not implemented yet.
 func (Unimplemented) ImportProject(context.Context, ImportProjectRequestObject) (ImportProjectResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListActivity is not implemented yet.
 func (Unimplemented) ListActivity(context.Context, ListActivityRequestObject) (ListActivityResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListEnvironmentVersions is not implemented yet.
 func (Unimplemented) ListEnvironmentVersions(context.Context, ListEnvironmentVersionsRequestObject) (ListEnvironmentVersionsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListEnvironments is not implemented yet.
 func (Unimplemented) ListEnvironments(context.Context, ListEnvironmentsRequestObject) (ListEnvironmentsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListProjects is not implemented yet.
 func (Unimplemented) ListProjects(context.Context, ListProjectsRequestObject) (ListProjectsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListProviders is not implemented yet.
 func (Unimplemented) ListProviders(context.Context, ListProvidersRequestObject) (ListProvidersResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListScheduleExecutions is not implemented yet.
 func (Unimplemented) ListScheduleExecutions(context.Context, ListScheduleExecutionsRequestObject) (ListScheduleExecutionsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListSchedules is not implemented yet.
 func (Unimplemented) ListSchedules(context.Context, ListSchedulesRequestObject) (ListSchedulesResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListSessionHITL is not implemented yet.
 func (Unimplemented) ListSessionHITL(context.Context, ListSessionHITLRequestObject) (ListSessionHITLResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListSessions is not implemented yet.
 func (Unimplemented) ListSessions(context.Context, ListSessionsRequestObject) (ListSessionsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListTasks is not implemented yet.
 func (Unimplemented) ListTasks(context.Context, ListTasksRequestObject) (ListTasksResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListWorkspacePreviewPorts is not implemented yet.
 func (Unimplemented) ListWorkspacePreviewPorts(context.Context, ListWorkspacePreviewPortsRequestObject) (ListWorkspacePreviewPortsResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ListWorkspaces is not implemented yet.
 func (Unimplemented) ListWorkspaces(context.Context, ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // OrchestrationHealth is not implemented yet.
 func (Unimplemented) OrchestrationHealth(context.Context, OrchestrationHealthRequestObject) (OrchestrationHealthResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ReassignTask is not implemented yet.
 func (Unimplemented) ReassignTask(context.Context, ReassignTaskRequestObject) (ReassignTaskResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RefreshEnvironment is not implemented yet.
 func (Unimplemented) RefreshEnvironment(context.Context, RefreshEnvironmentRequestObject) (RefreshEnvironmentResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RefreshWorkspace is not implemented yet.
 func (Unimplemented) RefreshWorkspace(context.Context, RefreshWorkspaceRequestObject) (RefreshWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RegisterEnvironment is not implemented yet.
 func (Unimplemented) RegisterEnvironment(context.Context, RegisterEnvironmentRequestObject) (RegisterEnvironmentResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RespondHITL is not implemented yet.
 func (Unimplemented) RespondHITL(context.Context, RespondHITLRequestObject) (RespondHITLResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RespondToQueueItem is not implemented yet.
 func (Unimplemented) RespondToQueueItem(context.Context, RespondToQueueItemRequestObject) (RespondToQueueItemResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // ResumeWorkspace is not implemented yet.
 func (Unimplemented) ResumeWorkspace(context.Context, ResumeWorkspaceRequestObject) (ResumeWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RetryTask is not implemented yet.
 func (Unimplemented) RetryTask(context.Context, RetryTaskRequestObject) (RetryTaskResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // RevokeEnvironmentFromProject is not implemented yet.
 func (Unimplemented) RevokeEnvironmentFromProject(context.Context, RevokeEnvironmentFromProjectRequestObject) (RevokeEnvironmentFromProjectResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // SelectProjectEnvironment is not implemented yet.
 func (Unimplemented) SelectProjectEnvironment(context.Context, SelectProjectEnvironmentRequestObject) (SelectProjectEnvironmentResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // SendMessage is not implemented yet.
 func (Unimplemented) SendMessage(context.Context, SendMessageRequestObject) (SendMessageResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // SendSessionMessage is not implemented yet.
 func (Unimplemented) SendSessionMessage(context.Context, SendSessionMessageRequestObject) (SendSessionMessageResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // StopTurn is not implemented yet.
 func (Unimplemented) StopTurn(context.Context, StopTurnRequestObject) (StopTurnResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // SuspendWorkspace is not implemented yet.
 func (Unimplemented) SuspendWorkspace(context.Context, SuspendWorkspaceRequestObject) (SuspendWorkspaceResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // TriggerSchedule is not implemented yet.
 func (Unimplemented) TriggerSchedule(context.Context, TriggerScheduleRequestObject) (TriggerScheduleResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // UpdateMergePolicy is not implemented yet.
 func (Unimplemented) UpdateMergePolicy(context.Context, UpdateMergePolicyRequestObject) (UpdateMergePolicyResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // UpdateProjectDefaultProvider is not implemented yet.
 func (Unimplemented) UpdateProjectDefaultProvider(context.Context, UpdateProjectDefaultProviderRequestObject) (UpdateProjectDefaultProviderResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }
 
 // UpdateSchedule is not implemented yet.
 func (Unimplemented) UpdateSchedule(context.Context, UpdateScheduleRequestObject) (UpdateScheduleResponseObject, error) {
-	return nil, httpx.ErrNotImplemented
+	return nil, apierr.NotImplemented
 }

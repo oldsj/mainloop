@@ -16,9 +16,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/events"
-	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
@@ -32,9 +32,7 @@ type SchedulesAPI struct {
 // NewAPI builds the API.
 func NewAPI(svc *Service) *SchedulesAPI { return &SchedulesAPI{Svc: svc} }
 
-var errUnavailable = httpx.NewError(http.StatusServiceUnavailable, "Scheduled runs are not available")
-
-func invalid(msg string) error { return httpx.NewError(http.StatusUnprocessableEntity, msg) }
+var errUnavailable = apierr.Unavailable("Scheduled runs are not available")
 
 // refusal maps a kagent failure to the contract's status. The error bodies are the contract's
 // HTTPError, which every 4xx and 502 of these routes allows, so they are returned as errors rather
@@ -47,29 +45,29 @@ func (s *Service) refusal(err error, creating bool) error {
 	case errors.As(err, &se):
 		switch se.Code {
 		case connect.CodeNotFound:
-			return httpx.NewError(http.StatusNotFound, "Schedule not found")
+			return apierr.NotFound("Schedule not found")
 		case connect.CodeAlreadyExists:
-			return httpx.NewError(http.StatusConflict, "request_id was already used with a different request")
+			return apierr.Conflict("request_id was already used with a different request")
 		case connect.CodeAborted:
-			return httpx.NewError(http.StatusPreconditionFailed, "The schedule changed since it was read; read it again and retry")
+			return apierr.New(http.StatusPreconditionFailed, "The schedule changed since it was read; read it again and retry")
 		case connect.CodeFailedPrecondition:
 			if creating {
-				return httpx.NewError(http.StatusNotFound, "Agent not found")
+				return apierr.NotFound("Agent not found")
 			}
-			return httpx.NewError(http.StatusConflict, "The schedule was deleted")
+			return apierr.Conflict("The schedule was deleted")
 		case connect.CodeInvalidArgument:
-			return invalid(se.Detail)
+			return apierr.Invalid(se.Detail)
 		}
 	case errors.As(err, &cfg) && !cfg.Credentials:
-		return httpx.NewError(http.StatusForbidden, "kagent refused this request")
+		return apierr.Forbidden("kagent refused this request")
 	}
 	s.log().Warn("kagent schedule call failed", "error", err)
-	return httpx.NewError(http.StatusBadGateway, "kagent is unavailable")
+	return apierr.BadGateway("kagent is unavailable")
 }
 
 func scheduleID(id string) error {
 	if _, err := uuid.Parse(id); err != nil {
-		return invalid("schedule_id must be a UUID")
+		return apierr.Invalid("schedule_id must be a UUID")
 	}
 	return nil
 }
@@ -82,15 +80,15 @@ func quote(etag string) *string {
 // ifMatch is the etag in an If-Match header: a quoted UUID.
 func ifMatch(h *string) (string, error) {
 	if h == nil || strings.TrimSpace(*h) == "" {
-		return "", httpx.NewError(http.StatusPreconditionRequired, "If-Match is required; send the etag from the last read")
+		return "", apierr.New(http.StatusPreconditionRequired, "If-Match is required; send the etag from the last read")
 	}
 	v := strings.TrimPrefix(strings.TrimSpace(*h), "W/")
 	if len(v) < 2 || v[0] != '"' || v[len(v)-1] != '"' {
-		return "", invalid("If-Match must be a quoted etag")
+		return "", apierr.Invalid("If-Match must be a quoted etag")
 	}
 	v = v[1 : len(v)-1]
 	if _, err := uuid.Parse(v); err != nil {
-		return "", invalid("If-Match must hold the schedule's etag")
+		return "", apierr.Invalid("If-Match must hold the schedule's etag")
 	}
 	return v, nil
 }
@@ -122,7 +120,7 @@ func updated(owner, id string) events.Draft {
 
 func ptr[T any](v T) *T { return &v }
 
-var errNotFound = httpx.NewError(http.StatusNotFound, "Schedule not found")
+var errNotFound = apierr.NotFound("Schedule not found")
 
 // registered returns the registry row of a schedule this instance made on one of its own Agents.
 // Anything else (another instance's schedule, one this instance never made, an Agent that left this
@@ -204,7 +202,7 @@ func definite(err error) bool {
 	return errors.As(err, &se)
 }
 
-var errRequestIDReused = httpx.NewError(http.StatusConflict, "request_id was already used with a different request")
+var errRequestIDReused = apierr.Conflict("request_id was already used with a different request")
 
 // lease is one create attempt's hold on its intent. The zero lease is an attempt on a request that
 // is no longer an intent (already confirmed): it sends the create to read the schedule back and
@@ -427,21 +425,21 @@ func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleR
 		return nil, err
 	}
 	if r.Body == nil {
-		return nil, invalid("the body is required")
+		return nil, apierr.Invalid("the body is required")
 	}
 	if strings.TrimSpace(r.Body.RequestId) == "" {
-		return nil, invalid("request_id is required")
+		return nil, apierr.Invalid("request_id is required")
 	}
 	cfg, err := toConfig(r.Body.Config)
 	if err != nil {
-		return nil, invalid(err.Error())
+		return nil, apierr.Invalid(err.Error())
 	}
 	owned, err := a.Svc.ownAgents(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !owned[agentKey(r.Body.Agent.Namespace, r.Body.Agent.Name)] {
-		return nil, httpx.NewError(http.StatusForbidden, "That Agent does not belong to this deployment")
+		return nil, apierr.Forbidden("That Agent does not belong to this deployment")
 	}
 	agent := &kagentapi.ResourceReference{Namespace: r.Body.Agent.Namespace, Name: r.Body.Agent.Name}
 	l, err := a.Svc.beginCreate(ctx, r.Body.RequestId, agent, cfg)
@@ -457,7 +455,7 @@ func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleR
 	}
 	if sc.GetDeletedAt() != nil {
 		// A replay of a create whose schedule was deleted since: kagent still returns it.
-		return nil, httpx.NewError(http.StatusConflict, "The schedule made by this request_id was deleted")
+		return nil, apierr.Conflict("The schedule made by this request_id was deleted")
 	}
 	return api.CreateSchedule201JSONResponse{
 		Body: fromSchedule(sc), Headers: api.CreateSchedule201ResponseHeaders{ETag: quote(sc.GetEtag())},
@@ -501,11 +499,11 @@ func (a *SchedulesAPI) UpdateSchedule(ctx context.Context, r api.UpdateScheduleR
 		return nil, err
 	}
 	if r.Body == nil {
-		return nil, invalid("the body is required")
+		return nil, apierr.Invalid("the body is required")
 	}
 	cfg, err := toConfig(*r.Body)
 	if err != nil {
-		return nil, invalid(err.Error())
+		return nil, apierr.Invalid(err.Error())
 	}
 	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
 		return nil, err
@@ -592,7 +590,7 @@ func (a *SchedulesAPI) TriggerSchedule(ctx context.Context, r api.TriggerSchedul
 		return nil, err
 	}
 	if r.Body == nil {
-		return nil, invalid("the body is required")
+		return nil, apierr.Invalid("the body is required")
 	}
 	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
 		return nil, err

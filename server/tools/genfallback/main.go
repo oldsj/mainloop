@@ -31,7 +31,7 @@ package api
 import (
 	"context"
 
-	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 )
 
 // Unimplemented answers 501 to every operation in the contract. Embed it below the per-domain
@@ -41,7 +41,7 @@ type Unimplemented struct{}
 var _ StrictServerInterface = Unimplemented{}
 `)
 	for _, m := range methods {
-		fmt.Fprintf(&buf, "\n// %s is not implemented yet.\nfunc (Unimplemented) %s(context.Context, %sRequestObject) (%sResponseObject, error) {\n\treturn nil, httpx.ErrNotImplemented\n}\n", m, m, m, m)
+		fmt.Fprintf(&buf, "\n// %s is not implemented yet.\nfunc (Unimplemented) %s(context.Context, %sRequestObject) (%sResponseObject, error) {\n\treturn nil, apierr.NotImplemented\n}\n", m, m, m, m)
 	}
 	src, err := format.Source(buf.Bytes())
 	if err != nil {

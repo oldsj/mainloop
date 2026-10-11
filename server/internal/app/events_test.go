@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apicheck"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -59,7 +60,7 @@ func newSSEWithoutSource(t *testing.T, buffer int, heartbeat time.Duration) *sse
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(h)
+	ts := httptest.NewServer(apicheck.Wrap(t, h))
 	e := &sseEnv{d: d, hub: hub, server: ts, srv: srv, log: log}
 	t.Cleanup(func() {
 		hub.Close()

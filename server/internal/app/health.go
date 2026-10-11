@@ -3,10 +3,10 @@ package app
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
@@ -30,7 +30,7 @@ func (h *HealthAPI) GetHealth(ctx context.Context, _ api.GetHealthRequestObject)
 	defer cancel()
 	if err := h.DB.Ping(ctx); err != nil {
 		h.Log.WarnContext(ctx, "health: database ping failed", "request_id", httpx.RequestID(ctx), "error", err)
-		return nil, httpx.NewError(http.StatusServiceUnavailable, "Database unavailable")
+		return nil, apierr.Unavailable("Database unavailable")
 	}
 	return api.GetHealth200JSONResponse{Status: api.Healthy, Database: "ok"}, nil
 }

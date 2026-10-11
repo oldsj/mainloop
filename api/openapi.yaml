@@ -94,6 +94,12 @@ paths:
               $ref: '#/components/schemas/ChatRequest'
         required: true
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -191,6 +197,12 @@ paths:
               $ref: '#/components/schemas/RegisterEnvironment'
         required: true
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '201':
           description: Successful Response
           content:
@@ -269,6 +281,12 @@ paths:
             schema:
               $ref: '#/components/schemas/RefreshRequest'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -321,6 +339,12 @@ paths:
             schema:
               $ref: '#/components/schemas/GrantRequest'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -404,6 +428,12 @@ paths:
             schema:
               $ref: '#/components/schemas/RefreshRequest'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '201':
           description: Successful Response
           content:
@@ -696,6 +726,12 @@ paths:
             default: 50
             title: Limit
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -740,6 +776,12 @@ paths:
             schema:
               $ref: '#/components/schemas/HITLDecisionInput'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -964,6 +1006,12 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectImportRequest'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '201':
           description: Successful Response
           content:
@@ -1086,6 +1134,12 @@ paths:
             schema:
               $ref: '#/components/schemas/ProjectProviderUpdate'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1208,6 +1262,12 @@ paths:
             schema:
               $ref: '#/components/schemas/SelectEnvironment'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1291,6 +1351,12 @@ paths:
             schema:
               $ref: '#/components/schemas/MergePolicyUpdate'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1458,6 +1524,12 @@ paths:
             schema:
               $ref: '#/components/schemas/QueueItemResponse'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1514,6 +1586,12 @@ paths:
             maxLength: 128
             title: Page Token
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1560,6 +1638,18 @@ paths:
               $ref: '#/components/schemas/ScheduledRunCreate'
         required: true
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '201':
           description: Successful Response
           headers:
@@ -1619,6 +1709,12 @@ paths:
             type: string
             title: Schedule Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           headers:
@@ -1685,6 +1781,18 @@ paths:
               $ref: '#/components/schemas/ScheduledRunConfigInput'
         required: true
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           headers:
@@ -1755,6 +1863,12 @@ paths:
             type: string
             title: Schedule Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '204':
           description: Successful Response
         '403':
@@ -1815,6 +1929,12 @@ paths:
             maxLength: 128
             title: Page Token
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -1869,6 +1989,18 @@ paths:
               $ref: '#/components/schemas/ScheduledRunTriggerRequest'
         required: true
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '202':
           description: Accepted
           content:
@@ -1959,6 +2091,12 @@ paths:
             schema:
               $ref: '#/components/schemas/SessionCreate'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2197,6 +2335,12 @@ paths:
             schema:
               $ref: '#/components/schemas/SessionMessageRequest'
       responses:
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2329,6 +2473,12 @@ paths:
             type: string
             title: Operation Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2379,6 +2529,12 @@ paths:
               - type: 'null'
             title: Parent Task Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2418,6 +2574,18 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskCreate'
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '202':
           description: Successful Response
           content:
@@ -2468,6 +2636,12 @@ paths:
             type: string
             title: Task Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2514,6 +2688,18 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskAction'
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '202':
           description: Successful Response
           content:
@@ -2570,6 +2756,18 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskReassign'
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '202':
           description: Successful Response
           content:
@@ -2626,6 +2824,18 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskAction'
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '202':
           description: Successful Response
           content:
@@ -2669,6 +2879,12 @@ paths:
       summary: List Workspaces
       operationId: listWorkspaces
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2698,6 +2914,18 @@ paths:
               $ref: '#/components/schemas/CreateWorkspaceRequest'
         required: true
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '201':
           description: Successful Response
           content:
@@ -2750,6 +2978,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2781,6 +3015,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '204':
           description: Successful Response
         '403':
@@ -2827,6 +3067,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2859,6 +3105,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2911,6 +3163,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:
@@ -2963,6 +3221,12 @@ paths:
             type: string
             title: Workspace Id
       responses:
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '200':
           description: Successful Response
           content:

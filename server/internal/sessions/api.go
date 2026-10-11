@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -39,17 +40,11 @@ func NewAPI(svc *Service, cfg *config.Config, pool *pgxpool.Pool, log *slog.Logg
 	return &SessionsAPI{Svc: svc}
 }
 
-func invalid(msg string) api.HTTPValidationError {
-	return api.HTTPValidationError{Detail: &[]api.ValidationError{{
-		Loc: []api.ValidationError_Loc_Item{}, Msg: msg, Type: "value_error",
-	}}}
-}
-
 // SendMessage implements api.StrictServerInterface. The request has no message id, so each call
 // is a new message; callers that need idempotency use Service.Send with their own id.
 func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestObject) (api.SendMessageResponseObject, error) {
 	if r.Body == nil {
-		return api.SendMessage422JSONResponse(invalid("the body is required")), nil
+		return nil, apierr.Invalid("the body is required")
 	}
 	conv := ""
 	if r.Body.ConversationId != nil {
@@ -59,11 +54,11 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 	sent, err := a.Svc.Send(ctx, id, conv, r.Body.Message)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.SendMessage404JSONResponse(api.HTTPError{Detail: "Conversation not found"}), nil
+		return nil, apierr.NotFound("Conversation not found")
 	case errors.Is(err, ErrBusy):
-		return api.SendMessage409JSONResponse(api.HTTPError{Detail: "A turn is already in progress for this conversation"}), nil
+		return nil, apierr.Conflict("A turn is already in progress for this conversation")
 	case errors.Is(err, ErrInvalid):
-		return api.SendMessage422JSONResponse(invalid(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))), nil
+		return nil, apierr.Invalid(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	case err != nil:
 		return nil, err
 	}
@@ -78,7 +73,7 @@ func (a *SessionsAPI) GetConversation(ctx context.Context, r api.GetConversation
 	q := dbq.New(a.Svc.Pool)
 	c, err := q.GetConversationSummary(ctx, dbq.GetConversationSummaryParams{ID: r.ConversationId, UserID: a.Svc.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return api.GetConversation404JSONResponse(api.HTTPError{Detail: "Conversation not found"}), nil
+		return nil, apierr.NotFound("Conversation not found")
 	}
 	if err != nil {
 		return nil, err
@@ -293,7 +288,7 @@ func (a *SessionsAPI) ListSessions(ctx context.Context, r api.ListSessionsReques
 // CreateSession implements api.StrictServerInterface.
 func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequestObject) (api.CreateSessionResponseObject, error) {
 	if r.Body == nil {
-		return create422(invalid("the body is required"))
+		return nil, apierr.Invalid("the body is required")
 	}
 	n := NewSession{Title: r.Body.Title, Description: r.Body.Description, Prompt: r.Body.Prompt, RepoURL: r.Body.RepoUrl}
 	if r.Body.AgentKind != nil {
@@ -302,7 +297,7 @@ func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequ
 	id, err := a.Svc.Create(ctx, n)
 	switch {
 	case errors.Is(err, ErrInvalid):
-		return create422(invalid(reason(err, ErrInvalid)))
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
 	case err != nil:
 		return nil, err
 	}
@@ -314,19 +309,11 @@ func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequ
 	return api.CreateSession200JSONResponse(toSession(row, false)), nil
 }
 
-func create422(v api.HTTPValidationError) (api.CreateSessionResponseObject, error) {
-	var b api.CreateSession422JSONResponseBody
-	if err := b.FromHTTPValidationError(v); err != nil {
-		return nil, err
-	}
-	return api.CreateSession422JSONResponse(b), nil
-}
-
 // GetSession implements api.StrictServerInterface.
 func (a *SessionsAPI) GetSession(ctx context.Context, r api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	row, err := dbq.New(a.Svc.Pool).GetSessionRow(ctx, dbq.GetSessionRowParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return api.GetSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	}
 	if err != nil {
 		return nil, err
@@ -343,7 +330,7 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 	q := dbq.New(a.Svc.Pool)
 	row, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return api.GetSessionConversation404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	}
 	if err != nil {
 		return nil, err
@@ -371,7 +358,7 @@ func (a *SessionsAPI) GetSessionNative(ctx context.Context, r api.GetSessionNati
 	q := dbq.New(a.Svc.Pool)
 	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: r.SessionId, UserID: a.Svc.OwnerID})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return api.GetSessionNative404JSONResponse(api.HTTPError{Detail: "Session has no native agent binding"}), nil
+		return nil, apierr.NotFound("Session has no native agent binding")
 	}
 	if err != nil {
 		return nil, err
@@ -397,19 +384,19 @@ func (a *SessionsAPI) GetSessionNative(ctx context.Context, r api.GetSessionNati
 // message; at most one turn is open per session.
 func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionMessageRequestObject) (api.SendSessionMessageResponseObject, error) {
 	if r.Body == nil {
-		return api.SendSessionMessage422JSONResponse(invalid("the body is required")), nil
+		return nil, apierr.Invalid("the body is required")
 	}
 	id := uuid.NewString()
 	_, err := a.Svc.SendTo(ctx, r.SessionId, id, r.Body.Message)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.SendSessionMessage404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	case errors.Is(err, ErrBusy):
-		return api.SendSessionMessage409JSONResponse(api.HTTPError{Detail: "A turn is already in progress for this session"}), nil
+		return nil, apierr.Conflict("A turn is already in progress for this session")
 	case errors.Is(err, ErrConflict):
-		return api.SendSessionMessage409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(reason(err, ErrConflict))
 	case errors.Is(err, ErrInvalid):
-		return api.SendSessionMessage422JSONResponse(invalid(reason(err, ErrInvalid))), nil
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
 	case err != nil:
 		return nil, err
 	}
@@ -423,14 +410,14 @@ func (a *SessionsAPI) StopTurn(ctx context.Context, r api.StopTurnRequestObject)
 	var kerr *KagentError
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.StopTurn404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	case errors.Is(err, ErrConflict):
-		return api.StopTurn409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(reason(err, ErrConflict))
 	case errors.As(err, &unconfirmed):
-		return api.StopTurn409JSONResponse(api.HTTPError{Detail: unconfirmed.Detail}), nil
+		return nil, apierr.Conflict(unconfirmed.Detail)
 	case errors.As(err, &kerr):
 		a.Svc.log().WarnContext(ctx, "stop turn failed in kagent", "session_id", r.SessionId, "error", kerr.Err)
-		return api.StopTurn502JSONResponse(api.HTTPError{Detail: "Could not stop the turn: " + safeDetail(kerr.Err.Error())}), nil
+		return nil, apierr.BadGateway("Could not stop the turn: " + safeDetail(kerr.Err.Error()))
 	case err != nil:
 		return nil, err
 	}
@@ -442,9 +429,9 @@ func (a *SessionsAPI) CancelSession(ctx context.Context, r api.CancelSessionRequ
 	res, err := a.Svc.Cancel(ctx, r.SessionId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.CancelSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	case errors.Is(err, ErrConflict):
-		return api.CancelSession409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(reason(err, ErrConflict))
 	case err != nil:
 		return nil, err
 	}
@@ -458,9 +445,9 @@ func (a *SessionsAPI) ArchiveSession(ctx context.Context, r api.ArchiveSessionRe
 	err := a.Svc.Archive(ctx, r.SessionId)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return api.ArchiveSession404JSONResponse(api.HTTPError{Detail: "Session not found"}), nil
+		return nil, apierr.NotFound("Session not found")
 	case errors.Is(err, ErrConflict):
-		return api.ArchiveSession409JSONResponse(api.HTTPError{Detail: reason(err, ErrConflict)}), nil
+		return nil, apierr.Conflict(reason(err, ErrConflict))
 	case err != nil:
 		return nil, err
 	}

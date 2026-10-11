@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -197,46 +198,39 @@ func TestSessionRoutesRefuseWhatIsNotTheOwners(t *testing.T) {
 	ctx := context.Background()
 
 	bad := "no-such-provider"
-	r, err := a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{Title: "t", Prompt: "p", AgentKind: &bad}})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{Title: "t", Prompt: "p", AgentKind: &bad}}); apierr.StatusOf(err) != 422 {
+		t.Fatalf("unknown provider: %v", err)
 	}
-	if _, ok := r.(api.CreateSession422JSONResponse); !ok {
-		t.Fatalf("unknown provider: %T", r)
-	}
-	r, _ = a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{Title: "t", Prompt: "  "}})
-	if _, ok := r.(api.CreateSession422JSONResponse); !ok {
-		t.Fatalf("blank prompt: %T", r)
+	if _, err := a.CreateSession(ctx, api.CreateSessionRequestObject{Body: &api.SessionCreate{Title: "t", Prompt: "  "}}); apierr.StatusOf(err) != 422 {
+		t.Fatalf("blank prompt: %v", err)
 	}
 	if s, _, _, _ := e.counts(); s != 0 {
 		t.Fatalf("%d sessions after refused creates", s)
 	}
 
 	const gone = "nope"
-	if r, _ := a.GetSession(ctx, api.GetSessionRequestObject{SessionId: gone}); !is[api.GetSession404JSONResponse](r) {
-		t.Fatalf("get: %T", r)
+	if _, err := a.GetSession(ctx, api.GetSessionRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("get: %v", err)
 	}
-	if r, _ := a.GetSessionConversation(ctx, api.GetSessionConversationRequestObject{SessionId: gone}); !is[api.GetSessionConversation404JSONResponse](r) {
-		t.Fatalf("conversation: %T", r)
+	if _, err := a.GetSessionConversation(ctx, api.GetSessionConversationRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("conversation: %v", err)
 	}
-	if r, _ := a.GetSessionNative(ctx, api.GetSessionNativeRequestObject{SessionId: gone}); !is[api.GetSessionNative404JSONResponse](r) {
-		t.Fatalf("native: %T", r)
+	if _, err := a.GetSessionNative(ctx, api.GetSessionNativeRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("native: %v", err)
 	}
-	if r, _ := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: gone, Body: &api.SessionMessageRequest{Message: "x"}}); !is[api.SendSessionMessage404JSONResponse](r) {
-		t.Fatalf("message: %T", r)
+	if _, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: gone, Body: &api.SessionMessageRequest{Message: "x"}}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("message: %v", err)
 	}
-	if r, _ := a.StopTurn(ctx, api.StopTurnRequestObject{SessionId: gone}); !is[api.StopTurn404JSONResponse](r) {
-		t.Fatalf("stop: %T", r)
+	if _, err := a.StopTurn(ctx, api.StopTurnRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("stop: %v", err)
 	}
-	if r, _ := a.CancelSession(ctx, api.CancelSessionRequestObject{SessionId: gone}); !is[api.CancelSession404JSONResponse](r) {
-		t.Fatalf("cancel: %T", r)
+	if _, err := a.CancelSession(ctx, api.CancelSessionRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("cancel: %v", err)
 	}
-	if r, _ := a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: gone}); !is[api.ArchiveSession404JSONResponse](r) {
-		t.Fatalf("archive: %T", r)
+	if _, err := a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: gone}); apierr.StatusOf(err) != 404 {
+		t.Fatalf("archive: %v", err)
 	}
 }
-
-func is[T any](v any) bool { _, ok := v.(T); return ok }
 
 // ---- message: one open turn, ended and archived sessions ---------------------------------------------
 
@@ -250,26 +244,20 @@ func TestOneOpenTurnPerSessionAndASecondMessageIsRefused(t *testing.T) {
 	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
 	e.openTurn(id, "second")
 
-	r, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: "third"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	busy, ok := r.(api.SendSessionMessage409JSONResponse)
-	if !ok || !strings.Contains(busy.Detail, "turn is already in progress") {
-		t.Fatalf("got %T %+v", r, r)
+	_, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: "third"}})
+	if busy, ok := apierr.As(err); !ok || busy.Status != 409 || !strings.Contains(busy.Message, "turn is already in progress") {
+		t.Fatalf("got %v", err)
 	}
 	var open int
 	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deliveries WHERE session_id = $1 AND state IN ('recorded','sending','delivered')`, id).Scan(&open); err != nil || open != 1 {
 		t.Fatalf("%d open turns (%v)", open, err)
 	}
 
-	r, _ = a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: ""}})
-	if !is[api.SendSessionMessage422JSONResponse](r) {
-		t.Fatalf("empty message: %T", r)
+	if _, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: ""}}); apierr.StatusOf(err) != 422 {
+		t.Fatalf("empty message: %v", err)
 	}
-	r, _ = a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id})
-	if !is[api.SendSessionMessage422JSONResponse](r) {
-		t.Fatalf("no body: %T", r)
+	if _, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id}); apierr.StatusOf(err) != 422 {
+		t.Fatalf("no body: %v", err)
 	}
 }
 
@@ -313,12 +301,8 @@ func TestACancelledOrArchivedSessionTakesNoMessage(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		r, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: "more"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := r.(api.SendSessionMessage409JSONResponse); !ok {
-			t.Fatalf("%s: got %T", step, r)
+		if _, err := a.SendSessionMessage(ctx, api.SendSessionMessageRequestObject{SessionId: id, Body: &api.SessionMessageRequest{Message: "more"}}); apierr.StatusOf(err) != 409 {
+			t.Fatalf("%s: got %v", step, err)
 		}
 	}
 	if e.sends() != 1 {
@@ -401,12 +385,9 @@ func TestStopTurnWhenKagentFailsLeavesTheTurnOpen(t *testing.T) {
 	mid := e.openTurn(id, "long")
 
 	e.srv.FailNext("CancelTask", kagenttest.Fault{RPC: &kagenttest.RPCError{Code: -32603, Message: "boom"}})
-	r, err := e.API().StopTurn(ctx, api.StopTurnRequestObject{SessionId: id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bad, ok := r.(api.StopTurn502JSONResponse); !ok || !strings.HasPrefix(bad.Detail, "Could not stop the turn") {
-		t.Fatalf("got %T %+v", r, r)
+	_, err := e.API().StopTurn(ctx, api.StopTurnRequestObject{SessionId: id})
+	if bad, ok := apierr.As(err); !ok || bad.Status != 502 || !strings.HasPrefix(bad.Message, "Could not stop the turn") {
+		t.Fatalf("got %v", err)
 	}
 	if d := e.delivery(mid); d.State != dbstate.DeliveryDelivered || e.queueHeld(id) {
 		t.Fatalf("delivery %s, held %v: a failed stop wrote something", d.State, e.queueHeld(id))
@@ -436,9 +417,8 @@ func TestStopTurnIsRefusedWhileKagentHasNoTaskOrKeepsRunningIt(t *testing.T) {
 		if e.delivery(mid).State != dbstate.DeliverySending || e.srv.Count("CancelTask") != 0 {
 			t.Fatal("a stop with no task changed something")
 		}
-		r, _ := e.API().StopTurn(context.Background(), api.StopTurnRequestObject{SessionId: id})
-		if !is[api.StopTurn409JSONResponse](r) {
-			t.Fatalf("got %T", r)
+		if _, err := e.API().StopTurn(context.Background(), api.StopTurnRequestObject{SessionId: id}); apierr.StatusOf(err) != 409 {
+			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("still running after the cancel", func(t *testing.T) {
@@ -620,12 +600,8 @@ func TestTheMainThreadCannotBeCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := e.API().CancelSession(context.Background(), api.CancelSessionRequestObject{SessionId: m.SessionID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := r.(api.CancelSession409JSONResponse); !ok {
-		t.Fatalf("got %T", r)
+	if _, err := e.API().CancelSession(context.Background(), api.CancelSessionRequestObject{SessionId: m.SessionID}); apierr.StatusOf(err) != 409 {
+		t.Fatalf("got %v", err)
 	}
 	if e.sessionStatus(m.SessionID) == dbstate.SessionCancelled {
 		t.Fatal("the main thread was cancelled")
@@ -641,17 +617,13 @@ func TestArchiveClearsAFinishedSessionOnly(t *testing.T) {
 	e.run()
 	e.waitState(e.firstDelivery(id), dbstate.DeliveryCompleted)
 
-	r, err := a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := r.(api.ArchiveSession409JSONResponse); !ok {
-		t.Fatalf("a live session: got %T", r)
+	if _, err := a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: id}); apierr.StatusOf(err) != 409 {
+		t.Fatalf("a live session: got %v", err)
 	}
 	if _, err := e.svc.Cancel(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	r, err = a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: id})
+	r, err := a.ArchiveSession(ctx, api.ArchiveSessionRequestObject{SessionId: id})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,12 +650,9 @@ func TestArchiveRefusesTheMainSessionOverHTTPShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := e.API().ArchiveSession(context.Background(), api.ArchiveSessionRequestObject{SessionId: m.SessionID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c, ok := r.(api.ArchiveSession409JSONResponse); !ok || !strings.Contains(c.Detail, "main") {
-		t.Fatalf("got %T %+v", r, r)
+	_, err = e.API().ArchiveSession(context.Background(), api.ArchiveSessionRequestObject{SessionId: m.SessionID})
+	if c, ok := apierr.As(err); !ok || c.Status != 409 || !strings.Contains(c.Message, "main") {
+		t.Fatalf("got %v", err)
 	}
 }
 
