@@ -8346,6 +8346,12 @@ components:
           anyOf:
             - type: string
             - type: 'null'
+        transport_detail:
+          description: Why the latest decision failed or is uncertain, when known. Absent or null otherwise.
+          anyOf:
+            - type: string
+              maxLength: 2000
+            - type: 'null'
         route_request_id:
           type: string
         answerable:

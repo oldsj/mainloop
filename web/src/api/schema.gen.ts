@@ -4078,6 +4078,8 @@ export interface components {
       request: components['schemas']['HITLProjection'];
       response: components['schemas']['DecisionReceipt'] | null;
       transport_state: string | null;
+      /** @description Why the latest decision failed or is uncertain, when known. Absent or null otherwise. */
+      transport_detail?: string | null;
       route_request_id: string;
       answerable: boolean;
       unavailable_reason: string | null;
