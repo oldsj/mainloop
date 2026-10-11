@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -273,8 +274,13 @@ func classify(err error) (permanent bool, reason string) {
 		case connect.CodeUnimplemented:
 			return true, "kagent does not support the request"
 		case connect.CodeFailedPrecondition:
-			// The request id belongs to a Session that was deleted; a replay cannot bring it back.
-			return true, "the runtime session for this request was deleted"
+			// Only a request id that belongs to a deleted Session is permanent: a replay cannot
+			// bring it back. kagent uses the same code while an Agent has no ready revision, its
+			// golden preparation failed or composition is not configured, and those clear up.
+			if strings.Contains(strings.ToLower(se.Detail), "deleted") {
+				return true, "the runtime session for this request was deleted"
+			}
+			return false, "kagent is not ready to create the workspace"
 		}
 		return false, "kagent reported an error"
 	case errors.As(err, &un):
@@ -463,8 +469,9 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		// create returns that Session, so the delete removes it rather than leaking it.
 		sess, err := s.Kagent.CreateSession(ctx, w.createRequest())
 		if refused(err) {
-			// kagent refuses the request for good (or its id belongs to a deleted Session), so
-			// no Session exists to delete; Create drops the rows on the same refusal.
+			// kagent refuses the request for good (or its id belongs to a deleted Session). No
+			// Session exists, or the orphan sweep reclaims it if a kagent-side change made this
+			// replay refuse a request an earlier attempt had accepted.
 			return result{state: dbstate.OpSucceeded, purge: true}
 		}
 		if err != nil {

@@ -39,13 +39,17 @@ built; nothing here has been measured against a live kagent.
   seconds have passed since the first failure, then the operation is `gave_up` and the workspace
   is `failed` until **refresh**. A permanent error (`INVALID_ARGUMENT`, `NOT_FOUND`,
   `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNIMPLEMENTED`, `UNAUTHENTICATED`, a kagent
-  configuration refusal) is `rejected` at once. So is `FAILED_PRECONDITION`, which kagent returns
-  when the request id belongs to a Session that was deleted: a replay cannot bring it back.
+  configuration refusal) is `rejected` at once. So is `FAILED_PRECONDITION` when kagent says the
+  request id belongs to a Session that was deleted: a replay cannot bring it back. Any other
+  `FAILED_PRECONDITION` (the Agent has no ready revision yet, its golden preparation failed,
+  composition is not configured) is transient and retries.
   Refusal of the first attempt removes the rows, publishes `workspace:updated` with the failed
   state (there is no removal event; clients drop the workspace when they next list) and returns
   `422`. A refusal after earlier attempts of unknown outcome keeps the rows, so a Session an
-  earlier attempt made can still be found and deleted; the workspace shows as failed. Refresh
-  sends a new create operation with a fresh window. The three timings are
+  earlier attempt made can still be found and deleted; the workspace shows as failed. The rows
+  are dropped only while that create is still the latest and nothing is open, so a Refresh that
+  lands after the refusal keeps them. Refresh sends a new create operation with a fresh window.
+  The three timings are
   `WORKSPACE_CREATE_RETRY_INITIAL_SECONDS`, `_MAX_SECONDS` and `_WINDOW_SECONDS`.
 - Suspend and resume are operations. Suspend is refused (`409`) while a delivery is open and is
   cancelled if activity arrived after the idle check picked the workspace. Resume touches the
@@ -56,8 +60,8 @@ built; nothing here has been measured against a live kagent.
   keeps retrying. A workspace whose create was never sent is removed without calling kagent. One
   whose create may have been sent replays the idempotent create first and deletes whatever comes
   back. If the replay is refused for good (or kagent says the request id belongs to a deleted
-  Session) there is no Session to delete and the rows are removed; a reply without a Session id
-  is not trusted and the delete retries. Delete is refused (`409`) while a delivery is open.
+  Session) the rows are removed: no Session exists, or the orphan sweep reclaims it. A reply
+  without a Session id is not trusted and the delete retries. Delete is refused (`409`) while a delivery is open.
 - Archiving a session deletes its kagent Session: a sweep (`WORKSPACE_ARCHIVED_DELETE_SECONDS`,
   default 60) deletes the Session of every archived binding that has no open delivery, and marks
   `kagent_deleted_at` only after kagent confirms. A failed delete is tried again on the next pass.

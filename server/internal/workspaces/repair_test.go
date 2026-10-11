@@ -18,9 +18,9 @@ import (
 // A refusal that lands after Create already returned keeps the rows (an earlier attempt's outcome
 // is unknown), and a later delete must not be stuck behind the same refusal.
 func TestDeleteAfterALateRefusalPurgesTheRows(t *testing.T) {
-	for name, code := range map[string]connect.Code{
-		"permanent":  connect.CodeInvalidArgument,
-		"deleted-id": connect.CodeFailedPrecondition,
+	for name, fault := range map[string]kagenttest.Fault{
+		"permanent":  grpcFault(connect.CodeInvalidArgument),
+		"deleted-id": failedPrecondition("request_id belongs to a deleted Session"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, slow)
@@ -30,7 +30,7 @@ func TestDeleteAfterALateRefusalPurgesTheRows(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.fake.FailNext(kagent.ProcCreateSession, grpcFault(code))
+			h.fake.FailNext(kagent.ProcCreateSession, fault)
 			h.due()
 			eventually(t, "refused", func() bool { return h.op(w.WorkspaceId, "create").State == dbstate.OpRejected })
 			if h.workspaceCount() != 1 {
@@ -40,7 +40,7 @@ func TestDeleteAfterALateRefusalPurgesTheRows(t *testing.T) {
 			if err != nil || got.ObservedState != api.WorkspaceObservedStateFailed {
 				t.Fatalf("%v %+v", err, got)
 			}
-			h.fake.FailNext(kagent.ProcCreateSession, grpcFault(code)) // the delete replays the create
+			h.fake.FailNext(kagent.ProcCreateSession, fault) // the delete replays the create
 			h.svc.Config.Workspaces.OperationWait = config.Seconds(5e9)
 			if err := h.svc.Delete(bg, w.WorkspaceId); err != nil {
 				t.Fatal(err)
@@ -52,12 +52,101 @@ func TestDeleteAfterALateRefusalPurgesTheRows(t *testing.T) {
 	}
 }
 
+func failedPrecondition(message string) kagenttest.Fault {
+	f := grpcFault(connect.CodeFailedPrecondition)
+	f.Message = message
+	return f
+}
+
+// kagent answers FAILED_PRECONDITION for an Agent that is not ready yet as well as for a deleted
+// request id; only the second is permanent, so the first must keep retrying.
+func TestNotReadyFailedPreconditionRetries(t *testing.T) {
+	for _, message := range []string{
+		"Agent does not have a ready prepared revision",
+		"golden preparation failed",
+		"composition is not configured",
+	} {
+		t.Run(message, func(t *testing.T) {
+			h := newHarness(t, map[string]string{
+				"WORKSPACE_CREATE_RETRY_INITIAL_SECONDS": "0.2", "WORKSPACE_CREATE_RETRY_MAX_SECONDS": "0.2",
+				"WORKSPACE_OPERATION_WAIT_SECONDS": "0.1",
+			})
+			h.fake.FailNext(kagent.ProcCreateSession, failedPrecondition(message))
+			h.run()
+			w, err := h.create(api.CreateWorkspaceRequest{})
+			if err != nil {
+				t.Fatalf("a transient refusal failed the create: %v", err)
+			}
+			if w.ObservedState != api.WorkspaceObservedStateResuming {
+				t.Fatalf("%+v", w)
+			}
+			eventually(t, "binding", func() bool { return h.row(w.WorkspaceId).KagentSessionID != nil })
+			if h.workspaceCount() != 1 || h.fake.Count(kagent.ProcCreateSession) != 2 {
+				t.Fatalf("rows %d, create calls %d", h.workspaceCount(), h.fake.Count(kagent.ProcCreateSession))
+			}
+		})
+	}
+}
+
+func TestFailedPreconditionClassification(t *testing.T) {
+	deleted := &kagent.SessionError{Op: "CreateSession", Code: connect.CodeFailedPrecondition, Detail: "request_id belongs to a deleted Session"}
+	if perm, _ := classify(deleted); !perm {
+		t.Fatal("a deleted request id must be permanent")
+	}
+	notReady := &kagent.SessionError{Op: "CreateSession", Code: connect.CodeFailedPrecondition, Detail: "Agent does not have a ready prepared revision"}
+	if perm, _ := classify(notReady); perm {
+		t.Fatal("an Agent that is not ready must be transient")
+	}
+}
+
+// A Refresh that lands between the refusal being recorded and Create dropping the rows adds a
+// create that may already have been sent; the drop must leave it alone.
+func TestDropRejectedLeavesAWorkspaceWithANewerOperation(t *testing.T) {
+	h := newHarness(t, slow)
+	h.fake.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Drop: true})
+	stop := h.run()
+	w, err := h.create(api.CreateWorkspaceRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	refused := h.op(w.WorkspaceId, "create")
+	h.exec(`UPDATE workspace_ops SET state = 'rejected', lease_owner = NULL, lease_until = NULL WHERE id = $1`, refused.ID)
+	refused = h.op(w.WorkspaceId, "create")
+
+	if _, err := h.svc.enqueue(bg, w.WorkspaceId, dbstate.OpCreate, nil); err != nil { // the Refresh in the gap
+		t.Fatal(err)
+	}
+	if err := h.svc.dropRejected(bg, w.WorkspaceId, refused); err != nil {
+		t.Fatal(err)
+	}
+	if h.workspaceCount() != 1 {
+		t.Fatal("the rows of a workspace with a newer create were dropped")
+	}
+
+	h.exec(`UPDATE workspace_ops SET state = 'cancelled' WHERE workspace_id = $1 AND state IN ('pending', 'retrying')`, w.WorkspaceId)
+	if err := h.svc.dropRejected(bg, w.WorkspaceId, refused); err != nil {
+		t.Fatal(err)
+	}
+	if h.workspaceCount() != 1 {
+		t.Fatal("dropped on the strength of an op that is no longer the latest create")
+	}
+	// The newest create refused in its turn: nothing is open, and it is the latest, so it drops.
+	h.exec(`UPDATE workspace_ops SET state = 'rejected' WHERE id = $1`, h.op(w.WorkspaceId, "create").ID)
+	if err := h.svc.dropRejected(bg, w.WorkspaceId, h.op(w.WorkspaceId, "create")); err != nil {
+		t.Fatal(err)
+	}
+	if h.workspaceCount() != 0 {
+		t.Fatal("rows kept for the latest refused create")
+	}
+}
+
 // A refusal of the very first request drops the rows and says so on the event stream.
 func TestFirstAttemptRefusalDropsTheRowsAndPublishes(t *testing.T) {
 	h := newHarness(t, nil)
 	h.run()
 	before := h.events()
-	h.fake.FailNext(kagent.ProcCreateSession, grpcFault(connect.CodeFailedPrecondition))
+	h.fake.FailNext(kagent.ProcCreateSession, failedPrecondition("request_id belongs to a deleted Session"))
 	if _, err := h.create(api.CreateWorkspaceRequest{}); err == nil {
 		t.Fatal("expected a refusal")
 	}

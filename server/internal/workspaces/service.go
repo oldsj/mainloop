@@ -424,7 +424,10 @@ func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (
 }
 
 // dropRejected removes a workspace whose create kagent refused and publishes its failed state.
-// The event contract has no removal event; clients drop the workspace when they next list.
+// The event contract has no removal event; clients drop the workspace when they next list. It
+// removes nothing once a newer operation exists (a Refresh landed after the refusal was recorded,
+// and its create may already have been sent): the workspace row is locked so none can be added
+// between the check and the delete.
 func (s *Service) dropRejected(ctx context.Context, id string, create dbq.WorkspaceOp) error {
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
@@ -433,6 +436,20 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 			return nil, nil
 		}
 		if err != nil {
+			return nil, err
+		}
+		// An operation insert needs a share lock on this row for its foreign key, so it waits here.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM workspaces WHERE id = $1 FOR UPDATE`, id); err != nil {
+			return nil, err
+		}
+		latest, err := q.GetLatestCreateOp(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if latest.ID != create.ID || latest.State == dbstate.OpPending || latest.State == dbstate.OpRetrying {
+			return nil, nil
+		}
+		if _, err := q.GetOpenWorkspaceOp(ctx, id); !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
 		if _, err := q.DeleteSession(ctx, id); err != nil {

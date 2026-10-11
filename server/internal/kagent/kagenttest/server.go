@@ -41,6 +41,8 @@ type Fault struct {
 	Status int  // answer with this bare HTTP status
 	// GRPC answers a gRPC-web call with this code in the trailers (HTTP 200).
 	GRPC *connect.Code
+	// Message is the gRPC status message; empty means "injected <code>".
+	Message string
 	// RPC answers an A2A call with this JSON-RPC error (HTTP 200).
 	RPC *RPCError
 }
@@ -256,7 +258,7 @@ func (s *Server) guard(proc string, next http.Handler) http.Handler {
 				return
 			}
 			if f.GRPC != nil {
-				h = grpcFailure(*f.GRPC)
+				h = grpcFailure(*f.GRPC, f.Message)
 			}
 		}
 		h.ServeHTTP(w, r)
@@ -264,11 +266,14 @@ func (s *Server) guard(proc string, next http.Handler) http.Handler {
 }
 
 // grpcFailure answers any gRPC-web request with an error status.
-func grpcFailure(code connect.Code) http.Handler {
+func grpcFailure(code connect.Code, message string) http.Handler {
+	if message == "" {
+		message = "injected " + code.String()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/grpc-web+proto")
 		w.Header().Set("Grpc-Status", strconv.Itoa(int(code)))
-		w.Header().Set("Grpc-Message", "injected "+code.String())
+		w.Header().Set("Grpc-Message", message)
 		w.WriteHeader(http.StatusOK)
 	})
 }
