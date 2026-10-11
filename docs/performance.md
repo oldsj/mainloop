@@ -1,8 +1,12 @@
 # Development workspace performance
 
-Status: measured findings and proposed tuning, recorded 2026-10-10. Implemented
-suite changes are in [#153](https://github.com/oldsj/mainloop/pull/153); workspace
-rollout and gVisor qualification are separate.
+Status: measured findings and proposed tuning, recorded 2026-10-10, refreshed
+2026-10-11. Implemented suite changes are in
+[#153](https://github.com/oldsj/mainloop/pull/153) and
+[#176](https://github.com/oldsj/mainloop/pull/176); workspace rollout and gVisor
+qualification remain open. A refreshed qualification attempt timed out (see
+[Workspace `make check` attempt](#workspace-make-check-attempt-gvisor-arm64)); this
+is a failed, capped observation, not a passing result.
 
 ## Summary
 
@@ -25,6 +29,11 @@ This is an inference from the measured flows and native suite profile, not a
 full-suite workspace result. Full-suite workspace qualification is in progress;
 a matched workspace-versus-CI slowdown is not established. The faster native
 suite has only 1.83× headroom under its 540-second cap.
+
+**Measured:** a refreshed `dev-postgres run make check` attempt in the arm64
+gVisor workspace timed out before the backend suite finished (outer exit 124,
+549.735 s); see [Workspace `make check` attempt](#workspace-make-check-attempt-gvisor-arm64).
+This is preserved as a failed capped observation, not a qualification pass.
 
 ## Recommendations
 
@@ -165,6 +174,55 @@ loopback HTTP servers. Intentional observation delays, contention checks,
 security matrices and timeout/recovery assertions remain. The slowest individual
 accepted test took 6.202 seconds.
 
+### Workspace `make check` attempt (gVisor arm64)
+
+**Measured:** one `dev-postgres run make check` execution in a refreshed arm64
+gVisor workspace (6 CPU / about 8 GiB), at source commit
+[cf962899](https://github.com/oldsj/mainloop/pull/176). The outer `dev-postgres`
+wrapper timed out at **549.734761053 s**, exit 124. This is a failed, capped run,
+not a passing measurement; retained as workspace-qualification evidence.
+
+**Measured:** the backend runner itself ran **496.20002337 s** against an
+effective nested cap of about 495 s. Of 1,452 unique planned test IDs, 1,396
+started and 1,395 completed with zero observed failures, errors or skips among
+the completed tests; 56 never started and 1 was interrupted mid-run (57
+uncompleted in total). Worker 4 died inside a push-transport HTTP test at its
+60-second watchdog deadline, so the `test_backend_runner` module it owned never
+started.
+
+**Measured:** in the same run, `make test-timeouts` logged 24 tests, 23 passing
+and 1 cancelled, because a real Make/helper aggregate regression exceeded its
+30-second expectation. The inner `make check` process ran **535.614457099 s**
+and exited 143 (terminated) once the outer deadline sent cancellation; this
+inner exit differs from the outer wrapper's exit 124, matching the two-layer
+cancellation behavior described in
+[Foreground deadlines](dev-environment.md#foreground-deadlines).
+
+| Step             |     Seconds | Result  |
+| ---------------- | ----------: | ------- |
+| fmt              |    3.721771 | Pass    |
+| backend          |  531.891297 | Timeout |
+| test-timeouts    |   67.983012 | Fail    |
+| install-frontend |   22.660763 | Pass    |
+| check-frontend   |   55.370722 | Pass    |
+| test-frontend    |   21.999891 | Pass    |
+| frontend-build   |   76.558644 | Pass    |
+| lint             |    2.931471 | Pass    |
+| PostgreSQL stop  | 0.309380332 | Exit 0  |
+
+**Measured:** the installed `dev-postgres` helper and the checkout's source
+helper matched. Step timings and the complete `test-timeouts` log were
+transferred out of the workspace and their byte hashes independently checked;
+the whole raw backend-runner JSON was reported in the native workspace before
+it was retired and was not transferred, so its availability afterward is
+unverified.
+
+**Historical:** an earlier failed workspace run completed 1,116 of 1,432 tests
+in 531.824 s before its cap. Both runs are single capped observations, not a
+matched whole-suite gVisor-versus-native comparison; no new tests or benchmarks
+were run to produce this entry, and earlier controlled microbenchmarks above
+retain their own caveats independently of this result.
+
 ## Details and references
 
 ### Runner bounds
@@ -230,6 +288,7 @@ GitOps; test-only durability changes must remain limited to disposable PGDATA.
 **Measured evidence provenance:** the tables summarize the native flow benchmark,
 its arm64 native workspace-image baseline, the chunked gVisor workspace run, and
 the backend test-speed result and
-independent review recorded on 2026-10-10. Raw logs remain private task artifacts.
+independent review recorded on 2026-10-10, plus the timed-out `make check`
+attempt recorded on 2026-10-11. Raw logs remain private task artifacts.
 Pending work is matched gVisor memory measurement, full-suite workspace qualification,
 concurrency/throttling measurements, hosted exact-commit CI and helper-image rollout.
