@@ -17,7 +17,9 @@
 // The snapshot, its count, the unread count and [Service.NeedsOwner] all read it, so they cannot
 // disagree.
 //
-// Every change that moves the unread count publishes inbox:updated in its own transaction.
+// Every change that moves the unread count publishes inbox:updated in its own transaction, and the
+// sweep publishes it for the moves that have no write of their own, comparing with the count the
+// newest inbox:updated carried.
 package attention
 
 import (
@@ -27,7 +29,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -70,10 +71,6 @@ type Service struct {
 	Log     *slog.Logger
 	// SweepEvery is the period of the task-decision sweep. Zero means 3 seconds.
 	SweepEvery time.Duration
-
-	mu         sync.Mutex
-	lastUnread int  // the unread count the sweep last saw
-	known      bool // whether the sweep has made its first pass
 }
 
 func (s *Service) log() *slog.Logger {
@@ -94,19 +91,20 @@ func (s *Service) Sweep() reconcile.Sweep {
 
 // SyncTasks opens an item for each task that waits for the owner's decision and resolves the
 // items whose need has ended: a decision that cleared, a question of a finished task, an item of a
-// finished or archived session. It publishes one inbox:updated when it changed an item or when the
-// unread count differs from the one it last saw, since a session or task that ends hides items
-// without any write here.
+// finished or archived session, an item whose task has finished or whose attempt was replaced,
+// archived or deleted. It publishes one inbox:updated when it changed an item, or when the unread
+// count differs from the one the owner's newest inbox:updated carried, since a session, task or
+// response that ends hides or shows items without any write here. That event is read from the
+// events table in the same transaction, never remembered by the process, so a restart, a second
+// replica or a duplicate pass publishes neither too little nor too much. Two sweeps that race in
+// the same instant can each publish once.
 func (s *Service) SyncTasks(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var count int
-	err := events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
 		var changed []string
 		for _, step := range []func(context.Context, string) ([]string, error){
 			q.OpenTaskDecisionAttention, q.ResolveStaleTaskDecisions, q.ResolveQueueForFinishedTasks,
-			q.ResolveFinishedSessionAttention,
+			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
 			ids, err := step(ctx, s.OwnerID)
 			if err != nil {
@@ -118,20 +116,21 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 		if err != nil {
 			return nil, err
 		}
-		count = int(n)
-		if len(changed) == 0 && (!s.known || count == s.lastUnread) {
-			return nil, nil
+		if len(changed) == 0 {
+			last, err := q.LastPublishedUnread(ctx, s.OwnerID)
+			if err != nil {
+				return nil, err
+			}
+			if last == n {
+				return nil, nil
+			}
 		}
 		item := ""
 		if len(changed) > 0 {
 			item = changed[0]
 		}
-		return []events.Draft{inboxEvent(s.OwnerID, item, count)}, nil
+		return []events.Draft{inboxEvent(s.OwnerID, item, int(n))}, nil
 	})
-	if err == nil {
-		s.lastUnread, s.known = count, true
-	}
-	return err
 }
 
 // NewQueueItem is a question put to the owner by another slice.

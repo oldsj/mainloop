@@ -418,6 +418,26 @@ func (e *env) waitResponse(id string, want dbstate.HITLResponseState) dbq.HitlRe
 	return r
 }
 
+// inboxUnread is the unread_count of each inbox:updated event so far, oldest first.
+func (e *env) inboxUnread() []int {
+	e.t.Helper()
+	rows, err := e.pool.Query(context.Background(),
+		`SELECT coalesce((payload->>'unread_count')::int, -1) FROM events WHERE user_id = $1 AND type = 'inbox:updated' ORDER BY id`, owner)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			e.t.Fatal(err)
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
 func deref(s *string) string {
 	if s == nil {
 		return ""
@@ -695,6 +715,11 @@ func TestUncertainHoldFailsOnlyWhileTheAskStillWaits(t *testing.T) {
 	view, err := e.svc.View(context.Background(), req.ID)
 	if err != nil || !view.Answerable {
 		t.Fatalf("request should be answerable again: %+v, %v", view, err)
+	}
+	// The request is back in the inbox, so the owner's badge gets an event for it: Respond sent 0,
+	// the refusal sends 1.
+	if got := e.inboxUnread(); len(got) < 2 || got[len(got)-1] != 1 || got[len(got)-2] != 0 {
+		t.Fatalf("inbox:updated unread counts %v, want ... 0, 1", got)
 	}
 	e.k.onSend = nil
 	// The same action id reads back the failed receipt and sends nothing.

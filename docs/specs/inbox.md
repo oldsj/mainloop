@@ -162,7 +162,10 @@ Built:
   stays `recorded` and is tried again after a minute. kagent's refusal of a send to a Session that is
   not ready counts as not sent. The row is marked `sending` and committed before the call, and no
   transaction is open across kagent I/O. A send that provably did not leave is retried; any other
-  failure records `uncertain`. An uncertain response is never resent: later passes look the
+  failure records `uncertain`. When the send timeout passes, the send is stopped before the dispatcher
+  decides: a refusal that was only being retried (kagent's "not ready" or "not accepted") ends as not
+  sent and no later retry can deliver it, while a request that may have reached kagent stays
+  `uncertain`. An uncertain response is never resent: later passes look the
   outbound message id up. Only the original task can accept it: its history must show the id with
   the HITL metadata that was sent. A message that only another task shows is
   `rejected_transport` ("kagent took the answer as a new turn"), as is one whose metadata differs.
@@ -207,8 +210,17 @@ reference.
   sees; the list, `count`, the unread count and `needs_owner` all read it. An item is hidden when
   its session is archived or finished, when a HITL request already has a live answer (recorded,
   sending, accepted or uncertain), when its task is final, or when its attempt is not the task's
-  current attempt, or is archived or its native session deleted. A sweep also resolves the items of
-  finished or archived sessions, and publishes `inbox:updated` whenever the unread count moves.
+  current attempt, or is archived or its native session deleted. The sweep (every 3 s) also closes
+  the items that are hidden for good: those of finished or archived sessions, of a final task, or
+  of an attempt that was replaced, archived or deleted. A request hidden only by an answer stays
+  open, so a response that ends `rejected_transport` shows it again.
+- **inbox:updated.** Every write that changes the unread count publishes it in the same
+  transaction, including a response that ends `rejected_transport`. Moves with no write of their own
+  (a session or task ends) are caught by the sweep, which compares the count with the
+  `unread_count` of the owner's newest `inbox:updated` in the events table, never with process
+  memory: a restart or a second replica neither misses nor repeats an event, and a missing or pruned
+  event means publish. The sweep also publishes when it closes an item. Two sweeps in the same
+  instant can each publish once.
 - **needs_owner and sessions.** A session needs the owner when it has a visible item. The
   snapshot's `sessions` is the owner's session list as `/sessions` gives it (every unfinished
   session plus the newest 100 finished ones, not the main thread), each row with its own

@@ -124,6 +124,25 @@ func (q *Queries) InsertQueueAttention(ctx context.Context, arg InsertQueueAtten
 	return result.RowsAffected(), nil
 }
 
+const lastPublishedUnread = `-- name: LastPublishedUnread :one
+SELECT coalesce(
+    (SELECT (e.payload->>'unread_count')::int
+     FROM events e
+     WHERE e.user_id = $1 AND e.type = 'inbox:updated'
+     ORDER BY e.id DESC
+     LIMIT 1),
+    -1)::int AS unread_count
+`
+
+// The unread count the owner's newest inbox:updated carried, or -1 when there is none (never
+// published, pruned, or without a count), which no real count equals.
+func (q *Queries) LastPublishedUnread(ctx context.Context, userID string) (int32, error) {
+	row := q.db.QueryRow(ctx, lastPublishedUnread, userID)
+	var unread_count int32
+	err := row.Scan(&unread_count)
+	return unread_count, err
+}
+
 const listActivityNotices = `-- name: ListActivityNotices :many
 SELECT id, detail, observed_at
 FROM hitl_diagnostics
@@ -353,6 +372,54 @@ RETURNING id
 // decision that was answered is never reopened and a new ask is a new item.
 func (q *Queries) OpenTaskDecisionAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, openTaskDecisionAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveAttentionHiddenForGood = `-- name: ResolveAttentionHiddenForGood :many
+UPDATE attention_items a
+SET state = 'resolved', resolved_at = now(), updated_at = now()
+FROM (
+    SELECT i.id
+    FROM attention_items i
+    LEFT JOIN task_attempts ta ON ta.session_id = i.session_id
+    LEFT JOIN tasks t ON t.id = CASE
+        WHEN ta.id IS NOT NULL THEN ta.task_id
+        WHEN i.source_kind <> 'hitl_request' THEN i.task_id
+    END
+    WHERE i.owner_id = $1 AND i.state = 'open'
+      AND (
+          t.status IN ('completed', 'failed', 'cancelled')
+          OR ta.archived_at IS NOT NULL OR ta.native_deleted_at IS NOT NULL
+          OR ta.state NOT IN ('creating', 'active', 'draining')
+          OR (ta.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM ta.id)
+      )
+) hidden
+WHERE a.id = hidden.id
+RETURNING a.id
+`
+
+// An item hidden for good by its task or attempt can never come back: close it. This mirrors the
+// task and attempt terms of attention_visible, and only those: a HITL item hidden by a live answer
+// (including a rejected one, which shows the request again) is not touched, nor is a session term,
+// which ResolveFinishedSessionAttention closes. An attempt that is still being created may not be
+// the task's current attempt yet, so "not current" counts only once it has left creating.
+func (q *Queries) ResolveAttentionHiddenForGood(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveAttentionHiddenForGood, ownerID)
 	if err != nil {
 		return nil, err
 	}

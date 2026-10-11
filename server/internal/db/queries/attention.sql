@@ -125,3 +125,41 @@ FROM sessions s
 WHERE s.id = a.session_id AND a.owner_id = $1 AND a.state = 'open'
   AND (s.archived_at IS NOT NULL OR s.status IN ('completed', 'failed', 'cancelled', 'superseded'))
 RETURNING a.id;
+
+-- An item hidden for good by its task or attempt can never come back: close it. This mirrors the
+-- task and attempt terms of attention_visible, and only those: a HITL item hidden by a live answer
+-- (including a rejected one, which shows the request again) is not touched, nor is a session term,
+-- which ResolveFinishedSessionAttention closes. An attempt that is still being created may not be
+-- the task's current attempt yet, so "not current" counts only once it has left creating.
+-- name: ResolveAttentionHiddenForGood :many
+UPDATE attention_items a
+SET state = 'resolved', resolved_at = now(), updated_at = now()
+FROM (
+    SELECT i.id
+    FROM attention_items i
+    LEFT JOIN task_attempts ta ON ta.session_id = i.session_id
+    LEFT JOIN tasks t ON t.id = CASE
+        WHEN ta.id IS NOT NULL THEN ta.task_id
+        WHEN i.source_kind <> 'hitl_request' THEN i.task_id
+    END
+    WHERE i.owner_id = $1 AND i.state = 'open'
+      AND (
+          t.status IN ('completed', 'failed', 'cancelled')
+          OR ta.archived_at IS NOT NULL OR ta.native_deleted_at IS NOT NULL
+          OR ta.state NOT IN ('creating', 'active', 'draining')
+          OR (ta.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM ta.id)
+      )
+) hidden
+WHERE a.id = hidden.id
+RETURNING a.id;
+
+-- The unread count the owner's newest inbox:updated carried, or -1 when there is none (never
+-- published, pruned, or without a count), which no real count equals.
+-- name: LastPublishedUnread :one
+SELECT coalesce(
+    (SELECT (e.payload->>'unread_count')::int
+     FROM events e
+     WHERE e.user_id = $1 AND e.type = 'inbox:updated'
+     ORDER BY e.id DESC
+     LIMIT 1),
+    -1)::int AS unread_count;

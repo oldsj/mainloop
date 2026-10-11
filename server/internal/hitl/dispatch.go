@@ -14,6 +14,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
@@ -85,9 +86,28 @@ func (d *dispatch) finish(ctx context.Context, state dbstate.HITLResponseState, 
 	if detail != "" {
 		why = &detail
 	}
-	err := lost(dbq.New(d.s.Pool).FinishHITLResponse(ctx, dbq.FinishHITLResponseParams{
-		ID: id, LeaseOwner: owner, Attempts: attempts, State: state, Detail: why,
-	}))
+	// A response that ends rejected_transport shows its request to the owner again, which moves the
+	// unread count with no other write, so the inbox event goes out in the same transaction.
+	err := events.InTxPublish(ctx, d.s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		q := dbq.New(tx)
+		if err := lost(q.FinishHITLResponse(ctx, dbq.FinishHITLResponseParams{
+			ID: id, LeaseOwner: owner, Attempts: attempts, State: state, Detail: why,
+		})); err != nil {
+			return nil, err
+		}
+		if state != dbstate.HITLRejectedTransport {
+			return nil, nil
+		}
+		last, err := q.LastPublishedUnread(ctx, d.w.OwnerID)
+		if err != nil {
+			return nil, err
+		}
+		n, err := q.CountUnreadAttention(ctx, d.w.OwnerID)
+		if err != nil || n == last {
+			return nil, err
+		}
+		return inboxDraft(ctx, q, d.w.OwnerID, attentionID(d.w.RequestID))
+	})
 	if err != nil {
 		return reconcile.Retry(), err
 	}

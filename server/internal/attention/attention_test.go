@@ -338,11 +338,11 @@ func TestSweepClosesItemsOfFinishedSessionsAndPublishes(t *testing.T) {
 	e.session(t, "s2", "active")
 	e.hitl(t, "req1", "s1")
 	e.hitl(t, "req2", "s2")
-	if err := e.svc.SyncTasks(ctx); err != nil { // the first pass only learns the count
+	if err := e.svc.SyncTasks(ctx); err != nil { // no inbox:updated yet: the first pass publishes the count
 		t.Fatal(err)
 	}
-	if n := len(e.inboxEvents(t)); n != 0 {
-		t.Fatalf("%d events from a quiet first pass", n)
+	if evs := e.inboxEvents(t); len(evs) != 1 || unread(t, evs[0]) != 2 {
+		t.Fatalf("first pass events %+v", evs)
 	}
 	e.exec(t, `UPDATE sessions SET status = 'cancelled' WHERE id = 's1'`)
 	e.exec(t, `UPDATE sessions SET archived_at = now() WHERE id = 's2'`)
@@ -350,7 +350,7 @@ func TestSweepClosesItemsOfFinishedSessionsAndPublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	evs := e.inboxEvents(t)
-	if len(evs) != 1 || unread(t, evs[0]) != 0 {
+	if len(evs) != 2 || unread(t, evs[1]) != 0 {
 		t.Fatalf("events %+v", evs)
 	}
 	var open int
@@ -360,7 +360,7 @@ func TestSweepClosesItemsOfFinishedSessionsAndPublishes(t *testing.T) {
 	if err := e.svc.SyncTasks(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(e.inboxEvents(t)); n != 1 {
+	if n := len(e.inboxEvents(t)); n != 2 {
 		t.Fatalf("a quiet pass published: %d events", n)
 	}
 	// A task that ends moves the count with no item written: the sweep still publishes.
@@ -765,3 +765,189 @@ func requireKeys(t *testing.T, what string, m map[string]any, keys ...string) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func (e *env) sweep(t *testing.T, svc *attention.Service, times int) {
+	t.Helper()
+	for range times {
+		if err := svc.SyncTasks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func unreads(t *testing.T, evs []api.EventInboxUpdated) []int {
+	t.Helper()
+	out := make([]int, 0, len(evs))
+	for _, ev := range evs {
+		out = append(out, unread(t, ev))
+	}
+	return out
+}
+
+func wantUnreads(t *testing.T, evs []api.EventInboxUpdated, want ...int) {
+	t.Helper()
+	if got := unreads(t, evs); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("inbox:updated unread counts %v, want %v", got, want)
+	}
+}
+
+func (e *env) hitlRequest(t *testing.T, request, session string) {
+	t.Helper()
+	e.exec(t, `INSERT INTO hitl_requests (id, owner_id, session_id, kagent_session_id, agent_namespace, agent_name, context_id, task_id,
+		status_message_id, request_hash, kind, payload) VALUES ($1, $2, $3, 'ks', 'ns', 'ag', 'ctx', 'a2a-task', 'sm', 'h', 'ask_user', '{}')`,
+		request, owner, session)
+}
+
+// A response that ends rejected_transport shows its request again with no event of its own from the
+// store: the sweep sees the unread count differ from the one the owner last got, once.
+func TestSweepPublishesWhenARefusedAnswerBringsTheRequestBack(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.session(t, "s1", "active")
+	e.hitl(t, "req1", "s1")
+	e.hitlRequest(t, "req1", "s1")
+	e.sweep(t, e.svc, 1) // the owner's badge reads 1
+	zero := 0
+	if err := events.InTxPublish(ctx, e.pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		return []events.Draft{{UserID: owner, Type: events.TypeInboxUpdated, Payload: api.EventInboxUpdated{UnreadCount: &zero}}}, nil
+	}); err != nil { // what hitl.Respond publishes when the answer is recorded
+		t.Fatal(err)
+	}
+	e.exec(t, `INSERT INTO hitl_responses (id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state)
+		VALUES ('act', 'req1', $1, 'k', '{}', 'h', 'm', '{}', 'sending')`, owner)
+	e.sweep(t, e.svc, 2)
+	e.exec(t, `UPDATE hitl_responses SET state = 'rejected_transport'`)
+	e.sweep(t, e.svc, 4)
+	wantUnreads(t, e.inboxEvents(t), 1, 0, 1)
+}
+
+// The sweep keeps nothing in memory: a restart (a new Service) or a second replica neither misses an
+// event nor repeats one.
+func TestSweepComparesWithThePublishedCountNotWithMemory(t *testing.T) {
+	t.Run("restart after a task ends", func(t *testing.T) {
+		e := newEnv(t)
+		e.session(t, "s1", "active")
+		e.blockedTask(t, "t1", "s1", "rep1")
+		e.hitl(t, "req1", "s1")
+		e.sweep(t, e.svc, 1)
+		e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
+		// The process restarts before the next pass.
+		restarted := &attention.Service{Pool: e.pool, OwnerID: owner}
+		e.sweep(t, restarted, 3)
+		wantUnreads(t, e.inboxEvents(t), 2, 0)
+		e.sweep(t, &attention.Service{Pool: e.pool, OwnerID: owner}, 2)
+		wantUnreads(t, e.inboxEvents(t), 2, 0)
+	})
+	t.Run("restart with a hidden item and an event already out", func(t *testing.T) {
+		e := newEnv(t)
+		e.session(t, "s1", "active")
+		e.hitl(t, "req1", "s1")
+		e.sweep(t, e.svc, 1)
+		e.exec(t, `UPDATE sessions SET status = 'cancelled' WHERE id = 's1'`)
+		e.sweep(t, e.svc, 1)
+		before := len(e.inboxEvents(t))
+		e.sweep(t, &attention.Service{Pool: e.pool, OwnerID: owner}, 3)
+		if after := len(e.inboxEvents(t)); after != before {
+			t.Fatalf("a restart repeated an event: %d -> %d", before, after)
+		}
+	})
+	t.Run("open then a pass", func(t *testing.T) {
+		e := newEnv(t)
+		e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C"})
+		e.sweep(t, e.svc, 3)
+		wantUnreads(t, e.inboxEvents(t), 1)
+	})
+	t.Run("two replicas", func(t *testing.T) {
+		e := newEnv(t)
+		a := &attention.Service{Pool: e.pool, OwnerID: owner}
+		b := &attention.Service{Pool: e.pool, OwnerID: owner}
+		e.session(t, "s1", "active")
+		e.blockedTask(t, "t1", "s1", "rep1")
+		e.hitl(t, "req1", "s1")
+		e.sweep(t, a, 1)
+		e.sweep(t, b, 1)
+		e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`)
+		e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C"})
+		e.sweep(t, a, 1)
+		afterA := len(e.inboxEvents(t))
+		e.sweep(t, b, 2)
+		e.sweep(t, a, 2)
+		evs := e.inboxEvents(t)
+		if len(evs) != afterA {
+			t.Fatalf("the other replica repeated events: %v", unreads(t, evs))
+		}
+		wantUnreads(t, evs, 2, 1, 1)
+	})
+	t.Run("an event that was pruned", func(t *testing.T) {
+		e := newEnv(t)
+		e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C"})
+		e.exec(t, `DELETE FROM events`)
+		e.sweep(t, e.svc, 2)
+		wantUnreads(t, e.inboxEvents(t), 1)
+	})
+}
+
+// An item hidden for good by its task or attempt is closed by the sweep; one that a rejected answer
+// hides only until the answer ends stays open.
+func TestSweepClosesItemsHiddenForGood(t *testing.T) {
+	for name, hide := range map[string]string{
+		"task cancelled":     `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't1'`,
+		"task completed":     `UPDATE tasks SET status = 'completed', reason = NULL WHERE id = 't1'`,
+		"task failed":        `UPDATE tasks SET status = 'failed', reason = NULL WHERE id = 't1'`,
+		"attempt replaced":   `UPDATE tasks SET current_attempt_id = NULL WHERE id = 't1'`,
+		"attempt superseded": `UPDATE task_attempts SET state = 'superseded' WHERE task_id = 't1'`,
+		"attempt archived":   `UPDATE task_attempts SET archived_at = now() WHERE task_id = 't1'`,
+		"native deleted":     `UPDATE task_attempts SET native_deleted_at = now() WHERE task_id = 't1'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.session(t, "s1", "active")
+			e.blockedTask(t, "t1", "s1", "rep1")
+			e.hitl(t, "req1", "s1")
+			e.hitlRequest(t, "req1", "s1")
+			e.open(t, attention.NewQueueItem{ID: "q1", Title: "T", Content: "C", SessionID: ptr("s1"), TaskID: ptr("t1")})
+			e.sweep(t, e.svc, 1)
+			e.exec(t, hide)
+			e.sweep(t, e.svc, 2)
+			for _, id := range []string{"req1", "q1"} {
+				var state string
+				if err := e.pool.QueryRow(context.Background(),
+					`SELECT state FROM attention_items WHERE source_id = $1`, id).Scan(&state); err != nil || state != "resolved" {
+					t.Fatalf("%s is %q (err %v), want resolved", id, state, err)
+				}
+			}
+		})
+	}
+
+	t.Run("a refused answer keeps its request open", func(t *testing.T) {
+		e := newEnv(t)
+		e.session(t, "s1", "active")
+		e.blockedTask(t, "t1", "s1", "rep1")
+		e.hitl(t, "req1", "s1")
+		e.hitlRequest(t, "req1", "s1")
+		e.exec(t, `INSERT INTO hitl_responses (id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state)
+			VALUES ('act', 'req1', $1, 'k', '{}', 'h', 'm', '{}', 'rejected_transport')`, owner)
+		e.sweep(t, e.svc, 2)
+		var state string
+		if err := e.pool.QueryRow(context.Background(), `SELECT state FROM attention_items WHERE source_id = 'req1'`).Scan(&state); err != nil || state != "open" {
+			t.Fatalf("state %q err %v", state, err)
+		}
+		if snap, _ := e.svc.Snapshot(context.Background()); snap.Count != 2 { // the request and the task decision
+			t.Fatalf("count %d", snap.Count)
+		}
+	})
+
+	t.Run("an attempt still being created stays open", func(t *testing.T) {
+		e := newEnv(t)
+		e.session(t, "s1", "active")
+		e.blockedTask(t, "t1", "s1", "rep1")
+		e.hitl(t, "req1", "s1")
+		e.exec(t, `UPDATE task_attempts SET state = 'creating' WHERE task_id = 't1'`)
+		e.exec(t, `UPDATE tasks SET current_attempt_id = NULL WHERE id = 't1'`)
+		e.sweep(t, e.svc, 2)
+		var state string
+		if err := e.pool.QueryRow(context.Background(), `SELECT state FROM attention_items WHERE source_id = 'req1'`).Scan(&state); err != nil || state != "open" {
+			t.Fatalf("state %q err %v", state, err)
+		}
+	})
+}
