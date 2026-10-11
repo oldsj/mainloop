@@ -35,10 +35,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	d := testdb.New(t)
-	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := mustConfig(t)
 	reg, err := providers.NewRegistry(cfg.Kagent)
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +48,15 @@ func newEnv(t *testing.T) *env {
 	e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('foreign', 'someone-else', 'o', 'f', 'o/f', 'https://example.test/f')`)
 	e.exec(`INSERT INTO topics (id, user_id, name) VALUES ('tp1', $1, 'Infra')`, owner)
 	return e
+}
+
+func mustConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 func (e *env) exec(sql string, args ...any) {
@@ -489,8 +495,10 @@ func TestRetryAndReassignAreBlocked(t *testing.T) {
 	wantRefusal(t, err, 409, tasks.ReasonPayloadConflict)
 
 	coord := e.mustCreate(e.own, tasks.CreateInput{})
-	_, err = e.svc.Retry(context.Background(), e.own, action(coord, e.view(e.own, coord), "r"))
-	wantRefusal(t, err, 422, tasks.ReasonCodeHandoffRequired)
+	cop, err := e.svc.Retry(context.Background(), e.own, action(coord, e.view(e.own, coord), "r"))
+	if err != nil || cop.State != "blocked" || cop.Reason == nil || *cop.Reason != "handoff_unavailable" {
+		t.Fatalf("coordination retry = %+v, %v", cop, err)
+	}
 
 	e.setStatus(id, "failed", "")
 	_, err = e.svc.Retry(context.Background(), e.own, action(id, e.view(e.own, id), "r2"))
