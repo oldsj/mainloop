@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,15 +17,21 @@ import (
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
-// evidenceStopUnconfirmed is written to an attempt's evidence when kagent did not confirm that its
-// agent stopped. It survives a replay, which would otherwise see a cancelled session and call the
-// agent stopped. The attempt stays draining, holding its writer claim and its capacity slot because
-// the agent may still be running, until the resolver observes kagent and writes
-// evidenceStopConfirmed. Its credentials are already revoked.
+// Stop states of an attempt (task_attempts.stop_state). The state is requested in the statement that
+// moves the attempt to draining, so a crash anywhere leaves a durable request. Only the observer
+// confirms it, from what kagent reports for the attempt's session; fence releases the writer claim and
+// the capacity slot only then. Evidence on the attempt is a diagnostic trail and is never read for
+// safety.
 const (
-	evidenceStopUnconfirmed = "runtime-stop-unconfirmed"
-	evidenceStopConfirmed   = "runtime-stop-confirmed"
-	// evidenceStopUnresolved is written once, when the resolver has looked the bound number of times.
+	stopNone       = "none"
+	stopRequested  = "requested"
+	stopConfirmed  = "confirmed"
+	stopUnresolved = "unresolved"
+)
+
+// Diagnostic evidence written next to a stop state change.
+const (
+	evidenceStopConfirmed  = "runtime-stop-confirmed"
 	evidenceStopUnresolved = "runtime-stop-unresolved"
 )
 
@@ -38,9 +43,10 @@ const defaultResolveBound = 6
 // it never races the handler that is still working on it.
 const defaultSettleIdle = 30 * time.Second
 
-// unconfirmed is whether kagent has not yet confirmed that the attempt's agent stopped.
-func unconfirmed(a dbq.TaskAttempt) bool {
-	return slices.Contains(a.EvidenceRefs, evidenceStopUnconfirmed) && !slices.Contains(a.EvidenceRefs, evidenceStopConfirmed)
+// awaitingStop is whether the attempt's stop has been requested and the observer has not yet
+// confirmed it.
+func awaitingStop(a dbq.TaskAttempt) bool {
+	return a.StopState == stopRequested || a.StopState == stopUnresolved
 }
 
 // drain moves an attempt that could still act to draining, under the task lock (tasks before
@@ -111,23 +117,19 @@ func (s *Service) cancelOpenChildren(ctx context.Context, q *dbq.Queries, t dbq.
 	return drafts, nil
 }
 
-// stop stops what runs for a draining attempt: its session, and its workspace too when the agent
-// never ran. A stop kagent does not confirm is recorded on the attempt and not repeated; the attempt
-// then stays draining until [Service.resolveStop] observes kagent.
+// stop acts on a draining attempt: it cancels its session, which closes Mainloop's own open
+// deliveries, and removes its workspace when the agent never ran. What the session's Cancel reports
+// never confirms a stop (it may be a repeat on a cancelled session, or have no kagent session to ask):
+// [Service.resolveStop] asks the observer, and only the observer confirms. stop is safe to repeat, and
+// is skipped once the resolver has looked: it has already done its part, and the observer cancels
+// whatever runs.
 func (s *Service) stop(ctx context.Context, a dbq.TaskAttempt) error {
-	if unconfirmed(a) {
+	if a.ResolveAttempts > 0 {
 		return nil
 	}
 	if a.SessionID != nil {
-		res, err := s.Sessions.Cancel(ctx, *a.SessionID)
-		switch {
-		case errors.Is(err, sessions.ErrNotFound):
-			res = sessions.CancelResult{Agent: sessions.AgentNotRunning}
-		case err != nil:
+		if _, err := s.Sessions.Cancel(ctx, *a.SessionID); err != nil && !errors.Is(err, sessions.ErrNotFound) {
 			return err
-		}
-		if res.Agent == sessions.AgentUnknown {
-			return dbq.New(s.Pool).AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopUnconfirmed})
 		}
 	}
 	if a.BriefDeliveryID != nil || s.Workspaces == nil {
@@ -171,12 +173,12 @@ func (s *Service) orphanWorkspace(ctx context.Context, a dbq.TaskAttempt) (*stri
 	return &id, nil
 }
 
-// errStopUnconfirmed means an attempt cannot be fenced: kagent has not confirmed its agent stopped.
+// errStopUnconfirmed means an attempt cannot be fenced: the observer has not confirmed its agent stopped.
 var errStopUnconfirmed = errors.New("tasks: the attempt's stop is not confirmed")
 
 // fence revokes the attempt's credentials, releases its writer claim and its capacity slot, and
-// moves it draining → fenced in one transaction. It refuses an attempt whose stop kagent has not
-// confirmed, because the agent may still be writing. extra runs in the same transaction.
+// moves it draining → fenced in one transaction. It refuses an attempt whose stop is not confirmed,
+// because the agent may still be writing. extra runs in the same transaction.
 func (s *Service) fence(ctx context.Context, attemptID string, extra func(q *dbq.Queries) error) (dbq.TaskAttempt, error) {
 	var out dbq.TaskAttempt
 	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
@@ -191,7 +193,7 @@ func (s *Service) fence(ctx context.Context, attemptID string, extra func(q *dbq
 			return nil, err
 		}
 		if out.State == dbstate.AttemptDraining {
-			if unconfirmed(out) {
+			if out.StopState != stopConfirmed {
 				return nil, errStopUnconfirmed
 			}
 			if out.BindingID != nil {
@@ -294,8 +296,8 @@ func (s *Service) settle(ctx context.Context, attemptID string) error {
 		if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, attemptID); err != nil {
 			return err
 		}
-		// A stop kagent did not confirm keeps the attempt draining, with its claim and slot, until
-		// the resolver sees the agent stopped; the sweep looks again when the backoff is over.
+		// The attempt stays draining, with its claim and slot, until the observer has seen the agent
+		// stopped; the sweep looks again when the backoff is over.
 		if wait, err := s.resolveStop(ctx, a); err != nil || wait > 0 {
 			return err
 		}
@@ -365,7 +367,7 @@ func (s *Service) driveCancel(ctx context.Context, c reconcile.Claim, op dbq.Tas
 			if a, err = dbq.New(s.Pool).GetTaskAttempt(ctx, src); err != nil {
 				return reconcile.Outcome{}, err
 			}
-			// The cancel waits for kagent to confirm the stop; the attempt keeps its claim and slot.
+			// The cancel waits for the observer to confirm the stop; the attempt keeps its claim and slot.
 			if wait, err := s.resolveStop(ctx, a); err != nil || wait > 0 {
 				if err != nil {
 					return reconcile.Outcome{}, err

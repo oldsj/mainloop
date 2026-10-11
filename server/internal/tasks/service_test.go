@@ -730,7 +730,7 @@ func TestAuthRefusesStaleAttempts(t *testing.T) {
 		t.Fatalf("not current = %v", err)
 	}
 	e.exec(`UPDATE tasks SET current_attempt_id = (SELECT id FROM task_attempts WHERE binding_id = 'sup-1') WHERE id = $1`, id)
-	e.exec(`UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE binding_id = 'sup-1'`)
+	e.exec(`UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE binding_id = 'sup-1'`)
 	if _, err := e.svc.Auth(ctx, dbstate.RoleSupervisor, dbstate.GrantCoordination, "sup-1"); !errors.Is(err, tasks.ErrInactive) {
 		t.Fatalf("fenced = %v", err)
 	}
@@ -805,12 +805,12 @@ func TestAuthChecksTheParent(t *testing.T) {
 		t.Fatalf("live parent = %v", err)
 	}
 	for name, set := range map[string]string{
-		"parent attempt draining": `UPDATE task_attempts SET state = 'draining' WHERE binding_id = 'sup-1'`,
+		"parent attempt draining": `UPDATE task_attempts SET state = 'draining', stop_state = 'requested' WHERE binding_id = 'sup-1'`,
 		"parent task failed":      `UPDATE tasks SET status = 'failed', reason = NULL WHERE id = '` + root + `'`,
 		"parent task cancelled":   `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = '` + root + `'`,
 		"no parent attempt":       `UPDATE tasks SET current_attempt_id = NULL WHERE id = '` + root + `'`,
 	} {
-		e.exec(`UPDATE task_attempts SET state = 'active' WHERE binding_id = 'sup-1'`)
+		e.exec(`UPDATE task_attempts SET state = 'active', stop_state = 'none' WHERE binding_id = 'sup-1'`)
 		e.exec(`UPDATE tasks SET status = 'running', reason = NULL, current_attempt_id = (SELECT id FROM task_attempts WHERE binding_id = 'sup-1') WHERE id = $1`, root)
 		e.exec(set)
 		if err := auth(); !errors.Is(err, tasks.ErrInactive) {
@@ -832,7 +832,7 @@ func TestWritesRecheckTheAttempt(t *testing.T) {
 	child := e.mustCreate(sup, tasks.CreateInput{})
 	e.setStatus(child, "running", "")
 
-	e.exec(`UPDATE task_attempts SET state = 'draining' WHERE binding_id = 'sup-1'`)
+	e.exec(`UPDATE task_attempts SET state = 'draining', stop_state = 'requested' WHERE binding_id = 'sup-1'`)
 	before := e.count(`SELECT count(*) FROM tasks`)
 	_, err := e.svc.Report(ctx, sup, report(sup, "late", dbstate.OutcomeProgress))
 	wantRefusal(t, err, 403, tasks.ReasonInactivePrincipal)

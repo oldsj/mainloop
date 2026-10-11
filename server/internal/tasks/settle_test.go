@@ -175,8 +175,8 @@ func TestAgentViewsAreNarrowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later attempt replaces it (as a retry would, once handoff exists).
-	e.exec(`UPDATE task_attempts SET state = 'draining' WHERE id = $1`, old)
-	e.exec(`UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE id = $1`, old)
+	e.exec(`UPDATE task_attempts SET state = 'draining', stop_state = 'requested' WHERE id = $1`, old)
+	e.exec(`UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE id = $1`, old)
 	e.exec(`UPDATE task_attempts SET state = 'superseded' WHERE id = $1`, old)
 	fresh := uuid.NewString()
 	e.exec(`INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,

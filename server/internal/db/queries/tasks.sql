@@ -188,6 +188,8 @@ UPDATE task_attempts SET brief_delivery_id = $2, updated_at = now() WHERE id = $
 -- name: MoveAttempt :one
 UPDATE task_attempts
 SET state = sqlc.arg(to_state), capacity_held = sqlc.arg(capacity_held), updated_at = now(),
+    -- Entering draining requests the stop in this statement, before anything is asked of kagent.
+    stop_state = CASE WHEN sqlc.arg(to_state) = 'draining' THEN 'requested' ELSE stop_state END,
     evidence_refs = CASE WHEN sqlc.narg(evidence_ref)::text IS NULL THEN evidence_refs
                          ELSE array_append(evidence_refs, sqlc.narg(evidence_ref)::text) END
 WHERE id = sqlc.arg(id) AND state = sqlc.arg(from_state)
@@ -414,3 +416,37 @@ WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled'
   AND NOT ('brief-delivery-failed' = ANY (a.evidence_refs))
 ORDER BY a.updated_at, a.id
 LIMIT $1;
+
+-- name: ConfirmAttemptStop :one
+-- The observer saw nothing running for the attempt's session. This is the only way an attempt's
+-- stop_state becomes confirmed; fence checks it. Returns no row when the attempt is not waiting on a
+-- stop.
+UPDATE task_attempts
+SET stop_state = 'confirmed', updated_at = now()
+WHERE id = $1 AND state = 'draining' AND stop_state IN ('requested', 'unresolved')
+RETURNING *;
+
+-- name: MarkAttemptStopUnresolved :one
+-- The resolver has looked the bound number of times. Returns no row when it was already marked, so
+-- the caller raises the block once.
+UPDATE task_attempts
+SET stop_state = 'unresolved', updated_at = now()
+WHERE id = $1 AND state = 'draining' AND stop_state = 'requested'
+RETURNING *;
+
+-- name: ListSessionNativeContexts :many
+-- Every kagent session (A2A context) a Mainloop session has sent a message to, from all of its
+-- deliveries.
+SELECT DISTINCT kagent_session_id::text AS kagent_session_id FROM deliveries
+WHERE session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
+ORDER BY kagent_session_id;
+
+-- name: ListSessionPossiblyLandingDeliveries :many
+-- Deliveries that were sent to kagent and that no task is recorded for, and that the ledger has not
+-- resolved (still sending or uncertain) or that a cancel closed: the message may still land and start
+-- a task, so the session counts as possibly running while they are inside the hold.
+SELECT id, state, kagent_session_id, updated_at FROM deliveries
+WHERE session_id = $1 AND kagent_session_id IS NOT NULL AND kagent_session_id <> ''
+  AND (task_id IS NULL OR task_id = '')
+  AND state IN ('sending', 'uncertain', 'cancelled')
+ORDER BY created_at, id;

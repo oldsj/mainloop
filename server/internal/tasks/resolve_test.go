@@ -20,7 +20,7 @@ func (r *rig) stopUnconfirmed(sup tasks.Principal, child string) (attempt string
 		r.t.Fatal(err)
 	}
 	r.eventually("stop looked at", func() bool {
-		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'runtime-stop-unconfirmed' = ANY (evidence_refs)`, attempt) == 1 &&
+		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND stop_state IN ('requested', 'unresolved')`, attempt) == 1 &&
 			r.stops.lookCount() > 0
 	})
 	return attempt
@@ -77,8 +77,8 @@ func TestUnconfirmedStopKeepsTheSlotUntilResolved(t *testing.T) {
 	if slot, claim := r.held(attempt); slot != 0 || claim != 0 {
 		t.Fatalf("held slot=%d claim=%d after resolution", slot, claim)
 	}
-	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'runtime-stop-confirmed' = ANY (evidence_refs)`, attempt); n != 1 {
-		t.Fatal("no runtime-stop-confirmed evidence")
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND stop_state = 'confirmed'`, attempt); n != 1 {
+		t.Fatal("stop_state is not confirmed")
 	}
 	if n := r.ses.cancelCount(); n != 1 {
 		t.Fatalf("session cancels = %d after resolution", n)
@@ -140,7 +140,7 @@ func TestUnresolvedStopIsRaisedAfterTheBound(t *testing.T) {
 	attempt := r.stopUnconfirmed(sup, child)
 	r.eventually("unresolved raised", func() bool {
 		r.sweep(r.svc.SettleSweep())
-		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'runtime-stop-unresolved' = ANY (evidence_refs)`, attempt) == 1
+		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND stop_state = 'unresolved'`, attempt) == 1
 	})
 	if got, reason := r.taskStatus(child), r.str(`SELECT reason FROM tasks WHERE id = $1`, child); got != "blocked" || reason != "reconciliation" {
 		t.Fatalf("task = %s/%s, want blocked/reconciliation", got, reason)

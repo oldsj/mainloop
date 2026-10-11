@@ -285,8 +285,8 @@ func TestCapacityRefusals(t *testing.T) {
 	r.setStatus(ended, "cancelled", "")
 	_, err = r.create(b, tasks.CreateInput{})
 	wantRefusal(t, err, 409, tasks.ReasonGlobalCapacity)
-	r.exec(`UPDATE task_attempts SET state = 'draining' WHERE id = $1`, att)
-	r.exec(`UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE id = $1`, att)
+	r.exec(`UPDATE task_attempts SET state = 'draining', stop_state = 'requested' WHERE id = $1`, att)
+	r.exec(`UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE id = $1`, att)
 	r.mustCreate(b, tasks.CreateInput{})
 }
 

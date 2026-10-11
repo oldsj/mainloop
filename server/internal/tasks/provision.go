@@ -518,7 +518,20 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 	if _, err := q.GetDelivery(ctx, mid); errors.Is(err, pgx.ErrNoRows) {
 		_, err := s.Sessions.SendTo(ctx, *a.SessionID, mid, DelegatedBrief(a.Role, t.Mode, t.Brief))
 		switch {
-		case errors.Is(err, sessions.ErrBusy), errors.Is(err, sessions.ErrConflict):
+		case errors.Is(err, sessions.ErrNotFound):
+			return s.giveUpInitialBrief(ctx, c, op, a, mid)
+		case errors.Is(err, sessions.ErrConflict):
+			// A session that ended or was archived can never take the brief; a workspace that is not
+			// ready yet can, so that is tried again.
+			ended, oerr := s.sessionEnded(ctx, t.OwnerID, *a.SessionID)
+			if oerr != nil {
+				return reconcile.Outcome{}, oerr
+			}
+			if ended {
+				return s.giveUpInitialBrief(ctx, c, op, a, mid)
+			}
+			return reconcile.RetryAfter(3 * time.Second), nil
+		case errors.Is(err, sessions.ErrBusy):
 			return reconcile.RetryAfter(3 * time.Second), nil
 		case err != nil:
 			return reconcile.Outcome{}, err
@@ -531,6 +544,23 @@ func (s *Service) sendBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskO
 			return nil, err
 		}
 		return nil, advance(ctx, q, c, op, dbstate.TaskOpCompleted, nil, &a.ID)
+	})
+	if err != nil {
+		return reconcile.Outcome{}, err
+	}
+	return reconcile.Recorded(), nil
+}
+
+// giveUpInitialBrief ends the create operation of an attempt whose session ended before it could take
+// its first brief: the attempt gets evidence and its task is blocked for reconciliation, like a
+// resent brief that cannot be delivered. The owner decides what happens to the attempt.
+func (s *Service) giveUpInitialBrief(ctx context.Context, c reconcile.Claim, op dbq.TaskOperation, a dbq.TaskAttempt, mid string) (reconcile.Outcome, error) {
+	if err := s.giveUpBrief(ctx, a.ID, mid); err != nil {
+		return reconcile.Outcome{}, err
+	}
+	reason := dbstate.ReasonReconciliation
+	err := s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
+		return nil, advance(ctx, q, c, op, dbstate.TaskOpBlocked, &reason, nil)
 	})
 	if err != nil {
 		return reconcile.Outcome{}, err

@@ -82,6 +82,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"tasks", "reason", taskReasons},
 		{"task_attempts", "native_provider", strs(string(dbstate.ProviderClaude), string(dbstate.ProviderCodex))},
 		{"task_attempts", "role", strs(string(dbstate.AttemptSupervisor), string(dbstate.AttemptChild))},
+		{"task_attempts", "stop_state", strs("none", "requested", "confirmed", "unresolved")},
 		{"task_attempts", "state", strs(
 			string(dbstate.AttemptCreating), string(dbstate.AttemptActive), string(dbstate.AttemptDraining),
 			string(dbstate.AttemptFenced), string(dbstate.AttemptSuperseded), string(dbstate.AttemptFailed),

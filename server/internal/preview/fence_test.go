@@ -39,7 +39,7 @@ func TestTaskOwnedPreviewNeedsTheCurrentActiveAttempt(t *testing.T) {
 	}
 
 	for _, state := range []string{"draining", "fenced"} {
-		exec(`UPDATE task_attempts SET state = $1, capacity_held = $2 WHERE id = 'a1'`, state, state == "draining")
+		exec(`UPDATE task_attempts SET state = $1, capacity_held = $2, stop_state = CASE $1::text WHEN 'draining' THEN 'requested' ELSE 'confirmed' END WHERE id = 'a1'`, state, state == "draining")
 		if got := status(); got != http.StatusNotFound {
 			t.Errorf("%s attempt: %d, want 404", state, got)
 		}

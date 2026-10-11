@@ -465,7 +465,7 @@ func TestTaskDecisionResolvesWhenAttemptEndsOrTaskFinishes(t *testing.T) {
 	if snap, _ := e.svc.Snapshot(ctx); snap.Count != 2 {
 		t.Fatalf("%d", snap.Count)
 	}
-	e.exec(t, `UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE id = 'att-t1'`)
+	e.exec(t, `UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE id = 'att-t1'`)
 	e.exec(t, `UPDATE tasks SET status = 'cancelled', reason = NULL WHERE id = 't2'`)
 	if err := e.svc.SyncTasks(ctx); err != nil {
 		t.Fatal(err)

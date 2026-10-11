@@ -33,8 +33,9 @@ func (h *harness) seedTask(t *testing.T, parent *string, role dbstate.AttemptRol
 		t.Fatal(err)
 	}
 	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
-	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, capacity_held)
-	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, $6, $6, $7)`,
+	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, capacity_held, stop_state)
+	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, $6, $6, $7,
+	                CASE $5::text WHEN 'draining' THEN 'requested' WHEN 'fenced' THEN 'confirmed' ELSE 'none' END)`,
 		attemptID, taskID, role, depth, state, agent.SessionID, state == dbstate.AttemptActive || state == dbstate.AttemptCreating || state == dbstate.AttemptDraining); err != nil {
 		t.Fatal(err)
 	}

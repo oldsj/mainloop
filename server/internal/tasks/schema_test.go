@@ -91,7 +91,8 @@ func TestAttemptInvariants(t *testing.T) {
 	att := e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
 	insert := func(number int, state string, role string, held bool) error {
 		_, err := e.pool.Exec(context.Background(), `INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
-			agent_namespace, agent_name, role, depth, state, capacity_held) VALUES (gen_random_uuid()::text, $1, $2, 'claude', 'claude', 'v', 'kagent', 'a', $3, 1, $4, $5)`,
+			agent_namespace, agent_name, role, depth, state, capacity_held, stop_state) VALUES (gen_random_uuid()::text, $1, $2, 'claude', 'claude', 'v', 'kagent', 'a', $3, 1, $4::text, $5,
+			CASE $4::text WHEN 'draining' THEN 'requested' WHEN 'fenced' THEN 'confirmed' ELSE 'none' END)`,
 			root, number, role, state, held)
 		return err
 	}
@@ -102,7 +103,7 @@ func TestAttemptInvariants(t *testing.T) {
 		}
 	}
 	// A fenced one is fine, and then a new one may start.
-	e.exec(`UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE id = $1`, att)
+	e.exec(`UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE id = $1`, att)
 	if err := insert(2, "active", "supervisor", true); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestWriterGenerationOnlyMovesUpByOne(t *testing.T) {
 	id := e.mustCreate(e.own, tasks.CreateInput{})
 	a1 := e.attempt(id, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
 	e.exec(`INSERT INTO workspace_writer_claims (owner_id, repository, branch, generation, attempt_id) VALUES ($1, 'o/r', 'main', 1, $2)`, owner, a1)
-	e.exec(`UPDATE task_attempts SET state = 'fenced', capacity_held = false WHERE id = $1`, a1)
+	e.exec(`UPDATE task_attempts SET state = 'fenced', stop_state = 'confirmed', capacity_held = false WHERE id = $1`, a1)
 	a2 := e.uuidAttempt(id, 2)
 
 	e.refused("must increment", `UPDATE workspace_writer_claims SET attempt_id = $1, generation = 1 WHERE repository = 'o/r'`, a2)

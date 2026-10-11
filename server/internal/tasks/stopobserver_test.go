@@ -15,13 +15,17 @@ import (
 // fakeKagent is kagent for the real KagentStops observer. Until it has landed, kagent has not seen
 // the in-flight message: no task carries it. Once landed, the message has a task in state.
 type fakeKagent struct {
-	mu                   sync.Mutex
-	landed               bool
-	state                a2a.TaskState
-	finds, gets, cancels int
-	// gone makes GetTask answer that the task no longer exists.
+	mu                          sync.Mutex
+	landed                      bool
+	state                       a2a.TaskState
+	finds, gets, cancels, lists int
+	// gone makes the task disappear: it is no longer listed or found.
 	gone bool
+	// contexts are the contexts ListTasks was asked about.
+	contexts []string
 }
+
+const fakeNativeTask = "native-1"
 
 func (k *fakeKagent) GetTask(_ context.Context, _ kagent.AgentRef, id string) (*a2a.Task, error) {
 	k.mu.Lock()
@@ -33,14 +37,25 @@ func (k *fakeKagent) GetTask(_ context.Context, _ kagent.AgentRef, id string) (*
 	return &a2a.Task{ID: a2a.TaskID(id), Status: a2a.TaskStatus{State: k.state}}, nil
 }
 
+func (k *fakeKagent) ListTasks(_ context.Context, _ kagent.AgentRef, contextID string) ([]*a2a.Task, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.lists++
+	k.contexts = append(k.contexts, contextID)
+	if k.gone || !k.landed {
+		return nil, nil
+	}
+	return []*a2a.Task{{ID: fakeNativeTask, ContextID: contextID, Status: a2a.TaskStatus{State: k.state}}}, nil
+}
+
 func (k *fakeKagent) FindTaskForMessage(_ context.Context, _ kagent.AgentRef, _, msg string) (*a2a.Task, bool, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.finds++
-	if !k.landed {
+	if k.gone || !k.landed {
 		return nil, false, nil
 	}
-	return &a2a.Task{ID: a2a.TaskID("t-" + msg), Status: a2a.TaskStatus{State: k.state}}, true, nil
+	return &a2a.Task{ID: fakeNativeTask, Status: a2a.TaskStatus{State: k.state}}, true, nil
 }
 
 func (k *fakeKagent) CancelTask(_ context.Context, _ kagent.AgentRef, id string) (*a2a.Task, error) {
@@ -256,7 +271,7 @@ func TestCancelledSupervisorCancelsChildrenWhileItsStopIsUnresolved(t *testing.T
 		t.Fatal(err)
 	}
 	r.eventually("root stop unresolved", func() bool {
-		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'runtime-stop-unresolved' = ANY (evidence_refs)`, rootAttempt) == 1
+		return r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND stop_state = 'unresolved'`, rootAttempt) == 1
 	})
 	if got := r.attemptState(root); got != "draining" {
 		t.Fatalf("root attempt = %s, want draining", got)

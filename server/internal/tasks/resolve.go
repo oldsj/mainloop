@@ -2,7 +2,10 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -47,15 +50,17 @@ func (s *Service) blockReconciliation(ctx context.Context, q *dbq.Queries, t dbq
 	return []events.Draft{s.updated(after)}, nil
 }
 
-// resolveStop is the resolver of an unconfirmed stop. For an attempt whose stop kagent did not
-// confirm, it asks the StopObserver whether anything still runs for the session. When nothing does,
-// it records the confirmation and returns 0: the attempt can be fenced. Otherwise it counts the look,
-// schedules the next one with backoff and returns how long to wait. After the bound it writes
-// evidence to the attempt and blocks the task for reconciliation, once; it keeps looking.
+// resolveStop is the resolver of a requested stop. For a draining attempt whose stop the observer has
+// not confirmed, it asks the StopObserver whether anything still runs for the session. When nothing
+// does, it confirms the stop and returns 0: the attempt can be fenced. Otherwise it counts the look,
+// schedules the next one with backoff and returns how long to wait. After the bound it marks the stop
+// unresolved and blocks the task for reconciliation, once; it keeps looking, and a later confirmation
+// still ends the attempt.
 //
-// Without an observer the service has no kagent client, so no agent can be running.
+// Without an observer the service has no kagent client, so no agent can be running. An attempt with
+// no session never started an agent.
 func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time.Duration, err error) {
-	if !unconfirmed(a) {
+	if !awaitingStop(a) {
 		return 0, nil
 	}
 	q := dbq.New(s.Pool)
@@ -64,11 +69,14 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		var oerr error
 		stopped, oerr = s.StopObserver.Stopped(ctx, *a.SessionID)
 		if oerr != nil {
-			s.log().WarnContext(ctx, "observe unconfirmed stop", "attempt", a.ID, "error", oerr)
+			s.log().WarnContext(ctx, "observe requested stop", "attempt", a.ID, "error", oerr)
 			stopped = false
 		}
 	}
 	if stopped {
+		if _, err := q.ConfirmAttemptStop(ctx, a.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
 		return 0, q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopConfirmed})
 	}
 	wait = s.resolveBackoff().Delay(int(a.ResolveAttempts) + 1)
@@ -84,7 +92,7 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 	return wait, nil
 }
 
-// raiseUnresolved writes the unresolved-stop evidence to the attempt and blocks its task, once.
+// raiseUnresolved marks the attempt's stop unresolved and blocks its task, once.
 func (s *Service) raiseUnresolved(ctx context.Context, attemptID string) error {
 	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		a, err := q.GetTaskAttempt(ctx, attemptID)
@@ -95,10 +103,10 @@ func (s *Service) raiseUnresolved(ctx context.Context, attemptID string) error {
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range a.EvidenceRefs {
-			if e == evidenceStopUnresolved {
-				return nil, nil
-			}
+		if _, err := q.MarkAttemptStopUnresolved(ctx, attemptID); errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // already raised, or confirmed meanwhile
+		} else if err != nil {
+			return nil, err
 		}
 		if err := q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopUnresolved}); err != nil {
 			return nil, err

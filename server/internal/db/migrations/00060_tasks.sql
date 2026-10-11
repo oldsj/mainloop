@@ -146,8 +146,14 @@ CREATE TABLE task_attempts (
     archived_at timestamptz,
     native_deleted_at timestamptz,
     retention_hold text,
-    -- Reconcile state of an unconfirmed stop: how often the resolver looked at kagent, and when it
-    -- looks next.
+    -- Whether the attempt's runtime is known to have stopped. It becomes requested in the same
+    -- statement that moves the attempt to draining, before anything is asked of kagent, so a crash
+    -- anywhere leaves a durable request. Only the observer confirms it, from what kagent reports for
+    -- the session; the attempt is fenced, and its writer claim and capacity slot released, only then.
+    -- unresolved means the resolver gave up looking for now; a later confirmation still counts.
+    -- evidence_refs is diagnostic: nothing reads it for safety.
+    stop_state text NOT NULL DEFAULT 'none' CHECK (stop_state IN ('none', 'requested', 'confirmed', 'unresolved')),
+    -- How often the resolver looked at kagent, and when it looks next.
     resolve_attempts integer NOT NULL DEFAULT 0,
     resolve_after timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -159,6 +165,11 @@ CREATE TABLE task_attempts (
     ),
     CONSTRAINT task_attempts_unfenced_hold_capacity CHECK (
         state NOT IN ('creating', 'active', 'draining') OR capacity_held
+    ),
+    CONSTRAINT task_attempts_stop_state CHECK (
+        (state NOT IN ('creating', 'active') OR stop_state = 'none')
+        AND (state <> 'draining' OR stop_state <> 'none')
+        AND (state <> 'fenced' OR stop_state = 'confirmed')
     )
 );
 -- A task has at most one attempt that has not been fenced.
