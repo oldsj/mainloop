@@ -55,10 +55,11 @@ func (l Limits) defaults() Limits {
 }
 
 type spool struct {
-	root   string
-	body   *os.File
-	Size   int64
-	Digest string
+	root    string
+	body    *os.File
+	Size    int64
+	Digest  string
+	scratch *scratchReservation
 }
 
 func (s *spool) close() { _ = s.body.Close(); _ = os.RemoveAll(s.root) }
@@ -102,7 +103,7 @@ func newSpool(ctx context.Context, root string, source io.Reader, l Limits) (*sp
 		}
 	}()
 	h := sha256.New()
-	writer := &scratchWriter{ctx: ctx, w: body, available: func() (uint64, error) { return diskAvailable(work) }}
+	writer := &scratchWriter{ctx: ctx, w: &limitedWriter{w: body, left: min(l.BodyBytes, l.DiskBytes), code: "body_limit"}, available: func() (uint64, error) { return diskAvailable(work) }}
 	n, err := io.Copy(io.MultiWriter(writer, h), io.LimitReader(&contextReader{ctx, source}, min(l.BodyBytes, l.DiskBytes)+1))
 	if err != nil {
 		var d denial
@@ -201,6 +202,11 @@ type Upstream interface {
 
 func (s *spool) validate(ctx context.Context, c commands, repo github.Repo, policy Policy, u Upstream, l Limits, guard func(context.Context) error) (validation, error) {
 	var v validation
+	if s.scratch != nil {
+		if err := s.scratch.validation(l); err != nil {
+			return v, err
+		}
+	}
 	if _, err := s.body.Seek(c.Offset, io.SeekStart); err != nil {
 		return v, err
 	}
@@ -241,7 +247,11 @@ func (s *spool) validate(ctx context.Context, c commands, repo github.Repo, poli
 		return v, err
 	}
 	seedWriter := &scratchWriter{ctx: ctx, w: seed, available: func() (uint64, error) { return diskAvailable(s.root) }}
-	if err = u.Seed(ctx, repo, wants, &limitedWriter{w: seedWriter, left: min(l.BodyBytes, l.DiskBytes-s.Size)}); err != nil {
+	allocated, err := s.disk(l)
+	if err != nil {
+		return v, err
+	}
+	if err = u.Seed(ctx, repo, wants, &limitedWriter{w: seedWriter, left: min(l.BodyBytes, l.DiskBytes-allocated)}); err != nil {
 		return v, err
 	}
 	if _, err = seed.Seek(0, io.SeekStart); err != nil {
@@ -333,6 +343,13 @@ func (s *spool) git(ctx context.Context, l Limits, in io.Reader, outputLimit int
 	if err != nil {
 		return nil, err
 	}
+	// Git does not write through scratchWriter. Reserve free headroom for its entire remaining
+	// allowance before launch; concurrent gate allocations cannot consume it because validation
+	// owns the full shared scratch reservation until quarantine cleanup.
+	free, err := diskAvailable(s.root)
+	if err != nil || free < freeReserve || uint64(l.DiskBytes-disk) > free-freeReserve { //nolint:gosec // disk() checked 0 <= disk <= DiskBytes
+		return nil, denial("disk_unavailable")
+	}
 	if outputLimit <= 0 {
 		outputLimit = l.CommandBytes
 	}
@@ -363,11 +380,16 @@ func (s *spool) git(ctx context.Context, l Limits, in io.Reader, outputLimit int
 type limitedWriter struct {
 	w    io.Writer
 	left int64
+	code string
 }
 
 func (w *limitedWriter) Write(b []byte) (int, error) {
 	if int64(len(b)) > w.left {
-		return 0, denial("response_limit")
+		code := w.code
+		if code == "" {
+			code = "response_limit"
+		}
+		return 0, denial(code)
 	}
 	n, err := w.w.Write(b)
 	w.left -= int64(n)

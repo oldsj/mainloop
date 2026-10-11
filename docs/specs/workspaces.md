@@ -22,7 +22,9 @@ built; nothing here has been measured against a live kagent.
 
 - MCP credential (G6c): before `CreateSession` the create publishes the workspace's MCP credential (role `agent`, grant `workspace`) and sends its reference with the request; a delete that replays the create sends the same reference and issues nothing. Delete and the drop of a refused create revoke the credential in the same transaction that removes the rows. If the credential cannot be issued because the Secret name is still owed a delete, the create retries; if the binding has ended, the create is rejected. With no Secret store (outside a cluster) the workspace is created without a credential and a warning is logged.
 - Git read: with `GIT_TRANSPORT_ENABLED`, a GitHub App and a cluster, the create also enrolls the workspace for git read (`gittransport.Enroller.Enroll`, idempotent) before `CreateSession` and sends the capability's reference after the MCP one. Only a GitHub repository gets one. The decision, including "no git read", is frozen on the workspace row (`git_read_decided`, `git_read_credential`) before the first `CreateSession`, so a restart that turns git read on or off cannot change the credentials of a retry or of the delete's replay: both send the frozen set, and the replay enrolls and issues nothing. The credential service revokes the capability with the workspace. With any of the three missing, the workspace is created as before.
-- Caller request id: `CreateWithRequestID` takes a UUID and is idempotent on it. A repeat call, concurrent or later, returns the workspace the first call made (waiting for its create the same way) and makes no second kagent Session; `LookupByRequestID` finds one by that id. The id is also the kagent request id. The HTTP API does not take one yet; the tasks service will derive it from the attempt.
+- Git push (G11c): with the read transport and push gate configured, creation freezes an optional push reference after read enrollment and before the first `CreateSession`. A writable code-task attempt is found through its attempt-derived request ID and must hold the exact repository/branch writer generation. Standalone and default-branch workspaces get no push reference. The durable reservation is keyed by the attempt, freezes the reference, and cannot transfer to another workspace. Creation retries and deletion replays reuse that reference and never mint another reservation. Already-created Sessions receive no new reference.
+- Push enrollment runs separately after the native Session is freshly observed READY with no operation and exactly one matching reference. The task caller must have attached the workspace and activated the current writer before `pushgate.Service.Enroll` can publish its grant and Secret. Creation refusal, runtime failure/deletion, task abandonment and reservation expiry release push authority. Delete and first-attempt refusal release it in their outcome transaction; other abandoned/expired reservations are reconciled automatically. No database transaction spans native, metadata or Secret calls. Local tests include a real push from the workspace credential to a bare repository; live kagent and GitHub remain unmeasured.
+- Caller request id: `CreateWithRequestID` takes a UUID and is idempotent on it. A repeat call, concurrent or later, returns the workspace the first call made (waiting for its create the same way) and makes no second kagent Session; `LookupByRequestID` finds one by that id. The id is also the kagent request id. The HTTP API does not take one yet; the tasks service derives it from the attempt.
 
 - Every lifecycle change is a durable `workspace_ops` row (`create`, `suspend`, `resume`,
   `delete`) with a state (`pending`, `retrying`, `succeeded`, `rejected`, `gave_up`, `cancelled`)
@@ -129,8 +131,9 @@ built; nothing here has been measured against a live kagent.
 
 ### Proposed, not built
 
-- The git gate (SHA resolution, credentials, publication) and the
-  per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
+- Checkout SHA resolution and lifecycle publication projection. The Git read/push transports and
+  per-workspace MCP grants are implemented above, but the lifecycle response still reports
+  `publication_mode: read_only` with reason `disabled`; it does not yet project the push grant.
 
 ## React status (migration slice F8)
 

@@ -57,7 +57,7 @@ func (q *Queries) BindWorkspaceSession(ctx context.Context, arg BindWorkspaceSes
 }
 
 const bumpWorkspace = `-- name: BumpWorkspace :one
-UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
 `
 
 func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, error) {
@@ -79,6 +79,8 @@ func (q *Queries) BumpWorkspace(ctx context.Context, id string) (Workspace, erro
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,
@@ -175,6 +177,24 @@ func (q *Queries) ForgetKnownAgent(ctx context.Context, arg ForgetKnownAgentPara
 	return result.RowsAffected(), nil
 }
 
+const freezeWorkspaceGitPush = `-- name: FreezeWorkspaceGitPush :one
+UPDATE workspaces SET git_push_decided = true, git_push_credential = $2
+WHERE id = $1 AND NOT git_push_decided
+RETURNING git_push_credential
+`
+
+type FreezeWorkspaceGitPushParams struct {
+	ID                string
+	GitPushCredential json.RawMessage
+}
+
+func (q *Queries) FreezeWorkspaceGitPush(ctx context.Context, arg FreezeWorkspaceGitPushParams) (json.RawMessage, error) {
+	row := q.db.QueryRow(ctx, freezeWorkspaceGitPush, arg.ID, arg.GitPushCredential)
+	var git_push_credential json.RawMessage
+	err := row.Scan(&git_push_credential)
+	return git_push_credential, err
+}
+
 const freezeWorkspaceGitRead = `-- name: FreezeWorkspaceGitRead :one
 UPDATE workspaces SET git_read_decided = true, git_read_credential = $2
 WHERE id = $1 AND NOT git_read_decided
@@ -269,7 +289,7 @@ func (q *Queries) GetWorkspaceActivity(ctx context.Context, id string) (time.Tim
 }
 
 const getWorkspaceByRequestID = `-- name: GetWorkspaceByRequestID :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.request_id = $1 AND w.user_id = $2
@@ -296,6 +316,8 @@ type GetWorkspaceByRequestIDRow struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -325,6 +347,8 @@ func (q *Queries) GetWorkspaceByRequestID(ctx context.Context, arg GetWorkspaceB
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,
@@ -373,7 +397,7 @@ func (q *Queries) GetWorkspaceEnvironmentVersion(ctx context.Context, projectID 
 }
 
 const getWorkspaceForOp = `-- name: GetWorkspaceForOp :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.id = $1
@@ -395,6 +419,8 @@ type GetWorkspaceForOpRow struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -424,6 +450,8 @@ func (q *Queries) GetWorkspaceForOp(ctx context.Context, id string) (GetWorkspac
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,
@@ -461,8 +489,63 @@ func (q *Queries) GetWorkspaceOp(ctx context.Context, id string) (WorkspaceOp, e
 	return i, err
 }
 
+const getWorkspacePushAttempt = `-- name: GetWorkspacePushAttempt :one
+SELECT a.id AS attempt_id
+FROM workspaces w
+JOIN sessions s ON s.id = w.id AND s.archived_at IS NULL
+    AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+JOIN task_attempts a ON a.workspace_request_id = w.request_id AND a.state IN ('creating', 'active')
+JOIN tasks t ON t.id = a.task_id AND t.current_attempt_id = a.id AND t.mode = 'code'
+    AND t.owner_id = w.user_id AND t.project_id = w.project_id AND t.checkout_branch = w.branch
+    AND t.status NOT IN ('completed', 'failed', 'cancelled')
+JOIN projects p ON p.id = w.project_id AND p.user_id = w.user_id
+    AND p.default_branch <> '' AND w.branch <> p.default_branch
+JOIN workspace_writer_claims c ON c.attempt_id = a.id AND c.held
+    AND c.owner_id = w.user_id AND c.repository = lower(p.full_name) AND c.branch = w.branch
+    AND c.generation = a.writer_generation
+WHERE w.id = $1
+    AND (t.parent_task_id IS NULL OR EXISTS (
+        SELECT 1 FROM tasks parent JOIN task_attempts pa ON pa.id = parent.current_attempt_id
+        WHERE parent.id = t.parent_task_id AND parent.owner_id = t.owner_id
+            AND parent.status NOT IN ('completed', 'failed', 'cancelled') AND pa.state = 'active'))
+FOR SHARE OF s, a, t, p, c
+`
+
+// T1's request identity locates the attempt before the caller attaches the returned workspace.
+// Standalone workspaces, default branches, stale attempts and lost writers get no reference.
+func (q *Queries) GetWorkspacePushAttempt(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getWorkspacePushAttempt, id)
+	var attempt_id string
+	err := row.Scan(&attempt_id)
+	return attempt_id, err
+}
+
+const getWorkspacePushReservation = `-- name: GetWorkspacePushReservation :one
+SELECT id, idempotency_key, workspace_id, attempt_id, reference, state, expires_at, attempts, next_attempt_at, lease_owner, lease_until, created_at FROM workspace_push_reservations WHERE workspace_id = $1
+`
+
+func (q *Queries) GetWorkspacePushReservation(ctx context.Context, workspaceID string) (WorkspacePushReservation, error) {
+	row := q.db.QueryRow(ctx, getWorkspacePushReservation, workspaceID)
+	var i WorkspacePushReservation
+	err := row.Scan(
+		&i.ID,
+		&i.IdempotencyKey,
+		&i.WorkspaceID,
+		&i.AttemptID,
+		&i.Reference,
+		&i.State,
+		&i.ExpiresAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceRow = `-- name: GetWorkspaceRow :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -490,6 +573,8 @@ type GetWorkspaceRowRow struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -519,6 +604,8 @@ func (q *Queries) GetWorkspaceRow(ctx context.Context, arg GetWorkspaceRowParams
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,
@@ -536,7 +623,7 @@ INSERT INTO workspaces (
     id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name,
     ports, idle_timeout_minutes, environment, request_id
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
+RETURNING id, user_id, project_id, repo_url, ref, branch, depth, agent_kind, agent_namespace, agent_name, ports, idle_timeout_minutes, environment, git_read_decided, git_read_credential, git_push_decided, git_push_credential, request_id, last_active_at, idle_suspended_at, created_at, updated_at
 `
 
 type InsertWorkspaceParams struct {
@@ -591,6 +678,8 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,
@@ -640,6 +729,32 @@ func (q *Queries) InsertWorkspaceOp(ctx context.Context, arg InsertWorkspaceOpPa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertWorkspacePushReservation = `-- name: InsertWorkspacePushReservation :exec
+INSERT INTO workspace_push_reservations (id, idempotency_key, workspace_id, attempt_id, reference, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertWorkspacePushReservationParams struct {
+	ID             string
+	IdempotencyKey string
+	WorkspaceID    string
+	AttemptID      string
+	Reference      json.RawMessage
+	ExpiresAt      time.Time
+}
+
+func (q *Queries) InsertWorkspacePushReservation(ctx context.Context, arg InsertWorkspacePushReservationParams) error {
+	_, err := q.db.Exec(ctx, insertWorkspacePushReservation,
+		arg.ID,
+		arg.IdempotencyKey,
+		arg.WorkspaceID,
+		arg.AttemptID,
+		arg.Reference,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const listArchivedUndeletedBindings = `-- name: ListArchivedUndeletedBindings :many
@@ -864,8 +979,32 @@ func (q *Queries) ListLatestCreateOps(ctx context.Context, userID string) ([]Wor
 	return items, nil
 }
 
+const listLiveWorkspacePushReservations = `-- name: ListLiveWorkspacePushReservations :many
+SELECT workspace_id FROM workspace_push_reservations WHERE state <> 'revoked' ORDER BY id LIMIT $1
+`
+
+func (q *Queries) ListLiveWorkspacePushReservations(ctx context.Context, limit int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, listLiveWorkspacePushReservations, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var workspace_id string
+		if err := rows.Scan(&workspace_id); err != nil {
+			return nil, err
+		}
+		items = append(items, workspace_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceRows = `-- name: ListWorkspaceRows :many
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
@@ -889,6 +1028,8 @@ type ListWorkspaceRowsRow struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -923,6 +1064,8 @@ func (q *Queries) ListWorkspaceRows(ctx context.Context, userID string) ([]ListW
 			&i.Environment,
 			&i.GitReadDecided,
 			&i.GitReadCredential,
+			&i.GitPushDecided,
+			&i.GitPushCredential,
 			&i.RequestID,
 			&i.LastActiveAt,
 			&i.IdleSuspendedAt,
@@ -978,6 +1121,26 @@ func (q *Queries) PruneWorkspaceOps(ctx context.Context, keepSeconds float64) (i
 	return result.RowsAffected(), nil
 }
 
+const publishWorkspacePushReservation = `-- name: PublishWorkspacePushReservation :execrows
+UPDATE workspace_push_reservations SET state = 'published', lease_owner = NULL, lease_until = NULL
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'planned'
+    AND expires_at > clock_timestamp()
+`
+
+type PublishWorkspacePushReservationParams struct {
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+}
+
+func (q *Queries) PublishWorkspacePushReservation(ctx context.Context, arg PublishWorkspacePushReservationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, publishWorkspacePushReservation, arg.ID, arg.LeaseOwner, arg.Attempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const retryWorkspaceOp = `-- name: RetryWorkspaceOp :execrows
 UPDATE workspace_ops
 SET state = 'retrying', failures = failures + 1,
@@ -1010,6 +1173,37 @@ func (q *Queries) RetryWorkspaceOp(ctx context.Context, arg RetryWorkspaceOpPara
 	return result.RowsAffected(), nil
 }
 
+const revokeWorkspacePushCredential = `-- name: RevokeWorkspacePushCredential :exec
+UPDATE credentials SET state = 'revoked', lease_owner = NULL, lease_until = NULL,
+    next_attempt_at = now(), revoked_at = now(), updated_at = now()
+WHERE binding_id = $1 AND kind = 'git_push' AND state IN ('planned', 'published')
+`
+
+func (q *Queries) RevokeWorkspacePushCredential(ctx context.Context, bindingID string) error {
+	_, err := q.db.Exec(ctx, revokeWorkspacePushCredential, bindingID)
+	return err
+}
+
+const revokeWorkspacePushGrant = `-- name: RevokeWorkspacePushGrant :exec
+UPDATE git_push_grants SET state = 'revoked', revoked_at = now(), updated_at = now()
+WHERE workspace_id = $1 AND state <> 'revoked'
+`
+
+func (q *Queries) RevokeWorkspacePushGrant(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, revokeWorkspacePushGrant, workspaceID)
+	return err
+}
+
+const revokeWorkspacePushReservation = `-- name: RevokeWorkspacePushReservation :exec
+UPDATE workspace_push_reservations SET state = 'revoked', lease_owner = NULL, lease_until = NULL
+WHERE workspace_id = $1 AND state <> 'revoked'
+`
+
+func (q *Queries) RevokeWorkspacePushReservation(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, revokeWorkspacePushReservation, workspaceID)
+	return err
+}
+
 const touchWorkspace = `-- name: TouchWorkspace :execrows
 UPDATE workspaces SET last_active_at = now(), updated_at = now() WHERE id = $1
 `
@@ -1030,6 +1224,31 @@ SELECT EXISTS (
 // Whether a create was ever sent: kagent may then own a Session Mainloop has not recorded.
 func (q *Queries) WorkspaceCreateAttempted(ctx context.Context, workspaceID string) (bool, error) {
 	row := q.db.QueryRow(ctx, workspaceCreateAttempted, workspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const workspacePushReservationLive = `-- name: WorkspacePushReservationLive :one
+SELECT EXISTS (
+    SELECT 1 FROM workspace_push_reservations r
+    JOIN workspaces w ON w.id = r.workspace_id
+    JOIN sessions s ON s.id = w.id AND s.archived_at IS NULL
+        AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+    JOIN task_attempts a ON a.id = r.attempt_id AND a.state IN ('creating', 'active')
+    JOIN tasks t ON t.id = a.task_id AND t.current_attempt_id = a.id
+        AND t.status NOT IN ('completed', 'failed', 'cancelled')
+    JOIN workspace_writer_claims c ON c.attempt_id = a.id AND c.held AND c.generation = a.writer_generation
+        AND c.owner_id = w.user_id AND c.branch = w.branch
+    WHERE r.workspace_id = $1 AND r.state <> 'revoked'
+        AND (r.state = 'published' OR r.expires_at > clock_timestamp())
+        AND NOT EXISTS (SELECT 1 FROM workspace_ops o WHERE o.workspace_id = w.id AND
+            (o.kind = 'delete' OR (o.kind = 'create' AND o.state IN ('rejected', 'gave_up', 'cancelled'))))
+)
+`
+
+func (q *Queries) WorkspacePushReservationLive(ctx context.Context, workspaceID string) (bool, error) {
+	row := q.db.QueryRow(ctx, workspacePushReservationLive, workspaceID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

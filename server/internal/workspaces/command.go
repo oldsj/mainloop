@@ -13,8 +13,10 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/pushgate"
 )
 
 const (
@@ -32,9 +34,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) (*Service, er
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	s := &Service{
 		Pool: pool, Kagent: client, Providers: reg, Config: cfg, Log: log, OwnerID: cfg.Identity.OwnerID,
-	}, nil
+	}
+	if cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "" {
+		upstream, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
+		if err != nil {
+			return nil, err
+		}
+		s.GitPush = &GitPush{Upstream: upstream, Origin: cfg.Git.PushOrigin}
+	}
+	return s, nil
 }
 
 // RunSweepOrphans lists the kagent Sessions Mainloop created and no longer references. It deletes

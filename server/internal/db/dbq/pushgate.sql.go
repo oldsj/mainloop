@@ -237,7 +237,7 @@ func (q *Queries) GetPushPublication(ctx context.Context, id string) (GitPublica
 }
 
 const getPushWorkspace = `-- name: GetPushWorkspace :one
-SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id::text AS native_session_id, b.role, b.mcp_grant_kind,
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.git_read_decided, w.git_read_credential, w.git_push_decided, w.git_push_credential, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id::text AS native_session_id, b.role, b.mcp_grant_kind,
        e.repository, p.default_branch, p.full_name,
        c.generation, c.attempt_id, c.binding_id AS claim_binding_id
 FROM workspaces w
@@ -248,6 +248,8 @@ JOIN projects p ON p.id = w.project_id AND p.user_id = w.user_id AND lower(p.ful
 JOIN workspace_writer_claims c ON c.owner_id = w.user_id AND c.repository = e.repository
     AND c.branch = w.branch AND c.held
 WHERE w.id = $1 AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+    AND NOT EXISTS (SELECT 1 FROM workspace_push_reservations r WHERE r.workspace_id = w.id
+        AND (r.state = 'revoked' OR (r.state = 'planned' AND r.expires_at <= clock_timestamp())))
     AND b.kagent_deleted_at IS NULL AND b.kagent_session_id IS NOT NULL
     AND b.mcp_grant_kind = 'workspace' AND b.role IN ('agent', 'supervisor', 'child')
     AND ((b.role = 'agent' AND c.binding_id = w.id AND c.attempt_id IS NULL)
@@ -288,6 +290,8 @@ type GetPushWorkspaceRow struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -323,6 +327,8 @@ func (q *Queries) GetPushWorkspace(ctx context.Context, id string) (GetPushWorks
 		&i.Environment,
 		&i.GitReadDecided,
 		&i.GitReadCredential,
+		&i.GitPushDecided,
+		&i.GitPushCredential,
 		&i.RequestID,
 		&i.LastActiveAt,
 		&i.IdleSuspendedAt,

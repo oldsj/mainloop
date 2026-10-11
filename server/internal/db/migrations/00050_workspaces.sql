@@ -36,6 +36,10 @@ CREATE TABLE workspaces (
     -- kagent refuses a replayed request id whose credentials differ. A protojson SessionCredential.
     git_read_decided boolean NOT NULL DEFAULT false,
     git_read_credential jsonb,
+    -- The push decision is also frozen before creation. Positive decisions have a separate
+    -- attempt-keyed reservation; this copy survives release for an identical cleanup replay.
+    git_push_decided boolean NOT NULL DEFAULT false,
+    git_push_credential jsonb,
     -- The CreateSession request id: stable for the life of the workspace.
     request_id text NOT NULL UNIQUE,
     -- Owner activity (resume, preview traffic). Delivery activity is read from the delivery ledger.
@@ -44,7 +48,8 @@ CREATE TABLE workspaces (
     idle_suspended_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (git_read_decided OR git_read_credential IS NULL)
+    CHECK (git_read_decided OR git_read_credential IS NULL),
+    CHECK (git_push_decided OR git_push_credential IS NULL)
 );
 CREATE INDEX workspaces_user ON workspaces (user_id, created_at DESC);
 

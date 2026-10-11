@@ -20,6 +20,16 @@ var receiveScratch struct {
 }
 
 func reserveScratch(l Limits) (func(), error) {
+	r, err := reserveScratchReservation(l)
+	if err != nil {
+		return nil, err
+	}
+	return r.release, nil
+}
+
+type scratchReservation struct{ size int64 }
+
+func reserveScratchReservation(l Limits) (*scratchReservation, error) {
 	size := min(l.BodyBytes, l.DiskBytes)
 	receiveScratch.Lock()
 	defer receiveScratch.Unlock()
@@ -27,11 +37,28 @@ func reserveScratch(l Limits) (func(), error) {
 		return nil, denial("admission_busy")
 	}
 	receiveScratch.used += size
-	return func() {
-		receiveScratch.Lock()
-		defer receiveScratch.Unlock()
-		receiveScratch.used -= size
-	}, nil
+	return &scratchReservation{size: size}, nil
+}
+
+// Validation reserves its complete per-quarantine disk allowance before fetching a seed or
+// starting Git. This conservatively serializes validation at the pod's disk budget, including
+// subprocess temporary files, while independent branches can still spool bodies concurrently.
+func (r *scratchReservation) validation(l Limits) error {
+	receiveScratch.Lock()
+	defer receiveScratch.Unlock()
+	if l.DiskBytes-r.size > l.DiskBytes-receiveScratch.used {
+		return denial("admission_busy")
+	}
+	receiveScratch.used += l.DiskBytes - r.size
+	r.size = l.DiskBytes
+	return nil
+}
+
+func (r *scratchReservation) release() {
+	receiveScratch.Lock()
+	defer receiveScratch.Unlock()
+	receiveScratch.used -= r.size
+	r.size = 0
 }
 
 func (s *Service) admit(ctx context.Context, c capability, a authority, owner string, l Limits) (string, error) {

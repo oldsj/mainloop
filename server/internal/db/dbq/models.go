@@ -732,6 +732,8 @@ type Workspace struct {
 	Environment        json.RawMessage
 	GitReadDecided     bool
 	GitReadCredential  json.RawMessage
+	GitPushDecided     bool
+	GitPushCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time
@@ -753,6 +755,21 @@ type WorkspaceOp struct {
 	FirstFailedAt  *time.Time
 	LastError      *string
 	QuietSince     *time.Time
+	CreatedAt      time.Time
+}
+
+type WorkspacePushReservation struct {
+	ID             string
+	IdempotencyKey string
+	WorkspaceID    string
+	AttemptID      string
+	Reference      json.RawMessage
+	State          string
+	ExpiresAt      time.Time
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
 	CreatedAt      time.Time
 }
 

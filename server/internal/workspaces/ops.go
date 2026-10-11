@@ -44,6 +44,8 @@ func (s *Service) Loop() reconcile.Loop {
 // Register adds the lifecycle loop and the periodic sweeps to the runner.
 func (s *Service) Register(r *reconcile.Runner) {
 	r.Add(s.Loop())
+	r.Add(s.pushEnrollmentLoop())
+	r.AddSweep(reconcile.Sweep{Name: "workspace-push-release", Every: time.Minute, Run: s.releaseEndedPush})
 	for _, sw := range s.sweeps() {
 		r.AddSweep(sw)
 	}
@@ -175,6 +177,11 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 		if err != nil || n == 0 {
 			return false, err
 		}
+		if kind == dbstate.OpCreate && (res.state == dbstate.OpRejected || res.state == dbstate.OpGaveUp || res.state == dbstate.OpCancelled) {
+			if err := revokePush(ctx, q, w.ID); err != nil {
+				return false, err
+			}
+		}
 		if res.bind != "" {
 			if n, err := q.BindWorkspaceSession(ctx, dbq.BindWorkspaceSessionParams{SessionID: w.ID, KagentSessionID: &res.bind}); err != nil {
 				return false, err
@@ -193,6 +200,9 @@ func (s *Service) finalize(ctx context.Context, c reconcile.Claim, op dbq.Worksp
 			}
 		}
 		if res.purge {
+			if err := revokePush(ctx, q, w.ID); err != nil {
+				return false, err
+			}
 			// The session row goes first: an Issue that planned a credential holds it FOR SHARE, so the
 			// delete waits for that plan to commit and the revoke after it sees the row.
 			if _, err := q.DeleteSession(ctx, w.ID); err != nil {
@@ -383,6 +393,13 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 	if ref != nil {
 		req.Credentials = append(req.Credentials, ref)
 	}
+	ref, err = s.gitPushForCreate(ctx, w)
+	if err != nil {
+		return result{err: err}
+	}
+	if ref != nil {
+		req.Credentials = append(req.Credentials, ref)
+	}
 	sess, err := s.Kagent.CreateSession(ctx, req)
 	if err != nil {
 		return result{err: err}
@@ -522,6 +539,13 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 		}
 		req.Credentials = s.Credentials.ReplayCredentials(w.ID, s.Config.MCPOrigin(), b.Role, b.MCPGrantKind)
 		ref, err := gitReadForReplay(w)
+		if err != nil {
+			return result{err: &transient{err}}
+		}
+		if ref != nil {
+			req.Credentials = append(req.Credentials, ref)
+		}
+		ref, err = frozenReference(w.GitPushCredential)
 		if err != nil {
 			return result{err: &transient{err}}
 		}

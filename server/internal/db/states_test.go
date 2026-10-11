@@ -117,6 +117,8 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.GitEnrollmentPlanned), string(dbstate.GitEnrollmentPublished), string(dbstate.GitEnrollmentRevoked))},
 		{"git_push_grants", "state", strs(
 			string(dbstate.GitGrantPlanned), string(dbstate.GitGrantPublished), string(dbstate.GitGrantRevoked))},
+		{"workspace_push_reservations", "state", strs(
+			string(dbstate.GitGrantPlanned), string(dbstate.GitGrantPublished), string(dbstate.GitGrantRevoked))},
 		{"health_collection", "state", strs(
 			string(dbstate.HealthPending), string(dbstate.HealthCollected), string(dbstate.HealthUnavailable))},
 		{"git_publications", "state", strs(

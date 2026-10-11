@@ -9,15 +9,27 @@ the read transport. `/health` and `/ready` remain listener probes.
 
 Scratch PostgreSQL, fake Kubernetes Secrets, a fake GitHub App API and local bare repositories
 prove branch creation, fast-forward, real smart-HTTP `git push`, replay, refusals and uncertainty
-resolution. This is local integration evidence. No live GitHub, Actor containment, production
-rollout or native creation caller integration is claimed.
+resolution. Workspace creation tests additionally prove creation-time attachment, replay,
+readiness and release; a credential read from a fake workspace Secret publishes through the real
+gate to a local bare repository. No live GitHub, Actor containment or production rollout is claimed.
 
-`pushgate.Reference` reserves the lowercase `authorization` reference before native creation.
-`Service.Enroll` freezes current authority and publishes the immutable Secret after readiness;
-replay reuses the same grant and credential. The existing native workspace creation code currently
-reserves read references only. Attaching the reserved push reference and invoking enrollment from
-native creation are caller integration work; the gate never adds references to an existing Session
-or publishes credentials on authentication. No owner policy API is added.
+Native workspace creation freezes the lowercase `authorization` reference from
+`pushgate.Reference` before `CreateSession`. Only a current code-task attempt with the exact held
+writer generation, repository and feature branch reserves one; standalone and default-branch
+workspaces freeze no push reference. The durable `workspace_push_reservations` intent uses the
+attempt as its idempotency key and the attempt's native creation request ID as its identity.
+Retries and deletion replays carry the saved reference, even after release or configuration changes.
+The native idempotent create checks the original request before returning or creating its Session.
+
+The workspace enrollment reconciler freshly reads the native Session on every retry. It requires
+READY, no operation and exactly one matching creation-time reference before calling
+`Service.Enroll`, which freezes the active task/writer authority and runtime and publishes the
+immutable Secret. No reference is added to an existing Session. A refused, abandoned, failed,
+deleted or expired creation releases the reservation; release also revokes any push grant and
+credential, with Secret deletion handled by the existing credential cleanup loop. The reservation
+expires after the configured workspace create retry window if enrollment never completes.
+Terminal reservations and their identities cannot reopen or change. No owner policy API is added,
+and authentication never issues credentials.
 
 ## Authority and policy
 
@@ -49,6 +61,14 @@ Admission also blocks writer release/transfer. Claims and reservations remain he
 scratch cleanup and are released on every outcome. A crashed handler's claim expires after the
 bounded request/dispatch/persistence window; stale handlers cannot reserve or dispatch a
 publication, and their cleanup cannot release a successor's claim.
+
+Before validation, the body reservation must expand to the full per-quarantine disk allowance.
+That allowance covers the body, seed pack, repository files and temporary Git output in the same
+process-wide budget. Validation is consequently serialized at the pod's disk budget; other
+branches can spool concurrently before validation, but insufficient validation capacity returns
+the same retryable `admission_busy` refusal. Capacity stays reserved through dispatch and cleanup.
+The eight-branch regression checks real quarantine sizes against this reservation, refuses the
+seven competing branches while validation is held, and proves they succeed after cleanup.
 
 Policy requires a known default branch. That branch, every previously observed default and
 protected patterns override the allowed patterns. Patterns match case sensitively, with `*`
@@ -87,7 +107,9 @@ scratch disk and 64 MiB free reserve. Spooling, validation and dispatch each hav
 The configured body and command limits are used by the listener. The fixed configuration disk
 budget is sized below the 3 GiB spool volume; configuration rejects a body limit above 2 GiB.
 Each copy stops at `min(body limit, disk budget) + 1` bytes, and checks remaining free space
-before each body/seed allocation to preserve the 64 MiB reserve. A non-commit branch head
+before each body/seed allocation to preserve the 64 MiB reserve. Seed limits include existing
+repository files. Before every Git subprocess, available space must cover its entire remaining
+reserved disk allowance plus the 64 MiB headroom. A non-commit branch head
 returns HTTP 403 with `commit_required`.
 
 Strict pkt-lines require lowercase SHA-1 OIDs, one command and supported report-status

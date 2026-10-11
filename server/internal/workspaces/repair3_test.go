@@ -105,7 +105,7 @@ func TestAnArchivedWorkspaceWithAnUnresolvedCreateIsDeleted(t *testing.T) {
 		_ = ss.ResolveCreates(bg)
 		n, err := h.dq.CountUnresolvedBindings(bg)
 		_, alive := h.fake.Session(landed.GetId())
-		return err == nil && n == 0 && !alive
+		return err == nil && n == 0 && !alive && h.workspaceCount() == 0
 	})
 	if _, alive := h.fake.Session(landed.GetId()); alive {
 		t.Error("the Session the lost-reply create made is still alive")

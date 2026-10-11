@@ -111,12 +111,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.Service.releaseAdmission(ctx, claim)
-	releaseScratch, err := reserveScratch(l)
+	scratch, err := reserveScratchReservation(l)
 	if err != nil {
 		s.fail(w, r, id, stage, err)
 		return
 	}
-	defer releaseScratch()
+	defer scratch.release()
 	stage = "body"
 	bctx, bcancel := context.WithTimeout(ctx, l.Timeout)
 	defer bcancel()
@@ -152,6 +152,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sp.close()
+	sp.scratch = scratch
 	if r.ContentLength >= 0 && sp.Size != r.ContentLength {
 		s.refuse(w, r, id, "http_body_length", stage)
 		return

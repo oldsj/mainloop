@@ -33,6 +33,10 @@ type Policy struct {
 	AllowedPatterns   []string `json:"allowed_patterns"`
 }
 
+// Allows lets creation callers reserve a reference only for a branch the stored policy permits.
+// Enrollment and each publication still recheck the policy and fresh repository metadata.
+func (p Policy) Allows(branch string) bool { return p.permits(branch) == nil }
+
 func (p Policy) permits(branch string) error {
 	if !gitref.Valid(p.DefaultBranch) {
 		return denial("metadata_unavailable")

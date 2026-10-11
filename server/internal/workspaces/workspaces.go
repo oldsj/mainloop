@@ -63,6 +63,9 @@ type Service struct {
 	// GitRead enrolls workspaces for git read and adds the capability to their Sessions. Nil
 	// creates Sessions without it.
 	GitRead *GitRead
+	// GitPush reserves creation-time references for writable task attempts. Enrollment waits for
+	// the task's active writer and a freshly confirmed native runtime.
+	GitPush *GitPush
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.

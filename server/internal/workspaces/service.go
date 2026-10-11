@@ -590,6 +590,9 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 			return nil, err
 		}
 		// The session row first, so an Issue holding it FOR SHARE finishes before the revoke runs.
+		if err := revokePush(ctx, q, id); err != nil {
+			return nil, err
+		}
 		if _, err := q.DeleteSession(ctx, id); err != nil {
 			return nil, err
 		}

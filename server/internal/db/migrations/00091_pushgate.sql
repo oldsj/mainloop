@@ -9,6 +9,39 @@ ALTER TABLE git_push_grants
     ADD COLUMN native_session_id text NOT NULL DEFAULT '',
     ADD COLUMN runtime jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE git_publications ADD COLUMN owner_id text NOT NULL DEFAULT '';
+-- Creation-time push attachment is an intent, keyed by the task attempt. Keep the identity after
+-- workspace deletion so a repeated attempt cannot reserve a different reference or workspace.
+CREATE TABLE workspace_push_reservations (
+    id text PRIMARY KEY,
+    idempotency_key text NOT NULL UNIQUE,
+    workspace_id text NOT NULL UNIQUE,
+    attempt_id text NOT NULL UNIQUE,
+    reference jsonb NOT NULL,
+    state text NOT NULL DEFAULT 'planned' CHECK (state IN ('planned', 'published', 'revoked')),
+    expires_at timestamptz NOT NULL,
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX workspace_push_reservations_claim ON workspace_push_reservations (next_attempt_at, id)
+WHERE state = 'planned';
+-- +goose StatementBegin
+CREATE FUNCTION workspace_push_reservation_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF ROW(OLD.id, OLD.idempotency_key, OLD.workspace_id, OLD.attempt_id, OLD.reference)
+       IS DISTINCT FROM ROW(NEW.id, NEW.idempotency_key, NEW.workspace_id, NEW.attempt_id, NEW.reference)
+       OR (OLD.state <> NEW.state AND NOT (
+           (OLD.state = 'planned' AND NEW.state IN ('published', 'revoked')) OR
+           (OLD.state = 'published' AND NEW.state = 'revoked'))) THEN
+        RAISE EXCEPTION 'push reservation identity or terminal state immutable';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER workspace_push_reservation_identity BEFORE UPDATE ON workspace_push_reservations
+FOR EACH ROW EXECUTE FUNCTION workspace_push_reservation_identity();
 -- Admission precedes reading a body, including the bounded probe. Expired rows can be replaced
 -- after a crashed handler; request IDs prevent its eventual cleanup from releasing a successor.
 CREATE TABLE git_push_admissions (
@@ -84,6 +117,8 @@ CREATE TRIGGER pushgate_publication_identity BEFORE UPDATE ON git_publications
 FOR EACH ROW EXECUTE FUNCTION pushgate_publication_identity();
 
 -- +goose Down
+DROP TABLE workspace_push_reservations;
+DROP FUNCTION workspace_push_reservation_identity();
 DROP TRIGGER pushgate_publication_identity ON git_publications;
 DROP FUNCTION pushgate_publication_identity();
 DROP INDEX git_publications_confirmed_body;

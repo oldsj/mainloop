@@ -36,6 +36,79 @@ UPDATE workspaces SET git_read_decided = true, git_read_credential = $2
 WHERE id = $1 AND NOT git_read_decided
 RETURNING git_read_decided, git_read_credential;
 
+-- name: FreezeWorkspaceGitPush :one
+UPDATE workspaces SET git_push_decided = true, git_push_credential = $2
+WHERE id = $1 AND NOT git_push_decided
+RETURNING git_push_credential;
+
+-- name: GetWorkspacePushAttempt :one
+-- T1's request identity locates the attempt before the caller attaches the returned workspace.
+-- Standalone workspaces, default branches, stale attempts and lost writers get no reference.
+SELECT a.id AS attempt_id
+FROM workspaces w
+JOIN sessions s ON s.id = w.id AND s.archived_at IS NULL
+    AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+JOIN task_attempts a ON a.workspace_request_id = w.request_id AND a.state IN ('creating', 'active')
+JOIN tasks t ON t.id = a.task_id AND t.current_attempt_id = a.id AND t.mode = 'code'
+    AND t.owner_id = w.user_id AND t.project_id = w.project_id AND t.checkout_branch = w.branch
+    AND t.status NOT IN ('completed', 'failed', 'cancelled')
+JOIN projects p ON p.id = w.project_id AND p.user_id = w.user_id
+    AND p.default_branch <> '' AND w.branch <> p.default_branch
+JOIN workspace_writer_claims c ON c.attempt_id = a.id AND c.held
+    AND c.owner_id = w.user_id AND c.repository = lower(p.full_name) AND c.branch = w.branch
+    AND c.generation = a.writer_generation
+WHERE w.id = $1
+    AND (t.parent_task_id IS NULL OR EXISTS (
+        SELECT 1 FROM tasks parent JOIN task_attempts pa ON pa.id = parent.current_attempt_id
+        WHERE parent.id = t.parent_task_id AND parent.owner_id = t.owner_id
+            AND parent.status NOT IN ('completed', 'failed', 'cancelled') AND pa.state = 'active'))
+FOR SHARE OF s, a, t, p, c;
+
+-- name: InsertWorkspacePushReservation :exec
+INSERT INTO workspace_push_reservations (id, idempotency_key, workspace_id, attempt_id, reference, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: GetWorkspacePushReservation :one
+SELECT * FROM workspace_push_reservations WHERE workspace_id = $1;
+
+-- name: PublishWorkspacePushReservation :execrows
+UPDATE workspace_push_reservations SET state = 'published', lease_owner = NULL, lease_until = NULL
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'planned'
+    AND expires_at > clock_timestamp();
+
+-- name: WorkspacePushReservationLive :one
+SELECT EXISTS (
+    SELECT 1 FROM workspace_push_reservations r
+    JOIN workspaces w ON w.id = r.workspace_id
+    JOIN sessions s ON s.id = w.id AND s.archived_at IS NULL
+        AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+    JOIN task_attempts a ON a.id = r.attempt_id AND a.state IN ('creating', 'active')
+    JOIN tasks t ON t.id = a.task_id AND t.current_attempt_id = a.id
+        AND t.status NOT IN ('completed', 'failed', 'cancelled')
+    JOIN workspace_writer_claims c ON c.attempt_id = a.id AND c.held AND c.generation = a.writer_generation
+        AND c.owner_id = w.user_id AND c.branch = w.branch
+    WHERE r.workspace_id = $1 AND r.state <> 'revoked'
+        AND (r.state = 'published' OR r.expires_at > clock_timestamp())
+        AND NOT EXISTS (SELECT 1 FROM workspace_ops o WHERE o.workspace_id = w.id AND
+            (o.kind = 'delete' OR (o.kind = 'create' AND o.state IN ('rejected', 'gave_up', 'cancelled'))))
+);
+
+-- name: RevokeWorkspacePushReservation :exec
+UPDATE workspace_push_reservations SET state = 'revoked', lease_owner = NULL, lease_until = NULL
+WHERE workspace_id = $1 AND state <> 'revoked';
+
+-- name: ListLiveWorkspacePushReservations :many
+SELECT workspace_id FROM workspace_push_reservations WHERE state <> 'revoked' ORDER BY id LIMIT $1;
+
+-- name: RevokeWorkspacePushCredential :exec
+UPDATE credentials SET state = 'revoked', lease_owner = NULL, lease_until = NULL,
+    next_attempt_at = now(), revoked_at = now(), updated_at = now()
+WHERE binding_id = $1 AND kind = 'git_push' AND state IN ('planned', 'published');
+
+-- name: RevokeWorkspacePushGrant :exec
+UPDATE git_push_grants SET state = 'revoked', revoked_at = now(), updated_at = now()
+WHERE workspace_id = $1 AND state <> 'revoked';
+
 -- name: BumpWorkspace :one
 UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING *;
 
