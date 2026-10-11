@@ -140,7 +140,7 @@ SELECT EXISTS (SELECT 1 FROM task_reports WHERE task_id = $1 AND outcome = 'comp
 -- Event deliveries
 
 -- name: InsertTaskEventDelivery :exec
-INSERT INTO task_event_deliveries (report_id, recipient_key) VALUES ($1, $2);
+INSERT INTO task_event_deliveries (id, report_id, recipient_key) VALUES ($1, $2, $3);
 
 -- name: ListTaskEventDeliveries :many
 SELECT * FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key;
@@ -154,3 +154,184 @@ UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND ver
 -- name: BlockRequestedCreateOps :exec
 UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
 WHERE task_id = $1 AND kind = 'create' AND state = 'requested';
+
+-- Provisioning and settlement. The attempt, the task's pointer to it and the writer claim change
+-- in one transaction under the task row lock.
+
+-- name: InsertTaskAttempt :one
+INSERT INTO task_attempts (
+    id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+)
+RETURNING *;
+
+-- name: NextAttemptNumber :one
+SELECT (coalesce(max(number), 0) + 1)::int FROM task_attempts WHERE task_id = $1;
+
+-- The native session of a code attempt, once the workspace exists. The environment is filled once.
+-- name: AttachAttemptSession :one
+UPDATE task_attempts
+SET session_id = $2, binding_id = $2, workspace_id = $2,
+    environment = coalesce(environment, sqlc.narg(environment)::jsonb), updated_at = now()
+WHERE id = $1 AND state = 'creating' AND (session_id IS NULL OR session_id = $2)
+RETURNING *;
+
+-- name: SetAttemptBrief :exec
+UPDATE task_attempts SET brief_delivery_id = $2, updated_at = now() WHERE id = $1;
+
+-- Moves an attempt along an edge of the attempt table. The from state is part of the match, so a
+-- concurrent move makes this return no row.
+-- name: MoveAttempt :one
+UPDATE task_attempts
+SET state = sqlc.arg(to_state), capacity_held = sqlc.arg(capacity_held), updated_at = now(),
+    evidence_refs = CASE WHEN sqlc.narg(evidence_ref)::text IS NULL THEN evidence_refs
+                         ELSE array_append(evidence_refs, sqlc.narg(evidence_ref)::text) END
+WHERE id = sqlc.arg(id) AND state = sqlc.arg(from_state)
+RETURNING *;
+
+-- name: ListUnsettledAttempts :many
+-- Attempts that still hold a runtime although their task has ended, and attempts stuck draining or
+-- fenced: the settle sweep finishes them.
+SELECT a.* FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE (a.state IN ('draining', 'fenced') OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
+  AND a.updated_at < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8)
+ORDER BY a.updated_at, a.id
+LIMIT $1;
+
+-- name: SetTaskAttempt :one
+UPDATE tasks
+SET current_attempt_id = sqlc.narg(current_attempt_id), status = sqlc.arg(status), reason = sqlc.narg(reason),
+    accepted_environment = coalesce(accepted_environment, sqlc.narg(accepted_environment)::jsonb),
+    decision_attempt_id = CASE WHEN sqlc.arg(status) = 'blocked' THEN decision_attempt_id END,
+    decision_report_id = CASE WHEN sqlc.arg(status) = 'blocked' THEN decision_report_id END,
+    decision_action = CASE WHEN sqlc.arg(status) = 'blocked' THEN decision_action END,
+    version = version + 1, updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- Capacity: attempts that still hold a slot, plus tasks not yet given an attempt.
+-- name: CountParentCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.parent_task_id = $2
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
+
+-- name: CountGlobalCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)));
+
+-- Writer claims. A task claim is keyed by its attempt and leaves binding_id empty.
+
+-- name: ClaimTaskWriter :one
+INSERT INTO workspace_writer_claims (owner_id, repository, branch, generation, attempt_id, held)
+VALUES ($1, $2, $3, 1, $4, true)
+ON CONFLICT (owner_id, repository, branch) DO UPDATE
+SET generation = workspace_writer_claims.generation + 1, attempt_id = EXCLUDED.attempt_id, binding_id = NULL,
+    held = true, fence_evidence_ref = NULL, fenced_at = NULL
+WHERE NOT workspace_writer_claims.held
+RETURNING generation;
+
+-- name: GetTaskWriterClaim :one
+SELECT * FROM workspace_writer_claims WHERE attempt_id = $1;
+
+-- Releases the claim by compare-and-swap on the generation: a claim already moved on is left alone.
+-- name: ReleaseTaskWriter :execrows
+UPDATE workspace_writer_claims
+SET held = false, fence_evidence_ref = $3, fenced_at = now()
+WHERE attempt_id = $1 AND generation = $2 AND held;
+
+-- Operations driven by the reconcile loop. Every write is fenced on the claim.
+
+-- name: GetTaskOperationByID :one
+SELECT * FROM task_operations WHERE id = $1;
+
+-- name: AdvanceTaskOperation :one
+UPDATE task_operations
+SET state = sqlc.arg(state), last_confirmed_step = sqlc.arg(step), reason = sqlc.narg(reason),
+    attempt_id = coalesce(sqlc.narg(attempt_id), attempt_id),
+    target_attempt_id = coalesce(sqlc.narg(target_attempt_id), target_attempt_id),
+    updated_at = now()
+WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
+RETURNING *;
+
+-- name: SetTaskOperationSource :exec
+UPDATE task_operations SET source_attempt_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: OpenOperationsForTask :one
+SELECT count(*) FROM task_operations WHERE task_id = $1 AND state NOT IN ('completed', 'blocked');
+
+-- Event deliveries.
+
+-- name: GetTaskEventDelivery :one
+SELECT * FROM task_event_deliveries WHERE id = $1;
+
+-- name: CountOpenEventDeliveries :one
+SELECT count(*) FROM task_event_deliveries d
+JOIN task_reports r ON r.id = d.report_id
+WHERE r.task_id = $1 AND d.state IN ('pending', 'queued');
+
+-- name: GetTaskReport :one
+SELECT * FROM task_reports WHERE id = $1;
+
+-- The delivery's target and message id are written together with its first claim, so a replay
+-- finds the message id the ledger may already hold.
+-- name: PrepareTaskEventDelivery :one
+UPDATE task_event_deliveries
+SET target_attempt_id = sqlc.narg(target_attempt_id), delivery_id = sqlc.arg(delivery_id),
+    sends = sends + 1, updated_at = now()
+WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
+  AND delivery_id IS NULL
+RETURNING *;
+
+-- A message the ledger gave up on is recorded again under a new id.
+-- name: ResendTaskEventDelivery :one
+UPDATE task_event_deliveries
+SET delivery_id = sqlc.arg(delivery_id), state = 'pending', sends = sends + 1, updated_at = now()
+WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
+RETURNING *;
+
+-- name: SetTaskEventDeliveryState :one
+UPDATE task_event_deliveries
+SET state = sqlc.arg(state), updated_at = now(), lease_owner = NULL, lease_until = NULL
+WHERE id = sqlc.arg(id) AND lease_owner = sqlc.arg(lease_owner) AND attempts = sqlc.arg(attempts)
+RETURNING *;
+
+-- Projection (GitHub observation of the task's pull request).
+
+-- name: ListProjectionCandidates :many
+-- Code tasks that are not final and have a branch to look at, stalest first.
+SELECT t.*, p.full_name AS project_full_name
+FROM tasks t
+JOIN projects p ON p.id = t.project_id
+WHERE t.mode = 'code' AND t.status NOT IN ('completed', 'failed', 'cancelled')
+  AND t.current_attempt_id IS NOT NULL
+  AND (t.projected_at IS NULL OR t.projected_at < now() - make_interval(secs => sqlc.arg(stale_seconds)::float8))
+ORDER BY t.projected_at NULLS FIRST, t.id
+LIMIT $1;
+
+-- name: SetTaskProjection :one
+UPDATE tasks
+SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6, ci_head_sha = $7,
+    projected_at = now(), version = version + 1, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- Refreshes the observation time without a new version or event.
+-- name: TouchTaskProjection :exec
+UPDATE tasks SET projected_at = now() WHERE id = $1;
+
+-- Workspaces made for an attempt whose create was interrupted before the attempt recorded them.
+-- name: FindUnattachedWorkspace :one
+SELECT w.id FROM workspaces w
+WHERE w.user_id = $1 AND w.project_id = $2 AND w.branch = $3 AND w.created_at >= $4
+  AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.workspace_id = w.id)
+ORDER BY w.created_at, w.id
+LIMIT 1;
+
+-- name: SetBindingRole :one
+UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING *;

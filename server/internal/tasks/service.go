@@ -714,7 +714,7 @@ func (s *Service) applyReport(ctx context.Context, q *dbq.Queries, t dbq.Task, i
 		recipients = append(recipients, "main")
 	}
 	for _, r := range recipients {
-		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ReportID: reportID, RecipientKey: r}); err != nil {
+		if err := q.InsertTaskEventDelivery(ctx, dbq.InsertTaskEventDeliveryParams{ID: uuid.NewString(), ReportID: reportID, RecipientKey: r}); err != nil {
 			return t, report, err
 		}
 	}

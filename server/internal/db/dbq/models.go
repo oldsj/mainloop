@@ -463,6 +463,13 @@ type Task struct {
 	CheckoutBranch      *string
 	CheckoutRef         *string
 	CheckoutDepth       *int32
+	PrNumber            *int32
+	PrUrl               *string
+	PrHeadSha           *string
+	PrState             string
+	CiState             string
+	CiHeadSha           *string
+	ProjectedAt         *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -511,11 +518,17 @@ type TaskAttempt struct {
 }
 
 type TaskEventDelivery struct {
+	ID              string
 	ReportID        string
 	RecipientKey    string
 	TargetAttemptID *string
 	DeliveryID      *string
 	State           dbstate.TaskDeliveryState
+	Sends           int32
+	Attempts        int32
+	NextAttemptAt   time.Time
+	LeaseOwner      *string
+	LeaseUntil      *time.Time
 	UpdatedAt       time.Time
 }
 
@@ -536,6 +549,10 @@ type TaskOperation struct {
 	CheckpointRef     *string
 	ManifestRef       *string
 	Reason            *dbstate.TaskReason
+	Attempts          int32
+	NextAttemptAt     time.Time
+	LeaseOwner        *string
+	LeaseUntil        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }

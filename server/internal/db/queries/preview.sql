@@ -3,8 +3,9 @@
 -- name: GetPreviewTarget :one
 -- The owner's unarchived workspace with a live Session: the only thing a preview may reach. A
 -- workspace that belongs to a task attempt is reachable only while that attempt is active and the
--- task's current one; a fenced, superseded or finished attempt no longer owns it. This is a read,
--- not a lock: the dial checks again.
+-- task's current one, the task is not final, and (for a code attempt) it still holds the branch's
+-- writer claim at the generation it was admitted with; a fenced, superseded or finished attempt, a
+-- final task and a lost claim no longer own it. This is a read, not a lock: the dial checks again.
 SELECT w.id, w.ports, b.kagent_session_id::text AS kagent_session_id
 FROM workspaces w
 JOIN sessions s ON s.id = w.id
@@ -14,7 +15,11 @@ WHERE w.id = $1 AND w.user_id = $2 AND s.archived_at IS NULL
   AND NOT EXISTS (
     SELECT 1 FROM task_attempts a JOIN tasks t ON t.id = a.task_id
     WHERE (a.session_id = w.id OR a.binding_id = w.id OR a.workspace_id = w.id)
-      AND NOT (a.state = 'active' AND coalesce(t.current_attempt_id = a.id, false))
+      AND (NOT (a.state = 'active' AND coalesce(t.current_attempt_id = a.id, false))
+           OR t.status IN ('completed', 'failed', 'cancelled')
+           OR (a.writer_generation IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM workspace_writer_claims c
+                WHERE c.attempt_id = a.id AND c.held AND c.generation = a.writer_generation)))
   );
 
 -- name: UpsertPreviewLease :exec

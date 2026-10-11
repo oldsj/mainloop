@@ -8,9 +8,124 @@ package dbq
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
+
+const advanceTaskOperation = `-- name: AdvanceTaskOperation :one
+UPDATE task_operations
+SET state = $1, last_confirmed_step = $2, reason = $3,
+    attempt_id = coalesce($4, attempt_id),
+    target_attempt_id = coalesce($5, target_attempt_id),
+    updated_at = now()
+WHERE id = $6 AND lease_owner = $7 AND attempts = $8
+RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+`
+
+type AdvanceTaskOperationParams struct {
+	State           dbstate.TaskOpState
+	Step            dbstate.TaskOpState
+	Reason          *dbstate.TaskReason
+	AttemptID       *string
+	TargetAttemptID *string
+	ID              string
+	LeaseOwner      *string
+	Attempts        int32
+}
+
+func (q *Queries) AdvanceTaskOperation(ctx context.Context, arg AdvanceTaskOperationParams) (TaskOperation, error) {
+	row := q.db.QueryRow(ctx, advanceTaskOperation,
+		arg.State,
+		arg.Step,
+		arg.Reason,
+		arg.AttemptID,
+		arg.TargetAttemptID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+	)
+	var i TaskOperation
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.PrincipalKey,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.RequestPayload,
+		&i.Kind,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.State,
+		&i.LastConfirmedStep,
+		&i.SourceAttemptID,
+		&i.TargetAttemptID,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const attachAttemptSession = `-- name: AttachAttemptSession :one
+UPDATE task_attempts
+SET session_id = $2, binding_id = $2, workspace_id = $2,
+    environment = coalesce(environment, $3::jsonb), updated_at = now()
+WHERE id = $1 AND state = 'creating' AND (session_id IS NULL OR session_id = $2)
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, created_at, updated_at
+`
+
+type AttachAttemptSessionParams struct {
+	ID          string
+	SessionID   *string
+	Environment json.RawMessage
+}
+
+// The native session of a code attempt, once the workspace exists. The environment is filled once.
+func (q *Queries) AttachAttemptSession(ctx context.Context, arg AttachAttemptSessionParams) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, attachAttemptSession, arg.ID, arg.SessionID, arg.Environment)
+	var i TaskAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Number,
+		&i.ProfileID,
+		&i.NativeProvider,
+		&i.ConfigurationRevision,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Role,
+		&i.Depth,
+		&i.State,
+		&i.CapacityHeld,
+		&i.SessionID,
+		&i.BindingID,
+		&i.WorkspaceID,
+		&i.WriterGeneration,
+		&i.BriefDeliveryID,
+		&i.PredecessorID,
+		&i.SuccessorID,
+		&i.EvidenceRefs,
+		&i.ResultRef,
+		&i.Environment,
+		&i.InitialRef,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.SupersededAt,
+		&i.ArchivedAt,
+		&i.NativeDeletedAt,
+		&i.RetentionHold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
 
 const blockRequestedCreateOps = `-- name: BlockRequestedCreateOps :exec
 UPDATE task_operations SET state = 'blocked', reason = NULL, updated_at = now()
@@ -22,6 +137,51 @@ WHERE task_id = $1 AND kind = 'create' AND state = 'requested'
 func (q *Queries) BlockRequestedCreateOps(ctx context.Context, taskID *string) error {
 	_, err := q.db.Exec(ctx, blockRequestedCreateOps, taskID)
 	return err
+}
+
+const claimTaskWriter = `-- name: ClaimTaskWriter :one
+
+INSERT INTO workspace_writer_claims (owner_id, repository, branch, generation, attempt_id, held)
+VALUES ($1, $2, $3, 1, $4, true)
+ON CONFLICT (owner_id, repository, branch) DO UPDATE
+SET generation = workspace_writer_claims.generation + 1, attempt_id = EXCLUDED.attempt_id, binding_id = NULL,
+    held = true, fence_evidence_ref = NULL, fenced_at = NULL
+WHERE NOT workspace_writer_claims.held
+RETURNING generation
+`
+
+type ClaimTaskWriterParams struct {
+	OwnerID    string
+	Repository string
+	Branch     string
+	AttemptID  *string
+}
+
+// Writer claims. A task claim is keyed by its attempt and leaves binding_id empty.
+func (q *Queries) ClaimTaskWriter(ctx context.Context, arg ClaimTaskWriterParams) (int32, error) {
+	row := q.db.QueryRow(ctx, claimTaskWriter,
+		arg.OwnerID,
+		arg.Repository,
+		arg.Branch,
+		arg.AttemptID,
+	)
+	var generation int32
+	err := row.Scan(&generation)
+	return generation, err
+}
+
+const countGlobalCapacity = `-- name: CountGlobalCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.parent_task_id IS NOT NULL
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)))
+`
+
+func (q *Queries) CountGlobalCapacity(ctx context.Context, ownerID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countGlobalCapacity, ownerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countLiveChildTasks = `-- name: CountLiveChildTasks :one
@@ -39,6 +199,67 @@ func (q *Queries) CountLiveChildTasks(ctx context.Context, arg CountLiveChildTas
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countOpenEventDeliveries = `-- name: CountOpenEventDeliveries :one
+SELECT count(*) FROM task_event_deliveries d
+JOIN task_reports r ON r.id = d.report_id
+WHERE r.task_id = $1 AND d.state IN ('pending', 'queued')
+`
+
+func (q *Queries) CountOpenEventDeliveries(ctx context.Context, taskID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenEventDeliveries, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countParentCapacity = `-- name: CountParentCapacity :one
+SELECT count(*) FROM tasks t
+WHERE t.owner_id = $1 AND t.parent_task_id = $2
+  AND (EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id AND a.capacity_held)
+       OR (t.status NOT IN ('completed', 'failed', 'cancelled') AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id = t.id)))
+`
+
+type CountParentCapacityParams struct {
+	OwnerID      string
+	ParentTaskID *string
+}
+
+// Capacity: attempts that still hold a slot, plus tasks not yet given an attempt.
+func (q *Queries) CountParentCapacity(ctx context.Context, arg CountParentCapacityParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countParentCapacity, arg.OwnerID, arg.ParentTaskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const findUnattachedWorkspace = `-- name: FindUnattachedWorkspace :one
+SELECT w.id FROM workspaces w
+WHERE w.user_id = $1 AND w.project_id = $2 AND w.branch = $3 AND w.created_at >= $4
+  AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.workspace_id = w.id)
+ORDER BY w.created_at, w.id
+LIMIT 1
+`
+
+type FindUnattachedWorkspaceParams struct {
+	UserID    string
+	ProjectID string
+	Branch    string
+	CreatedAt time.Time
+}
+
+// Workspaces made for an attempt whose create was interrupted before the attempt recorded them.
+func (q *Queries) FindUnattachedWorkspace(ctx context.Context, arg FindUnattachedWorkspaceParams) (string, error) {
+	row := q.db.QueryRow(ctx, findUnattachedWorkspace,
+		arg.UserID,
+		arg.ProjectID,
+		arg.Branch,
+		arg.CreatedAt,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getAttemptPrincipal = `-- name: GetAttemptPrincipal :one
@@ -95,7 +316,7 @@ func (q *Queries) GetAttemptPrincipal(ctx context.Context, bindingID *string) (G
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at FROM tasks WHERE id = $1 AND owner_id = $2
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE id = $1 AND owner_id = $2
 `
 
 type GetTaskParams struct {
@@ -131,6 +352,13 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) 
 		&i.CheckoutBranch,
 		&i.CheckoutRef,
 		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -193,8 +421,34 @@ func (q *Queries) GetTaskCurrentAttempt(ctx context.Context, id string) (*string
 	return current_attempt_id, err
 }
 
+const getTaskEventDelivery = `-- name: GetTaskEventDelivery :one
+
+SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at FROM task_event_deliveries WHERE id = $1
+`
+
+// Event deliveries.
+func (q *Queries) GetTaskEventDelivery(ctx context.Context, id string) (TaskEventDelivery, error) {
+	row := q.db.QueryRow(ctx, getTaskEventDelivery, id)
+	var i TaskEventDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ReportID,
+		&i.RecipientKey,
+		&i.TargetAttemptID,
+		&i.DeliveryID,
+		&i.State,
+		&i.Sends,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getTaskForUpdate = `-- name: GetTaskForUpdate :one
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE id = $1 AND owner_id = $2 FOR UPDATE
 `
 
 type GetTaskForUpdateParams struct {
@@ -230,6 +484,13 @@ func (q *Queries) GetTaskForUpdate(ctx context.Context, arg GetTaskForUpdatePara
 		&i.CheckoutBranch,
 		&i.CheckoutRef,
 		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -237,7 +498,7 @@ func (q *Queries) GetTaskForUpdate(ctx context.Context, arg GetTaskForUpdatePara
 }
 
 const getTaskOperation = `-- name: GetTaskOperation :one
-SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at FROM task_operations WHERE id = $1 AND owner_id = $2
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE id = $1 AND owner_id = $2
 `
 
 type GetTaskOperationParams struct {
@@ -265,6 +526,46 @@ func (q *Queries) GetTaskOperation(ctx context.Context, arg GetTaskOperationPara
 		&i.CheckpointRef,
 		&i.ManifestRef,
 		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTaskOperationByID = `-- name: GetTaskOperationByID :one
+
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE id = $1
+`
+
+// Operations driven by the reconcile loop. Every write is fenced on the claim.
+func (q *Queries) GetTaskOperationByID(ctx context.Context, id string) (TaskOperation, error) {
+	row := q.db.QueryRow(ctx, getTaskOperationByID, id)
+	var i TaskOperation
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.PrincipalKey,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.RequestPayload,
+		&i.Kind,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.State,
+		&i.LastConfirmedStep,
+		&i.SourceAttemptID,
+		&i.TargetAttemptID,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -272,7 +573,7 @@ func (q *Queries) GetTaskOperation(ctx context.Context, arg GetTaskOperationPara
 }
 
 const getTaskOperationByKey = `-- name: GetTaskOperationByKey :one
-SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at FROM task_operations WHERE owner_id = $1 AND principal_key = $2 AND request_id = $3
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE owner_id = $1 AND principal_key = $2 AND request_id = $3
 `
 
 type GetTaskOperationByKeyParams struct {
@@ -301,8 +602,35 @@ func (q *Queries) GetTaskOperationByKey(ctx context.Context, arg GetTaskOperatio
 		&i.CheckpointRef,
 		&i.ManifestRef,
 		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTaskReport = `-- name: GetTaskReport :one
+SELECT id, task_id, attempt_id, request_id, request_digest, summary, outcome, owner_action, evidence_refs, task_version, created_at FROM task_reports WHERE id = $1
+`
+
+func (q *Queries) GetTaskReport(ctx context.Context, id string) (TaskReport, error) {
+	row := q.db.QueryRow(ctx, getTaskReport, id)
+	var i TaskReport
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.AttemptID,
+		&i.RequestID,
+		&i.RequestDigest,
+		&i.Summary,
+		&i.Outcome,
+		&i.OwnerAction,
+		&i.EvidenceRefs,
+		&i.TaskVersion,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -335,6 +663,27 @@ func (q *Queries) GetTaskReportByRequest(ctx context.Context, arg GetTaskReportB
 	return i, err
 }
 
+const getTaskWriterClaim = `-- name: GetTaskWriterClaim :one
+SELECT owner_id, repository, branch, generation, attempt_id, binding_id, held, fence_evidence_ref, fenced_at FROM workspace_writer_claims WHERE attempt_id = $1
+`
+
+func (q *Queries) GetTaskWriterClaim(ctx context.Context, attemptID *string) (WorkspaceWriterClaim, error) {
+	row := q.db.QueryRow(ctx, getTaskWriterClaim, attemptID)
+	var i WorkspaceWriterClaim
+	err := row.Scan(
+		&i.OwnerID,
+		&i.Repository,
+		&i.Branch,
+		&i.Generation,
+		&i.AttemptID,
+		&i.BindingID,
+		&i.Held,
+		&i.FenceEvidenceRef,
+		&i.FencedAt,
+	)
+	return i, err
+}
+
 const hasCompletedReport = `-- name: HasCompletedReport :one
 SELECT EXISTS (SELECT 1 FROM task_reports WHERE task_id = $1 AND outcome = 'completed')
 `
@@ -355,7 +704,7 @@ INSERT INTO tasks (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'provisioning_unavailable'
 )
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
 `
 
 type InsertTaskParams struct {
@@ -423,6 +772,99 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, e
 		&i.CheckoutBranch,
 		&i.CheckoutRef,
 		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertTaskAttempt = `-- name: InsertTaskAttempt :one
+
+INSERT INTO task_attempts (
+    id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name,
+    role, depth, writer_generation, initial_ref, session_id, binding_id, workspace_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+)
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, created_at, updated_at
+`
+
+type InsertTaskAttemptParams struct {
+	ID                    string
+	TaskID                string
+	Number                int32
+	ProfileID             string
+	NativeProvider        dbstate.NativeProvider
+	ConfigurationRevision string
+	AgentNamespace        string
+	AgentName             string
+	Role                  dbstate.AttemptRole
+	Depth                 int32
+	WriterGeneration      *int32
+	InitialRef            *string
+	SessionID             *string
+	BindingID             *string
+	WorkspaceID           *string
+}
+
+// Provisioning and settlement. The attempt, the task's pointer to it and the writer claim change
+// in one transaction under the task row lock.
+func (q *Queries) InsertTaskAttempt(ctx context.Context, arg InsertTaskAttemptParams) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, insertTaskAttempt,
+		arg.ID,
+		arg.TaskID,
+		arg.Number,
+		arg.ProfileID,
+		arg.NativeProvider,
+		arg.ConfigurationRevision,
+		arg.AgentNamespace,
+		arg.AgentName,
+		arg.Role,
+		arg.Depth,
+		arg.WriterGeneration,
+		arg.InitialRef,
+		arg.SessionID,
+		arg.BindingID,
+		arg.WorkspaceID,
+	)
+	var i TaskAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Number,
+		&i.ProfileID,
+		&i.NativeProvider,
+		&i.ConfigurationRevision,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Role,
+		&i.Depth,
+		&i.State,
+		&i.CapacityHeld,
+		&i.SessionID,
+		&i.BindingID,
+		&i.WorkspaceID,
+		&i.WriterGeneration,
+		&i.BriefDeliveryID,
+		&i.PredecessorID,
+		&i.SuccessorID,
+		&i.EvidenceRefs,
+		&i.ResultRef,
+		&i.Environment,
+		&i.InitialRef,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.SupersededAt,
+		&i.ArchivedAt,
+		&i.NativeDeletedAt,
+		&i.RetentionHold,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -431,17 +873,18 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (Task, e
 
 const insertTaskEventDelivery = `-- name: InsertTaskEventDelivery :exec
 
-INSERT INTO task_event_deliveries (report_id, recipient_key) VALUES ($1, $2)
+INSERT INTO task_event_deliveries (id, report_id, recipient_key) VALUES ($1, $2, $3)
 `
 
 type InsertTaskEventDeliveryParams struct {
+	ID           string
 	ReportID     string
 	RecipientKey string
 }
 
 // Event deliveries
 func (q *Queries) InsertTaskEventDelivery(ctx context.Context, arg InsertTaskEventDeliveryParams) error {
-	_, err := q.db.Exec(ctx, insertTaskEventDelivery, arg.ReportID, arg.RecipientKey)
+	_, err := q.db.Exec(ctx, insertTaskEventDelivery, arg.ID, arg.ReportID, arg.RecipientKey)
 	return err
 }
 
@@ -453,7 +896,7 @@ INSERT INTO task_operations (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 )
-RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at
+RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type InsertTaskOperationParams struct {
@@ -507,6 +950,10 @@ func (q *Queries) InsertTaskOperation(ctx context.Context, arg InsertTaskOperati
 		&i.CheckpointRef,
 		&i.ManifestRef,
 		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -568,7 +1015,7 @@ func (q *Queries) InsertTaskReport(ctx context.Context, arg InsertTaskReportPara
 }
 
 const listChildTasks = `-- name: ListChildTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks WHERE owner_id = $1 AND parent_task_id = $2 ORDER BY created_at, id
 `
 
 type ListChildTasksParams struct {
@@ -610,8 +1057,126 @@ func (q *Queries) ListChildTasks(ctx context.Context, arg ListChildTasksParams) 
 			&i.CheckoutBranch,
 			&i.CheckoutRef,
 			&i.CheckoutDepth,
+			&i.PrNumber,
+			&i.PrUrl,
+			&i.PrHeadSha,
+			&i.PrState,
+			&i.CiState,
+			&i.CiHeadSha,
+			&i.ProjectedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectionCandidates = `-- name: ListProjectionCandidates :many
+
+SELECT t.id, t.owner_id, t.project_id, t.topic_id, t.parent_task_id, t.root_task_id, t.creator_binding_id, t.title, t.brief, t.mode, t.assigned_profile_id, t.selection_source, t.provider_constraint, t.accepted_environment, t.status, t.reason, t.decision_attempt_id, t.decision_report_id, t.decision_action, t.current_attempt_id, t.version, t.checkout_branch, t.checkout_ref, t.checkout_depth, t.pr_number, t.pr_url, t.pr_head_sha, t.pr_state, t.ci_state, t.ci_head_sha, t.projected_at, t.created_at, t.updated_at, p.full_name AS project_full_name
+FROM tasks t
+JOIN projects p ON p.id = t.project_id
+WHERE t.mode = 'code' AND t.status NOT IN ('completed', 'failed', 'cancelled')
+  AND t.current_attempt_id IS NOT NULL
+  AND (t.projected_at IS NULL OR t.projected_at < now() - make_interval(secs => $2::float8))
+ORDER BY t.projected_at NULLS FIRST, t.id
+LIMIT $1
+`
+
+type ListProjectionCandidatesParams struct {
+	Limit        int32
+	StaleSeconds float64
+}
+
+type ListProjectionCandidatesRow struct {
+	ID                  string
+	OwnerID             string
+	ProjectID           *string
+	TopicID             *string
+	ParentTaskID        *string
+	RootTaskID          string
+	CreatorBindingID    *string
+	Title               string
+	Brief               string
+	Mode                dbstate.TaskMode
+	AssignedProfileID   string
+	SelectionSource     dbstate.TaskSelection
+	ProviderConstraint  *string
+	AcceptedEnvironment json.RawMessage
+	Status              dbstate.TaskStatus
+	Reason              *dbstate.TaskReason
+	DecisionAttemptID   *string
+	DecisionReportID    *string
+	DecisionAction      *string
+	CurrentAttemptID    *string
+	Version             int32
+	CheckoutBranch      *string
+	CheckoutRef         *string
+	CheckoutDepth       *int32
+	PrNumber            *int32
+	PrUrl               *string
+	PrHeadSha           *string
+	PrState             string
+	CiState             string
+	CiHeadSha           *string
+	ProjectedAt         *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	ProjectFullName     string
+}
+
+// Projection (GitHub observation of the task's pull request).
+// Code tasks that are not final and have a branch to look at, stalest first.
+func (q *Queries) ListProjectionCandidates(ctx context.Context, arg ListProjectionCandidatesParams) ([]ListProjectionCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listProjectionCandidates, arg.Limit, arg.StaleSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectionCandidatesRow{}
+	for rows.Next() {
+		var i ListProjectionCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.TopicID,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.CreatorBindingID,
+			&i.Title,
+			&i.Brief,
+			&i.Mode,
+			&i.AssignedProfileID,
+			&i.SelectionSource,
+			&i.ProviderConstraint,
+			&i.AcceptedEnvironment,
+			&i.Status,
+			&i.Reason,
+			&i.DecisionAttemptID,
+			&i.DecisionReportID,
+			&i.DecisionAction,
+			&i.CurrentAttemptID,
+			&i.Version,
+			&i.CheckoutBranch,
+			&i.CheckoutRef,
+			&i.CheckoutDepth,
+			&i.PrNumber,
+			&i.PrUrl,
+			&i.PrHeadSha,
+			&i.PrState,
+			&i.CiState,
+			&i.CiHeadSha,
+			&i.ProjectedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ProjectFullName,
 		); err != nil {
 			return nil, err
 		}
@@ -716,7 +1281,7 @@ func (q *Queries) ListTaskAttempts(ctx context.Context, taskIds []string) ([]Tas
 }
 
 const listTaskEventDeliveries = `-- name: ListTaskEventDeliveries :many
-SELECT report_id, recipient_key, target_attempt_id, delivery_id, state, updated_at FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key
+SELECT id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at FROM task_event_deliveries WHERE report_id = $1 ORDER BY recipient_key
 `
 
 func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID string) ([]TaskEventDelivery, error) {
@@ -729,11 +1294,17 @@ func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID string) 
 	for rows.Next() {
 		var i TaskEventDelivery
 		if err := rows.Scan(
+			&i.ID,
 			&i.ReportID,
 			&i.RecipientKey,
 			&i.TargetAttemptID,
 			&i.DeliveryID,
 			&i.State,
+			&i.Sends,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -747,7 +1318,7 @@ func (q *Queries) ListTaskEventDeliveries(ctx context.Context, reportID string) 
 }
 
 const listTaskOperations = `-- name: ListTaskOperations :many
-SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at FROM task_operations WHERE task_id = ANY($1::text[]) ORDER BY task_id, created_at, id
+SELECT id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM task_operations WHERE task_id = ANY($1::text[]) ORDER BY task_id, created_at, id
 `
 
 func (q *Queries) ListTaskOperations(ctx context.Context, taskIds []string) ([]TaskOperation, error) {
@@ -776,6 +1347,10 @@ func (q *Queries) ListTaskOperations(ctx context.Context, taskIds []string) ([]T
 			&i.CheckpointRef,
 			&i.ManifestRef,
 			&i.Reason,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -826,7 +1401,7 @@ func (q *Queries) ListTaskReports(ctx context.Context, taskIds []string) ([]Task
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at FROM tasks
+SELECT id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at FROM tasks
 WHERE owner_id = $1
   AND ($2::text IS NULL OR project_id = $2)
   AND ($3::text IS NULL OR parent_task_id = $3)
@@ -873,6 +1448,81 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.CheckoutBranch,
 			&i.CheckoutRef,
 			&i.CheckoutDepth,
+			&i.PrNumber,
+			&i.PrUrl,
+			&i.PrHeadSha,
+			&i.PrState,
+			&i.CiState,
+			&i.CiHeadSha,
+			&i.ProjectedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnsettledAttempts = `-- name: ListUnsettledAttempts :many
+SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configuration_revision, a.agent_namespace, a.agent_name, a.role, a.depth, a.state, a.capacity_held, a.session_id, a.binding_id, a.workspace_id, a.writer_generation, a.brief_delivery_id, a.predecessor_id, a.successor_id, a.evidence_refs, a.result_ref, a.environment, a.initial_ref, a.checkpoint_ref, a.manifest_ref, a.superseded_at, a.archived_at, a.native_deleted_at, a.retention_hold, a.created_at, a.updated_at FROM task_attempts a
+JOIN tasks t ON t.id = a.task_id
+WHERE (a.state IN ('draining', 'fenced') OR (a.state IN ('creating', 'active') AND t.status IN ('completed', 'failed', 'cancelled')))
+  AND a.updated_at < now() - make_interval(secs => $2::float8)
+ORDER BY a.updated_at, a.id
+LIMIT $1
+`
+
+type ListUnsettledAttemptsParams struct {
+	Limit       int32
+	IdleSeconds float64
+}
+
+// Attempts that still hold a runtime although their task has ended, and attempts stuck draining or
+// fenced: the settle sweep finishes them.
+func (q *Queries) ListUnsettledAttempts(ctx context.Context, arg ListUnsettledAttemptsParams) ([]TaskAttempt, error) {
+	rows, err := q.db.Query(ctx, listUnsettledAttempts, arg.Limit, arg.IdleSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskAttempt{}
+	for rows.Next() {
+		var i TaskAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Number,
+			&i.ProfileID,
+			&i.NativeProvider,
+			&i.ConfigurationRevision,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.Role,
+			&i.Depth,
+			&i.State,
+			&i.CapacityHeld,
+			&i.SessionID,
+			&i.BindingID,
+			&i.WorkspaceID,
+			&i.WriterGeneration,
+			&i.BriefDeliveryID,
+			&i.PredecessorID,
+			&i.SuccessorID,
+			&i.EvidenceRefs,
+			&i.ResultRef,
+			&i.Environment,
+			&i.InitialRef,
+			&i.CheckpointRef,
+			&i.ManifestRef,
+			&i.SupersededAt,
+			&i.ArchivedAt,
+			&i.NativeDeletedAt,
+			&i.RetentionHold,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -942,6 +1592,212 @@ func (q *Queries) LockTaskRequest(ctx context.Context, key string) error {
 	return err
 }
 
+const moveAttempt = `-- name: MoveAttempt :one
+UPDATE task_attempts
+SET state = $1, capacity_held = $2, updated_at = now(),
+    evidence_refs = CASE WHEN $3::text IS NULL THEN evidence_refs
+                         ELSE array_append(evidence_refs, $3::text) END
+WHERE id = $4 AND state = $5
+RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, created_at, updated_at
+`
+
+type MoveAttemptParams struct {
+	ToState      dbstate.AttemptState
+	CapacityHeld bool
+	EvidenceRef  *string
+	ID           string
+	FromState    dbstate.AttemptState
+}
+
+// Moves an attempt along an edge of the attempt table. The from state is part of the match, so a
+// concurrent move makes this return no row.
+func (q *Queries) MoveAttempt(ctx context.Context, arg MoveAttemptParams) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, moveAttempt,
+		arg.ToState,
+		arg.CapacityHeld,
+		arg.EvidenceRef,
+		arg.ID,
+		arg.FromState,
+	)
+	var i TaskAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Number,
+		&i.ProfileID,
+		&i.NativeProvider,
+		&i.ConfigurationRevision,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Role,
+		&i.Depth,
+		&i.State,
+		&i.CapacityHeld,
+		&i.SessionID,
+		&i.BindingID,
+		&i.WorkspaceID,
+		&i.WriterGeneration,
+		&i.BriefDeliveryID,
+		&i.PredecessorID,
+		&i.SuccessorID,
+		&i.EvidenceRefs,
+		&i.ResultRef,
+		&i.Environment,
+		&i.InitialRef,
+		&i.CheckpointRef,
+		&i.ManifestRef,
+		&i.SupersededAt,
+		&i.ArchivedAt,
+		&i.NativeDeletedAt,
+		&i.RetentionHold,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const nextAttemptNumber = `-- name: NextAttemptNumber :one
+SELECT (coalesce(max(number), 0) + 1)::int FROM task_attempts WHERE task_id = $1
+`
+
+func (q *Queries) NextAttemptNumber(ctx context.Context, taskID string) (int32, error) {
+	row := q.db.QueryRow(ctx, nextAttemptNumber, taskID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const openOperationsForTask = `-- name: OpenOperationsForTask :one
+SELECT count(*) FROM task_operations WHERE task_id = $1 AND state NOT IN ('completed', 'blocked')
+`
+
+func (q *Queries) OpenOperationsForTask(ctx context.Context, taskID *string) (int64, error) {
+	row := q.db.QueryRow(ctx, openOperationsForTask, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const prepareTaskEventDelivery = `-- name: PrepareTaskEventDelivery :one
+UPDATE task_event_deliveries
+SET target_attempt_id = $1, delivery_id = $2,
+    sends = sends + 1, updated_at = now()
+WHERE id = $3 AND lease_owner = $4 AND attempts = $5
+  AND delivery_id IS NULL
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+`
+
+type PrepareTaskEventDeliveryParams struct {
+	TargetAttemptID *string
+	DeliveryID      *string
+	ID              string
+	LeaseOwner      *string
+	Attempts        int32
+}
+
+// The delivery's target and message id are written together with its first claim, so a replay
+// finds the message id the ledger may already hold.
+func (q *Queries) PrepareTaskEventDelivery(ctx context.Context, arg PrepareTaskEventDeliveryParams) (TaskEventDelivery, error) {
+	row := q.db.QueryRow(ctx, prepareTaskEventDelivery,
+		arg.TargetAttemptID,
+		arg.DeliveryID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+	)
+	var i TaskEventDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ReportID,
+		&i.RecipientKey,
+		&i.TargetAttemptID,
+		&i.DeliveryID,
+		&i.State,
+		&i.Sends,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const releaseTaskWriter = `-- name: ReleaseTaskWriter :execrows
+UPDATE workspace_writer_claims
+SET held = false, fence_evidence_ref = $3, fenced_at = now()
+WHERE attempt_id = $1 AND generation = $2 AND held
+`
+
+type ReleaseTaskWriterParams struct {
+	AttemptID        *string
+	Generation       int32
+	FenceEvidenceRef *string
+}
+
+// Releases the claim by compare-and-swap on the generation: a claim already moved on is left alone.
+func (q *Queries) ReleaseTaskWriter(ctx context.Context, arg ReleaseTaskWriterParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseTaskWriter, arg.AttemptID, arg.Generation, arg.FenceEvidenceRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resendTaskEventDelivery = `-- name: ResendTaskEventDelivery :one
+UPDATE task_event_deliveries
+SET delivery_id = $1, state = 'pending', sends = sends + 1, updated_at = now()
+WHERE id = $2 AND lease_owner = $3 AND attempts = $4
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+`
+
+type ResendTaskEventDeliveryParams struct {
+	DeliveryID *string
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+}
+
+// A message the ledger gave up on is recorded again under a new id.
+func (q *Queries) ResendTaskEventDelivery(ctx context.Context, arg ResendTaskEventDeliveryParams) (TaskEventDelivery, error) {
+	row := q.db.QueryRow(ctx, resendTaskEventDelivery,
+		arg.DeliveryID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+	)
+	var i TaskEventDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ReportID,
+		&i.RecipientKey,
+		&i.TargetAttemptID,
+		&i.DeliveryID,
+		&i.State,
+		&i.Sends,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setAttemptBrief = `-- name: SetAttemptBrief :exec
+UPDATE task_attempts SET brief_delivery_id = $2, updated_at = now() WHERE id = $1
+`
+
+type SetAttemptBriefParams struct {
+	ID              string
+	BriefDeliveryID *string
+}
+
+func (q *Queries) SetAttemptBrief(ctx context.Context, arg SetAttemptBriefParams) error {
+	_, err := q.db.Exec(ctx, setAttemptBrief, arg.ID, arg.BriefDeliveryID)
+	return err
+}
+
 const setAttemptResult = `-- name: SetAttemptResult :exec
 UPDATE task_attempts SET result_ref = $2, updated_at = now() WHERE id = $1
 `
@@ -956,11 +1812,166 @@ func (q *Queries) SetAttemptResult(ctx context.Context, arg SetAttemptResultPara
 	return err
 }
 
+const setBindingRole = `-- name: SetBindingRole :one
+UPDATE agent_bindings SET role = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_create_request_id
+`
+
+type SetBindingRoleParams struct {
+	SessionID string
+	Role      dbstate.BindingRole
+}
+
+func (q *Queries) SetBindingRole(ctx context.Context, arg SetBindingRoleParams) (AgentBinding, error) {
+	row := q.db.QueryRow(ctx, setBindingRole, arg.SessionID, arg.Role)
+	var i AgentBinding
+	err := row.Scan(
+		&i.SessionID,
+		&i.Kind,
+		&i.Role,
+		&i.MCPGrantKind,
+		&i.ParentSessionID,
+		&i.TopicID,
+		&i.KagentSessionID,
+		&i.KagentRequestID,
+		&i.Model,
+		&i.StandingHash,
+		&i.Turns,
+		&i.QueueHeld,
+		&i.ChildStartFailure,
+		&i.ReportedAt,
+		&i.KagentDeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentCreateRequestID,
+	)
+	return i, err
+}
+
+const setTaskAttempt = `-- name: SetTaskAttempt :one
+UPDATE tasks
+SET current_attempt_id = $1, status = $2, reason = $3,
+    accepted_environment = coalesce(accepted_environment, $4::jsonb),
+    decision_attempt_id = CASE WHEN $2 = 'blocked' THEN decision_attempt_id END,
+    decision_report_id = CASE WHEN $2 = 'blocked' THEN decision_report_id END,
+    decision_action = CASE WHEN $2 = 'blocked' THEN decision_action END,
+    version = version + 1, updated_at = now()
+WHERE id = $5
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
+`
+
+type SetTaskAttemptParams struct {
+	CurrentAttemptID    *string
+	Status              dbstate.TaskStatus
+	Reason              *dbstate.TaskReason
+	AcceptedEnvironment json.RawMessage
+	ID                  string
+}
+
+func (q *Queries) SetTaskAttempt(ctx context.Context, arg SetTaskAttemptParams) (Task, error) {
+	row := q.db.QueryRow(ctx, setTaskAttempt,
+		arg.CurrentAttemptID,
+		arg.Status,
+		arg.Reason,
+		arg.AcceptedEnvironment,
+		arg.ID,
+	)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setTaskEventDeliveryState = `-- name: SetTaskEventDeliveryState :one
+UPDATE task_event_deliveries
+SET state = $1, updated_at = now(), lease_owner = NULL, lease_until = NULL
+WHERE id = $2 AND lease_owner = $3 AND attempts = $4
+RETURNING id, report_id, recipient_key, target_attempt_id, delivery_id, state, sends, attempts, next_attempt_at, lease_owner, lease_until, updated_at
+`
+
+type SetTaskEventDeliveryStateParams struct {
+	State      dbstate.TaskDeliveryState
+	ID         string
+	LeaseOwner *string
+	Attempts   int32
+}
+
+func (q *Queries) SetTaskEventDeliveryState(ctx context.Context, arg SetTaskEventDeliveryStateParams) (TaskEventDelivery, error) {
+	row := q.db.QueryRow(ctx, setTaskEventDeliveryState,
+		arg.State,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+	)
+	var i TaskEventDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ReportID,
+		&i.RecipientKey,
+		&i.TargetAttemptID,
+		&i.DeliveryID,
+		&i.State,
+		&i.Sends,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setTaskOperationSource = `-- name: SetTaskOperationSource :exec
+UPDATE task_operations SET source_attempt_id = $2, updated_at = now() WHERE id = $1
+`
+
+type SetTaskOperationSourceParams struct {
+	ID              string
+	SourceAttemptID *string
+}
+
+func (q *Queries) SetTaskOperationSource(ctx context.Context, arg SetTaskOperationSourceParams) error {
+	_, err := q.db.Exec(ctx, setTaskOperationSource, arg.ID, arg.SourceAttemptID)
+	return err
+}
+
 const setTaskOperationState = `-- name: SetTaskOperationState :one
 UPDATE task_operations
 SET state = $2, last_confirmed_step = $3, reason = $4, updated_at = now()
 WHERE id = $1
-RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at
+RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type SetTaskOperationStateParams struct {
@@ -995,6 +2006,10 @@ func (q *Queries) SetTaskOperationState(ctx context.Context, arg SetTaskOperatio
 		&i.CheckpointRef,
 		&i.ManifestRef,
 		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1002,7 +2017,7 @@ func (q *Queries) SetTaskOperationState(ctx context.Context, arg SetTaskOperatio
 }
 
 const setTaskOperationTask = `-- name: SetTaskOperationTask :one
-UPDATE task_operations SET task_id = $2, updated_at = now() WHERE id = $1 RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, created_at, updated_at
+UPDATE task_operations SET task_id = $2, updated_at = now() WHERE id = $1 RETURNING id, owner_id, principal_key, request_id, request_digest, request_payload, kind, task_id, attempt_id, state, last_confirmed_step, source_attempt_id, target_attempt_id, checkpoint_ref, manifest_ref, reason, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type SetTaskOperationTaskParams struct {
@@ -1030,6 +2045,77 @@ func (q *Queries) SetTaskOperationTask(ctx context.Context, arg SetTaskOperation
 		&i.CheckpointRef,
 		&i.ManifestRef,
 		&i.Reason,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setTaskProjection = `-- name: SetTaskProjection :one
+UPDATE tasks
+SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6, ci_head_sha = $7,
+    projected_at = now(), version = version + 1, updated_at = now()
+WHERE id = $1
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
+`
+
+type SetTaskProjectionParams struct {
+	ID        string
+	PrNumber  *int32
+	PrUrl     *string
+	PrHeadSha *string
+	PrState   string
+	CiState   string
+	CiHeadSha *string
+}
+
+func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionParams) (Task, error) {
+	row := q.db.QueryRow(ctx, setTaskProjection,
+		arg.ID,
+		arg.PrNumber,
+		arg.PrUrl,
+		arg.PrHeadSha,
+		arg.PrState,
+		arg.CiState,
+		arg.CiHeadSha,
+	)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.ProjectID,
+		&i.TopicID,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.CreatorBindingID,
+		&i.Title,
+		&i.Brief,
+		&i.Mode,
+		&i.AssignedProfileID,
+		&i.SelectionSource,
+		&i.ProviderConstraint,
+		&i.AcceptedEnvironment,
+		&i.Status,
+		&i.Reason,
+		&i.DecisionAttemptID,
+		&i.DecisionReportID,
+		&i.DecisionAction,
+		&i.CurrentAttemptID,
+		&i.Version,
+		&i.CheckoutBranch,
+		&i.CheckoutRef,
+		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1037,7 +2123,7 @@ func (q *Queries) SetTaskOperationTask(ctx context.Context, arg SetTaskOperation
 }
 
 const touchTask = `-- name: TouchTask :one
-UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at
+UPDATE tasks SET version = version + 1, updated_at = now() WHERE id = $1 AND version = $2 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
 `
 
 type TouchTaskParams struct {
@@ -1074,10 +2160,27 @@ func (q *Queries) TouchTask(ctx context.Context, arg TouchTaskParams) (Task, err
 		&i.CheckoutBranch,
 		&i.CheckoutRef,
 		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const touchTaskProjection = `-- name: TouchTaskProjection :exec
+UPDATE tasks SET projected_at = now() WHERE id = $1
+`
+
+// Refreshes the observation time without a new version or event.
+func (q *Queries) TouchTaskProjection(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, touchTaskProjection, id)
+	return err
 }
 
 const updateTaskState = `-- name: UpdateTaskState :one
@@ -1090,7 +2193,7 @@ SET status = $3,
     version = version + 1,
     updated_at = now()
 WHERE id = $1 AND version = $2
-RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, created_at, updated_at
+RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
 `
 
 type UpdateTaskStateParams struct {
@@ -1141,6 +2244,13 @@ func (q *Queries) UpdateTaskState(ctx context.Context, arg UpdateTaskStateParams
 		&i.CheckoutBranch,
 		&i.CheckoutRef,
 		&i.CheckoutDepth,
+		&i.PrNumber,
+		&i.PrUrl,
+		&i.PrHeadSha,
+		&i.PrState,
+		&i.CiState,
+		&i.CiHeadSha,
+		&i.ProjectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

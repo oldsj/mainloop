@@ -6,8 +6,9 @@
 --
 -- Every owner or agent request that changes durable state is a task_operations row: an intent
 -- with an explicit state and an idempotency key (owner, principal, request id) whose request
--- digest turns a replay with a different body into a conflict. The reconcile loop that drives
--- operations past 'requested' belongs to the provisioning slice; this migration only stores them.
+-- digest turns a replay with a different body into a conflict. The reconcile loop drives
+-- operations and event deliveries (internal/tasks): both carry the intent-row columns attempts,
+-- next_attempt_at, lease_owner and lease_until that internal/reconcile claims rows by.
 --
 -- Free-form values stay jsonb: the accepted environment (a frozen object read whole), an
 -- operation's request payload, and an artifact's content. Everything else is a column.
@@ -61,9 +62,19 @@ CREATE TABLE tasks (
     checkout_branch text CHECK (char_length(checkout_branch) BETWEEN 1 AND 255),
     checkout_ref text CHECK (char_length(checkout_ref) <= 255),
     checkout_depth integer CHECK (checkout_depth BETWEEN 0 AND 1000),
+    -- What the GitHub observation last saw of the task's pull request. A cache: nothing here is
+    -- evidence of completion. pr_state 'unknown' with a null number means no pull request yet.
+    pr_number integer CHECK (pr_number >= 1),
+    pr_url text,
+    pr_head_sha text,
+    pr_state text NOT NULL DEFAULT 'unknown' CHECK (pr_state IN ('open', 'closed', 'merged', 'unknown')),
+    ci_state text NOT NULL DEFAULT 'unknown' CHECK (ci_state IN ('pending', 'success', 'failure', 'unknown')),
+    ci_head_sha text,
+    projected_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (owner_id, id),
+    CONSTRAINT tasks_pr_whole CHECK (pr_number IS NOT NULL OR (pr_url IS NULL AND pr_head_sha IS NULL AND pr_state = 'unknown')),
     CONSTRAINT tasks_no_self_parent CHECK (parent_task_id IS DISTINCT FROM id),
     CONSTRAINT tasks_root CHECK (parent_task_id IS NOT NULL OR root_task_id = id),
     CONSTRAINT tasks_code_has_project CHECK (mode <> 'code' OR project_id IS NOT NULL),
@@ -190,14 +201,22 @@ CREATE TABLE task_operations (
             'reconciliation', 'provisioning_unavailable', 'handoff_unavailable', 'cancel_unavailable'
         )
     ),
+    -- Reconcile intent columns: see internal/reconcile.
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (owner_id, principal_key, request_id)
 );
 CREATE INDEX task_operations_task ON task_operations (task_id, created_at, id);
--- The reconcile loop reads operations that are not final.
 CREATE INDEX task_operations_open ON task_operations (created_at, id)
 WHERE state NOT IN ('completed', 'blocked');
+-- The reconcile loop claims operations in these states. An uncertain one is claimed too: its
+-- handler looks at what exists before it does anything.
+CREATE INDEX task_operations_claim ON task_operations (next_attempt_at, id)
+WHERE state IN ('requested', 'draining', 'source_fencing', 'source_fenced', 'target_creating', 'target_ready', 'uncertain');
 
 -- Immutable checkpoint, manifest and summary content. Bounded canonical JSON that Mainloop
 -- produced, never a transcript or a credential.
@@ -240,6 +259,8 @@ CREATE INDEX task_reports_task ON task_reports (task_id, created_at, id);
 -- Who still has to be told about a report. A row is written with the report; the dispatcher
 -- moves it on and never replays a delivery whose state is uncertain.
 CREATE TABLE task_event_deliveries (
+    -- The delivery's own id; the message id of its first send derives from it.
+    id text NOT NULL UNIQUE,
     report_id text NOT NULL REFERENCES task_reports (id),
     -- 'main' or 'parent-task:<task id>': written by the server, never taken from a request.
     recipient_key text NOT NULL,
@@ -248,10 +269,21 @@ CREATE TABLE task_event_deliveries (
     state text NOT NULL DEFAULT 'pending' CHECK (
         state IN ('pending', 'queued', 'delivered', 'uncertain', 'cancelled')
     ),
+    -- How many messages have been recorded for this delivery: a send that failed in the ledger is
+    -- recorded again under a new message id, up to a bound.
+    sends integer NOT NULL DEFAULT 0,
+    -- Reconcile intent columns: see internal/reconcile.
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner text,
+    lease_until timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (report_id, recipient_key)
 );
 CREATE INDEX task_event_deliveries_pending ON task_event_deliveries (updated_at) WHERE state = 'pending';
+-- Pending rows are sent; queued rows are watched until the ledger settles them.
+CREATE INDEX task_event_deliveries_claim ON task_event_deliveries (next_attempt_at, id)
+WHERE state IN ('pending', 'queued');
 
 -- One writer per repository branch. The generation is the fencing token: a transfer to another
 -- holder moves it up by exactly one, and nothing moves it down.
@@ -338,7 +370,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_attempt_hierarchy();
 -- +goose StatementBegin
 CREATE FUNCTION task_attempt_routing_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF ROW(OLD.task_id, OLD.number, OLD.profile_id, OLD.native_provider, OLD.configuration_revision, OLD.agent_namespace, OLD.agent_name, OLD.role, OLD.depth, OLD.environment, OLD.initial_ref)
+    IF ROW(OLD.task_id, OLD.number, OLD.profile_id, OLD.native_provider, OLD.configuration_revision, OLD.agent_namespace, OLD.agent_name, OLD.role, OLD.depth, coalesce(OLD.environment, NEW.environment), OLD.initial_ref)
         IS DISTINCT FROM ROW(NEW.task_id, NEW.number, NEW.profile_id, NEW.native_provider, NEW.configuration_revision, NEW.agent_namespace, NEW.agent_name, NEW.role, NEW.depth, NEW.environment, NEW.initial_ref) THEN
         RAISE EXCEPTION 'attempt routing is immutable';
     END IF;
