@@ -47,5 +47,5 @@ export const handlers = [
   http.get(url('/activity'), () => HttpResponse.json(activity)),
   http.get(url('/projects'), () => HttpResponse.json(projects)),
   http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
-  ...createChatBackend().handlers
+  ...createChatBackend({}, { autoEndTurnMs: 1500 }).handlers
 ];
