@@ -49,7 +49,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "migrate":
 		return runMigrate(args[1:], stdout, stderr)
-	case "sweep-orphans", "smoke", "kagent-probe":
+	case "kagent-probe":
+		return runKagentProbe(context.Background(), stdout, stderr)
+	case "sweep-orphans", "smoke":
 		_, _ = fmt.Fprintf(stderr, "%s: not implemented yet\n", cmd)
 		return exitNotImplemented
 	case "help", "-h", "--help":
@@ -72,7 +74,7 @@ commands:
   migrate         up | status | reset the database schema
   sweep-orphans   not implemented yet
   smoke           not implemented yet
-  kagent-probe    not implemented yet
+  kagent-probe    read-only check that kagent answers (GetAgent and ListSessions)
 `)
 }
 

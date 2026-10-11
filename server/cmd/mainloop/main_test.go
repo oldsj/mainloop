@@ -16,7 +16,6 @@ func TestRun(t *testing.T) {
 	}{
 		{[]string{"sweep-orphans"}, 2, "not implemented yet", "", true},
 		{[]string{"smoke"}, 2, "not implemented yet", "", true},
-		{[]string{"kagent-probe"}, 2, "not implemented yet", "", true},
 		{nil, 1, "usage:", "", true},
 		{[]string{"bogus"}, 1, `unknown command "bogus"`, "", true},
 		{[]string{"help"}, 0, "", "serve-api", false},
