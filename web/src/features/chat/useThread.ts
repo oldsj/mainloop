@@ -23,13 +23,22 @@ export const LOST_REPLY_RECORDED =
 const LOST_REPLY_UNCONFIRMED =
   ' Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.';
 
-/** The words for a send the backend did not accept. */
+const isClientError = (status: number) => status >= 400 && status < 500;
+
+/**
+ * The words for a send the backend did not accept. A 4xx refusal shows the server's reason, as does
+ * a send with no reply at all; a 5xx keeps the generic line.
+ */
 export function sendErrorText(error: unknown, restored: boolean): string {
   const suffix = restored ? BACK_IN_BOX : '';
   const code = refusalCode(error);
   if (code && error instanceof SendError && error.status === 409)
     return `${sendRefusalNotice(code)}${suffix}`;
-  if (error instanceof SendError && (error.status === 409 || error.status === 0))
+  if (
+    error instanceof SendError &&
+    error.message &&
+    (error.status === 0 || isClientError(error.status))
+  )
     return `${error.message}${suffix}`;
   return `Could not send the message.${suffix}`;
 }
@@ -131,6 +140,8 @@ export function useThread(source: ThreadSource) {
   const conversationEnabled = isMain ? conversationId !== null : true;
 
   const draftKey = isMain ? (conversationId ?? NEW_CONVERSATION) : sessionDraftKey(sessionId);
+  // A session's messages are labelled with the session's title, which its conversation read carries.
+  const context = isMain ? 'main' : sessionConversation.data?.session.title || 'session';
 
   const [optimistic, setOptimistic] = useState<Optimistic[]>([]);
   const [sendPending, setSendPending] = useState(false);
@@ -421,6 +432,8 @@ export function useThread(source: ThreadSource) {
     sessionId: threadSessionId,
     /** Where the unsent text is kept. */
     draftKey,
+    /** Where the messages were written, shown in the prompt: `main`, or the session's title. */
+    context,
     /** The thread itself is read, so the draft key is known. */
     threadKnown: thread.data !== undefined,
     /** The thread is read, and its conversation too when the thread has one. */

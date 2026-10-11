@@ -24,6 +24,18 @@ describe('MessageBubble', () => {
     expect(screen.getByText(/<b>raw<\/b>/)).toBeInTheDocument();
   });
 
+  it('labels the prompt with the thread it was written in', () => {
+    render(
+      <MessageBubble
+        message={messageFixture({ role: 'assistant', content: 'done' })}
+        agentKind="claude"
+        context="Fix sweep connection pinning"
+      />
+    );
+    expect(screen.getByText('claude@Fix sweep connection pinning$')).toBeInTheDocument();
+    expect(screen.queryByText('claude@main$')).toBeNull();
+  });
+
   it('strips the stopped note, marks the author and shows the note once', () => {
     render(
       <MessageBubble

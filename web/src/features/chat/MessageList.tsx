@@ -14,6 +14,8 @@ export interface MessageListProps {
   messages: Message[];
   notices: Map<string, DeliveryNotice>;
   agentKind?: 'claude' | 'codex' | null;
+  /** Where the messages were written, shown in each prompt label. */
+  context?: string;
   /** The thread has been read at least once; before that an empty list means "not loaded". */
   loaded: boolean;
   retryDisabled: boolean;
@@ -25,6 +27,7 @@ export function MessageList({
   messages,
   notices,
   agentKind,
+  context,
   loaded,
   retryDisabled,
   onRetry
@@ -54,10 +57,11 @@ export function MessageList({
   }, []);
 
   const last = messages.at(-1);
+  // A delivery notice can land on the last message without changing the list, so it re-pins too.
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && stuck.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, last?.content]);
+  }, [messages.length, last?.content, notices]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -80,6 +84,7 @@ export function MessageList({
               key={message.id}
               message={message}
               agentKind={agentKind}
+              context={context}
               notice={notices.get(message.id)}
               retryDisabled={retryDisabled}
               onRetry={onRetry}

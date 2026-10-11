@@ -175,6 +175,17 @@ describe('sending', () => {
     );
   });
 
+  it('gives the server reason for a refused send other than 409', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.rejectNextChat = { status: 403, detail: 'Only the owner can send here.' };
+    await userEvent.type(input(), 'x{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      'Only the owner can send here. Your message is back in the box.'
+    );
+    expect(input().value).toBe('x');
+  });
+
   it('does not roll back a message the backend accepted when the refresh fails', async () => {
     const { state } = setup(existing());
     await screen.findByText('build it');
@@ -1160,6 +1171,31 @@ describe('the main lock does not reach drafts or a child session', () => {
     // Sending to the child changes neither the main lock nor the main draft.
     expect(main.getByTestId('command-input')).toBeDisabled();
     expect(loadDraft(CONVERSATION_ID)).toBe('main draft');
+  });
+});
+
+describe('a session thread is labelled with its session', () => {
+  const SESSION_ID = 'child-session';
+
+  it("labels the session's prompts with its title, and the main thread's with main", async () => {
+    const backend = createChatBackend(idleThread());
+    server.use(...backend.handlers);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatPage />
+        <SessionChatSlot sessionId={SESSION_ID} />
+      </QueryClientProvider>
+    );
+    await screen.findByText('build it');
+    const main = within(screen.getByTestId('main-thread'));
+    const child = within(await screen.findByTestId('session-chat-slot'));
+    await waitFor(() => expect(child.getByTestId('command-input')).toBeEnabled());
+    await userEvent.type(child.getByTestId('command-input'), 'child note{Enter}');
+
+    expect(await child.findByText(`user@Session ${SESSION_ID}$`)).toBeInTheDocument();
+    expect(child.queryByText(/@main\$/)).toBeNull();
+    expect(main.queryByText(`user@Session ${SESSION_ID}$`)).toBeNull();
   });
 });
 

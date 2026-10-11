@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { messageFixture } from './fixtures';
+import { deliveryNotices } from '@/lib/delivery';
+import { deliveryFixture, messageFixture } from './fixtures';
 import { MessageList } from './MessageList';
 import { fireEvent } from '@testing-library/react';
 
@@ -55,6 +56,52 @@ describe('MessageList', () => {
     geometry(list, 100, 1200);
     rerender(<MessageList {...base} messages={[...messages, messageFixture({ id: 'b' })]} />);
     expect(list.scrollTop).toBe(100);
+  });
+
+  it('re-pins when a delivery notice lands on the last message', () => {
+    const messages = [messageFixture({ id: 'a' })];
+    const { rerender } = render(<MessageList {...base} messages={messages} />);
+    const list = screen.getByTestId('message-list');
+    geometry(list, 600); // 100 px from the end
+    fireEvent.scroll(list);
+    geometry(list, 600, 1200); // the notice makes the last message taller
+    rerender(
+      <MessageList
+        {...base}
+        messages={messages}
+        notices={deliveryNotices([deliveryFixture({ message_id: 'a', state: 'failed' })])}
+      />
+    );
+    expect(list.scrollTop).toBe(1200);
+  });
+
+  it('does not pull a reader who scrolled up back down for a notice', () => {
+    const messages = [messageFixture({ id: 'a' })];
+    const { rerender } = render(<MessageList {...base} messages={messages} />);
+    const list = screen.getByTestId('message-list');
+    geometry(list, 100); // 600 px from the end
+    fireEvent.scroll(list);
+    geometry(list, 100, 1200);
+    rerender(
+      <MessageList
+        {...base}
+        messages={messages}
+        notices={deliveryNotices([deliveryFixture({ message_id: 'a', state: 'failed' })])}
+      />
+    );
+    expect(list.scrollTop).toBe(100);
+  });
+
+  it('labels each message with the thread it was written in', () => {
+    render(
+      <MessageList
+        {...base}
+        messages={[messageFixture({ role: 'assistant', content: 'ok' })]}
+        agentKind="claude"
+        context="Fix sweep"
+      />
+    );
+    expect(screen.getByText('claude@Fix sweep$')).toBeInTheDocument();
   });
 
   it('hides the button within 100 px of the end', () => {

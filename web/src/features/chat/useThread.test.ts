@@ -46,4 +46,32 @@ describe('sendErrorText', () => {
       'Could not send the message.'
     );
   });
+
+  it.each([400, 403, 422])('gives the server reason for a %i refusal', (status) => {
+    expect(sendErrorText(new SendError('Only the owner can send here.', status), false)).toBe(
+      'Only the owner can send here.'
+    );
+  });
+
+  it('keeps the box note with a server reason for a refusal other than 409', () => {
+    expect(sendErrorText(new SendError('Only the owner can send here.', 403), true)).toBe(
+      'Only the owner can send here.' + BACK
+    );
+  });
+
+  it('keeps the generic line for a 5xx, whatever its detail', () => {
+    expect(sendErrorText(new SendError('database is locked', 503), true)).toBe(
+      'Could not send the message.' + BACK
+    );
+  });
+
+  it('gives the reason for a send with no reply', () => {
+    expect(sendErrorText(new SendError("Can't reach the Mainloop backend.", 0), true)).toBe(
+      "Can't reach the Mainloop backend." + BACK
+    );
+  });
+
+  it('keeps the generic line when a refusal carries no reason', () => {
+    expect(sendErrorText(new SendError('', 403), false)).toBe('Could not send the message.');
+  });
 });

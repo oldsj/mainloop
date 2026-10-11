@@ -107,4 +107,11 @@ describe('Composer', () => {
     expect(other).toHaveFocus();
     other.remove();
   });
+
+  it('contains its screen-reader status in a positioned box', () => {
+    setup();
+    // sr-only is position:absolute. Without a positioned ancestor it sizes the page to itself.
+    const status = screen.getByRole('status');
+    expect(status.closest('[data-testid="input-bar"]')).toHaveClass('relative');
+  });
 });

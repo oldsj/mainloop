@@ -111,7 +111,7 @@ export function Composer({
 
   return (
     <div
-      className="border-border bg-background px-md py-sm gap-sm flex shrink-0 items-end border-t"
+      className="border-border bg-background px-md py-sm gap-sm relative flex shrink-0 items-end border-t"
       data-testid="input-bar"
       aria-busy={sending || busy}
     >
@@ -144,6 +144,7 @@ export function Composer({
       >
         EXEC
       </Button>
+      {/* sr-only is absolutely positioned. The bar is its positioned ancestor, so it cannot grow the page. */}
       <span role="status" className="sr-only">
         {sending ? 'Sending' : ''}
       </span>

@@ -53,6 +53,7 @@ export function ThreadBody({
         messages={thread.messages}
         notices={thread.notices}
         agentKind={thread.native?.kind as 'claude' | 'codex' | undefined}
+        context={thread.context}
         loaded={thread.loaded}
         retryDisabled={thread.busy || thread.sendPending || offline}
         onRetry={(message) => void thread.retry(message)}
