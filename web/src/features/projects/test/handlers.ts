@@ -52,6 +52,9 @@ export const createWorkspaceWrite = (resolve: HttpResponseResolver) =>
 export const providersRead = () =>
   http.get(url('/providers'), () => HttpResponse.json([CLAUDE_PROFILE, CODEX_PROFILE]));
 
+export const providersReadWith = (resolve: HttpResponseResolver) =>
+  http.get(url('/providers'), resolve);
+
 /** A non-2xx response with the backend's `{ detail }` body, as the client reads it. */
 export function problem(status: number, message: string): HttpResponseResolver {
   return () => HttpResponse.json({ detail: message }, { status });

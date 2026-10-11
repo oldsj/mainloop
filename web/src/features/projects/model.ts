@@ -22,9 +22,9 @@ export class ContractError extends Error {}
 const text = z.string();
 
 /*
- * Each schema lists the fields this UI reads and nothing more. A row that fails its schema is
- * dropped, so one bad row cannot blank the list or the page. Rows that pass keep their generated
- * types, so the components read the same fields the contract names.
+ * Each schema checks every field the UI reads from that row, so a row that would break a read is
+ * dropped and the rest still render. A field a schema does not check is not guaranteed by it, so
+ * components read only the fields listed here. Kept rows keep their generated types.
  */
 export const projectRowSchema = z.object({
   id: z.string().min(1),
@@ -62,10 +62,36 @@ export const commitRowSchema = z.object({
   url: text
 });
 
+const SESSION_STATUSES = [
+  'pending',
+  'active',
+  'idle',
+  'superseded',
+  'completed',
+  'failed',
+  'cancelled',
+  'waiting_on_user'
+] as const;
+
+/** Every session field the project's session rows read, so a row missing one is dropped. */
 export const sessionRowSchema = z.object({
   id: z.string().min(1),
-  status: text,
-  created_at: text
+  title: text,
+  status: z.enum(SESSION_STATUSES),
+  needs_owner: z.boolean(),
+  created_at: text,
+  agent_kind: text.nullable(),
+  topic: text.nullable(),
+  error: text.nullable(),
+  repo_url: text.nullable(),
+  parent_session_id: text.nullable()
+});
+
+/** The provider fields a session row reads to name its native provider. */
+export const providerRowSchema = z.object({
+  id: z.string().min(1),
+  native_provider: z.enum(['claude', 'codex']),
+  aliases: z.array(text)
 });
 
 /** Every field the workspace badges and the branch list read, so a row missing one is dropped. */

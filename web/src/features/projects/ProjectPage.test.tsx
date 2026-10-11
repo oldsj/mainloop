@@ -1,8 +1,9 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
+import { session, type SessionFixture } from '@/features/sessions/test/fixtures';
 import { server } from '@/test/msw/server';
 import {
   commit,
@@ -16,6 +17,7 @@ import {
 import {
   createWorkspaceWrite,
   detailRead,
+  providersReadWith,
   serveProjectPage,
   workspacesReadWith
 } from './test/handlers';
@@ -303,6 +305,139 @@ describe('project page', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Branch already has a workspace');
     expect(posts).toBe(1);
     expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
+  });
+
+  it.each([
+    ['no reply', () => HttpResponse.error()],
+    ['a 500', () => HttpResponse.json({ detail: 'Mainloop is restarting' }, { status: 500 })]
+  ])(
+    'a branch create with %s is locked until the owner checks the workspace list',
+    async (_case, reply) => {
+      let posts = 0;
+      let listReads = 0;
+      const created = workspace({
+        workspace_id: 'ws-7',
+        manifest: { ...workspace().manifest, branch: 'feature/new' }
+      });
+      server.use(
+        createWorkspaceWrite(() => {
+          posts += 1;
+          return reply();
+        }),
+        // The first read is before the create. The re-read after the lost reply finds the new workspace.
+        workspacesReadWith(() => {
+          listReads += 1;
+          return HttpResponse.json(listReads === 1 ? [] : [created]);
+        }),
+        ...serveProjectPage()
+      );
+      const user = userEvent.setup();
+      renderProjects(PAGE);
+      const form = await screen.findByTestId('project-workspace-form');
+
+      const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
+      await user.clear(branch);
+      await user.type(branch, 'feature/new');
+      await user.click(within(form).getByRole('button', { name: 'New workspace' }));
+
+      const check = await screen.findByTestId('create-check');
+      expect(check).toHaveTextContent('The workspace may have been created.');
+      expect(screen.queryByText('Mainloop is restarting')).not.toBeInTheDocument();
+      expect(await within(check).findByRole('link', { name: /feature\/new/ })).toHaveAttribute(
+        'href',
+        '/workspaces/ws-7'
+      );
+
+      expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
+      await user.click(within(form).getByRole('button', { name: 'New workspace' }));
+      expect(posts).toBe(1);
+
+      const acknowledge = within(check).getByRole('button', { name: "I've checked the list" });
+      await waitFor(() => expect(acknowledge).toBeEnabled());
+      await user.click(acknowledge);
+      expect(screen.queryByTestId('create-check')).not.toBeInTheDocument();
+      // The reply that never came marked the backend offline. The health probe clears it, as it would in the app.
+      await act(async () => {
+        await connection.check();
+      });
+      expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
+    }
+  );
+
+  it('links to orchestration health for this project', async () => {
+    server.use(...serveProjectPage());
+    renderProjects(PAGE);
+
+    expect(await heading('acme/widgets')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Orchestration health' })).toHaveAttribute(
+      'href',
+      '/health?project_id=project-a'
+    );
+  });
+
+  it('names the page in the document title', async () => {
+    server.use(...serveProjectPage());
+    renderProjects(PAGE);
+
+    expect(await heading('acme/widgets')).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe('acme/widgets - mainloop'));
+  });
+
+  it('shows when a branch workspace was last active', async () => {
+    server.use(
+      ...serveProjectPage({
+        workspaces: [
+          workspace({
+            workspace_id: 'ws-1',
+            last_activity_at: new Date(Date.now() - 5 * 60_000).toISOString()
+          })
+        ]
+      })
+    );
+    renderProjects(PAGE);
+
+    await heading('acme/widgets');
+    const link = await screen.findByRole('link', { name: /feature\/widgets/ });
+    expect(within(link).getByText(/^Active /)).toBeInTheDocument();
+  });
+
+  it('drops a session row that breaks the contract and keeps the rest', async () => {
+    const broken = {
+      ...session({ id: 's-bad', title: 'Broken session', project_id: 'project-a' }),
+      repo_url: 42
+    } as unknown as SessionFixture;
+    server.use(
+      ...serveProjectPage({
+        detail: detail({
+          project: project(),
+          sessions: [
+            session({ id: 's-good', title: 'Good session', project_id: 'project-a' }),
+            broken
+          ]
+        })
+      })
+    );
+    renderProjects(PAGE);
+
+    expect(await screen.findByText('Good session')).toBeInTheDocument();
+    expect(screen.queryByText('Broken session')).not.toBeInTheDocument();
+  });
+
+  it('a provider profile that breaks the contract does not hide the sessions', async () => {
+    server.use(
+      providersReadWith(() =>
+        HttpResponse.json([{ id: 'claude-main', native_provider: 'claude', aliases: null }])
+      ),
+      ...serveProjectPage({
+        detail: detail({
+          project: project(),
+          sessions: [session({ id: 's-good', title: 'Still listed', project_id: 'project-a' })]
+        })
+      })
+    );
+    renderProjects(PAGE);
+
+    expect(await screen.findByText('Still listed')).toBeInTheDocument();
   });
 
   it('is disabled while the backend is unreachable', async () => {

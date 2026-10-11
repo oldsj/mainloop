@@ -6,16 +6,17 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import { EnvironmentSection } from '@/features/environments/EnvironmentSection';
 import { SessionRow } from '@/features/sessions/SessionRow';
-import { workspaceFor } from '@/features/sessions/model';
+import { relativeTime, workspaceFor } from '@/features/sessions/model';
 import {
   WorkspaceLifecycleBadge,
   WorkspacePublicationBadge
 } from '@/features/sessions/WorkspaceBadges';
 import { agentLabel } from '@/lib/agentLabel';
-import type { Session } from '@/lib/contract';
+import type { ProviderProfile, Session } from '@/lib/contract';
 import { safeExternalUrl } from '@/lib/taskState';
 import { useConnection } from '@/shell/ConnectionBanner';
 import { AgentRadios } from './AgentRadios';
+import { CreateCheck } from './CreateCheck';
 import { MergePolicySection } from './MergePolicySection';
 import {
   agentKindOf,
@@ -25,6 +26,7 @@ import {
   keepValid,
   openPrText,
   projectRowSchema,
+  providerRowSchema,
   pullRequestRowSchema,
   sessionRowSchema,
   workspaceRequest,
@@ -53,7 +55,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const detail = useProjectDetail(id);
   const workspaces = useWorkspaces();
   const providers = useProviders();
-  const create = useCreateWorkspace(id);
+  const [uncertain, setUncertain] = useState(false);
+  const create = useCreateWorkspace(id, () => setUncertain(true));
   const navigate = useNavigate();
 
   const data = detail.data;
@@ -91,13 +94,14 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const pulls = keepValid<PullRequest>(data.open_prs, pullRequestRowSchema);
   const commits = keepValid<Commit>(data.recent_commits, commitRowSchema);
   const sessions = keepValid<Session>(data.sessions, sessionRowSchema);
+  const providerRows = keepValid<ProviderProfile>(providers.data, providerRowSchema);
   const workspaceRows = keepValid<WorkspaceLifecycle>(workspaces.data, workspaceRowSchema);
   const branchWorkspaces = workspaceRows.filter(
     (workspace) => workspace.manifest.repo_url === project.html_url
   );
 
   const startWorkspace = (target: { branch: string; agentKind: AgentKind }) => {
-    if (create.isPending) return;
+    if (create.isPending || uncertain) return;
     create.mutate(
       { body: workspaceRequest({ projectId: id, ...target }) },
       {
@@ -107,11 +111,18 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
     );
   };
 
+  // The owner has looked at the recent list, so the form unlocks and the old error is cleared.
+  const acknowledge = () => {
+    setUncertain(false);
+    create.reset();
+  };
+
   return (
     <article
       aria-labelledby="project-heading"
       className="gap-lg p-md mx-auto flex w-full max-w-3xl min-w-0 flex-col"
     >
+      <title>{`${project.full_name} - mainloop`}</title>
       {detail.isError ? (
         <div data-testid="project-refresh-error">
           <ErrorRecovery
@@ -145,6 +156,13 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
               </a>
             ) : null}
             <span>{openPrText(project.open_pr_count)}</span>
+            <Link
+              to="/health"
+              search={{ project_id: id }}
+              className="text-foreground inline-flex min-h-11 items-center underline"
+            >
+              Orchestration health
+            </Link>
           </div>
         </div>
       </header>
@@ -185,9 +203,16 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         <BranchWorkspaceForm
           defaultBranch={project.default_branch}
           pending={create.isPending}
+          locked={uncertain}
           onSubmit={startWorkspace}
         />
-        {create.error ? (
+        {uncertain ? (
+          <CreateCheck
+            repoUrl={project.html_url}
+            reading={create.isPending}
+            onAcknowledge={acknowledge}
+          />
+        ) : create.error ? (
           <div role="alert" className="text-destructive text-sm">
             {failureText(create.error)}
           </div>
@@ -221,6 +246,11 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                     </span>
                     <WorkspaceLifecycleBadge workspace={workspace} />
                     <WorkspacePublicationBadge workspace={workspace} />
+                    {workspace.last_activity_at ? (
+                      <span className="text-muted-foreground">
+                        Active {relativeTime(workspace.last_activity_at)}
+                      </span>
+                    ) : null}
                   </span>
                 </Link>
               </li>
@@ -257,7 +287,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                 <SessionRow
                   session={session}
                   workspace={workspaceFor(workspaceRows, session.id)}
-                  providers={providers.data ?? []}
+                  providers={providerRows}
                 />
               </li>
             ))}
@@ -278,7 +308,7 @@ function PullRequestLine({ pr }: { pr: PullRequest }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center font-medium underline"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center font-medium underline"
           >
             #{pr.number}
           </a>
@@ -309,7 +339,7 @@ function CommitLine({ commit }: { commit: Commit }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center font-mono underline"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center font-mono underline"
           >
             {commit.sha.slice(0, 7)}
           </a>
@@ -328,15 +358,19 @@ function CommitLine({ commit }: { commit: Commit }) {
 function BranchWorkspaceForm({
   defaultBranch,
   pending,
+  locked,
   onSubmit
 }: {
   defaultBranch: string;
   pending: boolean;
+  /** An earlier create may have started a workspace; no new one until the owner has checked. */
+  locked: boolean;
   onSubmit: (target: { branch: string; agentKind: AgentKind }) => void;
 }) {
   const [branch, setBranch] = useState(defaultBranch);
   const [agentKind, setAgentKind] = useState<AgentKind>('claude');
   const offline = useConnection().status === 'offline';
+  const blocked = offline || pending || locked;
 
   return (
     <form
@@ -344,7 +378,7 @@ function BranchWorkspaceForm({
       className="gap-md p-md border-border flex flex-col border"
       onSubmit={(event) => {
         event.preventDefault();
-        if (offline || pending) return;
+        if (blocked) return;
         onSubmit({ branch: branch.trim() || defaultBranch, agentKind });
       }}
     >
@@ -358,7 +392,7 @@ function BranchWorkspaceForm({
         />
       </label>
       <AgentRadios prefix="project-workspace-kind" value={agentKind} onChange={setAgentKind} />
-      <Button type="submit" disabled={offline || pending}>
+      <Button type="submit" disabled={blocked}>
         {pending ? 'Creating…' : 'New workspace'}
       </Button>
     </form>

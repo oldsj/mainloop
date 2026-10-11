@@ -36,10 +36,14 @@ export function MergePolicySection({ projectId }: { projectId: string }) {
     });
   };
 
-  // The form remounts only after the re-read settles, so its draft starts from the refreshed policy.
+  // The lock stays until the re-read succeeds. Then the form remounts from the refreshed policy, so
+  // its draft starts from the new version. A failed re-read leaves the lock and its retry in place.
   const refresh = () => {
-    update.reset();
-    void policy.refetch().then(() => setGeneration((value) => value + 1));
+    void policy.refetch().then((result) => {
+      if (result.isError) return;
+      update.reset();
+      setGeneration((value) => value + 1);
+    });
   };
 
   return (
@@ -123,13 +127,15 @@ function PolicyForm({
   onRefresh
 }: PolicyFormProps) {
   const [draft, setDraft] = useState<MergePolicy>(view.merge_policy);
-  const editable = view.writes_enabled && !busy && !stale;
+  // A failed save or a re-read in flight means this version may be out of date, so it is locked too.
+  const locked = stale || refreshing;
+  const editable = view.writes_enabled && !busy && !locked;
   const canSave = canSavePolicy({
     draft,
     saved: view.merge_policy,
     writesEnabled: view.writes_enabled,
     busy,
-    stale
+    stale: locked
   });
 
   return (

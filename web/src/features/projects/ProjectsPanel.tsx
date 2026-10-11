@@ -4,6 +4,8 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { Button } from '@/components/ui/button';
 import { safeExternalUrl } from '@/lib/taskState';
 import { useConnection } from '@/shell/ConnectionBanner';
+import { AgentRadios } from './AgentRadios';
+import { CreateCheck } from './CreateCheck';
 import {
   failureText,
   keepValid,
@@ -12,14 +14,14 @@ import {
   type AgentKind,
   type Project
 } from './model';
-import { AgentRadios } from './AgentRadios';
 import { useCreateWorkspace, useProjects } from './queries';
 
 /** The Projects panel: the owner's repositories, and a way to start a workspace from any repository. */
 export function ProjectsPanel() {
   const navigate = useNavigate();
   const projects = useProjects();
-  const create = useCreateWorkspace();
+  const [uncertain, setUncertain] = useState(false);
+  const create = useCreateWorkspace(undefined, () => setUncertain(true));
   const [open, setOpen] = useState(false);
   const rows = keepValid<Project>(projects.data, projectRowSchema);
 
@@ -31,6 +33,12 @@ export function ProjectsPanel() {
           void navigate({ to: '/workspaces/$id', params: { id: workspace.workspace_id } })
       }
     );
+  };
+
+  // The owner has looked at the recent list, so the form unlocks and the old error is cleared.
+  const acknowledge = () => {
+    setUncertain(false);
+    create.reset();
   };
 
   return (
@@ -54,9 +62,13 @@ export function ProjectsPanel() {
         </Button>
       </div>
 
-      {open ? <NewWorkspaceForm pending={create.isPending} onSubmit={submit} /> : null}
+      {open ? (
+        <NewWorkspaceForm pending={create.isPending} locked={uncertain} onSubmit={submit} />
+      ) : null}
 
-      {create.error ? (
+      {uncertain ? (
+        <CreateCheck reading={create.isPending} onAcknowledge={acknowledge} />
+      ) : create.error ? (
         <div role="alert" className="text-destructive text-sm">
           {failureText(create.error)}
         </div>
@@ -136,9 +148,12 @@ function ProjectRow({ project }: { project: Project }) {
  */
 function NewWorkspaceForm({
   pending,
+  locked,
   onSubmit
 }: {
   pending: boolean;
+  /** An earlier create may have started a workspace; no new one until the owner has checked. */
+  locked: boolean;
   onSubmit: (target: { repo: string; branch: string; agentKind: AgentKind }) => void;
 }) {
   const [repo, setRepo] = useState('');
@@ -147,6 +162,7 @@ function NewWorkspaceForm({
   const [problem, setProblem] = useState<string | null>(null);
   const { status } = useConnection();
   const offline = status === 'offline';
+  const blocked = offline || pending || locked;
 
   return (
     <form
@@ -160,7 +176,7 @@ function NewWorkspaceForm({
           return;
         }
         setProblem(null);
-        if (offline || pending) return;
+        if (blocked) return;
         onSubmit({ repo: repo.trim(), branch: branch.trim(), agentKind });
       }}
     >
@@ -193,7 +209,7 @@ function NewWorkspaceForm({
         </p>
       ) : null}
 
-      <Button type="submit" disabled={offline || pending}>
+      <Button type="submit" disabled={blocked}>
         {pending ? 'Creating…' : 'Create workspace'}
       </Button>
     </form>

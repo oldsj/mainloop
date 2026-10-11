@@ -5,6 +5,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { $api, keys } from '@/api';
+import { isUncertain } from '@/features/environments/model';
 
 export function useProjects() {
   return $api.useQuery('get', '/projects');
@@ -48,10 +49,15 @@ export function useUpdateMergePolicy(projectId: string) {
 /**
  * Creates a workspace from a repository or a project. Both lists it can appear in are re-read, and
  * the project's detail too when the create came from its page, since a new session shows there.
+ * An uncertain reply (none, or a 5xx) may still have created the workspace, so `onUncertain` lets
+ * the caller lock the form until the owner has checked the list. The re-read runs before settle.
  */
-export function useCreateWorkspace(projectId?: string) {
+export function useCreateWorkspace(projectId?: string, onUncertain?: () => void) {
   const queryClient = useQueryClient();
   return $api.useMutation('post', '/workspaces', {
+    onError: (error) => {
+      if (isUncertain(error)) onUncertain?.();
+    },
     onSettled: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: keys.workspaces() }),

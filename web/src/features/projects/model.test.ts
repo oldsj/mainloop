@@ -14,6 +14,7 @@ import {
   POLICY_LABEL,
   policyText,
   projectRowSchema,
+  providerRowSchema,
   pullRequestRowSchema,
   sessionRowSchema,
   workspaceRequest,
@@ -56,17 +57,34 @@ describe('boundary schemas', () => {
     expect(commitRowSchema.safeParse({ ...commit(), sha: 123 }).success).toBe(false);
   });
 
-  it('accepts a session row with an id, a status and a creation time', () => {
-    expect(
-      sessionRowSchema.safeParse({
-        id: 's1',
-        status: 'running',
-        created_at: '2026-01-01T00:00:00Z'
-      }).success
-    ).toBe(true);
-    expect(sessionRowSchema.safeParse({ id: '', status: 'running', created_at: 'x' }).success).toBe(
-      false
-    );
+  it('checks every session field the list reads, and drops a row that would break a read', () => {
+    const row = {
+      id: 's1',
+      title: 'Fix the build',
+      status: 'active',
+      needs_owner: false,
+      created_at: '2026-01-01T00:00:00Z',
+      agent_kind: 'claude',
+      topic: null,
+      error: null,
+      repo_url: 'https://github.com/owner/repo',
+      parent_session_id: null
+    };
+    expect(sessionRowSchema.safeParse(row).success).toBe(true);
+    expect(sessionRowSchema.safeParse({ ...row, id: '' }).success).toBe(false);
+    expect(sessionRowSchema.safeParse({ ...row, status: 'running' }).success).toBe(false);
+    expect(sessionRowSchema.safeParse({ ...row, needs_owner: 'no' }).success).toBe(false);
+    expect(sessionRowSchema.safeParse({ ...row, repo_url: 42 }).success).toBe(false);
+    const withoutRepo: Record<string, unknown> = { ...row };
+    delete withoutRepo.repo_url;
+    expect(sessionRowSchema.safeParse(withoutRepo).success).toBe(false);
+  });
+
+  it('checks the provider fields the session row reads', () => {
+    const row = { id: 'claude-main', native_provider: 'claude', aliases: ['opus'] };
+    expect(providerRowSchema.safeParse(row).success).toBe(true);
+    expect(providerRowSchema.safeParse({ ...row, native_provider: 'gemini' }).success).toBe(false);
+    expect(providerRowSchema.safeParse({ ...row, aliases: [7] }).success).toBe(false);
   });
 
   it('needs the publication mode, the manifest repository, branch and agent to show a workspace', () => {

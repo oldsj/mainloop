@@ -1,11 +1,17 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
 import { server } from '@/test/msw/server';
 import { project, type ProjectFixture } from './test/fixtures';
-import { createWorkspaceWrite, projectsRead, projectsReadWith } from './test/handlers';
+import {
+  createWorkspaceWrite,
+  projectsRead,
+  projectsReadWith,
+  workspacesRead,
+  workspacesReadWith
+} from './test/handlers';
 import { renderProjects } from './test/render';
 
 // The panel's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
@@ -259,6 +265,78 @@ describe('new workspace from a repository', () => {
 
     expect(await screen.findByText('Workspace page')).toBeInTheDocument();
     expect(posts).toBe(1);
+  });
+
+  it.each([
+    ['no reply', () => HttpResponse.error()],
+    ['a 500', () => HttpResponse.json({ detail: 'Mainloop is restarting' }, { status: 500 })]
+  ])(
+    'a create with %s may still have made a workspace, so the form stays locked until the list is checked',
+    async (_case, reply) => {
+      let posts = 0;
+      server.use(
+        projectsRead([project()]),
+        workspacesRead([]),
+        createWorkspaceWrite(() => {
+          posts += 1;
+          return reply();
+        })
+      );
+      const user = userEvent.setup();
+      renderProjects('/');
+      const form = await openForm(user);
+      await user.type(within(form).getByRole('textbox', { name: 'Repository' }), 'acme/widgets');
+      await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+
+      const check = await screen.findByTestId('create-check');
+      expect(check).toHaveTextContent('The workspace may have been created.');
+      // The raw failure is not shown while the owner checks; the check replaces it.
+      expect(screen.queryByText('Mainloop is restarting')).not.toBeInTheDocument();
+      await within(check).findByText('No recent workspaces are listed.');
+
+      const submit = within(form).getByRole('button', { name: 'Create workspace' });
+      expect(submit).toBeDisabled();
+      await user.click(submit);
+      expect(posts).toBe(1);
+
+      const acknowledge = within(check).getByRole('button', { name: "I've checked the list" });
+      await waitFor(() => expect(acknowledge).toBeEnabled());
+      await user.click(acknowledge);
+      expect(screen.queryByTestId('create-check')).not.toBeInTheDocument();
+      // The reply that never came marked the backend offline. The health probe clears it, as it would in the app.
+      await act(async () => {
+        await connection.check();
+      });
+      expect(within(form).getByRole('button', { name: 'Create workspace' })).toBeEnabled();
+    }
+  );
+
+  it('a failed re-read of the workspace list keeps the check locked, with a retry', async () => {
+    // Every list read after the create fails, so the check has nothing it can confirm.
+    let posted = false;
+    server.use(
+      projectsRead([project()]),
+      workspacesReadWith(() =>
+        posted
+          ? HttpResponse.json({ detail: 'Workspaces are unavailable' }, { status: 500 })
+          : HttpResponse.json([])
+      ),
+      createWorkspaceWrite(() => {
+        posted = true;
+        return HttpResponse.error();
+      })
+    );
+    const user = userEvent.setup();
+    renderProjects('/');
+    const form = await openForm(user);
+    await user.type(within(form).getByRole('textbox', { name: 'Repository' }), 'acme/widgets');
+    await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+
+    const check = await screen.findByTestId('create-check');
+    expect(await within(check).findByText("Couldn't read the workspace list.")).toBeInTheDocument();
+    // A list that failed to re-read cannot confirm anything, so there is no way on yet.
+    expect(within(check).getByRole('button', { name: "I've checked the list" })).toBeDisabled();
+    expect(within(check).getByRole('button', { name: 'Retry loading workspaces' })).toBeEnabled();
   });
 
   it('is disabled while the backend is unreachable', async () => {

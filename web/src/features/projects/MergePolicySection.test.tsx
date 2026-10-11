@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -251,5 +251,41 @@ describe('merge policy section', () => {
     failing = false;
     await user.click(within(block).getByRole('button', { name: 'Refresh policy' }));
     expect(screen.queryByTestId('merge-policy-refresh-error')).not.toBeInTheDocument();
+  });
+
+  it('a failed refresh after a refused save keeps the form locked until a refresh succeeds', async () => {
+    let failing = false;
+    const current = policy({ writes_enabled: true, merge_policy: 'auto', merge_policy_version: 3 });
+    server.use(
+      policyRead(() =>
+        failing
+          ? HttpResponse.json({ detail: 'Policy read failed' }, { status: 500 })
+          : HttpResponse.json(current)
+      ),
+      policyWrite(problem(503, 'Owner policy writes are off on this server'))
+    );
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByText('Current policy: Auto');
+    await user.selectOptions(controls().select!, 'approval');
+    await user.click(controls().save!);
+    const alert = await screen.findByRole('alert');
+
+    // The re-read fails, so the draft is still not known to be current. The lock must hold.
+    failing = true;
+    await user.click(within(alert).getByRole('button', { name: 'Refresh policy' }));
+    const block = await screen.findByTestId('merge-policy-refresh-error');
+    expect(block).toHaveTextContent('Policy read failed');
+    expect(controls().select).toBeDisabled();
+    expect(controls().save).toBeDisabled();
+
+    failing = false;
+    await user.click(within(block).getByRole('button', { name: 'Refresh policy' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('merge-policy-refresh-error')).not.toBeInTheDocument()
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(controls().select).toBeEnabled();
   });
 });
