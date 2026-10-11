@@ -20,10 +20,16 @@ func (s *Service) ReadySession(ctx context.Context, sessionID string, workspaceI
 		return errors.New("the session has no kagent session")
 	}
 	t := &turn{s: s, ksid: kagentSessionID, d: dbq.GetDeliveryContextRow{SessionID: sessionID, WorkspaceID: workspaceID}}
+	if err := t.checkSendFence(ctx); err != nil {
+		return err
+	}
 	if workspaceID != nil && s.Waker != nil {
 		if err := s.Waker.Wake(ctx, *workspaceID); err != nil {
 			return fmt.Errorf("wake the workspace: %w", err)
 		}
+	}
+	if err := t.checkSendFence(ctx); err != nil {
+		return err
 	}
 	sess, err := s.Kagent.GetSession(ctx, kagentSessionID)
 	if err != nil {

@@ -68,6 +68,21 @@ func conflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrConflict, fmt.Sprintf(format, args...))
 }
 
+var errTaskSessionStopped = conflict("This task attempt has stopped; start a new one.")
+
+// checkTaskSendFence reads the durable stop intent, including old attempts. Session activity can
+// become completed without reopening the attempt's authority to send.
+func checkTaskSendFence(ctx context.Context, q *dbq.Queries, sessionID string) error {
+	stopped, err := q.IsTaskSessionStopped(ctx, &sessionID)
+	if err != nil {
+		return fmt.Errorf("check task session send fence: %w", err)
+	}
+	if stopped {
+		return errTaskSessionStopped
+	}
+	return nil
+}
+
 // reason is the text of an error that wraps sentinel, without the sentinel.
 func reason(err, sentinel error) string {
 	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
@@ -293,6 +308,9 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, sessionID, messageID, t
 	if err := db.XactLock(ctx, tx, "mainloop:send:"+sessionID); err != nil {
 		return err
 	}
+	if err := checkTaskSendFence(ctx, q, sessionID); err != nil {
+		return err
+	}
 	if d, err := q.GetDelivery(ctx, messageID); err == nil {
 		if d.SessionID != sessionID {
 			return fmt.Errorf("%w: the message id belongs to another conversation", ErrInvalid)
@@ -375,7 +393,7 @@ func endedStatus(st dbstate.SessionStatus) bool {
 
 // SendTo records one user message for a session of the owner and queues its delivery, like Send.
 // The session must have a native binding, must not have ended or been archived, and must have no
-// open turn.
+// open turn or stop request on its task attempt.
 func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string) (Sent, error) {
 	text, err := checkText(messageID, text)
 	if err != nil {

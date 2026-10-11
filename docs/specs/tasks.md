@@ -277,6 +277,14 @@ Attempt states are `creating`, `active`, `draining`, `fenced`, `superseded`, `fa
 `draining`; `draining` to `fenced`; `fenced` to `superseded`, `failed`, `cancelled` or `completed`. Capacity remains held separately until confirmed fencing/termination;
 reporting alone never releases it. Unknown creates/stops/publication retain their reservation.
 
+A stop request permanently closes the attempt's session to new messages, even if the session's
+activity status is `completed`. The retained attempt's `stop_state` is the send fence: it changes
+from `none` to `requested` with the move to `draining`, and stays non-`none` through unresolved
+stops, confirmation and settlement. Recording a message checks it in the recording transaction;
+dispatching an already-recorded message checks it before native preparation and dispatch. This
+does not change ordinary standalone or adopted scheduled sessions. Sends already in flight still
+require positive stop confirmation before the branch writer claim and capacity are released.
+
 Verified merged coding tasks enter automatic runtime cleanup through the existing task
 reconciler. It waits for all outstanding native deliveries and held child attempts, drains and
 revokes MCP/push authority, confirms deletion of the exact persisted kagent Session, then fences

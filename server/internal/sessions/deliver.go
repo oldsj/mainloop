@@ -195,6 +195,9 @@ func lost(n int64, err error) error {
 // new create request id. Every step is idempotent, so repeating it after a crash is safe, and none
 // holds a database lock across a kagent call.
 func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
+	if err := t.checkSendFence(ctx); err != nil {
+		return "", err
+	}
 	if t.d.WorkspaceID != nil {
 		// A workspace's Session belongs to the workspace service: it makes it, and wakes it. Wait for
 		// an open suspend and resume the workspace first, so the send finds a ready Session.
@@ -208,6 +211,9 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 		}
 	}
 	for replaced := false; ; replaced = true {
+		if err := t.checkSendFence(ctx); err != nil {
+			return "", err
+		}
 		var sess *kagentapi.Session
 		var err error
 		if t.ksid == "" {
@@ -288,6 +294,9 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 	})); err != nil {
 		return nil, fmt.Errorf("record the create request: %w", err)
 	}
+	if err := t.checkSendFence(ctx); err != nil {
+		return nil, err
+	}
 	sess, err := t.s.Kagent.CreateSession(ctx, &kagentapi.CreateSessionRequest{
 		Agent:       &kagentapi.ResourceReference{Namespace: t.agent.Namespace, Name: t.agent.Name},
 		RequestId:   reqID,
@@ -336,6 +345,9 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 	deadline := time.Now().Add(wait)
 	resumed := false
 	for {
+		if err := t.checkSendFence(ctx); err != nil {
+			return "", err
+		}
 		switch st := sess.GetState(); {
 		case st == kagentapi.RuntimeState_RUNTIME_STATE_READY && !changing(sess):
 			return sess.GetId(), nil
@@ -355,6 +367,9 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 				if err = t.s.Waker.Wake(ctx, *t.d.WorkspaceID); err != nil {
 					return "", fmt.Errorf("wake the workspace: %w", err)
 				}
+				if err := t.checkSendFence(ctx); err != nil {
+					return "", err
+				}
 				sess, err = t.s.Kagent.GetSession(ctx, t.ksid)
 			} else {
 				sess, err = t.s.Kagent.ResumeSession(ctx, t.ksid)
@@ -371,6 +386,9 @@ func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) 
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-time.After(poll):
+		}
+		if err := t.checkSendFence(ctx); err != nil {
+			return "", err
 		}
 		var err error
 		if sess, err = t.s.Kagent.GetSession(ctx, t.ksid); err != nil {
@@ -408,6 +426,9 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	}
 	ksid, err := t.ensureKagentSession(ctx)
 	if err != nil {
+		if errors.Is(err, errTaskSessionStopped) {
+			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
+		}
 		if ctx.Err() != nil {
 			return reconcile.Retry(), ctx.Err()
 		}
@@ -467,6 +488,12 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	}
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
 
+	if err := t.checkSendFence(ctx); err != nil {
+		if errors.Is(err, errTaskSessionStopped) {
+			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
+		}
+		return reconcile.Retry(), err
+	}
 	var sendErr error
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
 		Text: t.d.Content, MessageID: t.c.ID, ContextID: ksid,
@@ -503,6 +530,10 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return t.settle(ctx, dbstate.DeliveryFailed, "send rejected: "+sendErr.Error(), nil, false)
 	}
 	return t.undecided(ctx, "the send may have reached kagent: "+sendErr.Error())
+}
+
+func (t *turn) checkSendFence(ctx context.Context) error {
+	return checkTaskSendFence(ctx, dbq.New(t.s.Pool), t.d.SessionID)
 }
 
 // errOpenTurn means another delivery of the session is open, so this one cannot become delivered.
