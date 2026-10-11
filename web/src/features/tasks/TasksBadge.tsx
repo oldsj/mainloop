@@ -1,6 +1,6 @@
 import { badgeText } from '@/features/inbox/model';
 import { tasksNeedingOwner } from './cache';
-import { useTaskList } from './queries';
+import { useOwnerTaskPoll, useTaskList } from './queries';
 
 /** The owner-task count in words, as the badge and the tab's accessible name both read it. */
 export function ownerTaskText(count: number): string {
@@ -13,6 +13,7 @@ export function ownerTaskText(count: number): string {
  */
 export function TasksBadge({ compact = false }: { compact?: boolean }) {
   const list = useTaskList();
+  useOwnerTaskPoll(compact);
   const count = tasksNeedingOwner(list.data ?? []).length;
   if (count === 0) return null;
   if (compact)

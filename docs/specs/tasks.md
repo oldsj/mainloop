@@ -433,6 +433,7 @@ Labels: **implemented** means built in `web/` and covered by component tests aga
 - **Wording:** while the connection is down, every action is disabled with "Mainloop is offline." A resend waits for the connection probe to confirm the link, so a lost reply on a dead link cannot be resent blindly.
 - **Wording:** the task list is read under its own query key, below the `keys.tasks()` prefix. It does not share the sessions list's `['get', '/tasks']` query. Live invalidation still reaches it. A task page reads its parent by id and its children through the list's `parent_task_id` filter, so it does not read the whole list.
 - **Implemented:** the tasks count is mounted on the compact **Inbox** tab, and its words are part of that tab's accessible name. The tree is not mounted in the shell: the project route that would show it is not part of this slice.
+- **Implemented:** the compact task count has a shared visible-only poll fallback for missed live events, using the same task-list cache as the tree and badge. Task detail and list reads consume cancellation signals, so leaving their last observer or hiding an active poll cancels its read.
 - **Not proven:** any run against a live backend, the live SSE stream (the event handling is tested through the applier, not a real stream), and layout at phone width in a browser.
 
 ## Go status (G8a)

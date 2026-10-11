@@ -20,12 +20,13 @@ import { useCreateWorkspace, useProjects } from './queries';
 export function ProjectsPanel() {
   const navigate = useNavigate();
   const projects = useProjects();
-  const [uncertain, setUncertain] = useState(false);
-  const create = useCreateWorkspace(undefined, () => setUncertain(true));
+  const create = useCreateWorkspace();
+  const uncertain = create.uncertain;
   const [open, setOpen] = useState(false);
   const rows = keepValid<Project>(projects.data, projectRowSchema);
 
   const submit = (target: { repo: string; branch: string; agentKind: AgentKind }) => {
+    if (create.pending || uncertain) return;
     create.mutate(
       { body: workspaceRequest(target) },
       {
@@ -33,12 +34,6 @@ export function ProjectsPanel() {
           void navigate({ to: '/workspaces/$id', params: { id: workspace.workspace_id } })
       }
     );
-  };
-
-  // The owner has looked at the recent list, so the form unlocks and the old error is cleared.
-  const acknowledge = () => {
-    setUncertain(false);
-    create.reset();
   };
 
   return (
@@ -63,15 +58,15 @@ export function ProjectsPanel() {
       </div>
 
       {open ? (
-        <NewWorkspaceForm pending={create.isPending} locked={uncertain} onSubmit={submit} />
+        <NewWorkspaceForm pending={create.pending} locked={uncertain !== null} onSubmit={submit} />
       ) : null}
 
       {uncertain ? (
         <CreateCheck
-          repo={create.variables?.body.repo}
-          branch={create.variables?.body.branch}
-          reading={create.isPending}
-          onAcknowledge={acknowledge}
+          repo={uncertain.repo}
+          branch={uncertain.branch}
+          reading={create.pending}
+          onAcknowledge={create.acknowledge}
         />
       ) : create.error ? (
         <div role="alert" className="text-destructive text-sm">

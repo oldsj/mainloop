@@ -304,7 +304,13 @@ export function useThread(source: ThreadSource) {
           // No reply does not mean no record. Re-read before the text goes back to the box, so it
           // is not sent a second time.
           const lost = isLostReply(error);
-          const recorded = lost ? await recordedSince(known, text) : false;
+          let recorded = lost ? await recordedSince(known, text) : false;
+          if (lost && recorded === false) {
+            // The delivery may still be committing after the connection drops. Give it one more
+            // bounded read while the send guard holds; recovery never sends another POST.
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+            recorded = await recordedSince(known, text);
+          }
           if (recorded) {
             accepted = true;
             if (composer) clearDraft(draftKey);

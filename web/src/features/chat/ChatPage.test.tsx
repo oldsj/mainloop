@@ -197,9 +197,40 @@ describe('sending', () => {
     expect(state.chatPosts).toHaveLength(1);
   });
 
+  it('checks once more for a delivery recorded after the first lost-reply read', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    let recoveryReads = 0;
+    server.use(
+      http.post(`${API_URL}/chat`, async ({ request }) => {
+        state.chatPosts.push((await request.json()) as ChatBackendState['chatPosts'][number]);
+        return HttpResponse.error();
+      }),
+      http.get(`${API_URL}/main-thread`, () => {
+        if (state.chatPosts.length > 0) {
+          recoveryReads++;
+          if (recoveryReads === 2) {
+            recordDelivery(state, deliveryFixture({ message_id: 'late-1' }));
+            state.messages.push(messageFixture({ id: 'late-1', content: 'late commit' }));
+          }
+        }
+        return HttpResponse.json(state.mainThread);
+      })
+    );
+    await userEvent.type(input(), 'late commit{Enter}');
+    await waitFor(() => expect(recoveryReads).toBe(1));
+    expect(input()).toBeDisabled();
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(LOST_REPLY_RECORDED);
+    expect(await screen.findByText('late commit')).toBeInTheDocument();
+    expect(input().value).toBe('');
+    expect(loadDraft(CONVERSATION_ID)).toBe('');
+    expect(state.chatPosts).toHaveLength(1);
+  });
+
   it('gives the text back when a lost reply shows nothing was recorded', async () => {
     const { state } = setup(existing());
     await screen.findByText('build it');
+    const reads = state.mainThreadReads;
     state.lostSend = 'unrecorded';
     await userEvent.type(input(), 'lost{Enter}');
     expect(await screen.findByTestId('send-error')).toHaveTextContent(
@@ -207,6 +238,9 @@ describe('sending', () => {
     );
     expect(input().value).toBe('lost');
     expect(loadDraft(CONVERSATION_ID)).toBe('lost');
+    expect(state.chatPosts).toHaveLength(1);
+    // One baseline and exactly two recovery reads; the message is never automatically resent.
+    expect(state.mainThreadReads - reads).toBe(3);
   });
 
   it('does not count a report that lands in a lost reply window as this message', async () => {

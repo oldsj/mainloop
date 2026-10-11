@@ -364,6 +364,70 @@ describe('project page', () => {
     }
   );
 
+  it('keeps an in-flight create and its uncertain branch check through navigation', async () => {
+    let posts = 0;
+    let finish!: () => void;
+    const reply = new Promise<void>((resolve) => (finish = resolve));
+    const asked = workspace({
+      workspace_id: 'ws-asked',
+      manifest: { ...workspace().manifest, branch: 'feature/asked' }
+    });
+    server.use(
+      createWorkspaceWrite(async () => {
+        posts++;
+        await reply;
+        return HttpResponse.json({ detail: 'Reply unavailable' }, { status: 500 });
+      }),
+      ...serveProjectPage({ workspaces: [workspace(), asked] })
+    );
+    const user = userEvent.setup();
+    const { router } = renderProjects(PAGE);
+    let form = await screen.findByTestId('project-workspace-form');
+    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
+    await user.clear(branch);
+    await user.type(branch, 'feature/asked');
+    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
+    await waitFor(() => expect(posts).toBe(1));
+
+    try {
+      await act(async () => {
+        await router.navigate({ to: '/sessions/$id', params: { id: 's1' } });
+      });
+      await screen.findByText('Session page');
+      await act(async () => {
+        await router.navigate({ to: '/projects/$id', params: { id: 'project-a' } });
+      });
+      form = await screen.findByTestId('project-workspace-form');
+      expect(within(form).getByRole('button', { name: 'Creating…' })).toBeDisabled();
+    } finally {
+      finish();
+    }
+
+    const check = await screen.findByTestId('create-check');
+    await waitFor(() =>
+      expect(within(check).getByRole('button', { name: "I've checked the list" })).toBeEnabled()
+    );
+    await act(async () => {
+      await router.navigate({ to: '/sessions/$id', params: { id: 's1' } });
+    });
+    await screen.findByText('Session page');
+    await act(async () => {
+      await router.navigate({ to: '/projects/$id', params: { id: 'project-a' } });
+    });
+    const restored = await screen.findByTestId('create-check');
+    expect((await within(restored).findAllByRole('link'))[0]).toHaveAttribute(
+      'href',
+      '/workspaces/ws-asked'
+    );
+    form = screen.getByTestId('project-workspace-form');
+    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeDisabled();
+    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
+    expect(posts).toBe(1);
+    await user.click(within(restored).getByRole('button', { name: "I've checked the list" }));
+    expect(screen.queryByTestId('create-check')).not.toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'New workspace' })).toBeEnabled();
+  });
+
   it('lists the requested branch first, then the other workspaces of this repository', async () => {
     const asked = workspace({
       workspace_id: 'ws-asked',

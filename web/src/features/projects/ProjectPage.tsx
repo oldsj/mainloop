@@ -55,8 +55,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   const detail = useProjectDetail(id);
   const workspaces = useWorkspaces();
   const providers = useProviders();
-  const [uncertain, setUncertain] = useState(false);
-  const create = useCreateWorkspace(id, () => setUncertain(true));
+  const create = useCreateWorkspace(id);
+  const uncertain = create.uncertain;
   const navigate = useNavigate();
 
   const data = detail.data;
@@ -101,7 +101,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
   );
 
   const startWorkspace = (target: { branch: string; agentKind: AgentKind }) => {
-    if (create.isPending || uncertain) return;
+    if (create.pending || uncertain) return;
     create.mutate(
       { body: workspaceRequest({ projectId: id, ...target }) },
       {
@@ -109,12 +109,6 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           void navigate({ to: '/workspaces/$id', params: { id: workspace.workspace_id } })
       }
     );
-  };
-
-  // The owner has looked at the recent list, so the form unlocks and the old error is cleared.
-  const acknowledge = () => {
-    setUncertain(false);
-    create.reset();
   };
 
   return (
@@ -202,16 +196,16 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         </h2>
         <BranchWorkspaceForm
           defaultBranch={project.default_branch}
-          pending={create.isPending}
-          locked={uncertain}
+          pending={create.pending}
+          locked={uncertain !== null}
           onSubmit={startWorkspace}
         />
         {uncertain ? (
           <CreateCheck
             repo={project.html_url}
-            branch={create.variables?.body.branch}
-            reading={create.isPending}
-            onAcknowledge={acknowledge}
+            branch={uncertain.branch}
+            reading={create.pending}
+            onAcknowledge={create.acknowledge}
           />
         ) : create.error ? (
           <div role="alert" className="text-destructive text-sm">

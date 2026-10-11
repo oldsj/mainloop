@@ -210,4 +210,25 @@ describe('compact tab badges', () => {
     // The shared poll starts at once and repeats about every four seconds, so this waits past one.
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6000 });
   });
+
+  it('updates the task count without a live event while another tab is open', async () => {
+    setViewport(false);
+    let needsOwner = true;
+    let reads = 0;
+    server.use(
+      tasksList(() => {
+        reads++;
+        return HttpResponse.json([view({ reason: needsOwner ? 'owner_decision' : null })]);
+      })
+    );
+    await renderAt('/?tab=chat');
+    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1');
+    expect(screen.queryByTestId('inbox-panel')).not.toBeInTheDocument();
+    needsOwner = false;
+    await waitFor(() => expect(screen.queryByTestId('tasks-badge')).not.toBeInTheDocument(), {
+      timeout: 6000
+    });
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox');
+  });
 });

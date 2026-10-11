@@ -267,6 +267,95 @@ describe('new workspace from a repository', () => {
     expect(posts).toBe(1);
   });
 
+  it('restores the repository check after the panel unmounts, without another create', async () => {
+    let posts = 0;
+    const wanted = workspace({
+      workspace_id: 'ws-wanted',
+      manifest: { ...workspace().manifest, branch: 'feature/asked' }
+    });
+    server.use(
+      projectsRead([project()]),
+      workspacesRead([
+        wanted,
+        workspace({
+          manifest: { ...workspace().manifest, repo_url: 'https://github.com/acme/other' }
+        })
+      ]),
+      createWorkspaceWrite(() => {
+        posts++;
+        return HttpResponse.json({ detail: 'Reply unavailable' }, { status: 500 });
+      })
+    );
+    const user = userEvent.setup();
+    const { router } = renderProjects('/');
+    let form = await openForm(user);
+    await user.type(within(form).getByRole('textbox', { name: 'Repository' }), 'acme/widgets');
+    await user.type(
+      within(form).getByRole('textbox', { name: 'Branch (optional)' }),
+      'feature/asked'
+    );
+    await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+    const check = await screen.findByTestId('create-check');
+    await waitFor(() =>
+      expect(within(check).getByRole('button', { name: "I've checked the list" })).toBeEnabled()
+    );
+    await act(async () => {
+      await router.navigate({ to: '/sessions/$id', params: { id: 's1' } });
+    });
+    await screen.findByText('Session page');
+    await act(async () => {
+      await router.navigate({ to: '/' });
+    });
+    const restored = await screen.findByTestId('create-check');
+    expect(await within(restored).findByRole('link')).toHaveAttribute(
+      'href',
+      '/workspaces/ws-wanted'
+    );
+    expect(restored).not.toHaveTextContent('acme/other');
+    form = await openForm(user);
+    expect(within(form).getByRole('button', { name: 'Create workspace' })).toBeDisabled();
+    await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+    expect(posts).toBe(1);
+    await user.click(within(restored).getByRole('button', { name: "I've checked the list" }));
+    expect(within(form).getByRole('button', { name: 'Create workspace' })).toBeEnabled();
+  });
+
+  it('keeps the acknowledged list available while a background refresh is in flight', async () => {
+    let background = false;
+    let finish!: () => void;
+    const refresh = new Promise<void>((resolve) => (finish = resolve));
+    server.use(
+      projectsRead([project()]),
+      workspacesReadWith(async () => {
+        if (background) await refresh;
+        return HttpResponse.json([workspace()]);
+      }),
+      createWorkspaceWrite(() =>
+        HttpResponse.json({ detail: 'Reply unavailable' }, { status: 500 })
+      )
+    );
+    const user = userEvent.setup();
+    const { queryClient } = renderProjects('/');
+    const form = await openForm(user);
+    await user.type(within(form).getByRole('textbox', { name: 'Repository' }), 'acme/widgets');
+    await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+    const check = await screen.findByTestId('create-check');
+    const acknowledge = within(check).getByRole('button', { name: "I've checked the list" });
+    await waitFor(() => expect(acknowledge).toBeEnabled());
+    background = true;
+    try {
+      await act(async () => {
+        void queryClient.invalidateQueries({ queryKey: keys.workspaces() });
+      });
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: keys.workspaces() })).toBe(1));
+      expect(acknowledge).toBeEnabled();
+      expect(within(check).getByRole('link')).toHaveAttribute('href', '/workspaces/ws-1');
+    } finally {
+      finish();
+    }
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: keys.workspaces() })).toBe(0));
+  });
+
   it.each([
     ['no reply', () => HttpResponse.error()],
     ['a 500', () => HttpResponse.json({ detail: 'Mainloop is restarting' }, { status: 500 })]

@@ -113,7 +113,9 @@ MSW fixtures typed from `api/openapi.yaml`.
   A new user delivery is this message only when the conversation holds a user message under that
   delivery's id whose text matches the sent text (both trimmed). Then the notice says the message
   was recorded, the box clears, and the message shows in the conversation. If no new user delivery
-  landed, the text returns to the box. If one did, but the conversation cannot be read or holds no
+  landed, one more read after a short delay checks for a delivery still being recorded; the send
+  stays locked and no message is resent. If that also finds none, the text returns to the box.
+  If a read fails, or a new user delivery's conversation cannot be read or holds no
   matching message, the text also returns to the box, and the notice says Mainloop could not confirm
   whether the message was recorded. The text match cannot tell this message from another client's
   message with the same text sent in the same moment, so that case can read as recorded.

@@ -2,10 +2,12 @@
  * Data hooks for the task UI. Every read and write goes through the generated client, and cache
  * keys come from `keys`, so SSE invalidation reaches these queries without a second map.
  */
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { $api, fetchClient, keys } from '@/api';
 import type { TaskOperation } from '@/lib/contract';
 import type { ActionIntent } from '@/lib/taskActions';
+import { visiblePolling } from '@/lib/visiblePolling';
 import {
   isTaskView,
   mergeTaskCache,
@@ -29,9 +31,10 @@ export class UnreadablePayloadError extends Error {}
 export function useTask(taskId: string, enabled = true) {
   return useQuery({
     queryKey: keys.task(taskId),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const { data } = await fetchClient.GET('/tasks/{task_id}', {
-        params: { path: { task_id: taskId } }
+        params: { path: { task_id: taskId } },
+        signal
       });
       if (!isTaskView(data)) {
         throw new UnreadablePayloadError('Mainloop sent a task this page cannot read.');
@@ -53,8 +56,8 @@ export type TaskListFilter = { project_id?: string; parent_task_id?: string };
 function taskListQuery(filter: TaskListFilter) {
   return {
     queryKey: [...keys.tasks(), filter],
-    queryFn: async (): Promise<unknown[]> => {
-      const { data } = await fetchClient.GET('/tasks', { params: { query: filter } });
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<unknown[]> => {
+      const { data } = await fetchClient.GET('/tasks', { params: { query: filter }, signal });
       if (!Array.isArray(data)) {
         throw new UnreadablePayloadError('Mainloop sent a task list this page cannot read.');
       }
@@ -67,6 +70,28 @@ function taskListQuery(filter: TaskListFilter) {
 /** The task list, for the project tree, the owner count and the badge. Only readable rows. */
 export function useTaskList(filter: TaskListFilter = {}) {
   return useQuery({ ...taskListQuery(filter), select: readableTaskRows });
+}
+
+/** Visible-only fallback for the compact count. All mounts share one poll and the list cache. */
+export function useOwnerTaskPoll(enabled: boolean): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!enabled) return;
+    return visiblePolling().watch('tasks:owner', async (signal) => {
+      if (signal.aborted) return;
+      const query = taskListQuery({});
+      const cancel = () =>
+        void queryClient.cancelQueries({ queryKey: query.queryKey, exact: true }, { revert: true });
+      signal.addEventListener('abort', cancel, { once: true });
+      try {
+        await queryClient.fetchQuery({ ...query, staleTime: 0, retry: false });
+      } catch {
+        // The query holds the error; a later visible poll can recover.
+      } finally {
+        signal.removeEventListener('abort', cancel);
+      }
+    });
+  }, [enabled, queryClient]);
 }
 
 /** How many rows of the same list this page cannot read, so the list can say so. */

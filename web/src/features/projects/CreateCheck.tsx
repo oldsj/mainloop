@@ -56,7 +56,7 @@ export function CreateCheck({
     branch
   ).slice(0, RECENT);
   // A list that failed to re-read cannot confirm anything, so the owner gets a retry, not a way on.
-  const settled = !reading && list.isSuccess && !list.isFetching;
+  const settled = !reading && list.isSuccess;
 
   return (
     <div
