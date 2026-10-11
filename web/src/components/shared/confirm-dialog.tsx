@@ -1,4 +1,5 @@
 import { AlertDialog } from 'radix-ui';
+import { useRef } from 'react';
 import { Button } from '@/components/ui/button';
 
 export interface ConfirmDialogProps {
@@ -31,6 +32,9 @@ export function ConfirmDialog({
   pending = false,
   onConfirm
 }: ConfirmDialogProps) {
+  // Radix returns focus to its own Trigger, and this dialog is opened from state, so there is none
+  // and focus would drop to <body>. Remember what had focus when the dialog opened and return to it.
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <AlertDialog.Root
       open={open}
@@ -40,7 +44,17 @@ export function ConfirmDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="bg-background/80 fixed inset-0" />
-        <AlertDialog.Content className="inset-x-md gap-md border-border bg-background p-lg text-foreground fixed top-1/2 mx-auto grid max-w-md -translate-y-1/2 rounded-none border">
+        <AlertDialog.Content
+          onOpenAutoFocus={() => {
+            opener.current =
+              document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            opener.current?.focus();
+          }}
+          className="inset-x-md gap-md border-border bg-background p-lg text-foreground fixed top-1/2 mx-auto grid max-w-md -translate-y-1/2 rounded-none border"
+        >
           <AlertDialog.Title className="text-lg font-medium">{title}</AlertDialog.Title>
           <AlertDialog.Description className="text-muted-foreground text-sm">
             {description}

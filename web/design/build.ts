@@ -2,9 +2,11 @@
 //   web/src/styles/theme.css  Tailwind v4 @theme block plus one CSS variable set per theme
 //   web/design/system/        files for the published Claude Design System artifact
 //
-// Run with: node web/design/build.ts   (Node 24, no dependencies)
-// Invalid tokens exit 1 and write nothing. Output has no timestamps and a fixed order.
+// Run with: node web/design/build.ts   (Node 24; the width check uses the installed tailwindcss)
+// Invalid tokens, or a max-w class that Tailwind would resolve to spacing, exit 1 and write nothing.
+// Output has no timestamps and a fixed order.
 
+import { compile } from 'tailwindcss';
 import {
   existsSync,
   mkdirSync,
@@ -14,7 +16,7 @@ import {
   writeFileSync,
   copyFileSync
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
@@ -254,6 +256,7 @@ function cssName(path: string): string | undefined {
     return undefined;
   }
   if (group === 'spacing') return `--spacing-${a}`;
+  if (group === 'max-width') return `--max-width-${a}`;
   if (group === 'radius') return a === 'default' ? '--radius' : `--radius-${a}`;
   if (group === 'motion') {
     if (a === 'duration') return `--duration-${b}`;
@@ -334,6 +337,30 @@ function formatJson(value: Json, indent: string, prefix: string, suffix: string)
   return `${prefix}${JSON.stringify(value)}${suffix}`;
 }
 
+// Tailwind's max-w lookup reads --spacing-* before --container-* (and --max-width-* first), so a
+// spacing token named like a container size wins and collapses the width. Compile the @theme block
+// with the real Tailwind and report any max-w size that reads a spacing variable.
+const MAX_WIDTH_SIZES = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl', '6xl', '7xl'];
+const TAILWIND_INDEX = join(HERE, '..', 'node_modules', 'tailwindcss', 'index.css');
+async function maxWidthProblems(themeBlock: string): Promise<string[]> {
+  const compiler = await compile(`@import 'tailwindcss';\n${themeBlock}`, {
+    base: HERE,
+    loadStylesheet: async (id, base) => {
+      const path = id === 'tailwindcss' ? TAILWIND_INDEX : join(base, id);
+      return { path, base: dirname(path), content: readFileSync(path, 'utf8') };
+    }
+  });
+  const output = compiler.build(MAX_WIDTH_SIZES.map((size) => `max-w-${size}`));
+  return MAX_WIDTH_SIZES.flatMap((size) => {
+    const value = new RegExp(`\\.max-w-${size}\\s*\\{[^}]*max-width:\\s*([^;}]+)`).exec(
+      output
+    )?.[1];
+    if (!value) return [`max-w-${size}: no rule generated`];
+    if (value.includes('--spacing-')) return [`max-w-${size} resolves to ${value.trim()}`];
+    return [];
+  });
+}
+
 function checkComponents(): string[] {
   if (!existsSync(COMPONENTS_DIR)) {
     problem('components', 'directory is missing');
@@ -393,9 +420,11 @@ if (errors.length > 0 || !source) {
       continue;
     }
     const line = `${name}: ${cssValueOf(path)};`;
-    if (/^--(font|text|spacing|radius|ease)-/.test(name)) themeNamespaced.push(line);
+    if (/^--(font|text|spacing|max-width|radius|ease)-/.test(name)) themeNamespaced.push(line);
     else sharedRoot.push(line);
   }
+  for (const message of await maxWidthProblems(['@theme {', ...themeNamespaced, '}'].join('\n')))
+    problem('max-width', message);
   if (errors.length > 0) {
     fail();
   } else {

@@ -104,7 +104,7 @@ export function NewAgentPage() {
           data-testid="agent-title"
           value={title}
           onChange={(event) => setTitleOverride(event.target.value)}
-          className="border-border bg-background text-foreground px-md min-h-11 border text-sm"
+          className="border-border bg-background text-foreground px-md min-h-11 w-full border text-sm"
         />
       </label>
 
@@ -116,7 +116,7 @@ export function NewAgentPage() {
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={onPromptKeyDown}
-          className="border-border bg-background text-foreground px-md py-sm border text-sm"
+          className="border-border bg-background text-foreground px-md py-sm w-full border text-sm"
         />
       </label>
 

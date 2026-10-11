@@ -44,6 +44,14 @@ describe('new agent form', () => {
     expect(titleField()).toHaveValue('codex session');
   });
 
+  it('gives the title and prompt fields the full width of the form', async () => {
+    server.use(...otherListReads());
+    renderSessions('/agents');
+    await screen.findByRole('heading', { name: 'New agent session' });
+    expect(titleField()).toHaveClass('w-full');
+    expect(promptField()).toHaveClass('w-full');
+  });
+
   it('keeps a title the owner typed when the kind changes', async () => {
     server.use(...otherListReads());
     const user = userEvent.setup();
