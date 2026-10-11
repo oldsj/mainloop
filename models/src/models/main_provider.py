@@ -10,6 +10,7 @@ MainProvider = Literal["claude", "codex"]
 class MainProviderSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider: MainProvider
+    restart_failed: bool = False
 
 
 class MainProviderHistory(BaseModel):
@@ -24,4 +25,5 @@ class MainProviderInfo(BaseModel):
     status: Literal["ready", "not_started", "pending", "failed"]
     kagent_session_id: str | None
     error: str | None = None
+    recoverable: bool = False
     history: list[MainProviderHistory]

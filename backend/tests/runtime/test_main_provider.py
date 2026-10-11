@@ -11,20 +11,26 @@ import httpx
 from mainloop import api
 from mainloop.config import Settings, settings
 from mainloop.db import db
+from mainloop.db.main_provider_schema import MAIN_PROVIDER_MIGRATION_SQL
 from mainloop.identity import current_user
-from mainloop.mcp_app import invoke
+from mainloop.mcp_app import AgentAuth, _context, invoke
 from mainloop.providers import registry
 from mainloop.runtime import agent_credentials, main_provider
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.agent_identity import token_for
+from mainloop.runtime.agent_tools import AgentService
 from mainloop.runtime.delegation import PgStore, ensure_main_session, render_for_binding
 from mainloop.runtime.kagent_client import (
+    KagentClient,
     KagentSession,
     OutcomeUnknown,
     RuntimeOperation,
     RuntimeState,
+    SessionError,
     Task,
+    TaskProjection,
 )
+from mainloop.tasks.lifecycle import LifecycleDenied
 from tests.runtime import test_postgres_task_reports as task_fixtures
 from tests.runtime.postgres_fixture import wait_for_lock
 from tests.runtime.test_postgres_ledger import KagentFakeCase, PostgresTestCase
@@ -43,6 +49,8 @@ class Runtime:
         self.release.set()
 
     async def get_session(self, sid):
+        if sid not in self.sessions:
+            raise SessionError("confirmed absent", grpc_status=5)
         return self.sessions[sid]
 
     async def list_tasks(self, agent, context_id):
@@ -594,6 +602,468 @@ class MainProviderTests(PostgresTestCase):
         )
         self.assertEqual(selected, conversation.id)
         self.assertNotEqual(selected, workspace_cid)
+
+    async def test_retired_authenticated_request_cannot_mutate_any_ordinary_intent(
+        self,
+    ):
+        service = AgentService(PgStore())
+        ctx = await service.authenticate(token_for(self.sid))
+        pending = await invoke(service, ctx, "pending_add", {"text": "retain this"})
+        entered, release = asyncio.Event(), asyncio.Event()
+        results = []
+
+        async def downstream(scope, receive, send):
+            entered.set()
+            await release.wait()
+            for name, args in (
+                ("topic_open", {"name": "retired topic", "status": "obsolete"}),
+                ("note", {"text": "obsolete note"}),
+                ("decide", {"text": "obsolete decision"}),
+                ("pending_add", {"text": "obsolete instruction"}),
+                ("pending_done", {"id": pending.structuredContent["id"]}),
+            ):
+                results.append(await invoke(service, _context.get(), name, args))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        scope = {
+            "type": "http",
+            "path": "/mcp",
+            "headers": [(b"authorization", ("Bearer " + token_for(self.sid)).encode())],
+        }
+        inflight = asyncio.create_task(
+            AgentAuth(downstream, service)(scope, receive, send)
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            await self.select()
+        finally:
+            release.set()
+            await inflight
+        self.assertTrue(all(result.isError for result in results))
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM topic_records"), 1
+        )
+        self.assertEqual(
+            await self.pool.fetchval("SELECT status FROM topic_records"), "open"
+        )
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM topics"), 1)
+        fresh = await ns.get_binding(self.sid)
+        new_ctx = await service.authenticate(token_for(fresh["credential_identity"]))
+        self.assertFalse(
+            (
+                await invoke(
+                    service,
+                    new_ctx,
+                    "pending_done",
+                    {"id": pending.structuredContent["id"]},
+                )
+            ).isError
+        )
+        self.assertFalse(
+            (await invoke(service, new_ctx, "note", {"text": "current note"})).isError
+        )
+        self.assertFalse((await invoke(service, new_ctx, "task_list", {})).isError)
+
+    async def test_intent_commit_serializes_with_retirement_and_rolls_back_failure(
+        self,
+    ):
+        service = AgentService(PgStore())
+        ctx = await service.authenticate(token_for(self.sid))
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = PgStore.add_record
+
+        async def delayed(store, *args):
+            entered.set()
+            await release.wait()
+            return await original(store, *args)
+
+        with patch.object(PgStore, "add_record", delayed):
+            writing = asyncio.create_task(
+                invoke(service, ctx, "note", {"text": "before retirement"})
+            )
+            await asyncio.wait_for(entered.wait(), 10)
+            switching = asyncio.create_task(self.select())
+            try:
+                async with self.pool.acquire() as conn:
+                    self.assertTrue(
+                        await wait_for_lock(
+                            conn, query="%pg_advisory_lock%", locktype="advisory"
+                        )
+                    )
+                self.assertEqual(await ns.get_binding(self.sid), self.binding)
+            finally:
+                release.set()
+                written, selected = await asyncio.gather(writing, switching)
+        self.assertFalse(written.isError)
+        self.assertEqual(selected.status, "ready")
+        self.assertIn(
+            "before retirement",
+            await render_for_binding(await ns.get_binding(self.sid)),
+        )
+        fresh = await ns.get_binding(self.sid)
+        new_ctx = await service.authenticate(token_for(fresh["credential_identity"]))
+        with patch.object(
+            PgStore, "add_record", AsyncMock(side_effect=RuntimeError("write failed"))
+        ):
+            with self.assertRaisesRegex(RuntimeError, "write failed"):
+                await service.record(new_ctx, "note", "rollback", "rollback topic")
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM topics WHERE name='rollback topic')"
+            )
+        )
+
+    async def test_admitted_intent_rechecks_revocation(self):
+        service = AgentService(PgStore())
+        ctx = await service.authenticate(token_for(self.sid))
+        with patch.object(agent_credentials.credentials, "remove", AsyncMock()):
+            await agent_credentials.revoke(self.sid)
+        result = await invoke(service, ctx, "pending_add", {"text": "revoked intent"})
+        self.assertTrue(result.isError)
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM topics"), 0)
+
+    async def test_definitive_preparation_failure_allows_explicit_alternate_selection(
+        self,
+    ):
+        for outcome in ("absent", "failed", "deleted"):
+            with self.subTest(outcome=outcome):
+                # Start another fresh provider contract for each outcome.
+                target = (
+                    "codex"
+                    if (await ns.get_binding(self.sid))["kind"] == "claude"
+                    else "claude"
+                )
+                self.runtime.readiness_failure = True
+                failed = await self.select(target)
+                if outcome == "absent":
+                    del self.runtime.sessions[failed.kagent_session_id]
+                else:
+                    self.runtime.sessions[failed.kagent_session_id] = replace(
+                        self.runtime.sessions[failed.kagent_session_id],
+                        state=(
+                            RuntimeState.FAILED
+                            if outcome == "failed"
+                            else RuntimeState.DELETED
+                        ),
+                    )
+
+                async def readiness(runtime, **kwargs):
+                    return await KagentClient.ensure_ready(
+                        self.runtime, runtime, **kwargs
+                    )
+
+                with patch.object(self.runtime, "ensure_ready", readiness):
+                    observed = await self.select(target)
+                self.assertEqual(observed.status, "failed")
+                self.assertTrue(observed.recoverable)
+                saved = await ns.get_binding(self.sid)
+                self.assertEqual(await self.select(target), observed)
+                self.assertEqual(await ns.get_binding(self.sid), saved)
+                await self.pool.expire_connections()
+                self.runtime.readiness_failure = False
+                ready = await self.select("claude" if target == "codex" else "codex")
+                self.assertEqual(ready.status, "ready")
+                self.assertNotEqual(ready.kagent_session_id, failed.kagent_session_id)
+                snapshot = json.loads(
+                    await self.pool.fetchval(
+                        "SELECT snapshot FROM main_native_history WHERE kagent_session_id=$1",
+                        failed.kagent_session_id,
+                    )
+                )
+                self.assertTrue(snapshot["preparation_abandoned"])
+
+    async def test_failed_target_restart_is_fresh_idempotent_and_preserves_held_report(
+        self,
+    ):
+        self.runtime.readiness_failure = True
+        failed = await self.select()
+        self.runtime.sessions[failed.kagent_session_id] = replace(
+            self.runtime.sessions[failed.kagent_session_id],
+            state=RuntimeState.FAILED,
+        )
+        await self.select()
+        # A valid failed observation is sufficient even with the fake readiness error.
+        self.assertTrue((await main_provider.info(self.sid)).recoverable)
+        report = await ns.submit_message(self.sid, "held progress", source="report")
+        saved = await ns.get_binding(self.sid)
+        self.runtime.readiness_failure = False
+        ready = await main_provider.select(self.user, "codex", restart_failed=True)
+        fresh = await ns.get_binding(self.sid)
+        self.assertEqual(ready.status, "ready")
+        self.assertNotEqual(fresh["kagent_request_id"], saved["kagent_request_id"])
+        self.assertNotEqual(fresh["credential_identity"], saved["credential_identity"])
+        self.assertNotEqual(ready.kagent_session_id, failed.kagent_session_id)
+        self.assertEqual(
+            await main_provider.select(self.user, "codex", restart_failed=True), ready
+        )
+        self.assertEqual(len(self.runtime.creates), 2)
+        self.assertEqual((await ns.ledger.promote_queued(self.sid))[0], report)
+
+    async def test_uncertain_creation_restart_keeps_original_contract(self):
+        self.runtime.lose_create_reply = True
+        failed = await self.select()
+        self.assertFalse(failed.recoverable)
+        saved = await ns.get_binding(self.sid)
+        with self.assertRaisesRegex(
+            main_provider.MainProviderError, "main_provider_selection_pending"
+        ):
+            await self.select("claude")
+        ready = await main_provider.select(self.user, "codex", restart_failed=True)
+        self.assertEqual(ready.status, "ready")
+        self.assertEqual(
+            (await ns.get_binding(self.sid))["kagent_request_id"],
+            saved["kagent_request_id"],
+        )
+        self.assertEqual(self.runtime.creates[0], self.runtime.creates[1])
+
+    async def test_deleted_create_receipt_allows_abandonment_without_known_native_id(
+        self,
+    ):
+        original = self.runtime.create_session
+        request_ids = []
+
+        async def deleted_receipt(agent, *, request_id, **kwargs):
+            request_ids.append(request_id)
+            if agent == ns.agent_ref("codex", "main"):
+                raise SessionError("Session for request ID was deleted", grpc_status=9)
+            return await original(agent, request_id=request_id, **kwargs)
+
+        with patch.object(self.runtime, "create_session", deleted_receipt):
+            failed = await self.select()
+            self.assertTrue(failed.recoverable)
+            self.assertIsNone(failed.kagent_session_id)
+            ready = await self.select("claude")
+        self.assertEqual(ready.status, "ready")
+        self.assertEqual(request_ids[0], request_ids[1])
+        self.assertNotEqual(request_ids[1], request_ids[2])
+        self.assertEqual(len(self.runtime.sessions), 2)
+
+    async def test_create_returning_settled_failure_can_restart_with_fresh_identity(
+        self,
+    ):
+        original = self.runtime.create_session
+
+        async def failed_create(*args, **kwargs):
+            runtime = await original(*args, **kwargs)
+            self.runtime.sessions[runtime.id] = replace(
+                runtime, state=RuntimeState.FAILED
+            )
+            return self.runtime.sessions[runtime.id]
+
+        with patch.object(self.runtime, "create_session", failed_create):
+            failed = await self.select()
+        self.assertEqual(failed.status, "failed")
+        self.assertTrue(failed.recoverable)
+        with patch.object(settings, "api_hosts", "localhost"):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=api.app), base_url="http://localhost"
+            ) as client:
+                response = await client.put(
+                    "/main-thread/provider",
+                    json={"provider": "codex", "restart_failed": True},
+                )
+                self.assertEqual(response.status_code, 200)
+                ready = response.json()
+                self.assertEqual(ready["status"], "ready")
+                self.assertFalse(ready["recoverable"])
+                self.assertNotEqual(
+                    ready["kagent_session_id"], failed.kagent_session_id
+                )
+                self.assertEqual(
+                    (
+                        await client.put(
+                            "/main-thread/provider",
+                            json={"provider": "codex", "restart_failed": True},
+                        )
+                    ).json(),
+                    ready,
+                )
+        self.assertEqual(len(self.runtime.creates), 2)
+
+    async def test_unsettled_or_mismatched_failure_cannot_be_abandoned(self):
+        self.runtime.readiness_failure = True
+        failed = await self.select()
+        runtime = self.runtime.sessions[failed.kagent_session_id]
+        for replacement in (
+            replace(
+                runtime, state=RuntimeState.FAILED, operation=RuntimeOperation.CREATE
+            ),
+            replace(
+                runtime, state=RuntimeState.FAILED, agent=ns.agent_ref("claude", "main")
+            ),
+        ):
+            self.runtime.sessions[runtime.id] = replacement
+            self.assertFalse((await self.select()).recoverable)
+            with self.assertRaisesRegex(
+                main_provider.MainProviderError, "main_provider_selection_pending"
+            ):
+                await self.select("claude")
+        self.assertEqual(len(self.runtime.creates), 1)
+
+    async def test_abandonment_rechecks_native_failure_and_active_tasks(self):
+        self.runtime.readiness_failure = True
+        failed = await self.select()
+        runtime = self.runtime.sessions[failed.kagent_session_id]
+        self.runtime.sessions[runtime.id] = replace(runtime, state=RuntimeState.FAILED)
+        self.assertTrue((await self.select()).recoverable)
+        saved = await ns.get_binding(self.sid)
+        self.runtime.sessions[runtime.id] = runtime
+        with self.assertRaisesRegex(
+            main_provider.MainProviderError, "abandonment_unconfirmed"
+        ):
+            await self.select("claude")
+        self.runtime.sessions[runtime.id] = replace(runtime, state=RuntimeState.FAILED)
+        self.runtime.tasks = [
+            Task(
+                id="unsettled-task", context_id=runtime.id, status={"state": "working"}
+            )
+        ]
+        with self.assertRaisesRegex(
+            main_provider.MainProviderError, "main_native_turn_active"
+        ):
+            await self.select("claude")
+        self.assertEqual(await ns.get_binding(self.sid), saved)
+
+    async def test_recovery_and_idempotent_selection_ignore_current_catalog(self):
+        self.runtime.lose_create_reply = True
+        await self.select()
+        saved = await ns.get_binding(self.sid)
+        codex = registry().resolve("codex", "main")
+        claude = registry().resolve("claude", "main")
+        changed = [
+            codex.model_copy(
+                update={"enabled": False, "agents": {"child": codex.agents["child"]}}
+            ),
+            claude.model_copy(
+                update={"agents": {**claude.agents, "main": codex.agents["main"]}}
+            ),
+        ]
+        with patch.object(settings, "provider_profiles", changed):
+            ready = await self.select()
+            self.assertEqual(ready.status, "ready")
+            self.assertEqual(await self.select(), ready)
+        self.assertEqual(
+            (await ns.get_binding(self.sid))["kagent_request_id"],
+            saved["kagent_request_id"],
+        )
+        self.assertEqual(self.runtime.creates[0], self.runtime.creates[1])
+
+    async def test_failed_restart_validates_current_catalog_and_authority(self):
+        self.runtime.readiness_failure = True
+        failed = await self.select()
+        self.runtime.sessions[failed.kagent_session_id] = replace(
+            self.runtime.sessions[failed.kagent_session_id],
+            state=RuntimeState.FAILED,
+        )
+        await self.select()
+        saved = await ns.get_binding(self.sid)
+        disabled = (
+            registry().resolve("codex", "main").model_copy(update={"enabled": False})
+        )
+        with patch.object(settings, "provider_profiles", [disabled]):
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                await main_provider.select(self.user, "codex", restart_failed=True)
+        self.assertEqual(await ns.get_binding(self.sid), saved)
+        with patch.object(agent_credentials.credentials, "remove", AsyncMock()):
+            await agent_credentials.revoke(self.sid)
+        with self.assertRaises(LifecycleDenied):
+            await main_provider.select(self.user, "codex", restart_failed=True)
+        self.assertEqual(len(self.runtime.creates), 1)
+
+    async def test_completion_is_atomic_with_retirement_and_rolls_back_side_effect_failure(
+        self,
+    ):
+        mid = await self.delivery(self.sid, self.cid, "delivered")
+        projection = TaskProjection()
+        projection.replace(
+            Task(
+                id="old-completed",
+                context_id=self.old_id,
+                status={"state": "completed"},
+                artifacts=[
+                    {
+                        "artifactId": "reply",
+                        "parts": [{"kind": "text", "text": "old accepted result"}],
+                    }
+                ],
+            )
+        )
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = ns.ledger.mirror_reply
+
+        async def delayed(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        with patch.object(ns.ledger, "mirror_reply", delayed):
+            finalizing = asyncio.create_task(ns._finalize(self.sid, mid, projection))
+            await asyncio.wait_for(entered.wait(), 10)
+            switching = asyncio.create_task(self.select())
+            try:
+                async with self.pool.acquire() as conn:
+                    self.assertTrue(
+                        await wait_for_lock(
+                            conn, query="%pg_advisory_lock%", locktype="advisory"
+                        )
+                    )
+                self.assertEqual(await ns.ledger.delivery_state(mid), "delivered")
+            finally:
+                release.set()
+                await asyncio.gather(finalizing, switching)
+        fresh = await ns.get_binding(self.sid)
+        snapshot = json.loads(
+            await self.pool.fetchval("SELECT snapshot FROM main_native_history")
+        )
+        self.assertEqual(fresh["turns"], 0)
+        self.assertEqual(snapshot["turns"], 8)
+        self.assertIn("old accepted result", await render_for_binding(fresh))
+        self.assertIsNone(await ns._finalize(self.sid, mid, projection))
+        self.assertEqual((await ns.get_binding(self.sid))["turns"], 0)
+        mid = await self.delivery(self.sid, self.cid, "delivered")
+        projection.replace(
+            Task(
+                id="new-completed",
+                context_id=fresh["kagent_session_id"],
+                status={"state": "completed"},
+                artifacts=[
+                    {
+                        "artifactId": "reply",
+                        "parts": [{"kind": "text", "text": "rolled back reply"}],
+                    }
+                ],
+            )
+        )
+        with patch.object(
+            ns.ledger,
+            "bump_turns",
+            AsyncMock(side_effect=RuntimeError("accounting failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "accounting failed"):
+                await ns._finalize(self.sid, mid, projection)
+        self.assertEqual(await ns.ledger.delivery_state(mid), "delivered")
+        self.assertFalse(
+            await self.pool.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE content='rolled back reply')"
+            )
+        )
+
+    async def test_repair_schema_replays_without_changing_selection_or_history(self):
+        await self.select()
+        binding = await ns.get_binding(self.sid)
+        history = await self.pool.fetch("SELECT * FROM main_native_history ORDER BY id")
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        self.assertEqual(await ns.get_binding(self.sid), binding)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM main_native_history ORDER BY id"),
+            history,
+        )
 
 
 class MainProviderTaskTests(KagentFakeCase):

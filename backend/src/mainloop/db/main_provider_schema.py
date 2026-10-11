@@ -6,6 +6,7 @@ ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS main_agent_ref JSONB;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS credential_identity TEXT;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS main_provider_pending BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS main_provider_error TEXT;
+ALTER TABLE native_bindings ADD COLUMN IF NOT EXISTS main_provider_recoverable BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE agent_credential_cleanup ADD COLUMN IF NOT EXISTS credential_identity TEXT;
 UPDATE native_bindings b SET main_owner_id=s.user_id FROM sessions s
 WHERE s.id=b.session_id AND b.role='main' AND s.archived_at IS NULL

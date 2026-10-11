@@ -180,7 +180,7 @@ class MemoryLedger:
                 )
         return True
 
-    async def bump_turns(self, session_id):
+    async def bump_turns(self, session_id, *, conn=None):
         self.binding["turns"] += 1
 
     async def record_message(self, *, session_id, conversation_id, text, state, source):
@@ -299,7 +299,14 @@ class MemoryLedger:
             row["detail"] = detail
 
     async def transition(
-        self, message_id, state, *, from_states, revalidate_report=False, **kw
+        self,
+        message_id,
+        state,
+        *,
+        from_states,
+        revalidate_report=False,
+        conn=None,
+        **kw,
     ):
         if revalidate_report and not await self.validate_report(message_id):
             return False
@@ -371,7 +378,7 @@ class MemoryLedger:
                 r.update(state="failed", detail=detail)
         return opened
 
-    async def mirror_reply(self, conversation_id, message_id, text):
+    async def mirror_reply(self, conversation_id, message_id, text, *, conn=None):
         if message_id in self.replies:
             return False
         self.replies[message_id] = text

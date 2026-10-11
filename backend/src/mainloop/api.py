@@ -371,7 +371,9 @@ async def select_main_provider(
     from mainloop.runtime.kagent_client import KagentError
 
     try:
-        return await main_provider.select(user_id, request.provider)
+        return await main_provider.select(
+            user_id, request.provider, restart_failed=request.restart_failed
+        )
     except main_provider.MainProviderError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except ValueError as exc:

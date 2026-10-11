@@ -197,6 +197,10 @@ ownership and report routing. It suspends and records the old native Session in
 `main_native_history`, then provisions the persisted new native create contract. Main's
 Agent reference is pinned with that contract. Chat is blocked and reports are held during
 preparation; an owner repeats the same selection to recover an interrupted operation.
+Recovery uses the pinned contract independently of current catalog admission. A confirmed
+absent or settled failed preparation target can be explicitly abandoned for a fresh identity;
+uncertain creation retains its original request. MCP intent commits share the retirement
+authority lock, and delivery completion, reply and turn accounting commit atomically.
 See [main-provider selection](specs/chat.md#selecting-the-main-provider).
 
 A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;

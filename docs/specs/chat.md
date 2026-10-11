@@ -13,6 +13,8 @@ the main provider. There is no quota-driven fallback or new frontend control.
 
 The response exposes `desired_provider`, `effective_provider`, `status`, the current
 `kagent_session_id`, a bounded `error`, and retained native identity `history`.
+`recoverable` identifies a pending target confirmed absent or settled failed/deleted,
+including a frozen create receipt that confirms its Session was deleted before an ID was saved.
 `/main-thread` includes this provider state alongside its current native identity.
 `not_started` means the default binding has not created a native Session. `pending`
 means a switch contract is committed but preparation has not completed; `failed`
@@ -36,9 +38,26 @@ preparation remains pending, and arriving child reports are queued until readine
 confirmed. After a failed request or restart, read status and repeat the same PUT to
 recover. Another provider cannot replace an unresolved selection. There is no automatic
 switch recovery loop; normal delivery reconciliation drains reports after preparation.
+Recovery and idempotent selection use the persisted Agent and create contract even if
+the current provider catalog disables, removes or changes its main entry. New selections
+and fresh recovery identities validate the current catalog.
+
+If a repeat observes the pending target as absent or settled failed/deleted, the failure
+and `recoverable=true` are durable. The owner can then select another provider, or repeat
+the current provider with `{"provider":"codex","restart_failed":true}` to admit a fresh
+native and credential identity. The abandoned target remains in history. This operation
+rechecks absence or settled failure and refuses active tasks or uncertain lifecycle work;
+held child reports stay queued for the new target. A lost create reply or an unsettled
+failure keeps the original create contract, including when `restart_failed=true` is sent.
+No recovery operation replays a prompt.
 If a suspend response is lost before the switch commits, the original provider remains
 current and a repeated PUT first reconciles that same old native Session. No failed
 delivery or old prompt is replayed by a provider selection.
+
+Ordinary main MCP writes revalidate current credential authority and commit under the
+same authority lock as retirement. An old request paused after authentication is refused
+if the provider switch retires its generation first. A terminal delivery, its mirrored
+reply and its turn accounting commit together before retirement can snapshot that generation.
 
 Both main Agents must be installed with matching native harnesses and ModelConfigs,
 MCP credential routing and `sessionIdleTTL: 0s`. Claude uses `KAGENT_MAIN_AGENT`;

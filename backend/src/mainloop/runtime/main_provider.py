@@ -60,11 +60,12 @@ async def info(session_id: str, *, conn=None) -> MainProviderInfo:
         ),
         kagent_session_id=binding["kagent_session_id"],
         error=binding["main_provider_error"],
+        recoverable=binding["main_provider_recoverable"],
         history=[dict(row) for row in history],
     )
 
 
-async def _retire_idle(conn, binding: dict) -> None:
+async def _retire_idle(conn, binding: dict, *, abandon_failed: bool = False) -> None:
     """Check the ledger and native runtime, then suspend without deleting history.
 
     The caller holds publication, authority, runtime and delivery locks. kagent's
@@ -73,13 +74,26 @@ async def _retire_idle(conn, binding: dict) -> None:
     sid = binding["session_id"]
     busy = await conn.fetchval(
         """SELECT EXISTS(SELECT 1 FROM native_deliveries WHERE session_id=$1
-           AND state IN ('recorded','queued','sending','delivered','uncertain'))""",
+           AND state IN ('recorded','queued','sending','delivered','uncertain')
+           AND NOT ($2 AND state='queued' AND source='report'))""",
         sid,
+        abandon_failed,
     )
     status = await conn.fetchval("SELECT status FROM sessions WHERE id=$1", sid)
     if busy or status != "idle":
         raise MainProviderError(409, "main_provider_busy")
     if not binding["kagent_session_id"]:
+        if abandon_failed:
+            # A deleted create receipt can prove final absence without ever
+            # returning its native ID. Recheck that same frozen request before
+            # abandoning it; an uncertain reply still cannot admit another actor.
+            try:
+                await ns._create_bound_session_guarded(binding, conn=conn)
+            except SessionError as exc:
+                if ns._create_hit_deleted(exc):
+                    return
+                raise
+            raise MainProviderError(409, "main_preparation_abandonment_unconfirmed")
         if binding["git_create_dispatched"]:
             raise MainProviderError(409, "main_native_creation_unresolved")
         return
@@ -90,8 +104,23 @@ async def _retire_idle(conn, binding: dict) -> None:
             return  # Confirmed absent; retain its stored identity in history.
         raise
     await ns.validate_bound_session(binding, runtime, conn=conn)
-    if runtime.state == RuntimeState.DELETED and runtime.settled:
+    if runtime.settled and (
+        runtime.state == RuntimeState.DELETED
+        or (abandon_failed and runtime.state == RuntimeState.FAILED)
+    ):
+        if abandon_failed:
+            tasks = await ns.get_client().list_tasks(
+                await ns.binding_agent_ref(binding, conn=conn), runtime.id
+            )
+            if any(
+                task.context_id != runtime.id or not is_terminal(task.status.state)
+                for task in tasks
+            ):
+                raise MainProviderError(409, "main_native_turn_active")
         return
+    if abandon_failed:
+        # Previously recorded failure is insufficient if the native outcome changed.
+        raise MainProviderError(409, "main_preparation_abandonment_unconfirmed")
     if not runtime.settled or runtime.state not in (
         RuntimeState.READY,
         RuntimeState.SUSPENDED,
@@ -121,6 +150,8 @@ async def _prepare(conn, binding: dict) -> None:
     await conn.execute(
         "UPDATE native_bindings SET main_provider_error=NULL WHERE session_id=$1", sid
     )
+    runtime = None
+    validated = False
     try:
         if binding["kagent_session_id"] is None:
             runtime = await ns._create_bound_session_guarded(binding, conn=conn)
@@ -129,10 +160,13 @@ async def _prepare(conn, binding: dict) -> None:
         else:
             runtime = await ns.get_client().get_session(binding["kagent_session_id"])
             await ns.validate_bound_session(binding, runtime, conn=conn)
+        validated = True
         runtime = await ns.get_client().ensure_ready(
             runtime, timeout=settings.kagent_session_ready_timeout_seconds
         )
+        validated = False
         await ns.validate_bound_session(binding, runtime, conn=conn)
+        validated = True
         if runtime.state != RuntimeState.READY or not runtime.settled:
             raise OutcomeUnknown("main native readiness is unconfirmed")
         await conn.execute(
@@ -142,26 +176,58 @@ async def _prepare(conn, binding: dict) -> None:
     except Exception as exc:
         # No prompt was sent. Leave the same contract pending, including after a
         # lost CreateSession reply or a failed local write following native creation.
+        recoverable = bool(
+            (isinstance(exc, SessionError) and ns._create_hit_deleted(exc))
+            or (
+                binding["kagent_session_id"]
+                and (
+                    (isinstance(exc, SessionError) and exc.grpc_status == 5)
+                    or (
+                        runtime is not None
+                        and validated
+                        and runtime.settled
+                        and runtime.state in (RuntimeState.FAILED, RuntimeState.DELETED)
+                    )
+                )
+            )
+        )
         await conn.execute(
-            "UPDATE native_bindings SET main_provider_error=$2,updated_at=NOW() WHERE session_id=$1",
+            "UPDATE native_bindings SET main_provider_error=$2,main_provider_recoverable=$3,updated_at=NOW() WHERE session_id=$1",
             sid,
             ns.safe_detail(ns.describe_error(exc)),
+            recoverable,
         )
 
 
-async def select(user_id: str, provider: str) -> MainProviderInfo:
+async def select(
+    user_id: str, provider: str, *, restart_failed: bool = False
+) -> MainProviderInfo:
     # Validate authority and selection before first-use creates any rows.
     if user_id != settings.owner_id:
         raise MainProviderError(403, "main_provider_owner_required")
     provider = MainProviderSelection(provider=provider).provider
     from mainloop.providers import registry
 
-    profile = registry().resolve(provider, "main", selecting=True)
-    if profile.native_provider != provider:
-        raise MainProviderError(400, "main_provider_profile_mismatch")
-    opposite = "claude" if provider == "codex" else "codex"
-    if profile.agents["main"] == registry().resolve(opposite, "main").agents["main"]:
-        raise MainProviderError(400, "main_provider_agent_conflict")
+    def admission_profile():
+        profile = registry().resolve(provider, "main", selecting=True)
+        if profile.native_provider != provider:
+            raise MainProviderError(400, "main_provider_profile_mismatch")
+        opposite = "claude" if provider == "codex" else "codex"
+        if (
+            profile.agents["main"]
+            == registry().resolve(opposite, "main").agents["main"]
+        ):
+            raise MainProviderError(400, "main_provider_agent_conflict")
+        return profile
+
+    # Validate first-use admission without gating an existing pinned contract.
+    async with db.connection() as conn:
+        exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM native_bindings WHERE main_owner_id=$1)",
+            user_id,
+        )
+    if not exists:
+        admission_profile()
     binding = await ensure_main_session(user_id)
     sid = binding["session_id"]
     async with (
@@ -171,12 +237,25 @@ async def select(user_id: str, provider: str) -> MainProviderInfo:
     ):
         binding = await ns.get_binding(sid, conn=conn)
         await lifecycle.check(conn, sid, "create")
-        if binding["main_provider_pending"] and binding["kind"] != provider:
+        abandon_failed = bool(
+            binding["main_provider_pending"]
+            and binding["main_provider_recoverable"]
+            and (binding["kind"] != provider or restart_failed)
+        )
+        if (
+            binding["main_provider_pending"]
+            and binding["kind"] != provider
+            and not abandon_failed
+        ):
             raise MainProviderError(409, "main_provider_selection_pending")
-        if binding["kind"] != provider:
+        if binding["kind"] != provider or abandon_failed:
+            profile = admission_profile()
             current_ref = await ns.binding_agent_ref(binding, conn=conn)
             target_ref = profile.agents["main"]
-            if (current_ref.namespace, current_ref.name) == (
+            if binding["kind"] != provider and (
+                current_ref.namespace,
+                current_ref.name,
+            ) == (
                 target_ref.namespace,
                 target_ref.name,
             ):
@@ -186,7 +265,10 @@ async def select(user_id: str, provider: str) -> MainProviderInfo:
             key = f"native-deliveries:{sid}"
             await conn.execute("SELECT pg_advisory_lock(hashtext($1))", key)
             try:
-                await _retire_idle(conn, binding)
+                # Completion may have committed while retirement waited for the
+                # delivery lock. Snapshot its committed reply/turn generation.
+                binding = await ns.get_binding(sid, conn=conn)
+                await _retire_idle(conn, binding, abandon_failed=abandon_failed)
                 identity = str(uuid.uuid4())
                 old_ref = await ns.binding_agent_ref(binding, conn=conn)
                 snapshot = {
@@ -197,6 +279,8 @@ async def select(user_id: str, provider: str) -> MainProviderInfo:
                     "model": binding["model"],
                     "turns": binding["turns"],
                     "standing_hash": binding["standing_hash"],
+                    "preparation_abandoned": abandon_failed,
+                    "preparation_error": binding["main_provider_error"],
                 }
                 async with _binding_lock(conn, sid), conn.transaction():
                     await conn.execute(
@@ -212,6 +296,7 @@ async def select(user_id: str, provider: str) -> MainProviderInfo:
                            kagent_session_id=NULL,kagent_request_id=$4,credential_identity=$4,
                            credential_ref=$5::jsonb,token_hash=$6,standing_hash=NULL,turns=0,model=NULL,
                            git_create_dispatched=FALSE,main_provider_pending=TRUE,main_provider_error=NULL,
+                           main_provider_recoverable=FALSE,
                            updated_at=NOW() WHERE session_id=$1""",
                         sid,
                         provider,
@@ -228,6 +313,9 @@ async def select(user_id: str, provider: str) -> MainProviderInfo:
                 binding = await ns.get_binding(sid, conn=conn)
             finally:
                 await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
-        if binding["main_provider_pending"]:
+        if (
+            binding["main_provider_pending"]
+            and not binding["main_provider_recoverable"]
+        ):
             await _prepare(conn, binding)
         return await info(sid, conn=conn)

@@ -441,12 +441,14 @@ class Ledger:
                 )
         return True
 
-    async def bump_turns(self, session_id: str) -> None:
-        async with db.connection() as conn:
-            await conn.execute(
-                "UPDATE native_bindings SET turns=turns+1, updated_at=NOW() WHERE session_id=$1",
-                session_id,
-            )
+    async def bump_turns(self, session_id: str, *, conn=None) -> None:
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.bump_turns(session_id, conn=owned)
+        await conn.execute(
+            "UPDATE native_bindings SET turns=turns+1, updated_at=NOW() WHERE session_id=$1",
+            session_id,
+        )
 
     @staticmethod
     async def _lock_deliveries(conn, session_id: str) -> None:
@@ -742,10 +744,23 @@ class Ledger:
         evidence_ref: str | None = None,
         detail: str | None = None,
         revalidate_report: bool = False,
+        conn=None,
     ) -> bool:
         """Move a delivery only if it is still in ``from_states``; true when this call moved it."""
         detail = safe_detail(detail)
-        async with db.connection() as conn, conn.transaction():
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.transition(
+                    message_id,
+                    state,
+                    from_states=from_states,
+                    task_id=task_id,
+                    evidence_ref=evidence_ref,
+                    detail=detail,
+                    revalidate_report=revalidate_report,
+                    conn=owned,
+                )
+        async with conn.transaction():
             if revalidate_report:
                 # Preparation has not claimed a send. Recheck recipient authority atomically
                 # with failure classification, using the established ledger-before-row order.
@@ -994,15 +1009,19 @@ class Ledger:
         return [dict(r) for r in rows]
 
     async def mirror_reply(
-        self, conversation_id: str, message_id: str, text: str
+        self, conversation_id: str, message_id: str, text: str, *, conn=None
     ) -> bool:
-        async with db.connection() as conn:
-            result = await conn.execute(
-                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
-                message_id,
-                conversation_id,
-                text,
-            )
+        if conn is None:
+            async with db.connection() as owned:
+                return await self.mirror_reply(
+                    conversation_id, message_id, text, conn=owned
+                )
+        result = await conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ($1,$2,'assistant',$3,NOW()) ON CONFLICT (id) DO NOTHING",
+            message_id,
+            conversation_id,
+            text,
+        )
         return str(result).endswith(" 1")
 
     async def sessions_with_open_work(self) -> list[str]:
@@ -1996,33 +2015,39 @@ async def _finalize(
     else:
         new_state = "failed"
         detail = f"task {state}: {proj.failure_text.strip() or 'kagent gave no reason'}"
-    moved = await ledger.transition(
-        message_id,
-        new_state,
-        from_states=_RESOLVABLE,
-        task_id=proj.task_id,
-        # A receipt alone does not prove native failure: transport/config/preparation
-        # failures also use delivery state 'failed'. Only the observed FAILED outcome
-        # gets this durable marker, which task lifecycle qualification revalidates.
-        evidence_ref=(
-            f"a2a:task/{proj.task_id}" + ("#failed" if state == "failed" else "")
-            if proj.task_id
-            else None
-        ),
-        detail=detail,
-    )
-    if not moved:
-        return None
     reply = proj.text
-    if reply:
-        session = await db.get_session(session_id)
-        reply_id = assistant_message_id(session_id, proj.task_id or message_id)
-        if await ledger.mirror_reply(session.conversation_id, reply_id, reply):
-            await notify_session_message(
-                session.user_id, session_id, reply_id, "assistant"
+    session = await db.get_session(session_id)
+    reply_id = assistant_message_id(session_id, proj.task_id or message_id)
+    mirrored = False
+    # Retirement and new admissions must see completion, its reply and its turn
+    # accounting together. Any failed side effect rolls back the terminal claim.
+    async with db.connection() as conn, conn.transaction():
+        await Ledger._lock_deliveries(conn, session_id)
+        moved = await ledger.transition(
+            message_id,
+            new_state,
+            from_states=_RESOLVABLE,
+            task_id=proj.task_id,
+            # Only observed native failure qualifies as failure evidence.
+            evidence_ref=(
+                f"a2a:task/{proj.task_id}" + ("#failed" if state == "failed" else "")
+                if proj.task_id
+                else None
+            ),
+            detail=detail,
+            conn=conn,
+        )
+        if not moved:
+            return None
+        if reply:
+            mirrored = await ledger.mirror_reply(
+                session.conversation_id, reply_id, reply, conn=conn
             )
+        if state == "completed":
+            await ledger.bump_turns(session_id, conn=conn)
+    if mirrored:
+        await notify_session_message(session.user_id, session_id, reply_id, "assistant")
     if state == "completed":
-        await ledger.bump_turns(session_id)
         return reply or None
     return None
 

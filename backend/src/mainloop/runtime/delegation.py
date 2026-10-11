@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -192,6 +193,51 @@ async def auto_report(session_id: str, reply: str) -> None:
 class PgStore:
     """``agent_tools.Store`` over Postgres and the native-session delivery path."""
 
+    def __init__(self, conn=None):
+        self._conn = conn
+
+    @asynccontextmanager
+    async def _connection(self):
+        if self._conn is not None:
+            yield self._conn
+        else:
+            async with db.connection() as conn:
+                yield conn
+
+    @asynccontextmanager
+    async def intent_scope(self, binding: dict):
+        """Fence admitted MCP intent against retirement and grant revocation.
+
+        Revalidation and every write use one transaction on the authority lock's
+        connection. An authentication snapshot alone cannot authorize a mutation.
+        """
+        from mainloop.db.tasks import TaskError
+        from mainloop.tasks import lifecycle
+
+        async with db.connection() as conn, lifecycle.authority_locked(
+            conn, binding["session_id"]
+        ), conn.transaction():
+            fresh = await conn.fetchrow(
+                """SELECT b.*,s.user_id,s.status,s.archived_at FROM native_bindings b
+                   JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 FOR SHARE OF b,s""",
+                binding["session_id"],
+            )
+            if (
+                not fresh
+                or not fresh["token_hash"]
+                or fresh["token_hash"] != binding.get("token_hash")
+                or fresh["role"] != binding["role"]
+                or fresh["mcp_grant_kind"] != binding.get("mcp_grant_kind")
+                or fresh["mcp_grant_kind"] != "coordination"
+                or fresh["user_id"] != binding["user_id"]
+                or fresh["archived_at"]
+                or fresh["kagent_deleted_at"]
+                or fresh["status"] in ("completed", "failed", "cancelled")
+            ):
+                raise TaskError(403, "inactive_principal")
+            await lifecycle.check(conn, binding["session_id"], "create")
+            yield PgStore(conn)
+
     async def binding_by_token_hash(self, token_hash: str) -> dict | None:
         async with db.connection() as conn:
             row = await conn.fetchrow(
@@ -231,7 +277,7 @@ class PgStore:
             )
 
     async def topic(self, user_id: str, name: str, *, create: bool) -> dict | None:
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM topics WHERE user_id=$1 AND name=$2", user_id, name
             )
@@ -246,7 +292,7 @@ class PgStore:
         return dict(row) if row else None
 
     async def set_topic_status(self, topic_id: str, status_line: str) -> None:
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 "UPDATE topics SET status_line=$2, updated_at=NOW() WHERE id=$1",
                 topic_id,
@@ -260,7 +306,7 @@ class PgStore:
         self, topic_id: str, kind: str, text: str, session_id: str | None
     ) -> str:
         rid = str(uuid.uuid4())
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 "INSERT INTO topic_records (id, topic_id, kind, text, session_id) VALUES ($1,$2,$3,$4,$5)",
                 rid,
@@ -276,7 +322,7 @@ class PgStore:
 
     async def close_pending(self, user_id: str, record_id: str) -> bool:
         """Close one open pending item by id prefix; ambiguous or unknown prefixes close nothing."""
-        async with db.connection() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 """SELECT r.id FROM topic_records r JOIN topics t ON t.id=r.topic_id
                    WHERE t.user_id=$1 AND r.kind='pending' AND r.status='open'
