@@ -846,6 +846,9 @@ func (t *turn) settle(
 		if err != nil {
 			return nil, err
 		}
+		if err := t.ingestHealth(ctx, tx, task); err != nil {
+			return nil, err
+		}
 		return []events.Draft{endedEvent(t.d.UserID, t.d.SessionID, msg)}, nil
 	})
 	if err != nil {
@@ -853,6 +856,34 @@ func (t *turn) settle(
 	}
 	t.cur = final
 	return reconcile.Recorded(), nil
+}
+
+// ingestHealth stores the health observations of the task in hand in the settling transaction.
+// They are derived from a task that stays readable in kagent, and the health recovery sweep reads
+// any delivery that has no receipt, so a failed ingest must not undo the delivery's terminal state
+// (rolling back would put the turn back to delivered, and a health fault would stop sessions from
+// finishing). The ingest runs in a savepoint: it commits whole with the delivery, or leaves nothing
+// and is left to the sweep. Only an error that breaks the transaction itself is returned.
+func (t *turn) ingestHealth(ctx context.Context, tx pgx.Tx, task *a2a.Task) error {
+	if t.s.Health == nil || task == nil || t.ksid == "" {
+		return nil
+	}
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("health savepoint: %w", err)
+	}
+	if err := t.s.Health.IngestDelivery(ctx, sp, t.d.SessionID, t.d.ID, t.ksid, t.d.CreatedAt, task); err != nil {
+		t.s.log().WarnContext(ctx, "health ingest failed; the recovery sweep will collect it",
+			"message_id", t.d.ID, "task_id", string(task.ID), "error", err)
+		if rerr := sp.Rollback(ctx); rerr != nil {
+			return fmt.Errorf("health savepoint rollback: %w", rerr)
+		}
+		return nil
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return fmt.Errorf("health savepoint release: %w", err)
+	}
+	return nil
 }
 
 // normState turns TASK_STATE_INPUT_REQUIRED into input_required.

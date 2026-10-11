@@ -77,13 +77,21 @@ Cache, child attribution and context occupancy remain unknown.
 The Go server validates each observation strictly on import (exactly v1, no unknown fields,
 enumerations enforced; [event.go](../../server/internal/health/event.go)) and binds attribution
 through sessions, attempts and delivery receipts. It collects only by reading kagent's `GetTask`;
-the Go code has no stream importer. Collection is a reconcile sweep, run every five seconds in
-[`server/internal/health`](../../server/internal/health/collect.go). Nothing on the delivery path
-or the owner read API writes to it, and collection neither sends a prompt nor changes delivery
+the Go code has no stream importer. Two paths collect, and both write through the same idempotent
+ingest. When a delivery ends, the sessions package ingests the health artifacts of the task it already
+holds in the transaction that marks the delivery terminal, so the observations and the receipt commit
+with the delivery. A failed ingest is rolled back to a savepoint and logged: the delivery still ends,
+and the sweep collects it later (health data is derived, so it never blocks a session from finishing).
+The reconcile sweep, run every five seconds in
+[`server/internal/health`](../../server/internal/health/collect.go), is the backstop and the only
+collector of running turns, turns with no artifacts when they ended, and deliveries whose ingest
+failed. The owner read API writes nothing, and collection neither sends a prompt nor changes delivery
 success.
 
 - Discovery starts tracking up to 500 new receipts per pass: each delivery that carries a kagent
-  task, running (`delivered`) or finished. A receipt is written once.
+  task, running (`delivered`) or finished. A receipt is written once. A delivery whose receipt
+  is written (by either path) is flagged `health_tracked`, and the partial index `deliveries_health`
+  holds only unflagged ones, so a pass costs what is still undiscovered, not the whole window.
 - Each pass reads up to 50 due receipts. A running turn's receipt stays pending and is read again
   after 15 seconds, doubling per failed read up to one hour. A read of a finished delivery marks
   the receipt collected for good, and a collected receipt is never reopened.

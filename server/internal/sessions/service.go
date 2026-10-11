@@ -88,6 +88,14 @@ type Kagent interface {
 	CancelTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 }
 
+// HealthSink stores a finished delivery's health observations in the transaction that ends the
+// delivery. *health.Service satisfies it.
+type HealthSink interface {
+	IngestDelivery(
+		ctx context.Context, tx pgx.Tx, sessionID, deliveryID, runtimeSessionID string, createdAt time.Time, task *a2a.Task,
+	) error
+}
+
 // Waker makes a workspace's runtime ready for a message: it waits for an open suspend to finish and
 // resumes the workspace if it is suspended. *workspaces.Service satisfies it. A nil Waker leaves a
 // suspended Session to the delivery loop's own resume.
@@ -168,8 +176,11 @@ type Service struct {
 	Credentials *agentauth.Credentials
 	// MCPOrigin is where those credentials are valid: the MCP Service's in-cluster URL.
 	MCPOrigin string
-	Log       *slog.Logger
-	Opts      Options
+	// Health, when set, stores a finished turn's health observations in the transaction that ends it.
+	// The health recovery sweep collects whatever this misses, so nil only costs a later read.
+	Health HealthSink
+	Log    *slog.Logger
+	Opts   Options
 }
 
 func (s *Service) opts() Options { return s.Opts.withDefaults() }

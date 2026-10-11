@@ -157,6 +157,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	healthSvc := health.NewService(cfg, pool, log)
 	healthSvc.Kagent = kc
 	healthSvc.Agents = svc
+	svc.Health = healthSvc // a finished turn stores its health observations in the transaction that ends it
 	deps.Health = healthSvc
 	schedSvc := &schedules.Service{Pool: pool, Kagent: kc, OwnerID: cfg.Identity.OwnerID, Log: log}
 	deps.Schedules = schedSvc

@@ -89,6 +89,7 @@ type Delivery struct {
 	EvidenceRef     *string
 	Detail          *string
 	KagentSessionID *string
+	HealthTracked   bool
 	Attempts        int32
 	CreateFailures  int32
 	NextAttemptAt   time.Time

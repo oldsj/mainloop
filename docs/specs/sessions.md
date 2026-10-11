@@ -83,7 +83,7 @@ the conversation's old attention flag. An unavailable session disables message i
 - A message still `recorded` after a backend restart was never sent, so it is delivered then; this is its first send, not a replay. A `sending` message with no task after 60 seconds, including when the lookup itself keeps failing, becomes `uncertain`.
 - A failed or uncertain delivery stores a short reason with best-effort redaction (see [chat](chat.md)). The session chat shows it next to the message and the identity strip shows the last problem, and the same Retry rule applies: a new message with a new id, offered only for the newest failed user message with nothing in flight.
 - An uncertain delivery is never replayed automatically. A message is rejected with `409` while another turn is in flight. A message for a suspended workspace resumes it first; one that arrives while the workspace is being suspended waits for the suspend to finish, then resumes it.
-- Session conversations mirror the user's messages and each completed task's reply. The reply id is derived from the task id, so a repeated observation mirrors it once.
+- Session conversations mirror the user's messages and each completed task's reply. The reply id is derived from the task id, so a repeated observation mirrors it once. The transaction that ends a delivery also stores the health observations of the task it holds ([orchestration health](orchestration-health.md)); if that fails, the delivery still ends and the health sweep collects it later.
 
 ## Cancelling and clearing
 
@@ -123,7 +123,9 @@ carries a receipt that names no original request, or has runtime fields that can
 (an unknown state or operation, an identity outside its bounds). The duplicate check runs on the raw
 reply before protobuf merges the copies, in the kagent client's session codec, and also refuses a
 repeated singular field inside the receipt; the call then has an unknown outcome, as in the Python
-client. A Session that states no context id is shown with its own id as the context and
+client. A reply that carries the Session or the receipt twice at its top level (for example a
+split `GetSessionResponse.session`) is refused the same way, while the repeated `sessions` of a list
+reply stay allowed. A Session that states no context id is shown with its own id as the context and
 `context_confirmed: false`, read through a display-only client call (`ObserveSession`); delivery,
 lifecycle and readiness keep requiring a confirmed context, and a context naming another Session is
 refused either way.

@@ -261,6 +261,9 @@ func Ingest(ctx context.Context, tx pgx.Tx, in Input) (Result, error) {
 	}); err != nil {
 		return Result{}, fmt.Errorf("health: write receipt: %w", err)
 	}
+	if err := q.MarkDeliveryHealthTracked(ctx, in.DeliveryID); err != nil {
+		return Result{}, fmt.Errorf("health: mark delivery: %w", err)
+	}
 	return res, nil
 }
 
@@ -310,4 +313,41 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// HasObservations reports whether a task carries any health artifact.
+func HasObservations(task *a2a.Task) bool {
+	if task == nil {
+		return false
+	}
+	for _, art := range task.Artifacts {
+		if art == nil {
+			continue
+		}
+		for _, part := range art.Parts {
+			if part != nil && IsHealthPart(art.Name, part.Data()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IngestDelivery stores a finished delivery's health observations in the transaction that ends the
+// delivery, from the task the delivery holds. A task with no health artifact stores nothing and
+// leaves the delivery to the recovery sweep. runtimeSessionID is the kagent Session the message
+// was sent to; createdAt is when the delivery was created. It is Ingest with this instance's owner,
+// gateway, clock and retention, so the sessions package needs none of them.
+func (s *Service) IngestDelivery(
+	ctx context.Context, tx pgx.Tx, sessionID, deliveryID, runtimeSessionID string, createdAt time.Time, task *a2a.Task,
+) error {
+	if !HasObservations(task) || runtimeSessionID == "" {
+		return nil
+	}
+	_, err := Ingest(ctx, tx, Input{
+		OwnerID: s.OwnerID, Gateway: s.Gateway, SessionID: sessionID, DeliveryID: deliveryID, ReceiptAt: createdAt,
+		TaskID: string(task.ID), ContextID: task.ContextID, RuntimeSessionID: runtimeSessionID, Artifacts: task.Artifacts,
+		Now: s.now(), EventRetention: s.EventRetention,
+	})
+	return err
 }

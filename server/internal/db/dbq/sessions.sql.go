@@ -187,7 +187,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -203,6 +203,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.EvidenceRef,
 		&i.Detail,
 		&i.KagentSessionID,
+		&i.HealthTracked,
 		&i.Attempts,
 		&i.CreateFailures,
 		&i.NextAttemptAt,
@@ -533,7 +534,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type InsertDeliveryParams struct {
@@ -555,6 +556,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.EvidenceRef,
 		&i.Detail,
 		&i.KagentSessionID,
+		&i.HealthTracked,
 		&i.Attempts,
 		&i.CreateFailures,
 		&i.NextAttemptAt,
@@ -593,7 +595,7 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 }
 
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 ORDER BY created_at, id
 `
@@ -618,6 +620,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			&i.EvidenceRef,
 			&i.Detail,
 			&i.KagentSessionID,
+			&i.HealthTracked,
 			&i.Attempts,
 			&i.CreateFailures,
 			&i.NextAttemptAt,
@@ -637,7 +640,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 }
 
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -664,6 +667,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.EvidenceRef,
 			&i.Detail,
 			&i.KagentSessionID,
+			&i.HealthTracked,
 			&i.Attempts,
 			&i.CreateFailures,
 			&i.NextAttemptAt,

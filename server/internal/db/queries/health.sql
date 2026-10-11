@@ -81,13 +81,16 @@ ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO UPDATE SET
 -- Deliveries that carry a kagent task, finished or still running, become receipts to collect. A
 -- receipt is written once. Deliveries that already have one are excluded before the LIMIT, so a
 -- window holding more than one batch of them never hides the newer ones; the walk follows the
--- deliveries_health index in created_at order and sorts nothing.
+-- deliveries_health index in created_at order and sorts nothing. That index holds only the deliveries
+-- not yet marked health_tracked; the discovered batch is marked here, in the statement that writes
+-- its receipts.
 -- name: DiscoverHealthReceipts :execrows
 WITH batch AS (
     SELECT d.id, d.session_id, d.task_id, d.created_at
     FROM deliveries AS d
     WHERE d.state IN ('delivered', 'completed', 'failed', 'cancelled')
       AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
+      AND NOT d.health_tracked
       AND d.created_at > @since::timestamptz
       AND EXISTS (SELECT 1 FROM sessions AS o WHERE o.id = d.session_id AND o.user_id = @owner_id::text)
       AND NOT EXISTS (
@@ -96,6 +99,9 @@ WITH batch AS (
             AND c.a2a_task_id = d.task_id)
     ORDER BY d.created_at, d.id
     LIMIT @max_rows::int
+),
+marked AS (
+    UPDATE deliveries SET health_tracked = true WHERE id IN (SELECT id FROM batch)
 )
 INSERT INTO health_collection (owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id)
 SELECT s.user_id, @gateway::text, b.session_id, b.task_id, b.id, b.created_at,
@@ -317,3 +323,7 @@ SELECT EXISTS (
     SELECT 1 FROM git_publications AS g
     JOIN projects AS p ON lower(p.full_name) = g.repository
     WHERE p.id = $1 AND p.user_id = $2 AND g.branch = $3 AND g.state = 'confirmed');
+
+-- A delivery whose receipt is written leaves the discovery walk.
+-- name: MarkDeliveryHealthTracked :exec
+UPDATE deliveries SET health_tracked = true WHERE id = $1 AND NOT health_tracked;

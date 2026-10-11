@@ -283,6 +283,8 @@ func TestRecoveryRebuildsAfterLostCollection(t *testing.T) {
 	directView := e.view(t, health.Filter{})
 
 	e.exec(t, `TRUNCATE health_events, health_turns, health_collection`)
+	// The flag on a delivery says its receipt exists; a wiped collection leaves nothing to say it for.
+	e.exec(t, `UPDATE deliveries SET health_tracked = false`)
 	if err := e.svc.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
