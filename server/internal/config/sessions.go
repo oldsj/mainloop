@@ -19,4 +19,7 @@ type Sessions struct {
 	DeliveryConcurrency int `env:"SESSION_DELIVERY_CONCURRENCY" envDefault:"16"`
 	// EnsureEvery is how often the main session is checked for.
 	EnsureEvery Seconds `env:"SESSION_ENSURE_SECONDS" envDefault:"60"`
+	// CarryOverMessages is how many recent completed user and assistant messages the first
+	// message to a new main Session carries from the earlier conversation. 0 carries none.
+	CarryOverMessages int `env:"MAIN_CARRY_OVER_MESSAGES" envDefault:"6"`
 }

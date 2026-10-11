@@ -137,9 +137,8 @@ type Workspaces struct {
 // MainThread tunes the native main thread.
 type MainThread struct {
 	// Provider is the first-use main provider, claude or codex. An existing main keeps its own.
-	Provider          string `env:"MAIN_PROVIDER" envDefault:"claude"`
-	CarryOverMessages int    `env:"MAIN_CARRY_OVER_MESSAGES" envDefault:"6"`
-	NativeChildKinds  string `env:"NATIVE_CHILD_KINDS" envDefault:"claude,codex"`
+	Provider         string `env:"MAIN_PROVIDER" envDefault:"claude"`
+	NativeChildKinds string `env:"NATIVE_CHILD_KINDS" envDefault:"claude,codex"`
 }
 
 // PushGateDiskBytes leaves room for filesystem overhead and the free-space reserve on the
@@ -302,7 +301,7 @@ func (c *Config) validate() error {
 	if c.Main.Provider != NativeClaude && c.Main.Provider != NativeCodex {
 		fail("MAIN_PROVIDER must be claude or codex")
 	}
-	if c.Main.CarryOverMessages < 0 {
+	if c.Sessions.CarryOverMessages < 0 {
 		fail("MAIN_CARRY_OVER_MESSAGES must not be negative")
 	}
 	if c.Git.PushGateMaxCommandBytes < 1 || c.Git.PushGateMaxBodyBytes < 1 {

@@ -3,6 +3,8 @@ package sessions
 import (
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
@@ -22,3 +24,6 @@ func ParkedDelay(o Options, attempts int) time.Duration {
 	t := &turn{s: &Service{Opts: o}, c: reconcile.Claim{Attempts: attempts}}
 	return t.parkedDelay()
 }
+
+// AssistantID is the id of the mirrored reply of a task.
+func AssistantID(sessionID, taskID string) string { return assistantID(sessionID, a2a.TaskID(taskID)) }

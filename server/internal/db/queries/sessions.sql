@@ -82,7 +82,7 @@ LIMIT 1;
 -- whose binding is gone still loads, and the handler can fail it instead of retrying for ever.
 -- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       d.kagent_session_id AS sent_kagent_session_id,
+       d.kagent_session_id AS sent_kagent_session_id, d.sent_text,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
@@ -215,7 +215,7 @@ RETURNING create_failures;
 -- lock serializes this decision with stop; the native send follows only after commit.
 UPDATE deliveries d
 SET state = 'sending', detail = NULL, kagent_session_id = sqlc.arg(kagent_session_id),
-    updated_at = now()
+    sent_text = coalesce(sqlc.narg(sent_text)::text, d.sent_text), updated_at = now()
 WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
   AND d.state = 'recorded'
   AND NOT EXISTS (
@@ -459,3 +459,29 @@ SELECT
       WHERE d.session_id = sqlc.arg(session_id) AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))::bigint AS deliveries,
     (SELECT count(*) FROM sessions s
       WHERE s.id = sqlc.arg(session_id) AND s.agent_cancel_outcome = 'unknown')::bigint AS cancels;
+
+-- The newest completed deliveries of a session, newest first. Each is one user message and at most
+-- one mirrored reply, so the last N messages of the conversation come from the last N of them.
+-- name: ListCompletedDeliveries :many
+SELECT id, task_id FROM deliveries
+WHERE session_id = $1 AND state = 'completed'
+ORDER BY created_at DESC, id DESC
+LIMIT $2;
+
+-- name: ListSessionMessagesByID :many
+SELECT * FROM session_messages WHERE session_id = sqlc.arg(session_id) AND id = ANY(sqlc.arg(ids)::text[]) ORDER BY created_at, id;
+
+-- Marks the main binding's Session as having been given its standing context, in the transaction
+-- that freezes the delivery's text. Zero rows when another write got there first.
+-- name: SetBindingStandingHash :execrows
+UPDATE agent_bindings SET standing_hash = sqlc.arg(standing_hash), updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND standing_hash IS NULL;
+
+-- A delivery that ends without kagent having seen its message gives back the standing context it
+-- froze, so the next message to the Session carries it again. Only the hash of this delivery's own
+-- frozen text is cleared.
+-- name: ClearBindingStandingHash :exec
+UPDATE agent_bindings b SET standing_hash = NULL, updated_at = now()
+FROM deliveries d
+WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
+  AND b.standing_hash = encode(sha256(convert_to(d.sent_text, 'UTF8')), 'hex');

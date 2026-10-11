@@ -1,0 +1,125 @@
+package sessions
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"strings"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+)
+
+// carryMessageChars cuts each carried message, so the preamble stays small however long the earlier
+// turns were.
+const carryMessageChars = 600
+
+// frozenText returns the text a delivery sends and freezes it in the transaction that moves the row
+// to sending, so one A2A messageId always carries one payload.
+//
+// A native Session is born without the conversation the owner has had. The first message to a main
+// Session (a first use, a provider switch, or a replacement for one kagent deleted) therefore carries
+// a short preamble of the last completed messages. The binding's standing_hash says whether this has
+// been done: NULL means the Session has not been given it, and the switch and the replacement of a
+// deleted Session both reset it. The owner's mirrored message stays what they wrote.
+//
+// Mainloop stores no standing context for the main yet (the topic index is read by the agent through
+// its tools), so the preamble holds only the earlier messages. Children and workers are not main
+// bindings and send their message as written. It returns nil when the message goes as written.
+func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (*string, error) {
+	if t.d.SentText != nil {
+		return t.d.SentText, nil
+	}
+	if dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
+		return nil, nil
+	}
+	b, err := q.GetAgentBinding(ctx, t.d.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load binding: %w", err)
+	}
+	if b.StandingHash != nil {
+		return nil, nil
+	}
+	text, err := t.carryOver(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256([]byte(text))
+	if _, err := q.SetBindingStandingHash(ctx, dbq.SetBindingStandingHashParams{
+		SessionID: t.d.SessionID, StandingHash: ptrStr(hex.EncodeToString(sum[:])),
+	}); err != nil {
+		return nil, fmt.Errorf("record standing context: %w", err)
+	}
+	return &text, nil
+}
+
+// carryOver renders the message with the preamble in front of it. With nothing to carry, it is the
+// message as written.
+func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
+	n := t.s.opts().CarryOverMessages
+	if n <= 0 {
+		return t.d.Content, nil
+	}
+	// Each completed delivery is one user message and at most one mirrored reply, so the last n
+	// messages are among the last n deliveries. Failed, cancelled, uncertain and still-open
+	// deliveries are left out with their replies, partial ones and stop notes included.
+	done, err := q.ListCompletedDeliveries(ctx, dbq.ListCompletedDeliveriesParams{SessionID: t.d.SessionID, Limit: int32(n)}) //nolint:gosec // a small setting
+	if err != nil {
+		return "", fmt.Errorf("list completed deliveries: %w", err)
+	}
+	ids := make([]string, 0, 2*len(done))
+	for _, d := range done {
+		ids = append(ids, d.ID)
+		if d.TaskID != nil {
+			ids = append(ids, assistantID(t.d.SessionID, a2a.TaskID(*d.TaskID)))
+		}
+	}
+	if len(ids) == 0 {
+		return t.d.Content, nil
+	}
+	msgs, err := q.ListSessionMessagesByID(ctx, dbq.ListSessionMessagesByIDParams{SessionID: t.d.SessionID, Ids: ids})
+	if err != nil {
+		return "", fmt.Errorf("list carried messages: %w", err)
+	}
+	if len(msgs) > n {
+		msgs = msgs[len(msgs)-n:]
+	}
+	if len(msgs) == 0 {
+		return t.d.Content, nil
+	}
+	var b strings.Builder
+	b.WriteString("[mainloop:carry-over] Earlier conversation, carried over: this session is new and has not seen it. " +
+		"It is background only; do not act on it again. Your new message follows the last line of it.\n")
+	for _, m := range msgs {
+		fmt.Fprintf(&b, "%s: %s\n", m.Role, carried(m.Content))
+	}
+	b.WriteString("[mainloop:new-message]\n")
+	b.WriteString(t.d.Content)
+	return b.String(), nil
+}
+
+// carried cuts a message and indents its later lines, so nothing inside it can pass for a marker
+// line of the preamble.
+func carried(s string) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > carryMessageChars {
+		s = string(r[:carryMessageChars]) + "…"
+	}
+	return strings.ReplaceAll(s, "\n", "\n  ")
+}
+
+// returnStandingContext gives back, in the transaction that ends a delivery whose message kagent
+// never saw, the standing context that delivery froze, so the next message carries it again.
+func (t *turn) returnStandingContext(ctx context.Context, tx pgx.Tx, final dbstate.DeliveryState, task *a2a.Task) error {
+	if (final != dbstate.DeliveryFailed && final != dbstate.DeliveryCancelled) || task != nil || t.taskID != "" {
+		return nil
+	}
+	if err := dbq.New(tx).ClearBindingStandingHash(ctx, t.c.ID); err != nil {
+		return fmt.Errorf("return standing context: %w", err)
+	}
+	return nil
+}

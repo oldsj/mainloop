@@ -611,11 +611,14 @@ func TestOptionsFromSettings(t *testing.T) {
 	}
 	o := sessions.OptionsFrom(cfg.Sessions)
 	if o.UncertainHold != 30*time.Minute || o.UncertainRecheck != 30*time.Second || o.FollowPoll != 2*time.Second ||
-		o.Concurrency != 16 || o.EnsureEvery != time.Minute {
+		o.Concurrency != 16 || o.EnsureEvery != time.Minute || o.CarryOverMessages != 6 {
 		t.Fatalf("%+v", o)
 	}
 	if _, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "x.test", "SESSION_DELIVERY_CONCURRENCY": "0"}); err == nil {
 		t.Fatal("concurrency 0 accepted")
+	}
+	if _, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "x.test", "MAIN_CARRY_OVER_MESSAGES": "-1"}); err == nil {
+		t.Fatal("a negative carry-over accepted")
 	}
 }
 

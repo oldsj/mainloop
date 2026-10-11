@@ -106,6 +106,7 @@ type Delivery struct {
 	LeaseUntil      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	SentText        *string
 }
 
 type DevEnvironment struct {

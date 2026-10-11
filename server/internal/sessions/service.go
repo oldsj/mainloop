@@ -167,18 +167,22 @@ type Options struct {
 	ResolveEvery time.Duration
 	// Lease is the delivery claim lease.
 	Lease time.Duration
+	// CarryOverMessages is how many recent completed messages the first message to a new main
+	// Session carries. The zero value carries none; OptionsFrom sets the configured default.
+	CarryOverMessages int
 }
 
 // OptionsFrom reads the settings.
 func OptionsFrom(c config.Sessions) Options {
 	return Options{
-		UncertainHold:    c.UncertainHold.Duration(),
-		UncertainRecheck: c.UncertainRecheck.Duration(),
-		FollowPoll:       c.FollowPoll.Duration(),
-		ParkedMax:        c.ParkedMax.Duration(),
-		ReadyWait:        c.ReadyWait.Duration(),
-		Concurrency:      c.DeliveryConcurrency,
-		EnsureEvery:      c.EnsureEvery.Duration(),
+		CarryOverMessages: c.CarryOverMessages,
+		UncertainHold:     c.UncertainHold.Duration(),
+		UncertainRecheck:  c.UncertainRecheck.Duration(),
+		FollowPoll:        c.FollowPoll.Duration(),
+		ParkedMax:         c.ParkedMax.Duration(),
+		ReadyWait:         c.ReadyWait.Duration(),
+		Concurrency:       c.DeliveryConcurrency,
+		EnsureEvery:       c.EnsureEvery.Duration(),
 	}
 }
 

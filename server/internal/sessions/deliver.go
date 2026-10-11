@@ -495,7 +495,8 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 
 	// This committed decision orders the send before or after the attempt's stop. Once admitted,
 	// send without another fence read; stop confirmation waits for this delivery to resolve.
-	if err := t.decideSend(ctx, ksid); err != nil {
+	text, err := t.decideSend(ctx, ksid)
+	if err != nil {
 		if errors.Is(err, errTaskSessionStopped) {
 			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
 		}
@@ -504,7 +505,7 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 	t.cur, t.ksid = dbstate.DeliverySending, ksid
 	var sendErr error
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
-		Text: t.d.Content, MessageID: t.c.ID, ContextID: ksid,
+		Text: text, MessageID: t.c.ID, ContextID: ksid,
 	}) {
 		if err != nil {
 			sendErr = err
@@ -542,9 +543,11 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 
 // decideSend locks the attempt before the delivery and commits before native I/O. The session's
 // send lock also serializes cancellation with admission. A crash after commit is observed, never
-// replayed, by the next delivery claimer.
-func (t *turn) decideSend(ctx context.Context, ksid string) error {
-	return db.InTx(ctx, t.s.Pool, func(tx pgx.Tx) error {
+// replayed, by the next delivery claimer. It returns the text to send, frozen on the row in the same
+// transaction when it differs from the message (see frozenText).
+func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
+	text := t.d.Content
+	err := db.InTx(ctx, t.s.Pool, func(tx pgx.Tx) error {
 		if err := db.XactLock(ctx, tx, "mainloop:send:"+t.d.SessionID); err != nil {
 			return err
 		}
@@ -552,11 +555,19 @@ func (t *turn) decideSend(ctx context.Context, ksid string) error {
 		if err := checkTaskSendFence(ctx, q, t.d.SessionID); err != nil {
 			return err
 		}
+		frozen, err := t.frozenText(ctx, q)
+		if err != nil {
+			return err
+		}
+		if frozen != nil {
+			text = *frozen
+		}
 		id, owner, attempts := t.fence()
 		return lost(q.MarkDeliverySending(ctx, dbq.MarkDeliverySendingParams{
-			ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid,
+			ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid, SentText: frozen,
 		}))
 	})
+	return text, err
 }
 
 func (t *turn) checkSendFence(ctx context.Context) error {
@@ -902,6 +913,9 @@ func (t *turn) settle(
 			sessionID: t.d.SessionID, userID: t.d.UserID, messageID: t.c.ID, final: final, task: task,
 		})
 		if err != nil {
+			return nil, err
+		}
+		if err := t.returnStandingContext(ctx, tx, final, task); err != nil {
 			return nil, err
 		}
 		if err := t.ingestHealth(ctx, tx, task); err != nil {

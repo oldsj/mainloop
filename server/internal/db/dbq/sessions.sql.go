@@ -90,6 +90,21 @@ func (q *Queries) BumpBindingTurns(ctx context.Context, sessionID string) error 
 	return err
 }
 
+const clearBindingStandingHash = `-- name: ClearBindingStandingHash :exec
+UPDATE agent_bindings b SET standing_hash = NULL, updated_at = now()
+FROM deliveries d
+WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
+  AND b.standing_hash = encode(sha256(convert_to(d.sent_text, 'UTF8')), 'hex')
+`
+
+// A delivery that ends without kagent having seen its message gives back the standing context it
+// froze, so the next message to the Session carries it again. Only the hash of this delivery's own
+// frozen text is cleared.
+func (q *Queries) ClearBindingStandingHash(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, clearBindingStandingHash, id)
+	return err
+}
+
 const clearMainSwitchError = `-- name: ClearMainSwitchError :execrows
 UPDATE agent_bindings SET main_error = NULL, updated_at = now()
 WHERE session_id = $1 AND main_pending AND kagent_request_id = $2::text
@@ -422,7 +437,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -447,6 +462,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SentText,
 	)
 	return i, err
 }
@@ -466,7 +482,7 @@ func (q *Queries) GetDeliveryActivity(ctx context.Context, sessionID string) (ti
 
 const getDeliveryContext = `-- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       d.kagent_session_id AS sent_kagent_session_id,
+       d.kagent_session_id AS sent_kagent_session_id, d.sent_text,
        b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id,
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
@@ -491,6 +507,7 @@ type GetDeliveryContextRow struct {
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 	SentKagentSessionID    *string
+	SentText               *string
 	BindingSessionID       *string
 	KagentSessionID        *string
 	KagentRequestID        *string
@@ -520,6 +537,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SentKagentSessionID,
+		&i.SentText,
 		&i.BindingSessionID,
 		&i.KagentSessionID,
 		&i.KagentRequestID,
@@ -830,7 +848,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text
 `
 
 type InsertDeliveryParams struct {
@@ -861,6 +879,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.LeaseUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SentText,
 	)
 	return i, err
 }
@@ -930,7 +949,7 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 }
 
 const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
   AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
 `
 
@@ -963,7 +982,47 @@ func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID strin
 			&i.LeaseUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SentText,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompletedDeliveries = `-- name: ListCompletedDeliveries :many
+SELECT id, task_id FROM deliveries
+WHERE session_id = $1 AND state = 'completed'
+ORDER BY created_at DESC, id DESC
+LIMIT $2
+`
+
+type ListCompletedDeliveriesParams struct {
+	SessionID string
+	Limit     int32
+}
+
+type ListCompletedDeliveriesRow struct {
+	ID     string
+	TaskID *string
+}
+
+// The newest completed deliveries of a session, newest first. Each is one user message and at most
+// one mirrored reply, so the last N messages of the conversation come from the last N of them.
+func (q *Queries) ListCompletedDeliveries(ctx context.Context, arg ListCompletedDeliveriesParams) ([]ListCompletedDeliveriesRow, error) {
+	rows, err := q.db.Query(ctx, listCompletedDeliveries, arg.SessionID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCompletedDeliveriesRow{}
+	for rows.Next() {
+		var i ListCompletedDeliveriesRow
+		if err := rows.Scan(&i.ID, &i.TaskID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1013,7 +1072,7 @@ func (q *Queries) ListMainProviderHistory(ctx context.Context, sessionID string)
 }
 
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 ORDER BY created_at, id
 `
@@ -1047,6 +1106,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			&i.LeaseUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SentText,
 		); err != nil {
 			return nil, err
 		}
@@ -1092,7 +1152,7 @@ func (q *Queries) ListScheduledSessionCancelsDue(ctx context.Context, arg ListSc
 }
 
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -1128,6 +1188,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.LeaseUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SentText,
 		); err != nil {
 			return nil, err
 		}
@@ -1174,6 +1235,41 @@ SELECT id, session_id, role, content, created_at FROM session_messages WHERE ses
 
 func (q *Queries) ListSessionMessages(ctx context.Context, sessionID string) ([]SessionMessage, error) {
 	rows, err := q.db.Query(ctx, listSessionMessages, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionMessage{}
+	for rows.Next() {
+		var i SessionMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Role,
+			&i.Content,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionMessagesByID = `-- name: ListSessionMessagesByID :many
+SELECT id, session_id, role, content, created_at FROM session_messages WHERE session_id = $1 AND id = ANY($2::text[]) ORDER BY created_at, id
+`
+
+type ListSessionMessagesByIDParams struct {
+	SessionID string
+	Ids       []string
+}
+
+func (q *Queries) ListSessionMessagesByID(ctx context.Context, arg ListSessionMessagesByIDParams) ([]SessionMessage, error) {
+	rows, err := q.db.Query(ctx, listSessionMessagesByID, arg.SessionID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -1529,8 +1625,8 @@ func (q *Queries) MarkDeliveryDelivered(ctx context.Context, arg MarkDeliveryDel
 const markDeliverySending = `-- name: MarkDeliverySending :execrows
 UPDATE deliveries d
 SET state = 'sending', detail = NULL, kagent_session_id = $1,
-    updated_at = now()
-WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
+    sent_text = coalesce($2::text, d.sent_text), updated_at = now()
+WHERE d.id = $3 AND d.lease_owner = $4 AND d.attempts = $5
   AND d.state = 'recorded'
   AND NOT EXISTS (
       SELECT 1 FROM task_attempts a WHERE a.session_id = d.session_id AND a.stop_state <> 'none'
@@ -1543,6 +1639,7 @@ WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
 
 type MarkDeliverySendingParams struct {
 	KagentSessionID *string
+	SentText        *string
 	ID              string
 	LeaseOwner      *string
 	Attempts        int32
@@ -1553,6 +1650,7 @@ type MarkDeliverySendingParams struct {
 func (q *Queries) MarkDeliverySending(ctx context.Context, arg MarkDeliverySendingParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markDeliverySending,
 		arg.KagentSessionID,
+		arg.SentText,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,
@@ -1797,6 +1895,26 @@ type SetBindingAgentRefParams struct {
 func (q *Queries) SetBindingAgentRef(ctx context.Context, arg SetBindingAgentRefParams) error {
 	_, err := q.db.Exec(ctx, setBindingAgentRef, arg.SessionID, arg.KagentAgentNamespace, arg.KagentAgentName)
 	return err
+}
+
+const setBindingStandingHash = `-- name: SetBindingStandingHash :execrows
+UPDATE agent_bindings SET standing_hash = $1, updated_at = now()
+WHERE session_id = $2 AND standing_hash IS NULL
+`
+
+type SetBindingStandingHashParams struct {
+	StandingHash *string
+	SessionID    string
+}
+
+// Marks the main binding's Session as having been given its standing context, in the transaction
+// that freezes the delivery's text. Zero rows when another write got there first.
+func (q *Queries) SetBindingStandingHash(ctx context.Context, arg SetBindingStandingHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setBindingStandingHash, arg.StandingHash, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setDeliveryKagentSession = `-- name: SetDeliveryKagentSession :execrows
