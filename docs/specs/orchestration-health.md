@@ -74,18 +74,32 @@ sample. Multiple result iterations produce a replacement revision with unavailab
 their additive/cumulative semantics are not qualified. Missing counts also remain unavailable.
 Cache, child attribution and context occupancy remain unknown.
 
-Mainloop validates the strict shared [event model](../../models/src/models/orchestration_health.py)
-and binds attribution through sessions, attempts and delivery receipts. Stream artifacts and
-`GetTask` snapshots share the same transactional importer. Delivery handling only queues an
-import; one background worker imports from a bounded queue with time-limited database and lock
-waits, so health work never delays terminal delivery. A full queue or failed import is left to
-recovery. The queue lives in process memory, so imports still queued when Mainloop exits are
-lost until recovery re-imports them. The existing reconciliation sweep and the owner read API
-recover completed receipts too, and the sweep also applies health retention; neither path sends
-a prompt or changes delivery success. Receipt recovery is bounded to the 100 newest receipts and
-five seconds per pass, covering every lookup, import and gap write, so an older lost receipt
-stays partial; limits are visible, with a session filter available for narrower recovery. Import allows 2,048
-health events per receipt and 8 KiB per payload; overflow and integrity failures mark gaps.
+The Go server validates each observation strictly on import (exactly v1, no unknown fields,
+enumerations enforced; [event.go](../../server/internal/health/event.go)) and binds attribution
+through sessions, attempts and delivery receipts. It collects only by reading kagent's `GetTask`;
+the Go code has no stream importer. Collection is a reconcile sweep, run every five seconds in
+[`server/internal/health`](../../server/internal/health/collect.go). Nothing on the delivery path
+or the owner read API writes to it, and collection neither sends a prompt nor changes delivery
+success.
+
+- Discovery starts tracking up to 500 new receipts per pass: each delivery that carries a kagent
+  task, running (`delivered`) or finished. A receipt is written once.
+- Each pass reads up to 50 due receipts. A running turn's receipt stays pending and is read again
+  after 15 seconds, doubling per failed read up to one hour. A read of a finished delivery marks
+  the receipt collected for good, and a collected receipt is never reopened.
+- Each task is stored in its own short transaction after kagent returns. No transaction or row
+  lock is held during kagent I/O.
+- A failed read leaves the receipt pending with the `source_unavailable` gap. After eight failed
+  reads it becomes unavailable.
+- A pending receipt older than the event window is closed as unavailable. A receipt whose session,
+  agent binding or delivery is gone is abandoned the same way.
+- Retention runs as its own sweep every ten minutes.
+
+Coverage expects a receipt for every running or finished delivery that discovery tracks, so a
+running turn with no observations yet keeps its row and session partial. An open receipt does the
+same even when the observations read so far look complete. Import allows 2,048 health events per
+receipt and 8 KiB per event; overflow and integrity failures mark gaps. The queue-and-GET-recovery
+design described in earlier slices belonged to the frozen Python backend and is superseded.
 
 The [health ledger](../../backend/src/mainloop/db/health.py) enforces event/sequence uniqueness,
 retains source timestamp precision, rebuilds path-free turn summaries and serializes retention
@@ -118,9 +132,10 @@ production rollout or subscription proof is claimed.
 ## React status (migration slice F8)
 
 The React health page (`web/src/features/health`, route `/health`) is tested with MSW against the
-owner API contract. The Go handlers for `/orchestration-health` are still unimplemented, so the
-page has not been run against live data. Labels follow the Go section's: **implemented** is in the
-code and covered by those tests.
+owner API contract. The Go handlers for `/orchestration-health` are implemented in
+`server/internal/app` and covered by PostgreSQL route tests on fixture data, so the page has not
+been run against live data. Labels follow the Go section's: **implemented** is in the code and
+covered by those tests.
 
 Implemented in the React client:
 
@@ -144,7 +159,8 @@ Implemented in the React client:
 
 Not proven:
 
-- The live health path. The Go handlers are stubs, so the page has contract tests only.
+- The live health path. The Go collector and handlers are tested against scratch PostgreSQL and a
+  fake kagent only: no live kagent run and no deployed page has been checked.
 - Live event refresh. The page does not yet react to health events.
 
 Differences from the frozen page: native session identity polls only while a turn is in flight. The

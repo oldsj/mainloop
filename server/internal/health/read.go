@@ -11,6 +11,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
 // Limits of one page.
@@ -275,6 +276,21 @@ func (s *Service) decorate(ctx context.Context, q *dbq.Queries, f Filter, since 
 		return err
 	}
 
+	// What each session's receipts say. A receipt not collected yet (pending, or unavailable) means
+	// its turn may still gain observations, so coverage stays partial until the read that closes it.
+	want := map[string]int{}
+	for _, e := range expected {
+		want[e.SessionID] = int(e.Expected)
+	}
+	uncollected := map[string]bool{}
+	gapsOf := map[string][]string{}
+	for _, r := range receipts {
+		if r.State != string(dbstate.HealthCollected) {
+			uncollected[r.SessionID] = true
+		}
+		gapsOf[r.SessionID] = append(gapsOf[r.SessionID], r.Reasons...)
+	}
+
 	for _, id := range order {
 		g := groups[id]
 		own := map[string]bool{}
@@ -309,23 +325,19 @@ func (s *Service) decorate(ctx context.Context, q *dbq.Queries, f Filter, since 
 			}
 		}
 		gaps := map[string]bool{}
-		for _, r := range receipts {
-			if own[r.SessionID] {
-				for _, reason := range r.Reasons {
-					gaps[reason] = true
-				}
+		open := false
+		for sid := range own {
+			for _, reason := range gapsOf[sid] {
+				gaps[reason] = true
 			}
-		}
-		for _, e := range expected {
-			if own[e.SessionID] {
-				g.row.ExpectedReceipts += int(e.Expected)
-			}
+			open = open || uncollected[sid]
+			g.row.ExpectedReceipts += want[sid]
 		}
 		if len(tasksSeen) < len(g.turns) {
 			gaps[GapProducerRestart] = true
 		}
 		g.row.Gaps = sortedKeys(gaps)
-		if len(g.row.Gaps) > 0 || g.row.ExpectedReceipts > len(tasksSeen) {
+		if open || len(g.row.Gaps) > 0 || g.row.ExpectedReceipts > len(tasksSeen) {
 			g.row.Totals.Coverage = api.HealthTotalsCoveragePartial
 			if len(g.turns) == 0 {
 				g.row.Totals.Coverage = api.HealthTotalsCoverageUnknown
@@ -335,12 +347,19 @@ func (s *Service) decorate(ctx context.Context, q *dbq.Queries, f Filter, since 
 		g.row.Sessions = make([]api.HealthSession, 0, len(g.sessions))
 		for _, e := range g.sessions {
 			var mine []api.HealthTurnSummary
+			seen := map[string]bool{}
 			for _, t := range g.turns {
 				if e.SessionId != nil && t.row.SessionId == *e.SessionId {
 					mine = append(mine, t.summary)
+					seen[t.row.A2aTaskId] = true
 				}
 			}
 			e.Totals = totals(mine)
+			// A session's own receipts and expected turns judge its totals the same way the row's do.
+			if sid := e.SessionId; sid != nil && len(mine) > 0 &&
+				(uncollected[*sid] || len(gapsOf[*sid]) > 0 || want[*sid] > len(seen)) {
+				e.Totals.Coverage = api.HealthTotalsCoveragePartial
+			}
 			g.row.Sessions = append(g.row.Sessions, e)
 		}
 	}

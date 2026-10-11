@@ -642,7 +642,7 @@ const listHealthExpectedReceipts = `-- name: ListHealthExpectedReceipts :many
 SELECT session_id, count(*)::int AS expected
 FROM deliveries
 WHERE session_id = ANY($1::text[]) AND task_id IS NOT NULL AND kagent_session_id IS NOT NULL
-  AND state IN ('completed', 'failed', 'cancelled') AND created_at > $2::timestamptz
+  AND state IN ('delivered', 'completed', 'failed', 'cancelled') AND created_at > $2::timestamptz
 GROUP BY session_id
 `
 
@@ -656,7 +656,8 @@ type ListHealthExpectedReceiptsRow struct {
 	Expected  int32
 }
 
-// Turns that should have left a receipt: the finished deliveries discovery tracks.
+// Turns that should have left a receipt: the deliveries discovery tracks, running or finished. A
+// running turn with no observations yet is expected, so its absence reads as partial coverage.
 func (q *Queries) ListHealthExpectedReceipts(ctx context.Context, arg ListHealthExpectedReceiptsParams) ([]ListHealthExpectedReceiptsRow, error) {
 	rows, err := q.db.Query(ctx, listHealthExpectedReceipts, arg.SessionIds, arg.Since)
 	if err != nil {

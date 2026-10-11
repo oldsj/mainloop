@@ -80,6 +80,9 @@ func TestRunningTurnIsCollectedWhileItRuns(t *testing.T) {
 	midEvents := events()
 	if view := e.view(t, health.Filter{}); len(view.Rows) == 0 || view.Rows[0].Totals.Turns == 0 {
 		t.Fatalf("the page shows nothing of a running turn: %+v", view.Rows)
+	} else if view.Rows[0].Totals.Coverage != "partial" {
+		// The receipt is still open, so the page stays partial even with observations in hand.
+		t.Fatalf("a running turn shows %q coverage, want partial", view.Rows[0].Totals.Coverage)
 	}
 
 	// Inside the delay it is not read again.
@@ -175,5 +178,66 @@ func TestUnassignedSessionTitleAndExpectedReceipts(t *testing.T) {
 	}
 	if row.ExpectedReceipts != 2 || row.Totals.Coverage == "partial" {
 		t.Fatalf("expected %d receipts, coverage %q", row.ExpectedReceipts, row.Totals.Coverage)
+	}
+}
+
+// Review P2-1: an open receipt keeps its turn partial even when every observation read so far looks
+// complete, because the turn may still gain more.
+func TestOpenReceiptKeepsCoveragePartial(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.exec(t, `UPDATE deliveries SET state = 'delivered' WHERE id = 'msg-2'`)
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row := e.view(t, health.Filter{}).Rows[0]
+	if len(row.Turns) != 2 || row.ExpectedReceipts != 2 || row.Totals.Coverage != "partial" || row.Sessions[0].Totals.Coverage != "partial" {
+		t.Fatalf("turns %d, expected %d, row %q, session %q: an open receipt must keep coverage partial",
+			len(row.Turns), row.ExpectedReceipts, row.Totals.Coverage, row.Sessions[0].Totals.Coverage)
+	}
+}
+
+// Review P2-1: a running delivery is an expected receipt even before it has any observations. With
+// its snapshot still empty, the row and its session are partial, not complete. The read that
+// finishes the turn then gives the same coverage as reading the finished turn once.
+func TestExpectedReceiptsIncludeRunning(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	whole := e.tasks[task2] // e.tasks is the fake's map: capture the whole task before it is replaced
+	e.exec(t, `UPDATE deliveries SET state = 'delivered' WHERE id = 'msg-2'`)
+	e.kc.tasks[task2] = partial(whole, 0)
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(t, "health_collection"); n != 2 {
+		t.Fatalf("receipts = %d, want 2", n)
+	}
+	v := e.view(t, health.Filter{})
+	if len(v.Rows) != 1 || len(v.Rows[0].Sessions) != 1 || len(v.Rows[0].Turns) != 1 {
+		t.Fatalf("rows: %+v", v.Rows)
+	}
+	row := v.Rows[0]
+	if row.ExpectedReceipts != 2 || row.Totals.Coverage != "partial" || row.Sessions[0].Totals.Coverage != "partial" {
+		t.Fatalf("expected 2 receipts and partial coverage, got %d, row %q, session %q",
+			row.ExpectedReceipts, row.Totals.Coverage, row.Sessions[0].Totals.Coverage)
+	}
+
+	e.kc.tasks[task2] = whole
+	e.exec(t, `UPDATE deliveries SET state = 'completed' WHERE id = 'msg-2'`)
+	e.exec(t, `UPDATE health_collection SET next_attempt_at = now() WHERE a2a_task_id = $1`, task2)
+	if err := e.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row = e.view(t, health.Filter{}).Rows[0]
+
+	once := newEnv(t)
+	if err := once.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := once.view(t, health.Filter{}).Rows[0]
+	if row.ExpectedReceipts != 2 || len(row.Gaps) != 0 || row.Totals.Coverage != want.Totals.Coverage || row.Sessions[0].Totals.Coverage != want.Sessions[0].Totals.Coverage {
+		t.Fatalf("finished turn: expected %d, gaps %v, row %q, session %q; read once: row %q, session %q",
+			row.ExpectedReceipts, row.Gaps, row.Totals.Coverage, row.Sessions[0].Totals.Coverage,
+			want.Totals.Coverage, want.Sessions[0].Totals.Coverage)
 	}
 }

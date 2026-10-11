@@ -265,12 +265,13 @@ WHERE health_collection.owner_id = $1 AND health_collection.session_id = ANY(@se
              AND t.session_id = health_collection.session_id AND t.a2a_task_id = health_collection.a2a_task_id
              AND t.occurred_at > @since::timestamptz));
 
--- Turns that should have left a receipt: the finished deliveries discovery tracks.
+-- Turns that should have left a receipt: the deliveries discovery tracks, running or finished. A
+-- running turn with no observations yet is expected, so its absence reads as partial coverage.
 -- name: ListHealthExpectedReceipts :many
 SELECT session_id, count(*)::int AS expected
 FROM deliveries
 WHERE session_id = ANY(@session_ids::text[]) AND task_id IS NOT NULL AND kagent_session_id IS NOT NULL
-  AND state IN ('completed', 'failed', 'cancelled') AND created_at > @since::timestamptz
+  AND state IN ('delivered', 'completed', 'failed', 'cancelled') AND created_at > @since::timestamptz
 GROUP BY session_id;
 
 -- name: ListHealthEventRows :many
