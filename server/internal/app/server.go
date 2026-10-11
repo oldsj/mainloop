@@ -3,8 +3,10 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -102,6 +104,27 @@ type Deps struct {
 	Merge *merge.Service
 }
 
+// missing names the required services Deps lacks. A nil one would otherwise fail as a nil dereference
+// on the first request that reaches it.
+func (d Deps) missing() error {
+	var names []string
+	for _, r := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Providers", d.Providers == nil}, {"Projects", d.Projects == nil}, {"Sessions", d.Sessions == nil},
+		{"HITL", d.HITL == nil}, {"Attention", d.Attention == nil}, {"Health", d.Health == nil}, {"Schedules", d.Schedules == nil},
+	} {
+		if r.absent {
+			names = append(names, r.name)
+		}
+	}
+	if len(names) > 0 {
+		return fmt.Errorf("app: Deps lacks required services: %s", strings.Join(names, ", "))
+	}
+	return nil
+}
+
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
 // so the cap has to sit in this chain.
 const maxBodyBytes = 4 << 20
@@ -131,6 +154,9 @@ func New(d Deps) *Server {
 // recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
 	d := s.deps
+	if err := d.missing(); err != nil {
+		return nil, err
+	}
 	spec, err := api.GetSpec()
 	if err != nil {
 		return nil, err

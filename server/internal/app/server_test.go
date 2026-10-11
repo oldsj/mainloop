@@ -353,10 +353,39 @@ func TestAccessLinesCarryARequestID(t *testing.T) {
 	}
 	send(api, "GET", "/health", "", nil)
 	send(api, "GET", "/health", "", map[string]string{"Host": "evil.example"})
-	httpxtest.RequireRequestID(t, apiLogs.String())
+	// A routed request and a Host-guard refusal reach the access line too, not only the exempt probe.
+	send(api, "GET", "/schedules", "", nil)
+	send(api, "GET", "/schedules", "", map[string]string{"Host": "evil.example"})
+	if ids := httpxtest.RequireRequestID(t, apiLogs.String()); len(ids) != 4 {
+		t.Fatalf("API access lines = %d, want 4: %s", len(ids), apiLogs.String())
+	}
 
 	stub := app.StubHandler(cfg, slog.New(slog.NewJSONHandler(&stubLogs, nil)), cfg.AllowedMCPHosts())
 	send(stub, "GET", "/health", "", map[string]string{"Host": "mainloop-mcp.mainloop.svc.cluster.local:8002"})
 	send(stub, "POST", "/mcp/anything", "", map[string]string{"Host": "mainloop-mcp.mainloop.svc.cluster.local:8002"})
 	httpxtest.RequireRequestID(t, stubLogs.String())
+}
+
+// A required service missing from Deps is a startup error naming it, not a nil dereference on the
+// first request.
+func TestHandlerRefusesDepsMissingARequiredService(t *testing.T) {
+	cfg := newConfig(t, nil)
+	full := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), nil)
+	if _, err := app.New(full).Handler(); err != nil {
+		t.Fatalf("complete Deps: %v", err)
+	}
+	for name, drop := range map[string]func(*app.Deps){
+		"Providers": func(d *app.Deps) { d.Providers = nil }, "Projects": func(d *app.Deps) { d.Projects = nil },
+		"Sessions": func(d *app.Deps) { d.Sessions = nil }, "HITL": func(d *app.Deps) { d.HITL = nil },
+		"Attention": func(d *app.Deps) { d.Attention = nil }, "Health": func(d *app.Deps) { d.Health = nil },
+		"Schedules": func(d *app.Deps) { d.Schedules = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := full
+			drop(&d)
+			if _, err := app.New(d).Handler(); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Handler error = %v, want one naming %s", err, name)
+			}
+		})
+	}
 }

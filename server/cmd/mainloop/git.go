@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
+	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -60,4 +61,15 @@ func gitReadFor(cfg *config.Config, pool *pgxpool.Pool, creds *agentauth.Credent
 		Enroller: &gittransport.Enroller{Pool: pool, Creds: creds, Log: log},
 		Origin:   cfg.Git.ReadOrigin,
 	}
+}
+
+// workspaceOptions are the optional git paths of the workspace service. The push path is wired only
+// when the push gate is on: without it a workspace must not reserve a push reference, because
+// nothing could enroll it and the frozen decision would leave the workspace read-only for good.
+func workspaceOptions(cfg *config.Config, gate *pushgate.Service, gitRead *workspaces.GitRead) []workspaces.Option {
+	opts := []workspaces.Option{workspaces.WithGitRead(gitRead)}
+	if pushGateEnabled(cfg) {
+		opts = append(opts, workspaces.WithGitPush(&workspaces.GitPush{Gate: gate, Origin: cfg.Git.PushOrigin}))
+	}
+	return opts
 }

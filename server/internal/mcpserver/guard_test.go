@@ -26,7 +26,7 @@ func guardEnv(t *testing.T) (*authtest.Env, agentauth.Actor, *topics.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return env, actor, &topics.Service{Pool: d.Pool}
+	return env, actor, topics.NewService(d.Pool)
 }
 
 // A write a tool makes after its credential was revoked is refused and stores nothing, even though

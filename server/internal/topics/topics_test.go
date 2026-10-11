@@ -31,7 +31,7 @@ func session(t *testing.T, q *dbq.Queries, user string) string {
 
 func TestOpenAndIndex(t *testing.T) {
 	d := testdb.New(t)
-	svc := &topics.Service{Pool: d.Pool}
+	svc := topics.NewService(d.Pool)
 	ctx := context.Background()
 
 	if idx, err := svc.Index(ctx, "u1"); err != nil || len(idx) != 0 {
@@ -65,7 +65,7 @@ func TestOpenAndIndex(t *testing.T) {
 
 func TestOpenWithoutAStatusDoesNotBumpTheTopic(t *testing.T) {
 	d := testdb.New(t)
-	svc := &topics.Service{Pool: d.Pool}
+	svc := topics.NewService(d.Pool)
 	ctx := context.Background()
 	if _, err := svc.Open(ctx, "u1", "older", nil); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestOpenWithoutAStatusDoesNotBumpTheTopic(t *testing.T) {
 func TestAddDefaultsToInboxAndCountsPending(t *testing.T) {
 	d := testdb.New(t)
 	q := dbq.New(d.Pool)
-	svc := &topics.Service{Pool: d.Pool}
+	svc := topics.NewService(d.Pool)
 	ctx := context.Background()
 	sid := session(t, q, "u1")
 
@@ -155,7 +155,7 @@ func mustTopicID(t *testing.T, q *dbq.Queries, user, name string) string {
 func TestClosePending(t *testing.T) {
 	d := testdb.New(t)
 	q := dbq.New(d.Pool)
-	svc := &topics.Service{Pool: d.Pool}
+	svc := topics.NewService(d.Pool)
 	ctx := context.Background()
 	sid := session(t, q, "u1")
 	p, _ := svc.Add(ctx, "u1", sid, dbstate.RecordPending, "one", "")
@@ -184,7 +184,7 @@ func TestClosePending(t *testing.T) {
 func TestClosePendingRefusesAnAmbiguousPrefix(t *testing.T) {
 	d := testdb.New(t)
 	q := dbq.New(d.Pool)
-	svc := &topics.Service{Pool: d.Pool}
+	svc := topics.NewService(d.Pool)
 	ctx := context.Background()
 	sid := session(t, q, "u1")
 	topic, err := q.CreateTopic(ctx, dbq.CreateTopicParams{ID: uuid.NewString(), UserID: "u1", Name: "t"})

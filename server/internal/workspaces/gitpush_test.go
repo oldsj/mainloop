@@ -272,7 +272,7 @@ func TestWorkspacePushFailureAndExpiryRelease(t *testing.T) {
 }
 
 func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
-	for _, kind := range []string{"standalone", "default branch", "protected branch", "lost writer", "existing session"} {
+	for _, kind := range []string{"standalone", "default branch", "protected branch", "lost writer", "existing session", "gate without upstream"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newHarness(t, nil)
 			branch := "feature/test"
@@ -285,6 +285,10 @@ func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
 			}
 			if kind == "lost writer" {
 				h.exec(`UPDATE workspace_writer_claims SET held=false WHERE attempt_id='attempt'`)
+			}
+			if kind == "gate without upstream" {
+				// The policy-only gate of a process whose push gate is off: it reserves nothing.
+				h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, nil, h.svc.Credentials), Origin: h.cfg.Git.PushOrigin}
 			}
 			if kind == "existing session" {
 				h.svc.GitPush = nil

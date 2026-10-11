@@ -164,7 +164,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	projectSvc := projects.NewService(cfg, pool, remote, gate, attn.NeedsOwner, log)
 	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log,
-		workspaces.WithGitRead(gitReadFor(cfg, pool, creds, log)))
+		workspaceOptions(cfg, gate, gitReadFor(cfg, pool, creds, log))...)
 	healthSvc := health.NewService(cfg, pool, kc, log)
 	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, log)
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, log)

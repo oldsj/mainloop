@@ -80,7 +80,7 @@ func buildHarness(t *testing.T, mergeTools, realDepth bool, mod func(*mcpserver.
 		Auth:         auth,
 		Policy:       agentauth.Policy{MergeTools: mergeTools},
 		Queries:      q,
-		Topics:       &topics.Service{Pool: d.Pool},
+		Topics:       topics.NewService(d.Pool),
 		Tasks:        taskSvc,
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedHosts: map[string]bool{host: true},

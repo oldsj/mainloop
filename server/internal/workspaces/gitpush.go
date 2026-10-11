@@ -26,6 +26,11 @@ type GitPush struct {
 	Origin string
 }
 
+// enabled reports whether g can reserve and enroll push references: a gate with no upstream (the
+// policy-only gate of a process whose push gate is off) cannot enroll, so a reference reserved
+// through it would never get an authority.
+func (g *GitPush) enabled() bool { return g != nil && g.Gate != nil && g.Gate.Upstream != nil }
+
 func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCredential, error) {
 	var raw json.RawMessage
 	err := pgxTx(ctx, s, func(q *dbq.Queries) error {
@@ -42,7 +47,7 @@ func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCre
 			return nil
 		}
 		var attempt string
-		if cur.KagentSessionID == nil && s.GitPush != nil && s.Credentials != nil &&
+		if cur.KagentSessionID == nil && s.GitPush.enabled() && s.Credentials != nil &&
 			s.GitRead.applies(wsRow(cur)) && len(cur.GitReadCredential) > 0 {
 			_, off := s.Credentials.Secrets.(agentauth.Unconfigured)
 			if !off {
@@ -143,7 +148,7 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 	if !live {
 		return reconcile.Recorded(), s.releasePush(ctx, w.ID)
 	}
-	if s.GitPush == nil || s.Credentials == nil || w.KagentSessionID == nil {
+	if !s.GitPush.enabled() || s.Credentials == nil || w.KagentSessionID == nil {
 		return reconcile.Retry(), nil
 	}
 	// GetSession is fresh on every retry. The existing Session must already carry the reserved

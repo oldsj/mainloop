@@ -138,7 +138,6 @@ func TestBadConfigurationFailsClearly(t *testing.T) {
 	if _, err := providers.NewRegistry(cfg.Kagent); err == nil || !strings.Contains(err.Error(), "AgentRef") {
 		t.Errorf("NewRegistry with a bad built-in agent: %v", err)
 	}
-
 }
 
 func mergeEnv(extra map[string]string) map[string]string {

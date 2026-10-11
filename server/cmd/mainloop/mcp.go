@@ -52,7 +52,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Tasks:        taskSvc,
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled)},
 		Queries:      q,
-		Topics:       &topics.Service{Pool: pool},
+		Topics:       topics.NewService(pool),
 		Log:          log,
 		AllowedHosts: cfg.AllowedMCPHosts(),
 		Dev:          cfg.IsDev(),

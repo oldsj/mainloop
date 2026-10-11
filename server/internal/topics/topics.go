@@ -46,6 +46,9 @@ type Service struct {
 	Pool *pgxpool.Pool
 }
 
+// NewService builds the topic index over the database.
+func NewService(pool *pgxpool.Pool) *Service { return &Service{Pool: pool} }
+
 // Entry is one line of the topic index.
 type Entry struct {
 	Name       string `json:"name"`
