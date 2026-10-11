@@ -3,9 +3,9 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from models.provider import ProviderProfileId
 
@@ -196,6 +196,83 @@ class NativeDeliveryInfo(BaseModel):
     source: str = "user"  # user | report | brief
 
 
+_ObservationIdentity = Annotated[
+    str, Field(min_length=1, max_length=256, pattern=r"^[^\x00-\x1f\x7f]+$")
+]
+_PreparationIdentity = Annotated[
+    str, Field(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f\x7f]+$")
+]
+
+
+class _NativeObservationModel(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class NativePreparationTimestamp(_NativeObservationModel):
+    """Present protobuf Timestamp, retaining epoch zero and nanosecond precision."""
+
+    seconds: int = Field(ge=-62135596800, le=253402300799)
+    nanos: int = Field(ge=0, lt=1_000_000_000)
+
+
+class NativeRuntimeAssociationInfo(_NativeObservationModel):
+    """Observed active runtime identity; absence does not prove replacement."""
+
+    generation_id: _ObservationIdentity
+    actor_uid: _ObservationIdentity
+    phase: _ObservationIdentity
+    current_active: bool
+
+
+class NativePreparationActionInfo(_NativeObservationModel):
+    """Allowlisted original preparation inputs, with no workspace or configuration."""
+
+    session_id: _ObservationIdentity
+    action_id: (
+        Annotated[
+            str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:._-]+$")
+        ]
+        | None
+    ) = None
+    create_request_id: _PreparationIdentity | None = None
+    generation_id: _PreparationIdentity | None = None
+    actor_uid: _PreparationIdentity | None = None
+    prepared_revision: _PreparationIdentity | None = None
+    setup_profile: Literal["supervisor", "child", "agent"] | None = None
+    setup_digest: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+
+
+class NativePreparationReceiptInfo(_NativeObservationModel):
+    """Saved action evidence, never a current dispatch grant."""
+
+    original: NativePreparationActionInfo
+    context_id: _ObservationIdentity
+    classification: (
+        Literal["pending", "uncertain", "confirmed", "definite-failure"] | None
+    ) = None
+    historical: bool
+    challenge_id: _PreparationIdentity | None = None
+    observation_sequence: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
+    effect_observed_at: NativePreparationTimestamp | None = None
+    observed_at: NativePreparationTimestamp | None = None
+
+
+class NativePreparationObservation(_NativeObservationModel):
+    """Bounded projection of one existing GetSession response; no readiness claim."""
+
+    session_id: _ObservationIdentity
+    context_id: _ObservationIdentity
+    context_confirmed: bool
+    state: Literal[
+        "unspecified", "creating", "ready", "suspended", "failed", "deleting", "deleted"
+    ]
+    operation: Literal["unspecified", "create", "suspend", "resume", "delete", "none"]
+    prepared_revision: _PreparationIdentity | None = None
+    runtime_association: NativeRuntimeAssociationInfo | None = None
+    receipt_status: Literal["missing", "observed", "unavailable"]
+    receipt: NativePreparationReceiptInfo | None = None
+
+
 class NativeSessionInfo(BaseModel):
     """Identity strip for a session bound to a native agent session in kagent."""
 
@@ -207,6 +284,7 @@ class NativeSessionInfo(BaseModel):
     agent_name: str  # the kagent Agent that runs the session
     kagent_session_id: str | None = None
     session_state: str | None = None  # kagent runtime state, when reachable
+    preparation_observation: NativePreparationObservation | None = None
     model: str | None = None
     turns: int = 0
     turn_in_flight: bool = False

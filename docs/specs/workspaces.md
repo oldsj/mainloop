@@ -324,6 +324,17 @@ to be enabled. Static validation is metadata evidence, not a live composition pr
 
 ## Git publication contract (default off)
 
+Runtime readiness and workspace preparation are separate observations. The owner native
+GET exposes bounded optional preparation evidence from the GetSession response it already
+reads; see [session detail](sessions.md#session-detail). A missing association means that
+read did not verify a current active runtime; it does not prove a generation change. A
+saved receipt can retain the original generation even when the current runtime differs.
+Missing or unavailable receipts do not mean unprepared, and confirmed historical evidence
+does not authorize current work. GET neither refreshes receipt timestamps nor re-Prepares,
+wakes, dispatches, or changes lifecycle/publication state. These fields are implemented with
+fake-backed coverage; they are not live proof of preparation or a diagnosis of installed
+configuration and runtime admission failures.
+
 The [push gate contract](push-gate.md) defines feature-branch publication scope and
 protected branches. Source supports frozen native enrollment, deferred read/push publication
 and PostgreSQL authority for injectable ASGI listeners. Both enablement flags default off;

@@ -86,6 +86,23 @@ Assistant message prompts and processing indicators use the native runtime kind 
 
 The session view shows the conversation, session status, and a native identity strip with the agent kind, model, kagent Agent and Session state, turn count, delivery states, and the reason for the last failed or unconfirmed delivery. Workspace health and lifecycle controls are shown separately.
 
+The owner-only `GET /sessions/{id}/native` also returns an optional
+`preparation_observation`, projected from its existing authenticated kagent GetSession
+response. It includes Session/context identity and whether the context was explicit,
+state/operation and prepared revision, the observed runtime generation/Actor UID, and
+allowlisted original preparation action/create/generation identity, setup profile/digest,
+classification, historical flag, challenge/sequence and effect/observation timestamps.
+Timestamps retain protobuf seconds/nanoseconds. Absent optional messages and empty identity
+fields stay unavailable; proto3 scalar defaults are retained without claiming field presence.
+`receipt_status` distinguishes `observed`, `missing` and `unavailable` (a receipt that
+cannot be safely projected, including a foreign identity). Runtime association and receipt
+are independently optional. The observation itself is absent when GetSession is unavailable
+or its runtime fields cannot be safely projected.
+The response excludes credentials, configuration documents, checkout content and arbitrary
+runtime data. This diagnostic API does not add a UI flow or a second RPC, refresh preparation,
+start work, or grant dispatch authority. Runtime `ready` alone does not prove preparation;
+saved receipt evidence does not identify an earlier runtime admission failure's cause.
+
 Opening a session follows its URL. Missing sessions show a not-found state. If the backend is unavailable, the page retries instead of treating the session as missing.
 An HTTP 5xx on session or workspace detail shows a server error with an instruction to reload,
 separately from a failed connection or a 404.

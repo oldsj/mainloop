@@ -9,7 +9,8 @@ import asyncio
 import json
 import tempfile
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,14 +32,24 @@ from mainloop.runtime.kagent_client import (
     SessionError,
     SessionWorkspace,
     Unreachable,
+    _field_bytes,
+    _field_str,
+    _field_varint,
     assistant_message_id,
+    decode_fields,
 )
 from mainloop.sse import notify_session_message
 from tests.runtime.kagent_fake import (
     CONTEXT_ID,
     TASK_ID,
     FakeKagent,
+    grpc_response,
+    session_message,
     unauthorized_envelope,
+)
+from tests.runtime.test_kagent_client import (
+    preparation_receipt_message,
+    preparation_request,
 )
 from tests.runtime.test_task_provisioning import ordinary_guard
 
@@ -2000,6 +2011,410 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_identity_of_an_unbound_session_is_none(self):
         self.assertIsNone(await ns.identity("other"))
+        self.assertEqual(self.fake.requests, [])
+
+    @contextmanager
+    def preparation_response(
+        self,
+        *,
+        receipt=None,
+        association=True,
+        session=None,
+        prepared_revision="fixture-revision",
+    ):
+        """Augment the existing fake GetSession wire response; no runtime actions."""
+        self.ledger.binding["kagent_session_id"] = CONTEXT_ID
+        self.fake.sessions[CONTEXT_ID] = (RuntimeState.READY, RuntimeOperation.NONE)
+        raw = session or decode_fields(session_message(CONTEXT_ID))[1][0]
+        raw += _field_str(5, prepared_revision)
+        if association:
+            raw += _field_bytes(
+                20,
+                _field_str(1, "current-generation")
+                + _field_str(2, "fixture-space")
+                + _field_str(3, "fixture-actor")
+                + _field_str(4, "current-uid")
+                + _field_str(5, "active")
+                + _field_varint(6, 1),
+            )
+        if receipt is not None:
+            raw += _field_bytes(21, receipt)
+        original = self.fake._session
+        binding_before = self.ledger.binding.copy()
+        runtime_before = self.fake.sessions.copy()
+
+        def response(request, path):
+            result = original(request, path)
+            if path.endswith("/GetSession"):
+                return grpc_response(_field_bytes(1, raw))
+            return result
+
+        with patch.object(self.fake, "_session", response):
+            yield
+        self.assertEqual(self.ledger.binding, binding_before)
+        self.assertEqual(self.fake.sessions, runtime_before)
+
+    def assert_observation_only(self):
+        self.assertEqual(len(self.fake.requests), 1)
+        self.assertEqual(len(self.fake.session_calls("GetSession")), 1)
+        request = decode_fields(self.fake.session_calls("GetSession")[0])
+        self.assertEqual(request[1][0].decode(), CONTEXT_ID)
+        self.assertEqual(self.fake.accepted_message_ids, [])
+        self.assertEqual(self.ledger.rows, {})
+        self.assertEqual(self.ledger.replies, {})
+        self.assertEqual(self.ledger.binding["turns"], 0)
+        self.assertEqual(self.updated, [])
+        self.assertEqual(self.mirrored, [])
+        self.assertFalse(ns._tasks)
+
+    async def test_preparation_receipt_classifications_and_history_are_observed_only(
+        self,
+    ):
+        for classification, historical in (
+            ("confirmed", False),
+            ("pending", False),
+            ("uncertain", False),
+            ("definite-failure", False),
+            ("confirmed", True),
+        ):
+            with self.subTest(classification=classification, historical=historical):
+                self.fake.requests.clear()
+                with self.preparation_response(
+                    receipt=preparation_receipt_message(
+                        classification=classification, historical=historical
+                    )
+                ):
+                    info = await ns.identity(SESSION)
+                observed = info.preparation_observation
+                self.assertEqual(info.session_state, "ready")
+                self.assertEqual(observed.state, "ready")
+                self.assertEqual(observed.operation, "none")
+                self.assertEqual(observed.prepared_revision, "fixture-revision")
+                self.assertEqual(observed.session_id, CONTEXT_ID)
+                self.assertEqual(observed.context_id, CONTEXT_ID)
+                self.assertTrue(observed.context_confirmed)
+                self.assertEqual(observed.receipt_status, "observed")
+                self.assertEqual(observed.receipt.classification, classification)
+                self.assertEqual(observed.receipt.historical, historical)
+                self.assertEqual(observed.receipt.context_id, CONTEXT_ID)
+                self.assertEqual(observed.receipt.challenge_id, "challenge-fixture")
+                self.assertEqual(observed.receipt.observation_sequence, 12)
+                self.assertEqual(
+                    observed.receipt.effect_observed_at.model_dump(),
+                    {"seconds": 1_700_000_000, "nanos": 123_456_789},
+                )
+                self.assertEqual(
+                    observed.receipt.observed_at.model_dump(),
+                    {"seconds": 1_700_000_001, "nanos": 987_654_321},
+                )
+                original = preparation_request()
+                for field in (
+                    "session_id",
+                    "action_id",
+                    "create_request_id",
+                    "generation_id",
+                    "actor_uid",
+                    "prepared_revision",
+                    "setup_profile",
+                    "setup_digest",
+                ):
+                    self.assertEqual(
+                        getattr(observed.receipt.original, field),
+                        getattr(original, field),
+                    )
+                self.assertEqual(
+                    observed.runtime_association.generation_id, "current-generation"
+                )
+                self.assertEqual(observed.runtime_association.actor_uid, "current-uid")
+                self.assertEqual(observed.runtime_association.phase, "active")
+                self.assertTrue(observed.runtime_association.current_active)
+                self.assert_observation_only()
+
+    async def test_missing_receipt_and_association_are_independent_unknowns(self):
+        for receipt in (None, preparation_receipt_message(historical=True)):
+            for association in (False, True):
+                with self.subTest(receipt=receipt is not None, association=association):
+                    self.fake.requests.clear()
+                    with self.preparation_response(
+                        receipt=receipt, association=association
+                    ):
+                        observed = (await ns.identity(SESSION)).preparation_observation
+                    self.assertEqual(
+                        observed.receipt_status,
+                        "missing" if receipt is None else "observed",
+                    )
+                    self.assertEqual(observed.receipt is None, receipt is None)
+                    self.assertEqual(
+                        observed.runtime_association is not None, association
+                    )
+                    if association:
+                        self.assertEqual(
+                            observed.runtime_association.generation_id,
+                            "current-generation",
+                        )
+                    self.assert_observation_only()
+
+    async def test_unavailable_receipt_retains_current_runtime_identity(self):
+        original = preparation_request()
+        for receipt in (
+            preparation_receipt_message(
+                original=replace(original, session_id="foreign-session")
+            ),
+            preparation_receipt_message().replace(
+                _field_str(4, CONTEXT_ID), _field_str(4, "foreign-context")
+            ),
+            preparation_receipt_message(
+                original=replace(original, action_id="x" * 129)
+            ),
+            preparation_receipt_message(
+                original=replace(original, setup_profile="unsupported")
+            ),
+            preparation_receipt_message(
+                original=replace(original, setup_digest="invalid")
+            ),
+            preparation_receipt_message(classification="unsupported"),
+        ):
+            with self.subTest(receipt=receipt[:30]):
+                self.fake.requests.clear()
+                with self.preparation_response(receipt=receipt):
+                    info = await ns.identity(SESSION)
+                observed = info.preparation_observation
+                self.assertEqual(observed.receipt_status, "unavailable")
+                self.assertIsNone(observed.receipt)
+                self.assertEqual(
+                    observed.runtime_association.generation_id, "current-generation"
+                )
+                self.assertNotIn("foreign-session", info.model_dump_json())
+                self.assertNotIn("foreign-context", info.model_dump_json())
+                self.assertNotIn("unsupported", info.model_dump_json())
+                self.assert_observation_only()
+
+    async def test_absent_receipt_values_and_present_epoch_timestamp_are_not_invented(
+        self,
+    ):
+        original = replace(
+            preparation_request(), action_id="", setup_profile="", setup_digest=""
+        )
+        receipt = (
+            _field_bytes(1, original.encode())
+            + _field_str(4, CONTEXT_ID)
+            + _field_bytes(16, b"")
+        )
+        with self.preparation_response(receipt=receipt):
+            observed = (await ns.identity(SESSION)).preparation_observation
+        self.assertEqual(observed.receipt_status, "observed")
+        self.assertIsNone(observed.receipt.classification)
+        self.assertIsNone(observed.receipt.original.action_id)
+        self.assertIsNone(observed.receipt.original.setup_profile)
+        self.assertIsNone(observed.receipt.original.setup_digest)
+        self.assertIsNone(observed.receipt.challenge_id)
+        self.assertEqual(observed.receipt.observation_sequence, 0)
+        self.assertEqual(
+            observed.receipt.effect_observed_at.model_dump(), {"seconds": 0, "nanos": 0}
+        )
+        self.assertIsNone(observed.receipt.observed_at)
+        self.assert_observation_only()
+
+    async def test_missing_explicit_context_remains_unconfirmed(self):
+        with self.preparation_response(
+            session=_field_str(1, CONTEXT_ID), prepared_revision=""
+        ):
+            observed = (await ns.identity(SESSION)).preparation_observation
+        self.assertEqual(observed.context_id, CONTEXT_ID)
+        self.assertFalse(observed.context_confirmed)
+        self.assertEqual(observed.state, "unspecified")
+        self.assertEqual(observed.operation, "unspecified")
+        self.assertIsNone(observed.prepared_revision)
+        self.assert_observation_only()
+
+    async def test_foreign_session_or_context_has_no_preparation_projection(self):
+        for session in (
+            _field_str(1, "foreign-session") + _field_str(14, "foreign-session"),
+            _field_str(1, CONTEXT_ID) + _field_str(14, "foreign-context"),
+        ):
+            with self.subTest(session=session):
+                self.fake.requests.clear()
+                with self.preparation_response(session=session):
+                    info = await ns.identity(SESSION)
+                self.assertIsNone(info.preparation_observation)
+                self.assertIsNone(info.session_state)
+                self.assertNotIn("foreign-session", info.model_dump_json())
+                self.assertNotIn("foreign-context", info.model_dump_json())
+                self.assert_observation_only()
+
+    async def test_malformed_preparation_wire_still_uses_strict_client_validation(self):
+        raw = decode_fields(session_message(CONTEXT_ID))[1][0]
+        for session in (
+            raw + _field_bytes(20, b""),
+            raw + _field_bytes(21, b""),
+            raw + _field_bytes(21, preparation_receipt_message()) * 2,
+        ):
+            with self.subTest(session=session[:30]):
+                self.fake.requests.clear()
+                with self.preparation_response(session=session, association=False):
+                    info = await ns.identity(SESSION)
+                self.assertIsNone(info.preparation_observation)
+                self.assertIsNone(info.session_state)
+                self.assertIn("kagent session unavailable", info.note)
+                self.assert_observation_only()
+
+    async def test_pending_operation_is_retained_without_wake_or_preparation(self):
+        raw = decode_fields(
+            session_message(CONTEXT_ID, RuntimeState.SUSPENDED, RuntimeOperation.RESUME)
+        )[1][0]
+        with self.preparation_response(session=raw, association=False):
+            observed = (await ns.identity(SESSION)).preparation_observation
+        self.assertEqual(observed.state, "suspended")
+        self.assertEqual(observed.operation, "resume")
+        self.assertIsNone(observed.runtime_association)
+        self.assertEqual(observed.receipt_status, "missing")
+        self.assert_observation_only()
+
+    async def test_credential_configuration_and_arbitrary_fields_never_serialize(self):
+        private = "synthetic-private-value"
+        original = preparation_request()
+        private_original = replace(
+            original,
+            workspace=SessionWorkspace(private, private, private, 7),
+            development_environment=replace(
+                original.development_environment, policy_identity=private
+            ),
+            runtime_composition=replace(
+                original.runtime_composition, cli_version=private
+            ),
+        ).encode() + _field_str(
+            99,
+            json.dumps(
+                {
+                    "compiler_config": private,
+                    "native_toml": private,
+                    "task_content": private,
+                }
+            ),
+        )
+        receipt = preparation_receipt_message(original=original)
+        # Replace frozen inputs and excluded digest/hook fields, retaining a valid receipt.
+        fields = decode_fields(receipt)
+        receipt = (
+            _field_bytes(1, private_original)
+            + b"".join(
+                (
+                    _field_bytes(
+                        n,
+                        (
+                            private.encode()
+                            if n in (2, 3, 5, 6, 10, 11, 12, 13, 14, 15)
+                            else values[0]
+                        ),
+                    )
+                    if isinstance(values[0], bytes)
+                    else _field_varint(n, values[0])
+                )
+                for n, values in fields.items()
+                if n != 1
+            )
+            + _field_str(99, private)
+        )
+        session = (
+            decode_fields(session_message(CONTEXT_ID))[1][0]
+            + _field_bytes(
+                17,
+                _field_str(1, private)
+                + _field_str(2, private)
+                + _field_bytes(3, _field_str(1, private)),
+            )
+            + _field_bytes(9, _field_str(1, private) + _field_str(2, private))
+            + _field_str(13, private)
+            + _field_str(99, private)
+        )
+        with self.preparation_response(receipt=receipt, session=session):
+            info = await ns.identity(SESSION)
+        self.assertEqual(info.preparation_observation.receipt_status, "observed")
+        serialized = info.model_dump_json()
+        self.assertNotIn(private, serialized)
+        for field in (
+            "credentials",
+            "secret_ref",
+            "workspace",
+            "compiler_config",
+            "config_digest",
+            "native_hook",
+            "failure_message",
+            "runtime_composition",
+            "development_environment",
+        ):
+            self.assertNotIn(f'"{field}"', serialized)
+        self.assert_observation_only()
+
+    async def test_native_owner_get_serializes_observation_and_foreign_owner_never_reads(
+        self,
+    ):
+        from mainloop import api
+
+        with patch.object(settings, "owner_id", "user-1"), patch.object(
+            settings, "api_hosts", "test"
+        ), self.preparation_response(receipt=preparation_receipt_message()):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=api.app), base_url="http://test"
+            ) as client:
+                response = await client.get(
+                    f"/sessions/{SESSION}/native",
+                    headers={"X-User-ID": "foreign-owner"},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    response.json()["preparation_observation"]["receipt"][
+                        "classification"
+                    ],
+                    "confirmed",
+                )
+                self.assert_observation_only()
+                self.fake.requests.clear()
+                self.session.user_id = "foreign-owner"
+                for header in ("foreign-owner", "user-1"):
+                    response = await client.get(
+                        f"/sessions/{SESSION}/native", headers={"X-User-ID": header}
+                    )
+                    self.assertEqual(response.status_code, 404)
+                self.assertEqual(self.fake.requests, [])
+
+    async def test_observation_models_reject_extra_fields_coercion_and_unbounded_values(
+        self,
+    ):
+        from pydantic import ValidationError
+
+        from models import NativeSessionInfo
+        from models.session import (
+            NativePreparationObservation,
+            NativePreparationTimestamp,
+        )
+
+        with self.preparation_response(receipt=preparation_receipt_message()):
+            info = await ns.identity(SESSION)
+        data = info.preparation_observation.model_dump()
+        for invalid in (
+            {**data, "compiler_config": {"content": "synthetic"}},
+            {**data, "context_confirmed": 1},
+            {**data, "prepared_revision": "x" * 129},
+            {**data, "receipt": {**data["receipt"], "observation_sequence": "12"}},
+            {**data, "receipt": {**data["receipt"], "observation_sequence": 1 << 64}},
+        ):
+            with self.assertRaises(ValidationError):
+                NativePreparationObservation.model_validate(invalid)
+        for seconds, nanos in (
+            ("0", 0),
+            (0, -1),
+            (0, 1_000_000_000),
+            (253402300800, 0),
+        ):
+            with self.assertRaises(ValidationError):
+                NativePreparationTimestamp(seconds=seconds, nanos=nanos)
+        # Existing callers and older payloads do not need the new optional field.
+        older = info.model_dump(exclude={"preparation_observation"})
+        self.assertIsNone(
+            NativeSessionInfo.model_validate(older).preparation_observation
+        )
+        self.assert_observation_only()
 
 
 class DeliveryDetailTests(unittest.TestCase):
