@@ -620,6 +620,9 @@ func TestOptionsFromSettings(t *testing.T) {
 	if _, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "x.test", "MAIN_CARRY_OVER_MESSAGES": "-1"}); err == nil {
 		t.Fatal("a negative carry-over accepted")
 	}
+	if _, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "x.test", "MAIN_CARRY_OVER_MESSAGES": "101"}); err == nil {
+		t.Fatal("a carry-over above 100 accepted")
+	}
 }
 
 func TestUnauthorizedIsNotSent(t *testing.T) {

@@ -555,7 +555,7 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 		if err := checkTaskSendFence(ctx, q, t.d.SessionID); err != nil {
 			return err
 		}
-		frozen, err := t.frozenText(ctx, q)
+		frozen, hash, err := t.frozenText(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -563,9 +563,25 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 			text = *frozen
 		}
 		id, owner, attempts := t.fence()
-		return lost(q.MarkDeliverySending(ctx, dbq.MarkDeliverySendingParams{
+		// The delivery row is written before the binding row, the order stop and settle take them in.
+		if err := lost(q.MarkDeliverySending(ctx, dbq.MarkDeliverySendingParams{
 			ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid, SentText: frozen,
-		}))
+		})); err != nil {
+			return err
+		}
+		if hash == nil {
+			return nil
+		}
+		// Under the send lock the hash was read as NULL, so a miss means the binding moved; the
+		// transaction rolls back, and the next attempt renders again.
+		n, err := q.SetBindingStandingHash(ctx, dbq.SetBindingStandingHashParams{SessionID: t.d.SessionID, StandingHash: hash})
+		if err != nil {
+			return fmt.Errorf("record standing context: %w", err)
+		}
+		if n != 1 {
+			return fmt.Errorf("record standing context: binding changed (%d rows)", n)
+		}
+		return nil
 	})
 	return text, err
 }

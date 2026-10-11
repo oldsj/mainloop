@@ -301,8 +301,8 @@ func (c *Config) validate() error {
 	if c.Main.Provider != NativeClaude && c.Main.Provider != NativeCodex {
 		fail("MAIN_PROVIDER must be claude or codex")
 	}
-	if c.Sessions.CarryOverMessages < 0 {
-		fail("MAIN_CARRY_OVER_MESSAGES must not be negative")
+	if c.Sessions.CarryOverMessages < 0 || c.Sessions.CarryOverMessages > 100 {
+		fail("MAIN_CARRY_OVER_MESSAGES must be between 0 and 100")
 	}
 	if c.Git.PushGateMaxCommandBytes < 1 || c.Git.PushGateMaxBodyBytes < 1 {
 		fail("PUSH_GATE_MAX_COMMAND_BYTES and PUSH_GATE_MAX_BODY_BYTES must be at least 1")

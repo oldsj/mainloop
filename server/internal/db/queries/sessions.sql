@@ -472,16 +472,16 @@ LIMIT $2;
 SELECT * FROM session_messages WHERE session_id = sqlc.arg(session_id) AND id = ANY(sqlc.arg(ids)::text[]) ORDER BY created_at, id;
 
 -- Marks the main binding's Session as having been given its standing context, in the transaction
--- that freezes the delivery's text. Zero rows when another write got there first.
+-- that freezes the delivery's text. Zero rows when the binding already has one.
 -- name: SetBindingStandingHash :execrows
 UPDATE agent_bindings SET standing_hash = sqlc.arg(standing_hash), updated_at = now()
 WHERE session_id = sqlc.arg(session_id) AND standing_hash IS NULL;
 
 -- A delivery that ends without kagent having seen its message gives back the standing context it
 -- froze, so the next message to the Session carries it again. Only the hash of this delivery's own
--- frozen text is cleared.
+-- freeze (its id and frozen text) is cleared.
 -- name: ClearBindingStandingHash :exec
 UPDATE agent_bindings b SET standing_hash = NULL, updated_at = now()
 FROM deliveries d
 WHERE d.id = $1 AND b.session_id = d.session_id AND d.sent_text IS NOT NULL
-  AND b.standing_hash = encode(sha256(convert_to(d.sent_text, 'UTF8')), 'hex');
+  AND b.standing_hash = encode(sha256(convert_to(d.id || E'\n' || d.sent_text, 'UTF8')), 'hex');

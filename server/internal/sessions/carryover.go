@@ -27,34 +27,37 @@ const carryMessageChars = 600
 // been done: NULL means the Session has not been given it, and the switch and the replacement of a
 // deleted Session both reset it. The owner's mirrored message stays what they wrote.
 //
-// Mainloop stores no standing context for the main yet (the topic index is read by the agent through
-// its tools), so the preamble holds only the earlier messages. Children and workers are not main
-// bindings and send their message as written. It returns nil when the message goes as written.
-func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (*string, error) {
+// The preamble does not render the main's standing context yet (see delegation.md), so it holds only
+// the earlier messages. Children and workers are not main bindings and send their message as
+// written. It returns a nil text when the message goes as written, and a hash only when the caller
+// must record it on the binding (after the delivery row, see decideSend).
+func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text, hash *string, err error) {
 	if t.d.SentText != nil {
-		return t.d.SentText, nil
+		return t.d.SentText, nil, nil
 	}
 	if dbstate.BindingRole(t.d.BindingRole) != dbstate.RoleMain {
-		return nil, nil
+		return nil, nil, nil
 	}
 	b, err := q.GetAgentBinding(ctx, t.d.SessionID)
 	if err != nil {
-		return nil, fmt.Errorf("load binding: %w", err)
+		return nil, nil, fmt.Errorf("load binding: %w", err)
 	}
 	if b.StandingHash != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	text, err := t.carryOver(ctx, q)
+	rendered, err := t.carryOver(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	sum := sha256.Sum256([]byte(text))
-	if _, err := q.SetBindingStandingHash(ctx, dbq.SetBindingStandingHashParams{
-		SessionID: t.d.SessionID, StandingHash: ptrStr(hex.EncodeToString(sum[:])),
-	}); err != nil {
-		return nil, fmt.Errorf("record standing context: %w", err)
-	}
-	return &text, nil
+	return &rendered, ptrStr(standingHash(t.c.ID, rendered)), nil
+}
+
+// standingHash is what the binding records for a delivery that froze this text. It includes the
+// delivery, so giving the context back (ClearBindingStandingHash) only undoes that delivery's own
+// freeze, even when another delivery froze byte-identical text.
+func standingHash(deliveryID, text string) string {
+	sum := sha256.Sum256([]byte(deliveryID + "\n" + text))
+	return hex.EncodeToString(sum[:])
 }
 
 // carryOver renders the message with the preamble in front of it. With nothing to carry, it is the
@@ -67,7 +70,7 @@ func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
 	// Each completed delivery is one user message and at most one mirrored reply, so the last n
 	// messages are among the last n deliveries. Failed, cancelled, uncertain and still-open
 	// deliveries are left out with their replies, partial ones and stop notes included.
-	done, err := q.ListCompletedDeliveries(ctx, dbq.ListCompletedDeliveriesParams{SessionID: t.d.SessionID, Limit: int32(n)}) //nolint:gosec // a small setting
+	done, err := q.ListCompletedDeliveries(ctx, dbq.ListCompletedDeliveriesParams{SessionID: t.d.SessionID, Limit: int32(n)}) //nolint:gosec // capped at 100 by validation
 	if err != nil {
 		return "", fmt.Errorf("list completed deliveries: %w", err)
 	}
@@ -102,6 +105,12 @@ func (t *turn) carryOver(ctx context.Context, q *dbq.Queries) (string, error) {
 	return b.String(), nil
 }
 
+// lineBreaks indents every kind of line break, so a carried message cannot start a line of its own.
+var lineBreaks = strings.NewReplacer(
+	"\r\n", "\r\n  ", "\n", "\n  ", "\r", "\r  ", "\v", "\v  ", "\f", "\f  ",
+	"\u0085", "\u0085  ", "\u2028", "\u2028  ", "\u2029", "\u2029  ",
+)
+
 // carried cuts a message and indents its later lines, so nothing inside it can pass for a marker
 // line of the preamble.
 func carried(s string) string {
@@ -109,7 +118,7 @@ func carried(s string) string {
 	if r := []rune(s); len(r) > carryMessageChars {
 		s = string(r[:carryMessageChars]) + "…"
 	}
-	return strings.ReplaceAll(s, "\n", "\n  ")
+	return lineBreaks.Replace(s)
 }
 
 // returnStandingContext gives back, in the transaction that ends a delivery whose message kagent
