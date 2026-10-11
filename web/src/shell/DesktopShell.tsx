@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { PanelBoundary } from './PanelBoundary';
 import { InboxPanel, ProjectsPanel, SessionsPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 
@@ -32,9 +33,15 @@ export function DesktopShell({ children }: { children: ReactNode }) {
           aria-label="Sessions, inbox and projects"
           className="divide-border border-border flex w-96 shrink-0 flex-col divide-y overflow-y-auto border-l"
         >
-          <SessionsPanel />
-          <InboxPanel />
-          <ProjectsPanel />
+          <PanelBoundary name="Sessions">
+            <SessionsPanel />
+          </PanelBoundary>
+          <PanelBoundary name="Inbox">
+            <InboxPanel />
+          </PanelBoundary>
+          <PanelBoundary name="Projects">
+            <ProjectsPanel />
+          </PanelBoundary>
         </aside>
       </div>
     </div>

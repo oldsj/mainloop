@@ -1,3 +1,7 @@
+import type { components } from './schema.gen';
+
+type TaskErrorDetail = components['schemas']['TaskErrorDetail'];
+
 /** A request failed with an HTTP response, so the backend was reachable. */
 export class ApiError extends Error {
   constructor(
@@ -10,14 +14,18 @@ export class ApiError extends Error {
 }
 
 /**
- * A task read or action the backend refused. The task routes put a typed code in
- * `detail.reason` (for example `stale_task_version`); `reason` is null for other bodies.
+ * A task read or action the backend refused. Task routes answer `TaskError` (`detail` is an
+ * object with a stable `reason` code) or, for failures before the task layer such as a 404 from
+ * the Host guard, `HTTPError` (`detail` is a string). `reason` and `detail` are null for the
+ * latter, so a free-text message is never mistaken for a code.
  */
 export class TaskApiError extends ApiError {
   constructor(
     message: string,
     status: number,
-    readonly reason: string | null
+    readonly reason: string | null,
+    /** The whole error detail: `parent_capacity` adds `limit`, `held_tasks` and `recovery`. */
+    readonly detail: TaskErrorDetail | null = null
   ) {
     super(message, status);
     this.name = 'TaskApiError';
@@ -35,36 +43,31 @@ export class SendError extends Error {
   }
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
 /** The explanation in an error body, or the fallback when the body has none. */
 export function errorDetail(body: unknown, fallback: string): string {
   if (typeof body === 'string' && body.trim()) return body.trim().slice(0, 300);
-  if (body && typeof body === 'object' && 'detail' in body) {
-    const detail = (body as { detail: unknown }).detail;
+  if (isRecord(body) && 'detail' in body) {
+    const detail = body.detail;
     if (typeof detail === 'string') return detail;
     if (Array.isArray(detail)) {
       // Request validation answers with a list of {msg}.
       const messages = detail
-        .map((item) => (item as { msg?: unknown } | null)?.msg)
+        .map((item) => (isRecord(item) ? item.msg : undefined))
         .filter((msg): msg is string => typeof msg === 'string' && msg !== '');
       if (messages.length) return messages.join('; ');
     }
-    if (detail && typeof detail === 'object' && 'reason' in detail) {
-      const reason = (detail as { reason: unknown }).reason;
-      if (typeof reason === 'string') return reason;
-    }
+    if (isRecord(detail) && typeof detail.reason === 'string') return detail.reason;
   }
   return fallback;
 }
 
-/** The typed `detail.reason` code of a task route error, or null. */
-export function taskReason(body: unknown): string | null {
-  if (body && typeof body === 'object' && 'detail' in body) {
-    const detail = (body as { detail: unknown }).detail;
-    if (typeof detail === 'string') return detail;
-    if (detail && typeof detail === 'object' && 'reason' in detail) {
-      const reason = (detail as { reason: unknown }).reason;
-      if (typeof reason === 'string') return reason;
-    }
+/** The `TaskError` detail of a task route failure, or null for any other body. */
+export function taskErrorDetail(body: unknown): TaskErrorDetail | null {
+  if (isRecord(body) && isRecord(body.detail) && typeof body.detail.reason === 'string') {
+    return body.detail as TaskErrorDetail;
   }
   return null;
 }

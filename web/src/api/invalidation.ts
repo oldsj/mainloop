@@ -1,6 +1,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import { z } from 'zod';
 import { allKeys, keys } from './keys';
+import type { components } from './schema.gen';
 import type { SseMessage } from './sse';
 
 /**
@@ -16,20 +16,34 @@ import type { SseMessage } from './sse';
  * - `session:message`: that session's conversation and native info, plus the main thread.
  * - `heartbeat` and anything unknown: nothing.
  */
-const taskEvent = z.object({
-  event_id: z.string(),
-  task_id: z.string(),
-  version: z.number().finite()
-});
-const sessionMessageEvent = z.object({ session_id: z.string() });
-const workspaceEvent = z.object({
-  workspace: z.object({ workspace_id: z.string() }).loose()
-});
+type Schemas = components['schemas'];
+type TaskUpdated = Schemas['EventTaskUpdated'];
+type SessionMessage = Schemas['EventSessionMessage'];
+type WorkspaceUpdated = Schemas['EventWorkspaceUpdated'];
+type WorkspaceLifecycle = Schemas['WorkspaceLifecycle'];
+
+// Payload types come from the contract's `x-sse-events` schemas. The guards check only the fields
+// the cache logic reads, so an event this client does not understand is skipped, not applied.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isTaskUpdated = (value: unknown): value is TaskUpdated =>
+  isRecord(value) &&
+  typeof value.event_id === 'string' &&
+  typeof value.task_id === 'string' &&
+  typeof value.version === 'number' &&
+  Number.isFinite(value.version);
+
+const isSessionMessage = (value: unknown): value is SessionMessage =>
+  isRecord(value) && typeof value.session_id === 'string';
+
+const isWorkspaceUpdated = (value: unknown): value is WorkspaceUpdated =>
+  isRecord(value) && isRecord(value.workspace) && typeof value.workspace.workspace_id === 'string';
 
 export type CacheAction =
   | { kind: 'invalidate'; keys: readonly QueryKey[] }
   | { kind: 'task'; taskId: string; version: number; eventId: string }
-  | { kind: 'upsertWorkspace'; workspaceId: string; workspace: unknown }
+  | { kind: 'upsertWorkspace'; workspace: WorkspaceLifecycle }
   | { kind: 'none' };
 
 export function planSseEvent(
@@ -49,33 +63,24 @@ export function planSseEvent(
     case 'inbox:updated':
       return [{ kind: 'invalidate', keys: [keys.attention(), keys.activity()] }];
     case 'task:updated': {
-      const event = taskEvent.safeParse(payload);
-      if (!event.success) return [{ kind: 'none' }];
+      if (!isTaskUpdated(payload)) return [{ kind: 'none' }];
       return [
         { kind: 'invalidate', keys: [keys.attention(), keys.tasks()] },
         {
           kind: 'task',
-          taskId: event.data.task_id,
-          version: event.data.version,
-          eventId: event.data.event_id
+          taskId: payload.task_id,
+          version: payload.version,
+          eventId: payload.event_id
         }
       ];
     }
     case 'workspace:updated': {
-      const event = workspaceEvent.safeParse(payload);
-      if (!event.success) return [{ kind: 'none' }];
-      return [
-        {
-          kind: 'upsertWorkspace',
-          workspaceId: event.data.workspace.workspace_id,
-          workspace: event.data.workspace
-        }
-      ];
+      if (!isWorkspaceUpdated(payload)) return [{ kind: 'none' }];
+      return [{ kind: 'upsertWorkspace', workspace: payload.workspace }];
     }
     case 'session:message': {
-      const event = sessionMessageEvent.safeParse(payload);
-      if (!event.success) return [{ kind: 'none' }];
-      const id = event.data.session_id;
+      if (!isSessionMessage(payload)) return [{ kind: 'none' }];
+      const id = payload.session_id;
       return [
         {
           kind: 'invalidate',
@@ -93,13 +98,9 @@ export function planSseEvent(
   }
 }
 
-/** Version of a cached task view, whatever the contract names the wrapper. */
+/** Version of the cached task view, if one is held. */
 function heldTaskVersion(queryClient: QueryClient, taskId: string): number | undefined {
-  const held = queryClient.getQueryData<{ task?: { version?: unknown }; version?: unknown }>(
-    keys.task(taskId)
-  );
-  const version = held?.task?.version ?? held?.version;
-  return typeof version === 'number' ? version : undefined;
+  return queryClient.getQueryData<Schemas['TaskView']>(keys.task(taskId))?.task.version;
 }
 
 /** Remembers recent event ids so a redelivered event does not cause a second read. */
@@ -132,14 +133,16 @@ export function createSseApplier(queryClient: QueryClient) {
           }
           break;
         }
-        case 'upsertWorkspace':
-          queryClient.setQueryData(keys.workspace(action.workspaceId), action.workspace);
-          queryClient.setQueryData(keys.workspaces(), (list: unknown) =>
-            Array.isArray(list)
-              ? upsertById(list, 'workspace_id', action.workspaceId, action.workspace)
-              : list
+        case 'upsertWorkspace': {
+          const { workspace } = action;
+          queryClient.setQueryData(keys.workspace(workspace.workspace_id), workspace);
+          // setQueriesData reaches every cached variant of the list (any query params), not one key.
+          queryClient.setQueriesData<WorkspaceLifecycle[]>(
+            { queryKey: keys.workspaces() },
+            (list) => (list ? upsertWorkspace(list, workspace) : list)
           );
           break;
+        }
         case 'none':
           break;
       }
@@ -147,8 +150,8 @@ export function createSseApplier(queryClient: QueryClient) {
   };
 }
 
-function upsertById(list: unknown[], field: string, id: string, value: unknown): unknown[] {
-  const index = list.findIndex((item) => (item as Record<string, unknown>)[field] === id);
-  if (index === -1) return [value, ...list];
-  return list.map((item, i) => (i === index ? value : item));
+function upsertWorkspace(list: WorkspaceLifecycle[], workspace: WorkspaceLifecycle) {
+  const index = list.findIndex((item) => item.workspace_id === workspace.workspace_id);
+  if (index === -1) return [workspace, ...list];
+  return list.map((item, i) => (i === index ? workspace : item));
 }

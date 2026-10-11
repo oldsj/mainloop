@@ -49,6 +49,9 @@ export function createConnection(options: ConnectionOptions = {}) {
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
+  // Bumped by every start and stop, so a probe or timer left over from an earlier run (React
+  // StrictMode mounts, unmounts and mounts again) cannot keep a second loop going.
+  let generation = 0;
 
   function setStatus(next: ConnectionStatus) {
     const previous = state.status;
@@ -66,11 +69,15 @@ export function createConnection(options: ConnectionOptions = {}) {
     setStatus((await probe()) ? 'online' : 'offline');
   }
 
-  function schedule() {
-    if (!running) return;
+  function probeLoop(run: number) {
+    void check().then(() => schedule(run));
+  }
+
+  function schedule(run: number) {
+    if (!running || run !== generation) return;
     timer = setTimeout(
       () => {
-        void check().then(schedule);
+        if (run === generation) probeLoop(run);
       },
       state.status === 'offline' ? offlineProbeMs : onlineProbeMs
     );
@@ -88,13 +95,17 @@ export function createConnection(options: ConnectionOptions = {}) {
     start(): () => void {
       if (running) return () => {};
       running = true;
-      void check().then(schedule);
+      const run = ++generation;
+      probeLoop(run);
       const recheck = () => void check();
       const goOffline = () => setStatus('offline');
       window.addEventListener('online', recheck);
       window.addEventListener('offline', goOffline);
       return () => {
+        // A stop function from an earlier run must not stop the current one.
+        if (run !== generation) return;
         running = false;
+        generation++;
         clearTimeout(timer);
         window.removeEventListener('online', recheck);
         window.removeEventListener('offline', goOffline);

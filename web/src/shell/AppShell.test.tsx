@@ -29,6 +29,7 @@ async function renderAt(url: string) {
     ).not.toBeNull()
   );
   await router.load();
+  return router;
 }
 
 afterEach(() => {
@@ -69,6 +70,18 @@ describe('shell switch', () => {
     await renderAt('/');
     await user.click(screen.getByTestId('tab-inbox'));
     expect(await screen.findByTestId('inbox-panel')).toBeInTheDocument();
+  });
+});
+
+describe('?view= override', () => {
+  it('survives navigation through a link that does not mention it', async () => {
+    setViewport(true);
+    const user = userEvent.setup();
+    const router = await renderAt('/?view=compact');
+    await user.click(screen.getByTestId('header-new-agent'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/agents'));
+    expect(router.state.location.search).toMatchObject({ view: 'compact' });
+    expect(screen.getByTestId('compact-shell')).toBeInTheDocument();
   });
 });
 

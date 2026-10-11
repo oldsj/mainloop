@@ -139,10 +139,10 @@ export interface paths {
     };
     get?: never;
     /** Grant */
-    put: operations['grantEnvironment'];
+    put: operations['grantEnvironmentToProject'];
     post?: never;
     /** Revoke */
-    delete: operations['revokeEnvironment'];
+    delete: operations['revokeEnvironmentFromProject'];
     options?: never;
     head?: never;
     patch?: never;
@@ -976,7 +976,7 @@ export interface components {
       /** Content */
       content: string;
       /** Href */
-      href?: string | null;
+      href: string | null;
       /**
        * Created At
        * Format: date-time
@@ -1016,22 +1016,22 @@ export interface components {
       /** Href */
       href: string;
       /** Session Ids */
-      session_ids?: string[];
+      session_ids: string[];
       /** Task Id */
-      task_id?: string | null;
-      queue_item?: components['schemas']['QueueItem'] | null;
+      task_id: string | null;
+      queue_item: components['schemas']['QueueItem'] | null;
     };
     /** AttentionSnapshot */
     AttentionSnapshot: {
       /** Items */
-      items?: components['schemas']['AttentionItem'][];
+      items: components['schemas']['AttentionItem'][];
       /**
        * Count
        * @default 0
        */
       count: number;
       /** Sessions */
-      sessions?: components['schemas']['Session'][];
+      sessions: components['schemas']['Session'][];
     };
     /** CapabilityResult */
     CapabilityResult: {
@@ -1046,9 +1046,9 @@ export interface components {
        */
       scope: 'fixture' | 'live' | 'unverified';
       /** Evidence Ref */
-      evidence_ref?: string | null;
+      evidence_ref: string | null;
       /** Detail */
-      detail?: string | null;
+      detail: string | null;
     };
     /**
      * CapabilityState
@@ -1078,16 +1078,16 @@ export interface components {
     ChatResponse: {
       /** Conversation Id */
       conversation_id: string;
-      message?: components['schemas']['Message'] | null;
+      message: components['schemas']['Message'] | null;
       /** Spawned Session Id */
-      spawned_session_id?: string | null;
+      spawned_session_id: string | null;
       /**
        * Pending
        * @default false
        */
       pending: boolean;
       /** Delivery Message Id */
-      delivery_message_id?: string | null;
+      delivery_message_id: string | null;
     };
     /**
      * CommitSummary
@@ -1127,17 +1127,17 @@ export interface components {
        * Title
        * @description Conversation title
        */
-      title?: string | null;
+      title: string | null;
       /**
        * Summary
        * @description Compacted summary of older messages
        */
-      summary?: string | null;
+      summary: string | null;
       /**
        * Summarized Through Id
        * @description ID of last message included in summary
        */
-      summarized_through_id?: string | null;
+      summarized_through_id: string | null;
       /**
        * Message Count
        * @description Total message count for compaction threshold
@@ -1149,13 +1149,13 @@ export interface components {
        * Format: date-time
        * @description Creation timestamp
        */
-      created_at?: string;
+      created_at: string;
       /**
        * Updated At
        * Format: date-time
        * @description Last update timestamp
        */
-      updated_at?: string;
+      updated_at: string;
     };
     /**
      * ConversationResponse
@@ -1164,7 +1164,7 @@ export interface components {
     ConversationResponse: {
       conversation: components['schemas']['Conversation'];
       /** Messages */
-      messages?: components['schemas']['Message'][];
+      messages: components['schemas']['Message'][];
     };
     /** CreateWorkspaceRequest */
     CreateWorkspaceRequest: {
@@ -1231,22 +1231,26 @@ export interface components {
       /** Detail */
       detail?: components['schemas']['ValidationError'][];
     };
+    TopicLine: {
+      name: string;
+      status_line: string;
+      /** @description Open pending records in the topic. */
+      pending: number;
+    };
     /** MainThreadInfo */
     MainThreadInfo: {
       /** Mode */
       mode: string;
       /** Session Id */
-      session_id?: string | null;
+      session_id: string | null;
       /** Conversation Id */
-      conversation_id?: string | null;
-      native?: components['schemas']['NativeSessionInfo'] | null;
+      conversation_id: string | null;
+      native: components['schemas']['NativeSessionInfo'] | null;
       /**
        * Topics
        * @default []
        */
-      topics: {
-        [key: string]: unknown;
-      }[];
+      topics: components['schemas']['TopicLine'][];
     };
     /**
      * MergePolicy
@@ -1316,7 +1320,7 @@ export interface components {
        * Format: date-time
        * @description Creation timestamp
        */
-      created_at?: string;
+      created_at: string;
     };
     /**
      * NativeDeliveryInfo
@@ -1331,11 +1335,11 @@ export interface components {
        */
       state: string;
       /** Task Id */
-      task_id?: string | null;
+      task_id: string | null;
       /** Evidence Ref */
-      evidence_ref?: string | null;
+      evidence_ref: string | null;
       /** Detail */
-      detail?: string | null;
+      detail: string | null;
       /**
        * Source
        * @default user
@@ -1357,17 +1361,17 @@ export interface components {
        */
       role: string;
       /** Parent Session Id */
-      parent_session_id?: string | null;
+      parent_session_id: string | null;
       /** Topic */
-      topic?: string | null;
+      topic: string | null;
       /** Agent Name */
       agent_name: string;
       /** Kagent Session Id */
-      kagent_session_id?: string | null;
+      kagent_session_id: string | null;
       /** Session State */
-      session_state?: string | null;
+      session_state: string | null;
       /** Model */
-      model?: string | null;
+      model: string | null;
       /**
        * Turns
        * @default 0
@@ -1379,9 +1383,9 @@ export interface components {
        */
       turn_in_flight: boolean;
       /** Deliveries */
-      deliveries?: components['schemas']['NativeDeliveryInfo'][];
+      deliveries: components['schemas']['NativeDeliveryInfo'][];
       /** Note */
-      note?: string | null;
+      note: string | null;
     };
     /**
      * Project
@@ -1392,7 +1396,7 @@ export interface components {
        * Id
        * @description Unique project ID
        */
-      id?: string;
+      id: string;
       /**
        * User Id
        * @description User who owns this project
@@ -1424,7 +1428,7 @@ export interface components {
        * Description
        * @description Repo description
        */
-      description?: string | null;
+      description: string | null;
       /**
        * Default Branch
        * @description Default branch
@@ -1435,7 +1439,7 @@ export interface components {
        * Avatar Url
        * @description Owner avatar URL
        */
-      avatar_url?: string | null;
+      avatar_url: string | null;
       /**
        * Html Url
        * @description GitHub repo URL
@@ -1446,18 +1450,18 @@ export interface components {
        * Format: date-time
        * @description Creation timestamp
        */
-      created_at?: string;
+      created_at: string;
       /**
        * Last Used At
        * Format: date-time
        * @description Last used timestamp
        */
-      last_used_at?: string;
+      last_used_at: string;
       /**
        * Metadata Updated At
        * @description When GitHub data was refreshed
        */
-      metadata_updated_at?: string | null;
+      metadata_updated_at: string | null;
       /**
        * Open Pr Count
        * @description Cached open PR count
@@ -1579,7 +1583,7 @@ export interface components {
        * Id
        * @description Unique item ID
        */
-      id?: string;
+      id: string;
       /**
        * Main Thread Id
        * @description Parent main thread ID
@@ -1589,14 +1593,14 @@ export interface components {
        * Task Id
        * @description Related worker task ID
        */
-      task_id?: string | null;
+      task_id: string | null;
       /**
        * User Id
        * @description User ID
        */
       user_id: string;
       /** Hitl Request Id */
-      hitl_request_id?: string | null;
+      hitl_request_id: string | null;
       /** @description Type of queue item */
       item_type: components['schemas']['QueueItemType'];
       /**
@@ -1618,14 +1622,14 @@ export interface components {
        * Context
        * @description Extra context
        */
-      context?: {
+      context: {
         [key: string]: unknown;
       };
       /**
        * Options
        * @description Predefined response options if any
        */
-      options?: string[] | null;
+      options: string[] | null;
       /**
        * Status
        * @description Item status
@@ -1637,28 +1641,28 @@ export interface components {
        * Response
        * @description Human response
        */
-      response?: string | null;
+      response: string | null;
       /**
        * Responded At
        * @description Response timestamp
        */
-      responded_at?: string | null;
+      responded_at: string | null;
       /**
        * Read At
        * @description When item was read/acknowledged
        */
-      read_at?: string | null;
+      read_at: string | null;
       /**
        * Created At
        * Format: date-time
        * @description Creation timestamp
        */
-      created_at?: string;
+      created_at: string;
       /**
        * Expires At
        * @description When this item expires
        */
-      expires_at?: string | null;
+      expires_at: string | null;
     };
     /**
      * QueueItemPriority
@@ -1757,7 +1761,7 @@ export interface components {
        * Id
        * @description Unique session ID
        */
-      id?: string;
+      id: string;
       /**
        * User Id
        * @description Owner ID (the single configured owner)
@@ -1792,17 +1796,17 @@ export interface components {
        * Parent Session Id
        * @description Parent session (delegation)
        */
-      parent_session_id?: string | null;
+      parent_session_id: string | null;
       /**
        * Topic
        * @description Topic this session works for
        */
-      topic?: string | null;
+      topic: string | null;
       /**
        * Agent Kind
        * @description Native runtime kind from the session binding
        */
-      agent_kind?: string | null;
+      agent_kind: string | null;
       /**
        * @description Session status
        * @default pending
@@ -1818,53 +1822,53 @@ export interface components {
        * Worker Pod Name
        * @description K8s pod running this session
        */
-      worker_pod_name?: string | null;
+      worker_pod_name: string | null;
       /**
        * Created At
        * Format: date-time
        * @description Creation timestamp
        */
-      created_at?: string;
+      created_at: string;
       /**
        * Started At
        * @description Start timestamp
        */
-      started_at?: string | null;
+      started_at: string | null;
       /**
        * Completed At
        * @description Completion timestamp
        */
-      completed_at?: string | null;
+      completed_at: string | null;
       /**
        * Archived At
        * @description When the session was cleared from the list; kept for audit, never deleted
        */
-      archived_at?: string | null;
+      archived_at: string | null;
       /**
        * Summary
        * @description Summary posted to main thread on completion
        */
-      summary?: string | null;
+      summary: string | null;
       /**
        * Error
        * @description Error message if failed
        */
-      error?: string | null;
+      error: string | null;
       /**
        * Repo Url
        * @description GitHub repository URL
        */
-      repo_url?: string | null;
+      repo_url: string | null;
       /**
        * Project Id
        * @description Associated project ID
        */
-      project_id?: string | null;
+      project_id: string | null;
       /**
        * Branch Name
        * @description Branch to create/work on
        */
-      branch_name?: string | null;
+      branch_name: string | null;
       /**
        * Base Branch
        * @description Base ref; empty means the remote's default branch
@@ -1875,67 +1879,67 @@ export interface components {
        * Model
        * @description Claude model to use (haiku, sonnet, opus)
        */
-      model?: string | null;
+      model: string | null;
       /**
        * Issue Url
        * @description Plan issue URL
        */
-      issue_url?: string | null;
+      issue_url: string | null;
       /**
        * Issue Number
        * @description Plan issue number
        */
-      issue_number?: number | null;
+      issue_number: number | null;
       /**
        * Issue Etag
        * @description ETag for conditional polling
        */
-      issue_etag?: string | null;
+      issue_etag: string | null;
       /**
        * Issue Last Modified
        * @description Last-Modified for polling
        */
-      issue_last_modified?: string | null;
+      issue_last_modified: string | null;
       /**
        * Pr Url
        * @description Implementation PR URL
        */
-      pr_url?: string | null;
+      pr_url: string | null;
       /**
        * Pr Number
        * @description PR number
        */
-      pr_number?: number | null;
+      pr_number: number | null;
       /**
        * Pr Etag
        * @description ETag for conditional PR polling
        */
-      pr_etag?: string | null;
+      pr_etag: string | null;
       /**
        * Pr Last Modified
        * @description Last-Modified for PR polling
        */
-      pr_last_modified?: string | null;
+      pr_last_modified: string | null;
       /**
        * Commit Sha
        * @description Final commit SHA
        */
-      commit_sha?: string | null;
+      commit_sha: string | null;
       /**
        * Anchor Message Id
        * @description Main thread message ID that triggered this session
        */
-      anchor_message_id?: string | null;
+      anchor_message_id: string | null;
       /**
        * Color
        * @description Assigned color for inline display (hex or name)
        */
-      color?: string | null;
+      color: string | null;
       /**
        * Result
        * @description Session result data
        */
-      result?: {
+      result: {
         [key: string]: unknown;
       } | null;
     };
@@ -1946,7 +1950,7 @@ export interface components {
     SessionConversationResponse: {
       session: components['schemas']['Session'];
       /** Messages */
-      messages: unknown[];
+      messages: components['schemas']['Message'][];
     };
     /**
      * SessionCreate
@@ -2149,10 +2153,10 @@ export interface components {
         | null;
       observed_state: components['schemas']['WorkspaceObservedState'];
       /** Detail */
-      detail?: string | null;
+      detail: string | null;
       manifest: components['schemas']['WorkspaceManifest'];
       /** Last Activity At */
-      last_activity_at?: string | null;
+      last_activity_at: string | null;
       /**
        * Updated At
        * Format: date-time
@@ -2193,8 +2197,8 @@ export interface components {
        *       "idle_timeout_minutes": 30
        *     }
        */
-      dev: components['schemas']['WorkspaceDev'];
-      development_environment?: components['schemas']['WorkspaceEnvironment'] | null;
+      dev: components['schemas']['WorkspaceDevOutput'];
+      development_environment: components['schemas']['WorkspaceEnvironment'] | null;
     };
     /**
      * WorkspaceObservedState
@@ -2213,6 +2217,1865 @@ export interface components {
       name: string;
       /** Number */
       number: number;
+    };
+    /** @description FastAPI HTTPException body: `{detail: string}`. */
+    HTTPError: {
+      /** @description Human-readable error message. */
+      detail: string;
+    };
+    /** @description Task error payload. `reason` is always present; some reasons add detail fields. */
+    TaskErrorDetail: {
+      /** @description Stable machine code, for example stale_task_attempt. */
+      reason: string;
+      /** @description parent_capacity only. */
+      limit?: number;
+      /** @description parent_capacity only: tasks holding the capacity. */
+      held_tasks?: components['schemas']['TaskCapacityHolder'][];
+      /** @description parent_capacity only: how to free capacity. */
+      recovery?: string;
+    } & {
+      [key: string]: unknown;
+    };
+    TaskCapacityHolder: {
+      task_id: string;
+      title: string | null;
+      status: string;
+      reason: string | null;
+      version: number;
+      current_attempt_id: string | null;
+      held_attempt_id: string;
+      attempt_state: string;
+    };
+    /** @description Task route error body: `{detail: {reason, ...}}`. Raised as TaskError in the store. */
+    TaskError: {
+      detail: components['schemas']['TaskErrorDetail'];
+    };
+    /** @description Acknowledgement. */
+    StatusOk: {
+      /** @enum {string} */
+      status: 'ok';
+    };
+    QueueRespondResponse: {
+      /** @enum {string} */
+      status: 'ok';
+      /** @enum {string} */
+      message: 'Response sent';
+    };
+    SessionMessageResponse: {
+      /** @enum {string} */
+      status: 'ok';
+      message_id: string;
+    };
+    SessionCancelResponse: {
+      /**
+       * @description Session status after the call; the unchanged status when it had already finished.
+       * @enum {string}
+       */
+      status: 'completed' | 'failed' | 'cancelled';
+      /**
+       * @description `not_running` when the session had already finished; otherwise the runtime outcome.
+       * @enum {string}
+       */
+      agent: 'stopped' | 'not_running' | 'unknown';
+    };
+    SessionStopTurnResponse: {
+      /** @enum {string} */
+      status: 'stopped' | 'finished' | 'no_open_turn';
+    };
+    SessionArchiveResponse: {
+      /** @enum {string} */
+      status: 'archived';
+    };
+    /** @description Liveness: `status` is always `healthy`; `database` is `ok` while the database answers. */
+    HealthResponse: {
+      /** @enum {string} */
+      status: 'healthy';
+      database: string;
+    };
+    HITLObserverDiagnostic: {
+      runtime_session_id: string;
+      detail: string;
+      /** Format: date-time */
+      observed_at: string;
+    };
+    HITLObserverStatus: {
+      pending_task_count: number;
+      oldest_task_check: string | null;
+      diagnostics: components['schemas']['HITLObserverDiagnostic'][];
+    };
+    WorkspacePreviewPort: {
+      port: number;
+      name: string;
+      url: string;
+    };
+    WorkspacePortsResponse: {
+      ports: components['schemas']['WorkspacePreviewPort'][];
+    };
+    RegisteredEnvironment: {
+      environment: components['schemas']['DevEnvironment'];
+      version: components['schemas']['EnvironmentVersion'];
+    };
+    SmokeDelivery: {
+      message_id: string;
+      state: string;
+    };
+    SmokePush: {
+      request_id: string;
+      state: string;
+      branch: string;
+    };
+    /** @description Sanitized ledger facts for an operator smoke run. */
+    SmokeObservations: {
+      parent_capacity: number;
+      capacity_holders: string[];
+      global_capacity_available: boolean;
+      deliveries_busy: boolean;
+      deliveries_truncated: boolean;
+      deliveries: components['schemas']['SmokeDelivery'][];
+      push_confirmed: boolean;
+      pushes_truncated: boolean;
+      pushes: components['schemas']['SmokePush'][];
+    };
+    /** DevEnvironment */
+    DevEnvironment: {
+      /** Id */
+      id: string;
+      /** Owner Id */
+      owner_id: string;
+      /** Name */
+      name: string;
+      /**
+       * Source Kind
+       * @enum {string}
+       */
+      source_kind: 'prebuilt_image' | 'definition_repo' | 'operator_default';
+      /**
+       * Watched Tag
+       * @default null
+       */
+      watched_tag: string | null;
+      /**
+       * Accepted Default Version Id
+       * @default null
+       */
+      accepted_default_version_id: string | null;
+      /** @default null */
+      definition: components['schemas']['DefinitionReference'] | null;
+    };
+    /** PackageDeclaration */
+    PackageDeclaration: {
+      /**
+       * Manager
+       * @enum {string}
+       */
+      manager: 'apt' | 'apk';
+      /** Packages */
+      packages: components['schemas']['PackageSpec'][];
+      /** Policy Id */
+      policy_id: string;
+      /** Policy Version */
+      policy_version: number;
+      /** Repositories */
+      repositories: string[];
+      /**
+       * Generator Version
+       * @default null
+       */
+      generator_version: string | null;
+      /** Metadata Hashes */
+      metadata_hashes: string[];
+      /**
+       * Project Id
+       * @default null
+       */
+      project_id: string | null;
+      /**
+       * Task Id
+       * @default null
+       */
+      task_id: string | null;
+    };
+    /** PackageSpec */
+    PackageSpec: {
+      /** Name */
+      name: string;
+      /**
+       * Requested Version
+       * @default null
+       */
+      requested_version: string | null;
+      /**
+       * Resolved Version
+       * @default null
+       */
+      resolved_version: string | null;
+    };
+    /** EnvironmentVersion */
+    EnvironmentVersion: {
+      /** Id */
+      id: string;
+      /** Environment Id */
+      environment_id: string;
+      /**
+       * Registry
+       * @default null
+       */
+      registry: string | null;
+      /**
+       * Repository
+       * @default null
+       */
+      repository: string | null;
+      /**
+       * Index Digest
+       * @default null
+       */
+      index_digest: string | null;
+      /**
+       * Platform Manifest Digest
+       * @default null
+       */
+      platform_manifest_digest: string | null;
+      /**
+       * Config Digest
+       * @default null
+       */
+      config_digest: string | null;
+      /**
+       * Declared User
+       * @default null
+       */
+      declared_user: string | null;
+      /**
+       * Architecture
+       * @default null
+       */
+      architecture: ('amd64' | 'arm64') | null;
+      /** Capability Profile */
+      capability_profile: {
+        [key: string]: string;
+      };
+      /**
+       * Validation Status
+       * @enum {string}
+       */
+      validation_status: 'pending_build' | 'static_validated';
+      /** Validation Result */
+      validation_result: {
+        [key: string]: string;
+      };
+      /** Validator Version */
+      validator_version: string;
+      /**
+       * Provenance Kind
+       * @enum {string}
+       */
+      provenance_kind: 'user_pushed' | 'mainloop_built' | 'operator';
+      /**
+       * Base Provenance
+       * @default unknown
+       * @enum {string}
+       */
+      base_provenance: 'supplied' | 'verified' | 'unknown';
+      /**
+       * Parent Version Id
+       * @default null
+       */
+      parent_version_id: string | null;
+      /** @default null */
+      package_declaration: components['schemas']['PackageDeclaration'] | null;
+      /**
+       * Approval Reference
+       * @default null
+       */
+      approval_reference: string | null;
+      /** @default null */
+      definition: components['schemas']['DefinitionReference'] | null;
+    };
+    /** ProjectEnvironmentGrant */
+    ProjectEnvironmentGrant: {
+      /** Environment Id */
+      environment_id: string;
+      /** Project Id */
+      project_id: string;
+      /**
+       * Permission
+       * @enum {string}
+       */
+      permission: 'use' | 'derive';
+    };
+    /** ProjectEnvironmentSelection */
+    ProjectEnvironmentSelection: {
+      /** Project Id */
+      project_id: string;
+      /** Environment Id */
+      environment_id: string;
+      /**
+       * Version Id
+       * @default null
+       */
+      version_id: string | null;
+      /**
+       * Follow Default
+       * @default false
+       */
+      follow_default: boolean;
+      /** Revision */
+      revision: number;
+      /**
+       * Access Revoked
+       * @default false
+       */
+      access_revoked: boolean;
+      /**
+       * Resolved Version Id
+       * @default null
+       */
+      resolved_version_id: string | null;
+    };
+    /**
+     * OwnerDecision
+     * @description An unresolved report request, independent of native attention observations.
+     */
+    OwnerDecision: {
+      /** Attempt Id */
+      attempt_id: string;
+      /** Report Id */
+      report_id: string;
+      /** Action */
+      action: string;
+    };
+    /** Task */
+    Task: {
+      /** Id */
+      id: string;
+      /** Owner Id */
+      owner_id: string;
+      /**
+       * Project Id
+       * @default null
+       */
+      project_id: string | null;
+      /**
+       * Topic Id
+       * @default null
+       */
+      topic_id: string | null;
+      /**
+       * Parent Task Id
+       * @default null
+       */
+      parent_task_id: string | null;
+      /** Root Task Id */
+      root_task_id: string;
+      /**
+       * Creator Binding Id
+       * @default null
+       */
+      creator_binding_id: string | null;
+      /** Title */
+      title: string;
+      /** Brief */
+      brief: string;
+      /**
+       * Mode
+       * @enum {string}
+       */
+      mode: 'code' | 'coordination';
+      /** Assigned Profile Id */
+      assigned_profile_id: string;
+      /**
+       * Selection Source
+       * @enum {string}
+       */
+      selection_source: 'explicit' | 'project_default' | 'installation_default' | 'inherited';
+      /**
+       * Provider Constraint
+       * @default null
+       */
+      provider_constraint: string | null;
+      /** @default null */
+      accepted_environment: components['schemas']['WorkspaceEnvironment'] | null;
+      /**
+       * Status
+       * @default queued
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'waiting' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+      /**
+       * Reason
+       * @default null
+       */
+      reason:
+        | (
+            | 'owner_decision'
+            | 'awaiting_child'
+            | 'approval'
+            | 'ci'
+            | 'publication'
+            | 'handoff'
+            | 'reconciliation'
+            | 'provisioning_unavailable'
+            | 'handoff_unavailable'
+            | 'cancel_unavailable'
+          )
+        | null;
+      /** @default null */
+      owner_decision: components['schemas']['OwnerDecision'] | null;
+      /**
+       * Current Attempt Id
+       * @default null
+       */
+      current_attempt_id: string | null;
+      /**
+       * Version
+       * @default 1
+       */
+      version: number;
+      /** @default null */
+      checkout: components['schemas']['TaskCheckoutOutput'] | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** TaskArtifact */
+    TaskArtifact: {
+      /** Id */
+      id: string;
+      /** Operation Id */
+      operation_id: string;
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'checkpoint' | 'handoff_manifest' | 'unverified_provider_summary' | 'retention_receipt';
+      /** Sha256 */
+      sha256: string;
+      /** Payload */
+      payload: {
+        [key: string]: unknown;
+      };
+    };
+    /** TaskAttempt */
+    TaskAttempt: {
+      /** Id */
+      id: string;
+      /** Task Id */
+      task_id: string;
+      /** Number */
+      number: number;
+      /** Profile Id */
+      profile_id: string;
+      /**
+       * Native Provider
+       * @enum {string}
+       */
+      native_provider: 'claude' | 'codex';
+      /** Configuration Revision */
+      configuration_revision: string;
+      agent_ref: components['schemas']['ProviderAgentRef'];
+      /**
+       * Role
+       * @enum {string}
+       */
+      role: 'supervisor' | 'child';
+      /**
+       * Depth
+       * @enum {integer}
+       */
+      depth: 1 | 2;
+      /**
+       * Writer Generation
+       * @default null
+       */
+      writer_generation: number | null;
+      /**
+       * Session Id
+       * @default null
+       */
+      session_id: string | null;
+      /**
+       * Binding Id
+       * @default null
+       */
+      binding_id: string | null;
+      /**
+       * Workspace Id
+       * @default null
+       */
+      workspace_id: string | null;
+      /**
+       * State
+       * @default creating
+       * @enum {string}
+       */
+      state:
+        | 'creating'
+        | 'active'
+        | 'draining'
+        | 'fenced'
+        | 'superseded'
+        | 'failed'
+        | 'cancelled'
+        | 'completed';
+      /**
+       * Brief Delivery Id
+       * @default null
+       */
+      brief_delivery_id: string | null;
+      /**
+       * Predecessor Id
+       * @default null
+       */
+      predecessor_id: string | null;
+      /**
+       * Successor Id
+       * @default null
+       */
+      successor_id: string | null;
+      /**
+       * Evidence Refs
+       * @default []
+       */
+      evidence_refs: string[];
+      /**
+       * Result Ref
+       * @default null
+       */
+      result_ref: string | null;
+      /** @default null */
+      environment: components['schemas']['WorkspaceEnvironment'] | null;
+      /**
+       * Initial Ref
+       * @default null
+       */
+      initial_ref: string | null;
+      /**
+       * Checkpoint Ref
+       * @default null
+       */
+      checkpoint_ref: string | null;
+      /**
+       * Manifest Ref
+       * @default null
+       */
+      manifest_ref: string | null;
+      /**
+       * Superseded At
+       * @default null
+       */
+      superseded_at: string | null;
+      /**
+       * Archived At
+       * @default null
+       */
+      archived_at: string | null;
+      /**
+       * Native Deleted At
+       * @default null
+       */
+      native_deleted_at: string | null;
+      /**
+       * Retention Hold
+       * @default null
+       */
+      retention_hold: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** TaskEligibility */
+    TaskEligibility: {
+      /**
+       * Available
+       * @default false
+       */
+      available: boolean;
+      /**
+       * Reason
+       * @default null
+       */
+      reason:
+        | (
+            | 'owner_decision'
+            | 'awaiting_child'
+            | 'approval'
+            | 'ci'
+            | 'publication'
+            | 'handoff'
+            | 'reconciliation'
+            | 'provisioning_unavailable'
+            | 'handoff_unavailable'
+            | 'cancel_unavailable'
+          )
+        | null;
+    };
+    /** TaskOperation */
+    TaskOperation: {
+      /** Id */
+      id: string;
+      /** Owner Id */
+      owner_id: string;
+      /** Principal Key */
+      principal_key: string;
+      /** Request Id */
+      request_id: string;
+      /** Request Digest */
+      request_digest: string;
+      /** Request Payload */
+      request_payload: {
+        [key: string]: unknown;
+      };
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'create' | 'retry' | 'reassign' | 'cancel';
+      /**
+       * Task Id
+       * @default null
+       */
+      task_id: string | null;
+      /**
+       * Attempt Id
+       * @default null
+       */
+      attempt_id: string | null;
+      /**
+       * State
+       * @default requested
+       * @enum {string}
+       */
+      state:
+        | 'requested'
+        | 'draining'
+        | 'checkpoint_required'
+        | 'checkpoint_verified'
+        | 'source_fencing'
+        | 'source_fenced'
+        | 'target_creating'
+        | 'target_ready'
+        | 'completed'
+        | 'blocked'
+        | 'uncertain';
+      /**
+       * Last Confirmed Step
+       * @default requested
+       * @enum {string}
+       */
+      last_confirmed_step:
+        | 'requested'
+        | 'draining'
+        | 'checkpoint_required'
+        | 'checkpoint_verified'
+        | 'source_fencing'
+        | 'source_fenced'
+        | 'target_creating'
+        | 'target_ready'
+        | 'completed'
+        | 'blocked'
+        | 'uncertain';
+      /**
+       * Source Attempt Id
+       * @default null
+       */
+      source_attempt_id: string | null;
+      /**
+       * Target Attempt Id
+       * @default null
+       */
+      target_attempt_id: string | null;
+      /**
+       * Checkpoint Ref
+       * @default null
+       */
+      checkpoint_ref: string | null;
+      /**
+       * Manifest Ref
+       * @default null
+       */
+      manifest_ref: string | null;
+      /**
+       * Reason
+       * @default null
+       */
+      reason:
+        | (
+            | 'owner_decision'
+            | 'awaiting_child'
+            | 'approval'
+            | 'ci'
+            | 'publication'
+            | 'handoff'
+            | 'reconciliation'
+            | 'provisioning_unavailable'
+            | 'handoff_unavailable'
+            | 'cancel_unavailable'
+          )
+        | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** TaskProjection */
+    TaskProjection: {
+      /**
+       * Agent Activity
+       * @default null
+       */
+      agent_activity: string | null;
+      /**
+       * Delivery State
+       * @default null
+       */
+      delivery_state: string | null;
+      /**
+       * Workspace Health
+       * @default null
+       */
+      workspace_health: string | null;
+      /**
+       * Environment Version Id
+       * @default null
+       */
+      environment_version_id: string | null;
+      /**
+       * Repository
+       * @default null
+       */
+      repository: string | null;
+      /**
+       * Branch
+       * @default null
+       */
+      branch: string | null;
+      /**
+       * Pr Url
+       * @default null
+       */
+      pr_url: string | null;
+      /**
+       * Pr Number
+       * @default null
+       */
+      pr_number: number | null;
+      /**
+       * Pr Head Sha
+       * @default null
+       */
+      pr_head_sha: string | null;
+      /**
+       * Pr State
+       * @default unknown
+       * @enum {string}
+       */
+      pr_state: 'open' | 'closed' | 'merged' | 'unknown';
+      /**
+       * Ci State
+       * @default unknown
+       * @enum {string}
+       */
+      ci_state: 'pending' | 'success' | 'failure' | 'unknown';
+      /**
+       * Ci Head Sha
+       * @default null
+       */
+      ci_head_sha: string | null;
+      /**
+       * Merge State
+       * @default null
+       */
+      merge_state: string | null;
+      /**
+       * Merge Proposal Id
+       * @default null
+       */
+      merge_proposal_id: string | null;
+      /**
+       * Publication State
+       * @default null
+       */
+      publication_state: string | null;
+      /**
+       * Pending Approval Ids
+       * @default []
+       */
+      pending_approval_ids: string[];
+      /**
+       * Observed At
+       * @default null
+       */
+      observed_at: string | null;
+    };
+    /** TaskReport */
+    TaskReport: {
+      /** Task Id */
+      task_id: string;
+      /** Attempt Id */
+      attempt_id: string;
+      /** Request Id */
+      request_id: string;
+      /** Summary */
+      summary: string;
+      /**
+       * Outcome
+       * @enum {string}
+       */
+      outcome: 'progress' | 'completed' | 'failed' | 'blocked';
+      /**
+       * Owner Action
+       * @default null
+       */
+      owner_action: string | null;
+      /**
+       * Evidence Refs
+       * @default []
+       */
+      evidence_refs: string[];
+    };
+    /** TaskView */
+    TaskView: {
+      task: components['schemas']['Task'];
+      /**
+       * Attempts
+       * @default []
+       */
+      attempts: components['schemas']['TaskAttempt'][];
+      /**
+       * Operations
+       * @default []
+       */
+      operations: components['schemas']['TaskOperation'][];
+      /**
+       * Artifacts
+       * @default []
+       */
+      artifacts: components['schemas']['TaskArtifact'][];
+      /**
+       * Reports
+       * @default []
+       */
+      reports: components['schemas']['TaskReport'][];
+      projection: components['schemas']['TaskProjection'];
+      /** Actions */
+      actions: {
+        [key: string]: components['schemas']['TaskEligibility'];
+      };
+    };
+    /** ProjectProviderPreference */
+    ProjectProviderPreference: {
+      /** Project Id */
+      project_id: string;
+      /**
+       * Profile Id
+       * @default null
+       */
+      profile_id: string | null;
+      /**
+       * Version
+       * @default 0
+       */
+      version: number;
+    };
+    /** TaskUpdated */
+    TaskUpdated: {
+      /**
+       * Type
+       * @default task:updated
+       * @constant
+       */
+      type: 'task:updated';
+      /** Event Id */
+      event_id: string;
+      /** Task Id */
+      task_id: string;
+      /** Version */
+      version: number;
+      /** Attempt Id */
+      attempt_id: string | null;
+      /** Root Task Id */
+      root_task_id: string;
+      /** Parent Task Id */
+      parent_task_id: string | null;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+    };
+    /** AskUserRequest */
+    AskUserRequest: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'ask_user_request';
+      /** Id */
+      id: string;
+      /** Questions */
+      questions: components['schemas']['HITLQuestion'][];
+      /** @default null */
+      nested: components['schemas']['NestedHITLRequest'] | null;
+    } & {
+      [key: string]: unknown;
+    };
+    /** ContinuationIdentity */
+    ContinuationIdentity: {
+      /** Gateway */
+      gateway: string;
+      /** Endpoint */
+      endpoint: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** Context Id */
+      context_id: string;
+      /** Task Id */
+      task_id: string;
+      /** Status Message Id */
+      status_message_id: string;
+      /** Request Hash */
+      request_hash: string;
+    };
+    /** HITLQuestion */
+    HITLQuestion: {
+      /** Question */
+      question: string;
+      /** Choices */
+      choices: string[] | null;
+      /** Multiple */
+      multiple: boolean;
+    } & {
+      [key: string]: unknown;
+    };
+    /** HITLTool */
+    HITLTool: {
+      /** Id */
+      id: string;
+      /** Call Id */
+      call_id: string;
+      /** Name */
+      name: string;
+      /** Args */
+      args: {
+        [key: string]: components['schemas']['JsonValue'];
+      };
+    } & {
+      [key: string]: unknown;
+    };
+    JsonValue: unknown;
+    /** LeafIdentity */
+    LeafIdentity: {
+      /** Gateway */
+      gateway: string;
+      /** Endpoint */
+      endpoint: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** Context Id */
+      context_id: string;
+      /** Task Id */
+      task_id: string;
+      /** Owner Id */
+      owner_id: string;
+      /**
+       * Binding Id
+       * @default null
+       */
+      binding_id: string | null;
+      /** Pending Request Id */
+      pending_request_id: string;
+      /** Request Hash */
+      request_hash: string;
+    };
+    /** NestedHITLRequest */
+    NestedHITLRequest: {
+      /**
+       * Subagent Name
+       * @default
+       */
+      subagent_name: string;
+      /** Task Id */
+      task_id: string;
+      /** Context Id */
+      context_id: string;
+      /** Tools */
+      tools: components['schemas']['HITLTool'][];
+    } & {
+      [key: string]: unknown;
+    };
+    /** TaskIdentity */
+    TaskIdentity: {
+      /** Gateway */
+      gateway: string;
+      /** Endpoint */
+      endpoint: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** Context Id */
+      context_id: string;
+      /** Task Id */
+      task_id: string;
+    };
+    /** ToolApprovalRequest */
+    ToolApprovalRequest: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'tool_approval_request';
+      /**
+       * Hint
+       * @default
+       */
+      hint: string;
+      /** Tools */
+      tools: components['schemas']['HITLTool'][];
+      /** @default null */
+      nested: components['schemas']['NestedHITLRequest'] | null;
+    } & {
+      [key: string]: unknown;
+    };
+    /** VerifiedAssociation */
+    VerifiedAssociation: {
+      /** Owner Id */
+      owner_id: string;
+      outer: components['schemas']['TaskIdentity'];
+      leaf: components['schemas']['TaskIdentity'];
+      /**
+       * Evidence Source
+       * @enum {string}
+       */
+      evidence_source: 'control_plane_creation' | 'gateway_continuation';
+      /** Evidence Reference */
+      evidence_reference: string;
+    };
+    /** HITLProjection */
+    HITLProjection: {
+      /** Id */
+      id: string;
+      /** Owner Id */
+      owner_id: string;
+      outer: components['schemas']['ContinuationIdentity'];
+      /** Payload */
+      payload:
+        | components['schemas']['ToolApprovalRequest']
+        | components['schemas']['AskUserRequest'];
+      /**
+       * Leaves
+       * @default []
+       */
+      leaves: components['schemas']['LeafIdentity'][];
+      /**
+       * Associations
+       * @default []
+       */
+      associations: components['schemas']['VerifiedAssociation'][];
+      /**
+       * Availability
+       * @enum {string}
+       */
+      availability: 'pending' | 'unavailable' | 'stale' | 'answered';
+      /**
+       * Unavailable Reason
+       * @default null
+       */
+      unavailable_reason: string | null;
+    };
+    /** CallSnapshot */
+    CallSnapshot: {
+      leaf: components['schemas']['LeafIdentity'];
+      /**
+       * Call Id
+       * @default null
+       */
+      call_id: string | null;
+      /**
+       * Tool Name
+       * @default null
+       */
+      tool_name: string | null;
+      /** Arguments Hash */
+      arguments_hash: string;
+      /**
+       * Approved
+       * @default null
+       */
+      approved: boolean | null;
+      /**
+       * Configuration
+       * @default null
+       */
+      configuration:
+        | components['schemas']['TemplateMergeConfiguration']
+        | components['schemas']['VerifiedLeafConfiguration']
+        | null;
+      /**
+       * Mapping
+       * @default null
+       */
+      mapping:
+        | components['schemas']['TemplateMergeConfiguration']
+        | components['schemas']['TrustedToolMapping']
+        | null;
+      /** @default null */
+      mapping_evidence: components['schemas']['TemplateMappingEvidence'] | null;
+      /** @default null */
+      merge_key: components['schemas']['MergeReceiptKey'] | null;
+    };
+    /** MergeReceiptKey */
+    MergeReceiptKey: {
+      /** Owner Id */
+      owner_id: string;
+      /** Leaf Binding Id */
+      leaf_binding_id: string;
+      /** Leaf Runtime Session Id */
+      leaf_runtime_session_id: string;
+      /**
+       * Operation
+       * @default mainloop.merge_pull_request_with_approval.v1
+       * @constant
+       */
+      operation: 'mainloop.merge_pull_request_with_approval.v1';
+      /** Proposal Id */
+      proposal_id: string;
+      /** Invocation Request Id */
+      invocation_request_id: string;
+    };
+    /**
+     * TemplateMappingEvidence
+     * @description Server-computed reference included in an approval proposal snapshot.
+     */
+    TemplateMappingEvidence: {
+      /** Template Name */
+      template_name: string;
+      /**
+       * Provider
+       * @enum {string}
+       */
+      provider: 'claude' | 'codex';
+      /** Config Digest */
+      config_digest: string;
+    };
+    /**
+     * TemplateMergeConfiguration
+     * @description One operator-reviewed protected mapping for a named AgentTemplate/provider.
+     */
+    TemplateMergeConfiguration: {
+      /** Template Name */
+      template_name: string;
+      /**
+       * Provider
+       * @enum {string}
+       */
+      provider: 'claude' | 'codex';
+      /** Compiled Alias */
+      compiled_alias: string;
+      /** Endpoint */
+      endpoint: string;
+      /**
+       * Tool
+       * @constant
+       */
+      tool: 'merge_pull_request_with_approval';
+      /**
+       * Require Approval
+       * @constant
+       */
+      require_approval: true;
+      /**
+       * Operation
+       * @default mainloop.merge_pull_request_with_approval.v1
+       * @constant
+       */
+      operation: 'mainloop.merge_pull_request_with_approval.v1';
+    };
+    /**
+     * TrustedToolMapping
+     * @description Retained decoder for immutable receipts written before template mappings.
+     */
+    TrustedToolMapping: {
+      /**
+       * Provider
+       * @enum {string}
+       */
+      provider: 'claude' | 'codex';
+      /** Prepared Revision */
+      prepared_revision: string;
+      /** Compiled Alias */
+      compiled_alias: string;
+      /** Remote Server Id */
+      remote_server_id: string;
+      /** Endpoint */
+      endpoint: string;
+      /**
+       * Tool
+       * @constant
+       */
+      tool: 'merge_pull_request_with_approval';
+      /**
+       * Require Approval
+       * @constant
+       */
+      require_approval: true;
+      /**
+       * Operation
+       * @default mainloop.merge_pull_request_with_approval.v1
+       * @constant
+       */
+      operation: 'mainloop.merge_pull_request_with_approval.v1';
+    };
+    /**
+     * VerifiedLeafConfiguration
+     * @description Retained decoder for immutable per-session receipts; never accepted as config.
+     */
+    VerifiedLeafConfiguration: {
+      /** Owner Id */
+      owner_id: string;
+      /** Binding Id */
+      binding_id: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /**
+       * Provider
+       * @enum {string}
+       */
+      provider: 'claude' | 'codex';
+      /** Prepared Revision */
+      prepared_revision: string;
+      /** Evidence Reference */
+      evidence_reference: string;
+      /** Mappings */
+      mappings: components['schemas']['TrustedToolMapping'][];
+    };
+    /** DecisionReceipt */
+    DecisionReceipt: {
+      /** Action Id */
+      action_id: string;
+      /** Owner Id */
+      owner_id: string;
+      /** Request Hash */
+      request_hash: string;
+      /** Request */
+      request:
+        | components['schemas']['ToolApprovalRequest']
+        | components['schemas']['AskUserRequest'];
+      /** Response */
+      response:
+        | components['schemas']['ToolApprovalResponseOutput']
+        | components['schemas']['AskUserResponse'];
+      outer: components['schemas']['ContinuationIdentity'];
+      /** Calls */
+      calls: components['schemas']['CallSnapshot'][];
+      /**
+       * Associations
+       * @default []
+       */
+      associations: components['schemas']['VerifiedAssociation'][];
+      /** Outbound Message Id */
+      outbound_message_id: string;
+    };
+    /** Tool */
+    HealthTool: {
+      /** Call Key */
+      call_key: string;
+      /**
+       * Phase
+       * @enum {string}
+       */
+      phase: 'started' | 'finished';
+      /**
+       * Tool Class
+       * @enum {string}
+       */
+      tool_class: 'builtin' | 'shell' | 'mcp' | 'other';
+      /** Operation Key */
+      operation_key: string;
+      /**
+       * Action
+       * @enum {string}
+       */
+      action: 'read' | 'edit' | 'search' | 'other';
+      /** Path */
+      path: string | null;
+      /**
+       * Outcome
+       * @enum {string}
+       */
+      outcome: 'success' | 'error' | 'denied' | 'unknown';
+      /**
+       * Category
+       * @enum {string}
+       */
+      category: 'none' | 'tool_error' | 'mcp_error' | 'permission_denied';
+    };
+    /** ToolEvent */
+    HealthToolEvent: {
+      /**
+       * Schema Version
+       * @constant
+       */
+      schema_version: 'kagent.dev/orchestration-health/v1';
+      /** Event Id */
+      event_id: string;
+      /** Producer Epoch */
+      producer_epoch: string;
+      /** Sequence */
+      sequence: number;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /**
+       * Time Source
+       * @constant
+       */
+      time_source: 'adapter_observed';
+      /**
+       * Time Precision
+       * @constant
+       */
+      time_precision: 'nanosecond';
+      /**
+       * Provider
+       * @constant
+       */
+      provider: 'claude';
+      /** Runtime Version */
+      runtime_version: string;
+      /**
+       * Source
+       * @constant
+       */
+      source: 'claude_result_stream';
+      /** Turn Key */
+      turn_key: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** A2A Task Id */
+      a2a_task_id: string;
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      kind: 'tool';
+      tool: components['schemas']['HealthTool'];
+    };
+    /** Turn */
+    HealthTurn: {
+      /**
+       * State
+       * @enum {string}
+       */
+      state: 'started' | 'finished' | 'failed';
+      /**
+       * Coverage
+       * @enum {string}
+       */
+      coverage: 'complete' | 'partial';
+    };
+    /** TurnEvent */
+    HealthTurnEvent: {
+      /**
+       * Schema Version
+       * @constant
+       */
+      schema_version: 'kagent.dev/orchestration-health/v1';
+      /** Event Id */
+      event_id: string;
+      /** Producer Epoch */
+      producer_epoch: string;
+      /** Sequence */
+      sequence: number;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /**
+       * Time Source
+       * @constant
+       */
+      time_source: 'adapter_observed';
+      /**
+       * Time Precision
+       * @constant
+       */
+      time_precision: 'nanosecond';
+      /**
+       * Provider
+       * @constant
+       */
+      provider: 'claude';
+      /** Runtime Version */
+      runtime_version: string;
+      /**
+       * Source
+       * @constant
+       */
+      source: 'claude_result_stream';
+      /** Turn Key */
+      turn_key: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** A2A Task Id */
+      a2a_task_id: string;
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      kind: 'turn';
+      turn: components['schemas']['HealthTurn'];
+    };
+    /** Usage */
+    HealthUsage: {
+      /**
+       * Scope
+       * @constant
+       */
+      scope: 'turn';
+      /**
+       * Basis
+       * @constant
+       */
+      basis: 'turn_total';
+      /**
+       * Inclusion
+       * @constant
+       */
+      inclusion: 'tree_inclusive';
+      /** Sample Key */
+      sample_key: string;
+      /** Revision */
+      revision: number;
+      /** Input Tokens */
+      input_tokens: number | null;
+      /** Output Tokens */
+      output_tokens: number | null;
+      /**
+       * Coverage
+       * @enum {string}
+       */
+      coverage: 'complete' | 'partial';
+    };
+    /** UsageEvent */
+    HealthUsageEvent: {
+      /**
+       * Schema Version
+       * @constant
+       */
+      schema_version: 'kagent.dev/orchestration-health/v1';
+      /** Event Id */
+      event_id: string;
+      /** Producer Epoch */
+      producer_epoch: string;
+      /** Sequence */
+      sequence: number;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /**
+       * Time Source
+       * @constant
+       */
+      time_source: 'adapter_observed';
+      /**
+       * Time Precision
+       * @constant
+       */
+      time_precision: 'nanosecond';
+      /**
+       * Provider
+       * @constant
+       */
+      provider: 'claude';
+      /** Runtime Version */
+      runtime_version: string;
+      /**
+       * Source
+       * @constant
+       */
+      source: 'claude_result_stream';
+      /** Turn Key */
+      turn_key: string;
+      /** Runtime Session Id */
+      runtime_session_id: string;
+      /** A2A Task Id */
+      a2a_task_id: string;
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      kind: 'usage';
+      usage: components['schemas']['HealthUsage'];
+    };
+    HealthEvent:
+      | components['schemas']['HealthTurnEvent']
+      | components['schemas']['HealthToolEvent']
+      | components['schemas']['HealthUsageEvent'];
+    /** @description Display context from the owned binding; empty when the session is unknown. */
+    HITLContext: {
+      session_id?: string;
+      title?: string | null;
+      project_id?: string | null;
+      project_name?: string | null;
+      role?: string | null;
+      provider?: string | null;
+    };
+    MergeApprovalProjectPolicy: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'project_policy';
+    };
+    MergeApprovalProtectedPath: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'protected_path';
+      glob: string;
+      path: string;
+    };
+    MergeApprovalReason:
+      | components['schemas']['MergeApprovalProjectPolicy']
+      | components['schemas']['MergeApprovalProtectedPath'];
+    MergeCISummary: {
+      complete: boolean;
+      captured_at: string | null;
+      result_count: number;
+      passed_count: number;
+      failed_count: number;
+      pending_count: number;
+      green_at_preparation: boolean;
+      inventory_digest: string;
+      /** @description Present only when the recorded CI facts list ignored suites. */
+      ignored_suite_count?: number;
+    };
+    /** @description Immutable proposal presentation. The three merge_* fields exist only on proposals that recorded merge-result files. */
+    MergeSummary: {
+      /** @enum {integer} */
+      version: 1;
+      proposal_id: string;
+      repository: string | null;
+      pr_number: number | null;
+      title: string | null;
+      description_excerpt: string;
+      description_truncated: boolean;
+      description_digest: string | null;
+      description_length: number | null;
+      file_count: number | null;
+      additions: number | null;
+      deletions: number | null;
+      paths_digest: string | null;
+      paths_preview: string[];
+      paths_preview_truncated: boolean;
+      protected_matches: string[];
+      approval_reasons: components['schemas']['MergeApprovalReason'][];
+      policy: ('auto' | 'approval') | null;
+      policy_version: number | null;
+      globs_version: number | null;
+      head: string | null;
+      head_sha: string | null;
+      base: string | null;
+      base_sha: string | null;
+      ci: components['schemas']['MergeCISummary'] | null;
+      mapping_evidence: components['schemas']['TemplateMappingEvidence'] | null;
+      /** @enum {string} */
+      availability: 'ready' | 'unavailable';
+      unavailable_reasons: string[];
+      merge_file_count?: number;
+      merge_only_file_count?: number;
+      merge_paths_digest?: string | null;
+    };
+    /** @description Server-resolved merge context for one native tool call. pr_url and compare_url appear only when the repository, number, head and base are well formed. */
+    VerifiedMergeContext: {
+      tool_id: string | null;
+      proposal_id: string | null;
+      summary: components['schemas']['MergeSummary'] | null;
+      summary_digest: string | null;
+      /** @enum {string} */
+      availability: 'ready' | 'unavailable' | 'stale';
+      freshness_reason: string | null;
+      details_url: string | null;
+      pr_url?: string;
+      compare_url?: string;
+      repository: string | null;
+      pr_number: number | null;
+      head: string | null;
+      head_sha: string | null;
+      base: string | null;
+      base_sha: string | null;
+      protected_matches: string[];
+      stale: boolean;
+      state: string | null;
+      deadline: string | null;
+    };
+    HITLView: {
+      request: components['schemas']['HITLProjection'];
+      response: components['schemas']['DecisionReceipt'] | null;
+      transport_state: string | null;
+      route_request_id: string;
+      answerable: boolean;
+      unavailable_reason: string | null;
+      context: components['schemas']['HITLContext'];
+      writes_enabled: boolean;
+      merge: components['schemas']['VerifiedMergeContext'][] | null;
+    };
+    /** @description One changed file (files section) or CI record (checks section); the GitHub fields beyond these pass through. */
+    MergeDetailItem: {
+      /**
+       * @description checks section only.
+       * @enum {string}
+       */
+      kind?: 'suite' | 'check_run' | 'commit_status' | 'required_check';
+      /** @description files section. */
+      filename?: string;
+      previous_filename?: string | null;
+      status?: string;
+      additions?: number;
+      deletions?: number;
+      context?: string;
+      app_id?: number | null;
+    } & {
+      [key: string]: unknown;
+    };
+    /** @description One page of an immutable merge proposal. The JSON body is capped at 64 KiB; a larger one fails with 409. */
+    HITLMergeDetails: {
+      request_id: string;
+      proposal_id: string;
+      /** @enum {string} */
+      section: 'description' | 'files' | 'checks';
+      summary_digest: string;
+      head: string | null;
+      head_sha: string | null;
+      base: string | null;
+      base_sha: string | null;
+      captured_at: string | null;
+      cursor: number;
+      next_cursor: string | null;
+      truncated: boolean;
+      /** @description description section only. */
+      description?: string;
+      description_digest?: string | null;
+      description_length?: number;
+      description_truncated?: boolean;
+      /** @description files and checks sections only; at most 50 per page. */
+      items?: components['schemas']['MergeDetailItem'][];
+    };
+    HealthTotals: {
+      turns: number;
+      usage_observed_turns: number;
+      usage_complete_turns: number;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      failures: number | null;
+      repeated_failure_groups: number | null;
+      unresolved_calls: number;
+      /** @enum {string} */
+      coverage: 'complete' | 'partial' | 'unknown';
+    };
+    HealthTurnSummary: {
+      failures: number;
+      categories: {
+        [key: string]: number;
+      };
+      repeated_failure_groups: number;
+      unresolved_calls: number;
+      /** @enum {string} */
+      friction_coverage: 'complete' | 'partial';
+      input_tokens: number | null;
+      output_tokens: number | null;
+      /** @enum {string} */
+      usage_coverage: 'complete' | 'partial' | 'unknown';
+      /** @enum {string} */
+      inclusion: 'tree_inclusive';
+      /** @enum {string} */
+      child_attribution: 'unavailable';
+    };
+    /** @description A stored turn aggregate, as the database row. */
+    HealthTurnRow: {
+      owner_id: string;
+      gateway: string;
+      session_id: string;
+      runtime_session_id: string;
+      a2a_task_id: string;
+      turn_key: string;
+      project_id: string | null;
+      task_id: string | null;
+      attempt_id: string | null;
+      profile_revision: string | null;
+      provider: string;
+      /** Format: date-time */
+      occurred_at: string;
+      summary: components['schemas']['HealthTurnSummary'];
+      aggregation_version: number;
+      frozen: boolean;
+    };
+    /** @description Sessions without a task have task_title and title null; rows for tasks without a session omit title. */
+    HealthSession: {
+      session_id: string | null;
+      title?: string | null;
+      provider: string;
+      project_id: string | null;
+      task_id: string | null;
+      attempt_id: string | null;
+      task_title?: string | null;
+      totals: components['schemas']['HealthTotals'];
+    };
+    HealthReport: {
+      id: string;
+      task_id: string;
+      attempt_id: string;
+      /** @enum {string} */
+      outcome: 'blocked' | 'failed';
+    };
+    HealthApproval: {
+      id: string;
+      runtime_session_id: string | null;
+      state: string | null;
+    };
+    HealthRow: {
+      id: string;
+      task_id: string | null;
+      project_id: string | null;
+      title: string | null;
+      sessions: components['schemas']['HealthSession'][];
+      turns: components['schemas']['HealthTurnRow'][];
+      totals: components['schemas']['HealthTotals'];
+      reports: components['schemas']['HealthReport'][];
+      approvals: components['schemas']['HealthApproval'][];
+      gaps: string[];
+      expected_receipts: number;
+    };
+    HealthView: {
+      rows: components['schemas']['HealthRow'][];
+      hours: number;
+      partial: boolean;
+      unsupported: ('cache' | 'exact_approval_wait' | 'codex_usage' | 'native_child_attribution')[];
+      retention: {
+        events_days: number;
+        summaries_days: number;
+      };
+    };
+    HealthEventRow: {
+      event_id: string;
+      task_id: string | null;
+      attempt_id: string | null;
+      /** Format: date-time */
+      received_at: string;
+      payload: components['schemas']['HealthEvent'];
+    };
+    HealthEvents: {
+      events: components['schemas']['HealthEventRow'][];
+      partial: boolean;
+    };
+    /** @description `connected`: first frame of every stream. */
+    EventConnected: {
+      user_id: string;
+      /** @description UTC ISO-8601 without an offset. */
+      timestamp: string;
+    };
+    /** @description `heartbeat`: sent after 30 seconds without another event. */
+    EventHeartbeat: {
+      /** @description UTC ISO-8601 without an offset. */
+      timestamp: string;
+    };
+    /** @description `inbox:updated`: either field is omitted when unknown. */
+    EventInboxUpdated: {
+      item_id?: string;
+      unread_count?: number;
+    };
+    /** @description `session:message`: a mirrored reply landed in a session conversation. */
+    EventSessionMessage: {
+      session_id: string;
+      message_id: string;
+      /** @enum {string} */
+      role: 'assistant';
+    };
+    /** @description `workspace:updated`: the durable lifecycle projection. */
+    EventWorkspaceUpdated: {
+      workspace: components['schemas']['WorkspaceLifecycle'];
+    };
+    /** @description `task:updated`: names a change; read the task with getTask. */
+    EventTaskUpdated: components['schemas']['TaskUpdated'];
+    /** TaskCheckout */
+    TaskCheckoutOutput: {
+      /** Branch */
+      branch: string;
+      /**
+       * Ref
+       * @default
+       */
+      ref: string;
+      /**
+       * Depth
+       * @default 0
+       */
+      depth: number;
+    };
+    /** ToolApproval */
+    ToolApprovalOutput: {
+      /** Id */
+      id: string;
+      /** Approved */
+      approved: boolean;
+      /** Rejection Reason */
+      rejection_reason: string | null;
+    };
+    /** ToolApprovalResponse */
+    ToolApprovalResponseOutput: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      type: 'tool_approval_response';
+      /** Approvals */
+      approvals: components['schemas']['ToolApprovalOutput'][];
+      /** Reviewed Context */
+      reviewed_context: {
+        [key: string]: string;
+      };
+    };
+    /**
+     * WorkspaceDev
+     * @description Dev server settings: which ports the preview URL may reach, and when to idle out.
+     */
+    WorkspaceDevOutput: {
+      /**
+       * Ports
+       * @default []
+       */
+      ports: components['schemas']['WorkspacePort'][];
+      /**
+       * Idle Timeout Minutes
+       * @default 30
+       */
+      idle_timeout_minutes: number;
     };
   };
   responses: never;
@@ -2241,6 +4104,15 @@ export interface operations {
           'application/json': components['schemas']['ActivityItem'][];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
     };
   };
   getAttention: {
@@ -2259,6 +4131,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['AttentionSnapshot'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2283,6 +4164,33 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ChatResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2316,6 +4224,15 @@ export interface operations {
           'application/json': components['schemas']['ConversationResponse'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -2342,7 +4259,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['DevEnvironment'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2366,7 +4292,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['RegisteredEnvironment'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2375,7 +4319,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
@@ -2397,7 +4343,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['DevEnvironment'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2432,7 +4387,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['DevEnvironment'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2441,12 +4414,14 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
   };
-  grantEnvironment: {
+  grantEnvironmentToProject: {
     parameters: {
       query?: never;
       header?: never;
@@ -2468,7 +4443,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ProjectEnvironmentGrant'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2482,7 +4475,7 @@ export interface operations {
       };
     };
   };
-  revokeEnvironment: {
+  revokeEnvironmentFromProject: {
     parameters: {
       query?: never;
       header?: never;
@@ -2500,6 +4493,24 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
       };
       /** @description Validation Error */
       422: {
@@ -2533,7 +4544,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['EnvironmentVersion'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2542,7 +4571,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
@@ -2564,7 +4595,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['EnvironmentVersion'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2596,7 +4636,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['EnvironmentVersion'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2619,13 +4668,28 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Successful Response */
+      /** @description Server-sent event stream; each frame has `id`, `event` and a JSON `data` line. */
       200: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'text/event-stream':
+            | components['schemas']['EventConnected']
+            | components['schemas']['EventHeartbeat']
+            | components['schemas']['EventInboxUpdated']
+            | components['schemas']['EventSessionMessage']
+            | components['schemas']['EventTaskUpdated']
+            | components['schemas']['EventWorkspaceUpdated'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2645,7 +4709,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HealthResponse'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2665,7 +4738,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HITLObserverStatus'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2687,7 +4769,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HITLView'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2723,7 +4814,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HITLMergeDetails'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2758,7 +4867,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HITLView'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2768,6 +4904,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2788,6 +4933,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['MainThreadInfo'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -2814,7 +4968,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HealthView'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2846,7 +5009,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['HealthEvents'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2878,6 +5050,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Project'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -2913,6 +5094,33 @@ export interface operations {
           'application/json': components['schemas']['Project'];
         };
       };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -2944,6 +5152,15 @@ export interface operations {
           'application/json': components['schemas']['Project'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -2972,7 +5189,27 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ProjectProviderPreference'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3007,7 +5244,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ProjectProviderPreference'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
@@ -3016,7 +5284,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
@@ -3039,6 +5309,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ProjectDetail'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3069,7 +5348,23 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ProjectEnvironmentSelection'];
+        };
+      };
+      /** @description No environment is selected for the project. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3104,7 +5399,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ProjectEnvironmentSelection'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3113,7 +5435,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
@@ -3136,6 +5460,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['MergePolicyView'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3173,6 +5506,33 @@ export interface operations {
           'application/json': components['schemas']['MergePolicyView'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -3180,6 +5540,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -3203,7 +5572,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SmokeObservations'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3235,6 +5613,15 @@ export interface operations {
           'application/json': components['schemas']['ProviderProfile'][];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
     };
   };
   dismissQueueDiagnostic: {
@@ -3254,7 +5641,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['StatusOk'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3289,7 +5703,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['QueueRespondResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3321,6 +5762,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Session'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3356,13 +5806,33 @@ export interface operations {
           'application/json': components['schemas']['Session'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
         };
       };
     };
@@ -3385,6 +5855,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['Session'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3415,7 +5894,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SessionArchiveResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3446,7 +5952,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SessionCancelResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3480,6 +6013,15 @@ export interface operations {
           'application/json': components['schemas']['SessionConversationResponse'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -3508,7 +6050,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': string[];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3543,7 +6094,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SessionMessageResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3577,6 +6155,15 @@ export interface operations {
           'application/json': components['schemas']['NativeSessionInfo'];
         };
       };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -3605,7 +6192,34 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SessionStopTurnResponse'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3615,6 +6229,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -3636,7 +6259,27 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3668,7 +6311,25 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskView'][];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3701,7 +6362,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
@@ -3710,7 +6402,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
         };
       };
     };
@@ -3732,7 +6426,27 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskView'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3767,7 +6481,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
@@ -3776,7 +6521,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
         };
       };
     };
@@ -3802,7 +6549,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
@@ -3811,7 +6589,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
         };
       };
     };
@@ -3837,7 +6617,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['TaskOperation'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['TaskError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TaskError'];
         };
       };
       /** @description Validation Error */
@@ -3846,7 +6657,9 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['TaskError'];
         };
       };
     };
@@ -3867,6 +6680,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['WorkspaceLifecycle'][];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -3893,13 +6715,51 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -3922,6 +6782,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['WorkspaceLifecycle'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -3953,6 +6822,33 @@ export interface operations {
         };
         content?: never;
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -3960,6 +6856,15 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -3981,7 +6886,16 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['WorkspacePortsResponse'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */
@@ -4015,13 +6929,51 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -4046,13 +6998,51 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -4077,13 +7067,51 @@ export interface operations {
           'application/json': components['schemas']['WorkspaceLifecycle'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPValidationError'];
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };

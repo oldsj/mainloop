@@ -3,6 +3,7 @@ import { Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { PanelBoundary } from './PanelBoundary';
 import { InboxPanel, SessionsPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
 import type { Tab } from './view';
@@ -40,8 +41,16 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'chat' && children}
-        {tab === 'sessions' && <SessionsPanel />}
-        {tab === 'inbox' && <InboxPanel />}
+        {tab === 'sessions' && (
+          <PanelBoundary name="Sessions">
+            <SessionsPanel />
+          </PanelBoundary>
+        )}
+        {tab === 'inbox' && (
+          <PanelBoundary name="Inbox">
+            <InboxPanel />
+          </PanelBoundary>
+        )}
       </main>
       <nav
         data-testid="mobile-tab-bar"

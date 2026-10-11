@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createEventGate, createSseApplier, planSseEvent } from './invalidation';
 import { allKeys, keys } from './keys';
 import { createSseParser, type SseMessage } from './sse';
+import { workspaceFixture } from '@/test/fixtures';
 
 const message = (event: string, payload: unknown = {}): Pick<SseMessage, 'event' | 'data'> => ({
   event,
@@ -42,10 +43,10 @@ describe('planSseEvent', () => {
   });
 
   it('upserts the workspace carried by workspace:updated', () => {
-    const workspace = { workspace_id: 'w1', lifecycle: 'running' };
+    const workspace = workspaceFixture({ observed_state: 'running' });
     expect(
       planSseEvent(message('workspace:updated', { workspace }), { firstConnect: false })
-    ).toEqual([{ kind: 'upsertWorkspace', workspaceId: 'w1', workspace }]);
+    ).toEqual([{ kind: 'upsertWorkspace', workspace }]);
   });
 
   it.each([
@@ -105,19 +106,29 @@ describe('createSseApplier', () => {
     expect(queryClient.getQueryState(keys.task('t1'))?.isInvalidated).toBe(false);
   });
 
-  it('writes a workspace into the item and list caches', () => {
+  it('writes a workspace into the item cache and every cached variant of the list', () => {
     const { queryClient, apply } = setup();
-    queryClient.setQueryData(keys.workspaces(), [{ workspace_id: 'w1', lifecycle: 'starting' }]);
-    apply(
-      message('workspace:updated', { workspace: { workspace_id: 'w1', lifecycle: 'running' } })
-    );
-    expect(queryClient.getQueryData(keys.workspace('w1'))).toEqual({
-      workspace_id: 'w1',
-      lifecycle: 'running'
-    });
-    expect(queryClient.getQueryData(keys.workspaces())).toEqual([
-      { workspace_id: 'w1', lifecycle: 'running' }
-    ]);
+    const starting = workspaceFixture({ observed_state: 'resuming' });
+    const other = workspaceFixture({ workspace_id: 'w2', session_id: 's2' });
+    const listKey = keys.workspaces();
+    const filteredKey = [...listKey, { params: { query: { limit: 1 } } }];
+    queryClient.setQueryData(listKey, [starting, other]);
+    queryClient.setQueryData(filteredKey, [starting]);
+    const running = workspaceFixture({ observed_state: 'running' });
+    apply(message('workspace:updated', { workspace: running }));
+    expect(queryClient.getQueryData(keys.workspace('w1'))).toEqual(running);
+    expect(queryClient.getQueryData(listKey)).toEqual([running, other]);
+    expect(queryClient.getQueryData(filteredKey)).toEqual([running]);
+  });
+
+  it('adds a workspace the list does not hold yet, and leaves an unloaded list alone', () => {
+    const { queryClient, apply } = setup();
+    const created = workspaceFixture({ workspace_id: 'w9' });
+    apply(message('workspace:updated', { workspace: created }));
+    expect(queryClient.getQueryData(keys.workspaces())).toBeUndefined();
+    queryClient.setQueryData(keys.workspaces(), []);
+    apply(message('workspace:updated', { workspace: created }));
+    expect(queryClient.getQueryData(keys.workspaces())).toEqual([created]);
   });
 
   it('refetches all queries on a second connect only', () => {

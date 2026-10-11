@@ -69,58 +69,111 @@ export interface SseClientOptions {
   fetch?: typeof fetch;
   /** Delay before reconnect attempt n (0-based), in ms. */
   backoff?: (attempt: number) => number;
+  /** Waits `ms`; resolves early when `signal` aborts or the network or tab comes back. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Reconnect when no bytes arrive for this long (default 75 s; the server heartbeats at 30 s). */
+  idleTimeoutMs?: number;
 }
+
+export const SSE_IDLE_TIMEOUT_MS = 75_000;
 
 const defaultBackoff = (attempt: number) =>
   Math.min(30_000, 1000 * 2 ** attempt) * (0.75 + Math.random() * 0.5);
 
+/**
+ * A backoff wait that ends early on `online` and when the tab becomes visible: a user who just
+ * regained the network or came back to the tab should not wait out a 30 s delay.
+ */
 const defaultSleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') finish();
+    };
+    const finish = () => {
       clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      window.removeEventListener('online', finish);
+      document.removeEventListener('visibilitychange', onVisible);
       resolve();
-    });
+    };
+    const timer = setTimeout(finish, ms);
+    if (signal.aborted) return finish();
+    signal.addEventListener('abort', finish);
+    window.addEventListener('online', finish);
+    document.addEventListener('visibilitychange', onVisible);
   });
 
 /**
  * SSE over fetch, not EventSource: a fresh connection can send `Last-Event-ID` itself, so a
  * reconnect after an error or a server restart replays from the last event seen instead of
  * starting over. Reconnects with jittered exponential backoff until `stop()`.
+ *
+ * A watchdog drops a connection that has gone silent: a half-open TCP connection (sleeping laptop,
+ * dead NAT entry) neither errors nor ends, so without it the stream would hang forever.
  */
 export function createSseClient(options: SseClientOptions) {
   const url = options.url ?? `${API_URL}/events`;
   const doFetch = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
   const backoff = options.backoff ?? defaultBackoff;
   const sleep = options.sleep ?? defaultSleep;
+  const idleTimeoutMs = options.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   let controller: AbortController | undefined;
   let lastEventId = '';
+
+  /** One connection, ending when the stream ends, errors, goes silent, or `signal` aborts. */
+  async function connect(signal: AbortSignal): Promise<boolean> {
+    const attemptController = new AbortController();
+    const abortAttempt = () => attemptController.abort();
+    signal.addEventListener('abort', abortAttempt, { once: true });
+    let reader: ReadableStreamDefaultReader<string> | undefined;
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        attemptController.abort();
+        // A stalled body read does not always reject on abort.
+        void reader?.cancel().catch(() => {});
+      }, idleTimeoutMs);
+    };
+    let opened = false;
+    try {
+      arm();
+      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+      const response = await doFetch(url, {
+        headers,
+        signal: attemptController.signal,
+        cache: 'no-store'
+      });
+      if (!response.ok || !response.body) throw new Error(`SSE ${response.status}`);
+      options.onStatus?.('open');
+      opened = true;
+      const parser = createSseParser((message) => {
+        if (message.id) lastEventId = message.id;
+        options.onMessage(message);
+      });
+      reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        arm();
+        parser.push(value);
+      }
+    } catch {
+      // Falls through to the reconnect delay; an abort ends the loop in run().
+    } finally {
+      clearTimeout(idle);
+      signal.removeEventListener('abort', abortAttempt);
+      attemptController.abort();
+    }
+    return opened;
+  }
 
   async function run(signal: AbortSignal) {
     let attempt = 0;
     while (!signal.aborted) {
       options.onStatus?.('connecting');
-      try {
-        const headers: Record<string, string> = { Accept: 'text/event-stream' };
-        if (lastEventId) headers['Last-Event-ID'] = lastEventId;
-        const response = await doFetch(url, { headers, signal, cache: 'no-store' });
-        if (!response.ok || !response.body) throw new Error(`SSE ${response.status}`);
-        options.onStatus?.('open');
-        attempt = 0;
-        const parser = createSseParser((message) => {
-          if (message.id) lastEventId = message.id;
-          options.onMessage(message);
-        });
-        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          parser.push(value);
-        }
-      } catch {
-        // Falls through to the reconnect delay; an abort ends the loop below.
-      }
+      if (await connect(signal)) attempt = 0;
       if (signal.aborted) break;
       options.onStatus?.('connecting');
       await sleep(backoff(attempt++), signal);

@@ -1,7 +1,7 @@
 import createFetchClient from 'openapi-fetch';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, SendError, TaskApiError } from './errors';
-import { createMiddleware, createReadLimiter } from './middleware';
+import { createMiddleware, createReadLimiter, type LimiterClock } from './middleware';
 import type { paths } from './schema.gen';
 
 const json = (status: number, body: unknown) =>
@@ -90,7 +90,7 @@ describe('connection reporting', () => {
 });
 
 describe('read timeout', () => {
-  it('aborts a read that takes longer than the timeout and reports it', async () => {
+  it('aborts a read that takes longer than the timeout without reporting the backend offline', async () => {
     const { client, reportFailure } = setup(
       (request) =>
         new Promise<Response>((_, reject) => {
@@ -98,35 +98,101 @@ describe('read timeout', () => {
         }),
       20
     );
-    await client.GET('/projects').catch(() => undefined);
-    expect(reportFailure).toHaveBeenCalledOnce();
+    const error = await client.GET('/projects').catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: 'TimeoutError' });
+    // A slow read is not proof of an outage; the /health probe decides.
+    expect(reportFailure).not.toHaveBeenCalled();
   });
 });
 
-describe('read limiter', () => {
-  it('lets four reads start per second and spaces the rest', async () => {
-    let now = 1_000_000;
-    const sleeps: number[] = [];
-    const acquire = createReadLimiter(4, {
-      now: () => now,
-      sleep: (ms) => {
-        sleeps.push(ms);
-        now += ms;
-        return Promise.resolve();
-      }
-    });
-    for (let i = 0; i < 5; i++) await acquire();
-    // The first read starts at once; each later one waits for its 250 ms slot.
-    expect(sleeps).toEqual([250, 250, 250, 250]);
+describe('task errors', () => {
+  it('keeps the whole TaskError detail', async () => {
+    const detail = {
+      reason: 'parent_capacity',
+      limit: 2,
+      held_tasks: [],
+      recovery: 'Finish or cancel a held task.'
+    };
+    const { client } = setup(() => json(409, { detail }));
+    const error = await client
+      .GET('/tasks/{task_id}', { params: { path: { task_id: 't1' } } })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ reason: 'parent_capacity', detail });
   });
 
-  it('does not delay a read after a quiet period', async () => {
-    let now = 0;
-    const sleep = vi.fn(() => Promise.resolve());
-    const acquire = createReadLimiter(4, { now: () => now, sleep });
-    await acquire();
-    now += 5_000;
-    await acquire();
-    expect(sleep).not.toHaveBeenCalled();
+  it('has a null reason when the detail is a plain string', async () => {
+    const { client } = setup(() => json(404, { detail: 'Not Found' }));
+    const error = await client
+      .GET('/tasks/{task_id}', { params: { path: { task_id: 't1' } } })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TaskApiError);
+    expect(error).toMatchObject({ status: 404, reason: null, detail: null, message: 'Not Found' });
+  });
+});
+
+function fakeClock() {
+  let now = 1_000_000;
+  const sleeps: number[] = [];
+  const clock: LimiterClock = {
+    now: () => now,
+    sleep: (ms) => {
+      sleeps.push(ms);
+      now += ms;
+      return Promise.resolve();
+    }
+  };
+  return { clock, sleeps, advance: (ms: number) => (now += ms) };
+}
+
+describe('read limiter', () => {
+  it('lets a burst of four start at once, then spaces reads 250 ms apart', async () => {
+    const { clock, sleeps } = fakeClock();
+    const acquire = createReadLimiter(4, 4, clock);
+    for (let i = 0; i < 4; i++) await acquire();
+    expect(sleeps).toEqual([]);
+    for (let i = 0; i < 3; i++) await acquire();
+    expect(sleeps).toEqual([250, 250, 250]);
+  });
+
+  it('refills the bucket after a quiet period', async () => {
+    const { clock, sleeps, advance } = fakeClock();
+    const acquire = createReadLimiter(4, 4, clock);
+    for (let i = 0; i < 4; i++) await acquire();
+    advance(5_000);
+    for (let i = 0; i < 4; i++) await acquire();
+    expect(sleeps).toEqual([]);
+  });
+
+  it('frees the slot of a waiter that is aborted', async () => {
+    const now = 0;
+    const sleeps: number[] = [];
+    const clock: LimiterClock = {
+      now: () => now,
+      sleep: (ms, signal) => {
+        sleeps.push(ms);
+        // Never resolves on its own: only an abort ends the wait.
+        return new Promise<void>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        });
+      }
+    };
+    const acquire = createReadLimiter(4, 4, clock);
+    for (let i = 0; i < 4; i++) await acquire();
+    const controller = new AbortController();
+    const waiting = acquire(controller.signal);
+    controller.abort();
+    await expect(waiting).rejects.toBeDefined();
+    // Without the refund this read would queue behind the aborted one (500 ms).
+    void acquire();
+    expect(sleeps).toEqual([250, 250]);
+  });
+
+  it('does not start a read whose signal is already aborted', async () => {
+    const { clock } = fakeClock();
+    const acquire = createReadLimiter(4, 4, clock);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(acquire(controller.signal)).rejects.toBeDefined();
+    for (let i = 0; i < 4; i++) await acquire();
   });
 });
