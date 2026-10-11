@@ -649,24 +649,6 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 	return result.RowsAffected(), nil
 }
 
-const isTaskSessionStopped = `-- name: IsTaskSessionStopped :one
-SELECT coalesce((
-    SELECT a.stop_state <> 'none' FROM task_attempts a WHERE a.session_id = $1 FOR SHARE
-), false)::boolean AS stopped
-`
-
-// The attempt keeps its session id and non-none stop state after settlement. This is a permanent
-// send fence, independent of the session's activity status or the task's current attempt.
-// Standalone and adopted scheduled sessions have no task attempt and remain resumable.
-// During recording, the shared attempt lock lasts until commit: the stop-request UPDATE cannot
-// commit between this check and insertion. Dispatch checks run as short statements, outside I/O.
-func (q *Queries) IsTaskSessionStopped(ctx context.Context, sessionID *string) (bool, error) {
-	row := q.db.QueryRow(ctx, isTaskSessionStopped, sessionID)
-	var stopped bool
-	err := row.Scan(&stopped)
-	return stopped, err
-}
-
 const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
 SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
   AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
@@ -1085,6 +1067,22 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 	return items, nil
 }
 
+const lockSessionTaskAttempt = `-- name: LockSessionTaskAttempt :one
+SELECT stop_state FROM task_attempts WHERE session_id = $1 FOR SHARE
+`
+
+// The attempt keeps its session id and non-none stop state after settlement. This is a permanent
+// send fence, independent of the session's activity status or the task's current attempt.
+// Standalone and adopted scheduled sessions have no task attempt and remain resumable.
+// Recording and the sending decision retain this lock until commit, before locking a delivery.
+// No row means this is a standalone session. No lock spans native I/O.
+func (q *Queries) LockSessionTaskAttempt(ctx context.Context, sessionID *string) (string, error) {
+	row := q.db.QueryRow(ctx, lockSessionTaskAttempt, sessionID)
+	var stop_state string
+	err := row.Scan(&stop_state)
+	return stop_state, err
+}
+
 const markCreateRequested = `-- name: MarkCreateRequested :execrows
 UPDATE agent_bindings b
 SET kagent_create_request_id = $1,
@@ -1164,6 +1162,10 @@ WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
   AND NOT EXISTS (
       SELECT 1 FROM task_attempts a WHERE a.session_id = d.session_id AND a.stop_state <> 'none'
   )
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = d.session_id
+      AND s.status NOT IN ('cancelled', 'failed') AND s.archived_at IS NULL
+  )
 `
 
 type MarkDeliverySendingParams struct {
@@ -1173,8 +1175,8 @@ type MarkDeliverySendingParams struct {
 	Attempts        int32
 }
 
-// Also stores the kagent Session the message is about to be sent to. Re-read the task fence:
-// preparation may have overlapped a stop request after the handler's initial check.
+// Called in the sending-decision transaction after LockSessionTaskAttempt. The shared attempt
+// lock serializes this decision with stop; the native send follows only after commit.
 func (q *Queries) MarkDeliverySending(ctx context.Context, arg MarkDeliverySendingParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markDeliverySending,
 		arg.KagentSessionID,

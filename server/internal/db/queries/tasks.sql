@@ -459,11 +459,17 @@ LIMIT $1;
 
 -- name: ConfirmAttemptStop :one
 -- The observer saw nothing running for the attempt's session. This is the only way an attempt's
--- stop_state becomes confirmed; fence checks it. Returns no row when the attempt is not waiting on a
--- stop.
+-- stop_state becomes confirmed; fence checks it. A send admitted before stop may still be in its
+-- native call or have an unknown outcome. Those deliveries must reconcile before confirmation.
+-- No row means either the attempt is not waiting or a delivery has not resolved yet.
 UPDATE task_attempts
 SET stop_state = 'confirmed', updated_at = now()
-WHERE id = $1 AND state = 'draining' AND stop_state IN ('requested', 'unresolved')
+WHERE task_attempts.id = $1 AND task_attempts.state = 'draining'
+  AND task_attempts.stop_state IN ('requested', 'unresolved')
+  AND NOT EXISTS (
+      SELECT 1 FROM deliveries d WHERE d.session_id = task_attempts.session_id
+      AND d.state IN ('sending', 'uncertain')
+  )
 RETURNING *;
 
 -- name: MarkAttemptStopUnresolved :one

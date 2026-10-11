@@ -52,8 +52,9 @@ func (s *Service) blockReconciliation(ctx context.Context, q *dbq.Queries, t dbq
 
 // resolveStop is the resolver of a requested stop. For a draining attempt whose stop the observer has
 // not confirmed, it asks the StopObserver whether anything still runs for the session. When nothing
-// does, it confirms the stop and returns 0: the attempt can be fenced. Otherwise it counts the look,
-// schedules the next one with backoff and returns how long to wait. After the bound it marks the stop
+// does and admitted sends have resolved, it confirms the stop and returns 0: the attempt can be
+// fenced. Otherwise it counts the look, schedules the next one with backoff and returns how long to
+// wait. After the bound it marks the stop
 // unresolved and blocks the task for reconciliation, once; it keeps looking, and a later confirmation
 // still ends the attempt.
 //
@@ -74,10 +75,20 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		}
 	}
 	if stopped {
-		if _, err := q.ConfirmAttemptStop(ctx, a.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := q.ConfirmAttemptStop(ctx, a.ID); err == nil {
+			return 0, q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopConfirmed})
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return 0, err
 		}
-		return 0, q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopConfirmed})
+		// A concurrent resolver may have confirmed already. Otherwise an admitted delivery is
+		// still sending or uncertain: retain the reservation and take the normal backoff path.
+		current, err := q.GetTaskAttempt(ctx, a.ID)
+		if err != nil {
+			return 0, err
+		}
+		if current.StopState == stopConfirmed {
+			return 0, nil
+		}
 	}
 	wait = s.resolveBackoff().Delay(int(a.ResolveAttempts) + 1)
 	n, err := q.DeferAttemptResolve(ctx, dbq.DeferAttemptResolveParams{ID: a.ID, DelaySeconds: wait.Seconds()})

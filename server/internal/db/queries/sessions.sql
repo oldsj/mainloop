@@ -26,12 +26,10 @@ WHERE s.id = $1 AND s.user_id = $2;
 -- The attempt keeps its session id and non-none stop state after settlement. This is a permanent
 -- send fence, independent of the session's activity status or the task's current attempt.
 -- Standalone and adopted scheduled sessions have no task attempt and remain resumable.
--- During recording, the shared attempt lock lasts until commit: the stop-request UPDATE cannot
--- commit between this check and insertion. Dispatch checks run as short statements, outside I/O.
--- name: IsTaskSessionStopped :one
-SELECT coalesce((
-    SELECT a.stop_state <> 'none' FROM task_attempts a WHERE a.session_id = $1 FOR SHARE
-), false)::boolean AS stopped;
+-- Recording and the sending decision retain this lock until commit, before locking a delivery.
+-- No row means this is a standalone session. No lock spans native I/O.
+-- name: LockSessionTaskAttempt :one
+SELECT stop_state FROM task_attempts WHERE session_id = $1 FOR SHARE;
 
 -- name: GetTopicName :one
 SELECT name FROM topics WHERE id = $1;
@@ -192,8 +190,8 @@ WHERE id = $1 AND lease_owner = $2 AND attempts = $3
 RETURNING create_failures;
 
 -- name: MarkDeliverySending :execrows
--- Also stores the kagent Session the message is about to be sent to. Re-read the task fence:
--- preparation may have overlapped a stop request after the handler's initial check.
+-- Called in the sending-decision transaction after LockSessionTaskAttempt. The shared attempt
+-- lock serializes this decision with stop; the native send follows only after commit.
 UPDATE deliveries d
 SET state = 'sending', detail = NULL, kagent_session_id = sqlc.arg(kagent_session_id),
     updated_at = now()
@@ -201,6 +199,10 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
   AND d.state = 'recorded'
   AND NOT EXISTS (
       SELECT 1 FROM task_attempts a WHERE a.session_id = d.session_id AND a.stop_state <> 'none'
+  )
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = d.session_id
+      AND s.status NOT IN ('cancelled', 'failed') AND s.archived_at IS NULL
   );
 
 -- name: MarkDeliveryDelivered :execrows

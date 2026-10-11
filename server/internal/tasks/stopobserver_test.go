@@ -11,6 +11,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
 
@@ -165,6 +166,28 @@ func (r *rig) briefRow(attempt, set string, args ...any) {
 	r.exec(`UPDATE deliveries SET `+set+` WHERE id = (SELECT brief_delivery_id FROM task_attempts WHERE id = $1)`, append([]any{attempt}, args...)...)
 }
 
+// These rigs run task loops, not the sessions delivery loop. Once the observer has cancelled the
+// fake native task, explicitly run the real recovery handler to settle its retained delivery.
+func (r *rig) reconcileStoppedBrief(attempt string) {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	mid := r.str(`SELECT brief_delivery_id FROM task_attempts WHERE id=$1`, attempt)
+	d, err := dbq.New(r.pool).GetDelivery(ctx, mid)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if d.State != dbstate.DeliverySending && d.State != dbstate.DeliveryUncertain {
+		return
+	}
+	r.exec(`UPDATE deliveries SET lease_owner='stop-recovery', attempts=1, lease_until=now()+interval '1 hour' WHERE id=$1`, mid)
+	if _, err := r.ses.DeliveryLoop().Handle(ctx, reconcile.Claim{
+		ID: mid, State: string(d.State), Owner: "stop-recovery", Attempts: 1,
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
 func mustStopped(t *testing.T, obs *tasks.KagentStops, session string, want bool, what string) {
 	t.Helper()
 	got, err := obs.Stopped(context.Background(), session)
@@ -252,6 +275,7 @@ func TestInFlightSendKeepsTheClaimUntilItsTurnIsStopped(t *testing.T) {
 	r := newRig(t)
 	r.ses.agent = "unknown"
 	k := &fakeKagent{}
+	r.ses.Kagent = &stopProbeClient{k: k}
 	_, sup, first, attempt, _ := r.kagentStops(k)
 	// The sessions delivery loop committed "sending" for the brief; its POST to kagent is in flight.
 	r.briefRow(attempt, `state = 'sending', kagent_session_id = 'ks-' || session_id`)
@@ -259,8 +283,8 @@ func TestInFlightSendKeepsTheClaimUntilItsTurnIsStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.eventually("looked at", func() bool { f, _ := k.snapshot(); return f > 1 })
-	if got := r.str(`SELECT state || '/' || coalesce(task_id, '<no task>') FROM deliveries WHERE id = (SELECT brief_delivery_id FROM task_attempts WHERE id = $1)`, attempt); got != "cancelled/<no task>" {
-		t.Fatalf("brief row = %s: the cancel did not close the in-flight row", got)
+	if got := r.str(`SELECT state || '/' || coalesce(task_id, '<no task>') FROM deliveries WHERE id = (SELECT brief_delivery_id FROM task_attempts WHERE id = $1)`, attempt); got != "sending/<no task>" {
+		t.Fatalf("brief row = %s: the cancel erased the in-flight decision", got)
 	}
 
 	// A second child on the branch cannot take it: the first attempt may still be running.
@@ -286,6 +310,9 @@ func TestInFlightSendKeepsTheClaimUntilItsTurnIsStopped(t *testing.T) {
 	k.land(a2a.TaskStateWorking)
 	r.eventually("first ended", func() bool {
 		r.sweep(r.svc.SettleSweep())
+		if _, cancels := k.snapshot(); cancels > 0 {
+			r.reconcileStoppedBrief(attempt)
+		}
 		return r.attemptState(first) == "cancelled"
 	})
 	if _, cancels := k.snapshot(); cancels < 1 {

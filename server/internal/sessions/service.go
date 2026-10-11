@@ -73,11 +73,14 @@ var errTaskSessionStopped = conflict("This task attempt has stopped; start a new
 // checkTaskSendFence reads the durable stop intent, including old attempts. Session activity can
 // become completed without reopening the attempt's authority to send.
 func checkTaskSendFence(ctx context.Context, q *dbq.Queries, sessionID string) error {
-	stopped, err := q.IsTaskSessionStopped(ctx, &sessionID)
+	state, err := q.LockSessionTaskAttempt(ctx, &sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // standalone and adopted scheduled sessions have no task attempt
+	}
 	if err != nil {
 		return fmt.Errorf("check task session send fence: %w", err)
 	}
-	if stopped {
+	if state != "none" {
 		return errTaskSessionStopped
 	}
 	return nil

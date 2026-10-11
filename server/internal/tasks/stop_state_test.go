@@ -160,7 +160,12 @@ func TestStopOfAnAlreadyCancelledSessionIsStillObserved(t *testing.T) {
 				cancelTask()
 			}
 			r.run()
-			r.eventually("attempt ended", func() bool { return r.attemptState(child) == "cancelled" })
+			r.eventually("attempt ended", func() bool {
+				if _, cancels := k.snapshot(); cancels > 0 {
+					r.reconcileStoppedBrief(attempt)
+				}
+				return r.attemptState(child) == "cancelled"
+			})
 			slot, claim := r.held(attempt)
 			finds, cancels := k.snapshot()
 			k.mu.Lock()

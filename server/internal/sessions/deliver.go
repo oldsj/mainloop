@@ -16,6 +16,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -479,21 +480,15 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return reconcile.RetryAfter(min(createBackoff<<(failures-1), createBackoffM)), nil
 	}
 
-	// Commit "sending" before the call: if this process dies mid-call, the next claimer sees
-	// sending and looks the message up instead of sending it again.
-	id, owner, attempts := t.fence()
-	if err := lost(dbq.New(t.s.Pool).MarkDeliverySending(ctx,
-		dbq.MarkDeliverySendingParams{ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid})); err != nil {
-		return reconcile.Retry(), err
-	}
-	t.cur, t.ksid = dbstate.DeliverySending, ksid
-
-	if err := t.checkSendFence(ctx); err != nil {
+	// This committed decision orders the send before or after the attempt's stop. Once admitted,
+	// send without another fence read; stop confirmation waits for this delivery to resolve.
+	if err := t.decideSend(ctx, ksid); err != nil {
 		if errors.Is(err, errTaskSessionStopped) {
 			return t.settle(ctx, dbstate.DeliveryCancelled, "not sent: the task attempt has stopped", nil, false)
 		}
 		return reconcile.Retry(), err
 	}
+	t.cur, t.ksid = dbstate.DeliverySending, ksid
 	var sendErr error
 	for ev, err := range t.s.Kagent.SendMessage(ctx, t.agent, kagent.SendParams{
 		Text: t.d.Content, MessageID: t.c.ID, ContextID: ksid,
@@ -530,6 +525,25 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		return t.settle(ctx, dbstate.DeliveryFailed, "send rejected: "+sendErr.Error(), nil, false)
 	}
 	return t.undecided(ctx, "the send may have reached kagent: "+sendErr.Error())
+}
+
+// decideSend locks the attempt before the delivery and commits before native I/O. The session's
+// send lock also serializes cancellation with admission. A crash after commit is observed, never
+// replayed, by the next delivery claimer.
+func (t *turn) decideSend(ctx context.Context, ksid string) error {
+	return db.InTx(ctx, t.s.Pool, func(tx pgx.Tx) error {
+		if err := db.XactLock(ctx, tx, "mainloop:send:"+t.d.SessionID); err != nil {
+			return err
+		}
+		q := dbq.New(tx)
+		if err := checkTaskSendFence(ctx, q, t.d.SessionID); err != nil {
+			return err
+		}
+		id, owner, attempts := t.fence()
+		return lost(q.MarkDeliverySending(ctx, dbq.MarkDeliverySendingParams{
+			ID: id, LeaseOwner: owner, Attempts: attempts, KagentSessionID: &ksid,
+		}))
+	})
 }
 
 func (t *turn) checkSendFence(ctx context.Context) error {

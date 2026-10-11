@@ -302,9 +302,10 @@ type CancelResult struct {
 	Agent string
 }
 
-// Cancel ends a session: it sets the final cancelled status, closes its open deliveries and then
-// cancels non-final native tasks, including those started outside the delivery ledger. The status
-// and an unknown agent outcome are written first and are sticky, so no later delivery
+// Cancel ends a session: it sets the final cancelled status and cancels non-final native tasks,
+// including those started outside the delivery ledger. Task-owned sending and uncertain deliveries
+// stay open for reconciliation; other open deliveries are closed. The status and an unknown agent
+// outcome are written first and are sticky, so no later delivery
 // brings the session back and no message is taken. A cancel kagent does not confirm is reported as
 // unknown. The scheduled-cancel sweep revisits it without replaying the scheduled send. A session
 // that had already finished is left as it is.
@@ -337,6 +338,13 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 			return nil, err
 		}
 		q := dbq.New(tx)
+		// Task-owned sends that won admission must remain visible until the delivery loop resolves
+		// them. Lock the attempt before deliveries, in the same order as the sending decision.
+		_, aerr := q.LockSessionTaskAttempt(ctx, &sessionID)
+		if aerr != nil && !errors.Is(aerr, pgx.ErrNoRows) {
+			return nil, aerr
+		}
+		taskOwned := aerr == nil
 		// Deliveries first, then the session: a settle locks them in that order too (FinishDelivery,
 		// then RefreshSessionStatus), so the two cannot deadlock.
 		open, err := q.ListOpenDeliveries(ctx, sessionID)
@@ -345,6 +353,9 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 		}
 		states := make([]string, 0, len(openStates))
 		for _, st := range openStates {
+			if taskOwned && (st == dbstate.DeliverySending || st == dbstate.DeliveryUncertain) {
+				continue
+			}
 			states = append(states, string(st))
 		}
 		var drafts []events.Draft
@@ -354,6 +365,10 @@ func (s *Service) Cancel(ctx context.Context, sessionID string) (CancelResult, e
 				ID: d.ID, FromStates: states, State: dbstate.DeliveryCancelled, Detail: &det,
 			})
 			if errors.Is(err, pgx.ErrNoRows) {
+				if taskOwned && (d.State == dbstate.DeliverySending || d.State == dbstate.DeliveryUncertain) {
+					// Native cancellation still observes these sends; only their ledger close is deferred.
+					closedNow = append(closedNow, cancelledDelivery{d: d, prev: d.State})
+				}
 				continue
 			}
 			if err != nil {
