@@ -838,6 +838,78 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /main-thread/provider:
+    get:
+      tags:
+        - chat
+      summary: Get Main Provider
+      description: >-
+        The owner's main-thread provider: the selection, the provider that is confirmed running,
+        and the state of any switch in progress. Creates the main thread's database rows if they
+        are missing; it contacts no provider.
+      operationId: getMainProvider
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MainProviderInfo'
+    put:
+      tags:
+        - chat
+      summary: Select Main Provider
+      description: >-
+        Select Claude or Codex for the main thread. Owner API only; there is no MCP tool. A switch
+        needs an idle main and returns 409 without changing anything otherwise. Repeating the same
+        selection is idempotent and recovers a pending switch with the same create contract.
+        `restart_failed` admits a fresh native identity only once the pending target was seen
+        absent or settled failed or deleted (`recoverable`). The response is the resulting state:
+        a switch whose preparation did not finish returns 200 with status `pending` or `failed`.
+      operationId: putMainProvider
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MainProviderSelection'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MainProviderInfo'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '413':
+          description: Request Entity Too Large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /orchestration-health:
     get:
       tags:
@@ -3742,6 +3814,96 @@ components:
         - status_line
         - pending
       additionalProperties: false
+    MainProvider:
+      type: string
+      enum:
+        - claude
+        - codex
+      title: MainProvider
+    MainProviderSelection:
+      properties:
+        provider:
+          $ref: '#/components/schemas/MainProvider'
+        restart_failed:
+          type: boolean
+          title: Restart Failed
+          default: false
+          description: >-
+            Admit a fresh native identity for a pending target that is `recoverable`. Ignored
+            otherwise: the original create contract is recovered.
+      type: object
+      required:
+        - provider
+      additionalProperties: false
+      title: MainProviderSelection
+    MainProviderHistoryEntry:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        kagent_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Kagent Session Id
+      type: object
+      required:
+        - provider
+        - kagent_session_id
+      title: MainProviderHistoryEntry
+    MainProviderInfo:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        desired_provider:
+          $ref: '#/components/schemas/MainProvider'
+        effective_provider:
+          anyOf:
+            - $ref: '#/components/schemas/MainProvider'
+            - type: 'null'
+          description: The provider whose native Session is confirmed; null while none is.
+        status:
+          type: string
+          enum:
+            - not_started
+            - pending
+            - ready
+            - failed
+          title: Status
+        kagent_session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Kagent Session Id
+        error:
+          anyOf:
+            - type: string
+              maxLength: 300
+            - type: 'null'
+          title: Error
+        recoverable:
+          type: boolean
+          title: Recoverable
+          default: false
+        history:
+          # one entry per provider switch of the main thread; not paginated
+          items:
+            $ref: '#/components/schemas/MainProviderHistoryEntry'
+          type: array
+          title: History
+          default: []
+      type: object
+      required:
+        - session_id
+        - desired_provider
+        - effective_provider
+        - status
+        - kagent_session_id
+        - error
+        - recoverable
+        - history
+      title: MainProviderInfo
     MainThreadInfo:
       properties:
         mode:
@@ -3761,6 +3923,11 @@ components:
           anyOf:
             - $ref: '#/components/schemas/NativeSessionInfo'
             - type: 'null'
+        provider:
+          anyOf:
+            - $ref: '#/components/schemas/MainProviderInfo'
+            - type: 'null'
+          description: The main-provider state; null before the main thread exists.
         topics:
           # no cap in the code: one entry per topic; not paginated
           items:
@@ -3774,6 +3941,7 @@ components:
         - session_id
         - conversation_id
         - native
+        - provider
         - topics
       title: MainThreadInfo
     MergePolicy:

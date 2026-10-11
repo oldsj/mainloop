@@ -90,7 +90,7 @@ func NewRegistry(k config.Kagent) (*Registry, error) {
 
 func builtins(k config.Kagent) []config.ProviderProfile {
 	ref := func(name string) config.AgentRef { return config.AgentRef{Namespace: k.Namespace, Name: name} }
-	build := func(kind, display, supervisor, child, workspace string) config.ProviderProfile {
+	build := func(kind, display, main, supervisor, child, workspace string) config.ProviderProfile {
 		caps := make([]config.CapabilityResult, len(Capabilities))
 		for i, name := range Capabilities {
 			caps[i] = config.CapabilityResult{Capability: name, State: "unknown", Scope: "unverified"}
@@ -102,7 +102,7 @@ func builtins(k config.Kagent) []config.ProviderProfile {
 			NativeProvider:        kind,
 			ConfigurationRevision: "native-v1",
 			Agents: map[string]config.AgentRef{
-				"main":       ref(k.MainAgent),
+				"main":       ref(main),
 				"supervisor": ref(supervisor),
 				"child":      ref(child),
 				"agent":      ref(workspace),
@@ -113,8 +113,8 @@ func builtins(k config.Kagent) []config.ProviderProfile {
 		}
 	}
 	return []config.ProviderProfile{
-		build(config.NativeClaude, "Claude Code", k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent),
-		build(config.NativeCodex, "Codex", k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent),
+		build(config.NativeClaude, "Claude Code", k.MainAgent, k.SupervisorClaudeAgent, k.ClaudeAgent, k.WorkspaceClaudeAgent),
+		build(config.NativeCodex, "Codex", k.MainCodexAgent, k.SupervisorCodexAgent, k.CodexAgent, k.WorkspaceCodexAgent),
 	}
 }
 

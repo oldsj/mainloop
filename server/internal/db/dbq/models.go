@@ -34,6 +34,10 @@ type AgentBinding struct {
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
+	MainPending                bool
+	MainError                  *string
+	MainRecoverable            bool
+	MainReleasedAt             *time.Time
 }
 
 type AttentionItem struct {
@@ -345,6 +349,22 @@ type HitlSession struct {
 type KagentAgent struct {
 	Namespace string
 	Name      string
+}
+
+type MainProviderHistory struct {
+	ID              int64
+	SessionID       string
+	Provider        string
+	KagentSessionID *string
+	AgentNamespace  *string
+	AgentName       *string
+	RequestID       *string
+	CreateRequestID *string
+	Model           *string
+	Turns           int32
+	Abandoned       bool
+	Error           *string
+	RetiredAt       time.Time
 }
 
 type MergeCandidate struct {

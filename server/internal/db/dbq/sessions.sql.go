@@ -26,6 +26,42 @@ func (q *Queries) ArchiveFinishedSession(ctx context.Context, id string) (int64,
 	return result.RowsAffected(), nil
 }
 
+const beginMainSwitch = `-- name: BeginMainSwitch :execrows
+UPDATE agent_bindings
+SET kind = $1,
+    kagent_agent_namespace = $2, kagent_agent_name = $3,
+    kagent_session_id = NULL, kagent_request_id = $4,
+    kagent_create_request_id = $4,
+    kagent_create_agent_namespace = $2, kagent_create_agent_name = $3,
+    standing_hash = NULL, model = NULL, turns = 0, queue_held = false,
+    main_pending = true, main_error = NULL, main_recoverable = false, updated_at = now()
+WHERE session_id = $5 AND role = 'main' AND main_released_at IS NULL
+`
+
+type BeginMainSwitchParams struct {
+	Kind           string
+	AgentNamespace *string
+	AgentName      *string
+	RequestID      *string
+	SessionID      string
+}
+
+// Commits a switch intent. The caller holds the binding row lock and has read the identity it
+// retires; the new identity is a clean one: no Session, no standing hash, no turns.
+func (q *Queries) BeginMainSwitch(ctx context.Context, arg BeginMainSwitchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, beginMainSwitch,
+		arg.Kind,
+		arg.AgentNamespace,
+		arg.AgentName,
+		arg.RequestID,
+		arg.SessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const beginScheduledSessionCancelReconcile = `-- name: BeginScheduledSessionCancelReconcile :execrows
 UPDATE sessions
 SET agent_cancel_next_attempt_at = now() + make_interval(secs => least(30 * power(2, agent_cancel_attempts), 300)::float8),
@@ -53,6 +89,45 @@ func (q *Queries) BumpBindingTurns(ctx context.Context, sessionID string) error 
 	return err
 }
 
+const clearMainSwitchError = `-- name: ClearMainSwitchError :execrows
+UPDATE agent_bindings SET main_error = NULL, updated_at = now()
+WHERE session_id = $1 AND main_pending AND kagent_request_id = $2::text
+`
+
+type ClearMainSwitchErrorParams struct {
+	SessionID string
+	RequestID string
+}
+
+func (q *Queries) ClearMainSwitchError(ctx context.Context, arg ClearMainSwitchErrorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearMainSwitchError, arg.SessionID, arg.RequestID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countMainBlockingWork = `-- name: CountMainBlockingWork :one
+SELECT
+    (SELECT count(*) FROM deliveries d
+      WHERE d.session_id = $1 AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))::bigint AS deliveries,
+    (SELECT count(*) FROM sessions s
+      WHERE s.id = $1 AND s.agent_cancel_outcome = 'unknown')::bigint AS cancels
+`
+
+type CountMainBlockingWorkRow struct {
+	Deliveries int64
+	Cancels    int64
+}
+
+// Work that stops a provider switch: an open or uncertain delivery, or an unconfirmed cancel.
+func (q *Queries) CountMainBlockingWork(ctx context.Context, sessionID string) (CountMainBlockingWorkRow, error) {
+	row := q.db.QueryRow(ctx, countMainBlockingWork, sessionID)
+	var i CountMainBlockingWorkRow
+	err := row.Scan(&i.Deliveries, &i.Cancels)
+	return i, err
+}
+
 const countSessions = `-- name: CountSessions :one
 SELECT count(*) FROM sessions WHERE user_id = $1
 `
@@ -62,6 +137,59 @@ func (q *Queries) CountSessions(ctx context.Context, userID string) (int64, erro
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createMainBinding = `-- name: CreateMainBinding :one
+
+INSERT INTO agent_bindings (session_id, kind, role, mcp_grant_kind)
+VALUES ($1, $2, 'main', 'coordination')
+RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at
+`
+
+type CreateMainBindingParams struct {
+	SessionID string
+	Kind      string
+}
+
+// Main provider selection (internal/sessions/provider.go).
+//
+// A switch changes the binding in two steps around the kagent create: the intent (target provider,
+// Agent, request id and the frozen create contract) commits first, then the Session id and the
+// ready flag are stored. Every write after the intent matches the request id, so a preparation
+// that was superseded by a restart changes nothing.
+// A first-use main follows the configured Agent of its provider until a switch pins one.
+func (q *Queries) CreateMainBinding(ctx context.Context, arg CreateMainBindingParams) (AgentBinding, error) {
+	row := q.db.QueryRow(ctx, createMainBinding, arg.SessionID, arg.Kind)
+	var i AgentBinding
+	err := row.Scan(
+		&i.SessionID,
+		&i.Kind,
+		&i.Role,
+		&i.MCPGrantKind,
+		&i.ParentSessionID,
+		&i.TopicID,
+		&i.KagentSessionID,
+		&i.KagentRequestID,
+		&i.Model,
+		&i.StandingHash,
+		&i.Turns,
+		&i.QueueHeld,
+		&i.ChildStartFailure,
+		&i.ReportedAt,
+		&i.KagentDeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
+		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.MainReleasedAt,
+	)
+	return i, err
 }
 
 const endDelivery = `-- name: EndDelivery :one
@@ -107,6 +235,33 @@ func (q *Queries) EndDelivery(ctx context.Context, arg EndDeliveryParams) (strin
 	return previous_state, err
 }
 
+const failMainSwitch = `-- name: FailMainSwitch :execrows
+UPDATE agent_bindings
+SET main_error = $1, main_recoverable = main_recoverable OR $2::boolean,
+    updated_at = now()
+WHERE session_id = $3 AND main_pending AND kagent_request_id = $4::text
+`
+
+type FailMainSwitchParams struct {
+	Error       *string
+	Recoverable bool
+	SessionID   string
+	RequestID   string
+}
+
+func (q *Queries) FailMainSwitch(ctx context.Context, arg FailMainSwitchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failMainSwitch,
+		arg.Error,
+		arg.Recoverable,
+		arg.SessionID,
+		arg.RequestID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const finishDelivery = `-- name: FinishDelivery :execrows
 UPDATE deliveries
 SET state = $4, detail = $5, task_id = coalesce($6, task_id),
@@ -135,6 +290,28 @@ func (q *Queries) FinishDelivery(ctx context.Context, arg FinishDeliveryParams) 
 		arg.TaskID,
 		arg.EvidenceRef,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishMainSwitch = `-- name: FinishMainSwitch :execrows
+UPDATE agent_bindings
+SET main_pending = false, main_error = NULL, main_recoverable = false, updated_at = now()
+WHERE session_id = $1 AND main_pending
+  AND kagent_session_id IS NOT DISTINCT FROM $2::text
+  AND kagent_request_id = $3::text
+`
+
+type FinishMainSwitchParams struct {
+	SessionID       string
+	KagentSessionID *string
+	RequestID       string
+}
+
+func (q *Queries) FinishMainSwitch(ctx context.Context, arg FinishMainSwitchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishMainSwitch, arg.SessionID, arg.KagentSessionID, arg.RequestID)
 	if err != nil {
 		return 0, err
 	}
@@ -319,10 +496,10 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 
 const getMainBinding = `-- name: GetMainBinding :one
 
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.main_released_at, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
-WHERE b.role = 'main' AND s.user_id = $1 AND s.archived_at IS NULL
+WHERE b.role = 'main' AND b.main_released_at IS NULL AND s.user_id = $1 AND s.archived_at IS NULL
 ORDER BY b.created_at
 LIMIT 1
 `
@@ -350,6 +527,10 @@ type GetMainBindingRow struct {
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
+	MainPending                bool
+	MainError                  *string
+	MainRecoverable            bool
+	MainReleasedAt             *time.Time
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -386,6 +567,10 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 		&i.KagentCreateRequestID,
 		&i.KagentCreateAgentNamespace,
 		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.MainReleasedAt,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -394,7 +579,7 @@ func (q *Queries) GetMainBinding(ctx context.Context, userID string) (GetMainBin
 }
 
 const getOwnedSessionBinding = `-- name: GetOwnedSessionBinding :one
-SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, s.user_id, s.title, s.status AS session_status, s.archived_at,
+SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.parent_session_id, b.topic_id, b.kagent_session_id, b.kagent_request_id, b.model, b.standing_hash, b.turns, b.queue_held, b.child_start_failure, b.reported_at, b.kagent_deleted_at, b.created_at, b.updated_at, b.kagent_agent_namespace, b.kagent_agent_name, b.kagent_create_request_id, b.kagent_create_agent_namespace, b.kagent_create_agent_name, b.main_pending, b.main_error, b.main_recoverable, b.main_released_at, s.user_id, s.title, s.status AS session_status, s.archived_at,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
        coalesce(b.kagent_agent_name, w.agent_name, '') AS resolved_agent_name
@@ -432,6 +617,10 @@ type GetOwnedSessionBindingRow struct {
 	KagentCreateRequestID      *string
 	KagentCreateAgentNamespace *string
 	KagentCreateAgentName      *string
+	MainPending                bool
+	MainError                  *string
+	MainRecoverable            bool
+	MainReleasedAt             *time.Time
 	UserID                     string
 	Title                      string
 	SessionStatus              dbstate.SessionStatus
@@ -469,6 +658,10 @@ func (q *Queries) GetOwnedSessionBinding(ctx context.Context, arg GetOwnedSessio
 		&i.KagentCreateRequestID,
 		&i.KagentCreateAgentNamespace,
 		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.MainReleasedAt,
 		&i.UserID,
 		&i.Title,
 		&i.SessionStatus,
@@ -625,6 +818,44 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 	return i, err
 }
 
+const insertMainProviderHistory = `-- name: InsertMainProviderHistory :exec
+INSERT INTO main_provider_history (
+    session_id, provider, kagent_session_id, agent_namespace, agent_name, request_id, create_request_id,
+    model, turns, abandoned, error
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`
+
+type InsertMainProviderHistoryParams struct {
+	SessionID       string
+	Provider        string
+	KagentSessionID *string
+	AgentNamespace  *string
+	AgentName       *string
+	RequestID       *string
+	CreateRequestID *string
+	Model           *string
+	Turns           int32
+	Abandoned       bool
+	Error           *string
+}
+
+func (q *Queries) InsertMainProviderHistory(ctx context.Context, arg InsertMainProviderHistoryParams) error {
+	_, err := q.db.Exec(ctx, insertMainProviderHistory,
+		arg.SessionID,
+		arg.Provider,
+		arg.KagentSessionID,
+		arg.AgentNamespace,
+		arg.AgentName,
+		arg.RequestID,
+		arg.CreateRequestID,
+		arg.Model,
+		arg.Turns,
+		arg.Abandoned,
+		arg.Error,
+	)
+	return err
+}
+
 const insertSessionMessage = `-- name: InsertSessionMessage :execrows
 INSERT INTO session_messages (id, session_id, role, content)
 VALUES ($1, $2, $3, $4)
@@ -685,6 +916,44 @@ func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID strin
 			&i.LeaseUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMainProviderHistory = `-- name: ListMainProviderHistory :many
+SELECT id, session_id, provider, kagent_session_id, agent_namespace, agent_name, request_id, create_request_id, model, turns, abandoned, error, retired_at FROM main_provider_history WHERE session_id = $1 ORDER BY retired_at, id
+`
+
+func (q *Queries) ListMainProviderHistory(ctx context.Context, sessionID string) ([]MainProviderHistory, error) {
+	rows, err := q.db.Query(ctx, listMainProviderHistory, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MainProviderHistory{}
+	for rows.Next() {
+		var i MainProviderHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Provider,
+			&i.KagentSessionID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.RequestID,
+			&i.CreateRequestID,
+			&i.Model,
+			&i.Turns,
+			&i.Abandoned,
+			&i.Error,
+			&i.RetiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1023,6 +1292,7 @@ SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.kagent_create_request_i
        b.kagent_create_agent_namespace AS agent_namespace, b.kagent_create_agent_name AS agent_name
 FROM agent_bindings b
 WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
+  AND NOT b.main_pending
   AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
@@ -1070,6 +1340,47 @@ func (q *Queries) ListUnresolvedCreates(ctx context.Context, limit int32) ([]Lis
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockMainBinding = `-- name: LockMainBinding :one
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at FROM agent_bindings
+WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
+FOR UPDATE
+`
+
+// The main binding row, locked for the intent transaction. Matches only the binding the caller read.
+func (q *Queries) LockMainBinding(ctx context.Context, sessionID string) (AgentBinding, error) {
+	row := q.db.QueryRow(ctx, lockMainBinding, sessionID)
+	var i AgentBinding
+	err := row.Scan(
+		&i.SessionID,
+		&i.Kind,
+		&i.Role,
+		&i.MCPGrantKind,
+		&i.ParentSessionID,
+		&i.TopicID,
+		&i.KagentSessionID,
+		&i.KagentRequestID,
+		&i.Model,
+		&i.StandingHash,
+		&i.Turns,
+		&i.QueueHeld,
+		&i.ChildStartFailure,
+		&i.ReportedAt,
+		&i.KagentDeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
+		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.MainReleasedAt,
+	)
+	return i, err
 }
 
 const lockSessionTaskAttempt = `-- name: LockSessionTaskAttempt :one
@@ -1305,6 +1616,21 @@ func (q *Queries) RefreshSessionStatus(ctx context.Context, id string) error {
 	return err
 }
 
+const releaseMainBinding = `-- name: ReleaseMainBinding :execrows
+UPDATE agent_bindings
+SET main_released_at = now(), main_pending = false, updated_at = now()
+WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
+`
+
+// Hands the owner slot to a replacement: the old row stays for audit.
+func (q *Queries) ReleaseMainBinding(ctx context.Context, sessionID string) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseMainBinding, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const replaceDeliveryKagentSession = `-- name: ReplaceDeliveryKagentSession :execrows
 UPDATE agent_bindings b
 SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
@@ -1348,7 +1674,7 @@ UPDATE agent_bindings b
 SET kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
     updated_at = now()
 WHERE b.session_id = $1 AND b.kagent_create_request_id = $2
-  AND b.kagent_session_id IS NULL
+  AND b.kagent_session_id IS NULL AND NOT b.main_pending
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
       WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
@@ -1376,7 +1702,7 @@ SET kagent_request_id = CASE
         THEN $1::text ELSE b.kagent_request_id END,
     updated_at = now()
 WHERE b.session_id = $2 AND b.kagent_create_request_id = $3
-  AND b.kagent_session_id IS NULL
+  AND b.kagent_session_id IS NULL AND NOT b.main_pending
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
       WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))
@@ -1448,6 +1774,28 @@ func (q *Queries) SetDeliveryKagentSession(ctx context.Context, arg SetDeliveryK
 		arg.Attempts,
 		arg.RequestID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setMainTargetSession = `-- name: SetMainTargetSession :execrows
+UPDATE agent_bindings
+SET kagent_session_id = $1, updated_at = now()
+WHERE session_id = $2 AND main_pending
+  AND kagent_session_id IS NULL AND kagent_request_id = $3::text
+`
+
+type SetMainTargetSessionParams struct {
+	KagentSessionID *string
+	SessionID       string
+	RequestID       string
+}
+
+// Stores the Session id the target's create returned. The binding stays pending.
+func (q *Queries) SetMainTargetSession(ctx context.Context, arg SetMainTargetSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMainTargetSession, arg.KagentSessionID, arg.SessionID, arg.RequestID)
 	if err != nil {
 		return 0, err
 	}

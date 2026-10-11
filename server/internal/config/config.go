@@ -88,7 +88,9 @@ type Kagent struct {
 	// ActorAtespace is the Substrate atespace sessions run in (preview routing).
 	ActorAtespace string `env:"KAGENT_ACTOR_ATESPACE" envDefault:"kagent"`
 
-	MainAgent             string           `env:"KAGENT_MAIN_AGENT" envDefault:"mainloop-main"`
+	MainAgent string `env:"KAGENT_MAIN_AGENT" envDefault:"mainloop-main"`
+	// MainCodexAgent runs the main thread when the owner selects Codex; MainAgent runs it for Claude.
+	MainCodexAgent        string           `env:"KAGENT_MAIN_CODEX_AGENT" envDefault:"mainloop-main-codex"`
 	ClaudeAgent           string           `env:"KAGENT_CLAUDE_AGENT" envDefault:"claude-subscription"`
 	CodexAgent            string           `env:"KAGENT_CODEX_AGENT" envDefault:"codex-subscription-https"`
 	WorkspaceClaudeAgent  string           `env:"KAGENT_WORKSPACE_CLAUDE_AGENT" envDefault:"claude-workspace"`
@@ -134,6 +136,8 @@ type Workspaces struct {
 
 // MainThread tunes the native main thread.
 type MainThread struct {
+	// Provider is the first-use main provider, claude or codex. An existing main keeps its own.
+	Provider          string `env:"MAIN_PROVIDER" envDefault:"claude"`
 	CarryOverMessages int    `env:"MAIN_CARRY_OVER_MESSAGES" envDefault:"6"`
 	NativeChildKinds  string `env:"NATIVE_CHILD_KINDS" envDefault:"claude,codex"`
 }
@@ -294,6 +298,9 @@ func (c *Config) validate() error {
 	}
 	if !validProviderID(c.Tasks.DefaultProviderProfileID) {
 		fail("TASK_DEFAULT_PROVIDER_PROFILE_ID must match ^[a-z][a-z0-9_-]*$")
+	}
+	if c.Main.Provider != NativeClaude && c.Main.Provider != NativeCodex {
+		fail("MAIN_PROVIDER must be claude or codex")
 	}
 	if c.Main.CarryOverMessages < 0 {
 		fail("MAIN_CARRY_OVER_MESSAGES must not be negative")

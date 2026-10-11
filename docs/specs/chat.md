@@ -15,6 +15,26 @@ Status: **implemented** in `server/internal/sessions`, proven by tests against a
 - Stop turn (G6b) is implemented for the main thread and every other session: see [sessions](sessions.md). `queued` deliveries (the report queue) are not part of the Go server yet.
 - A delivery that stays `uncertain` while its hold passes and kagent lookups keep failing publishes `session:message` once when the hold passes, so the page shows the "not sent again" note without waiting for a lookup to succeed.
 
+## Selecting the main provider
+
+Status: **implemented** in `server/internal/sessions` and covered by scratch-PostgreSQL tests against the fake kagent. **Not measured** against a live kagent. The owner's Main provider dropdown is not built yet; until then the routes below are the only way to select.
+
+`MAIN_PROVIDER=claude|codex` selects the first-use default (`claude` when unset). An existing main binding keeps its persisted selection across restarts and configuration changes. The owner reads `GET /main-thread/provider` and selects with `PUT /main-thread/provider` and `{"provider":"codex"}` (or `"claude"`). These routes sit behind the owner API boundary and the cross-origin write guard (`403` for a foreign origin). There is no MCP tool, so agents cannot select the main provider, and there is no quota-driven fallback.
+
+The response exposes `desired_provider`, `effective_provider`, `status`, the current `kagent_session_id`, a bounded `error`, `recoverable`, and the retained native identity `history`. `/main-thread` includes the same state as `provider`. `not_started` means the binding has not created a native Session yet. `pending` means a switch contract is committed but preparation has not completed, and `failed` means its latest preparation failed; both have a null effective provider. A pending target may have a native Session id before readiness is confirmed. A switch whose preparation did not finish is still a `200` with `pending` or `failed`; the request is not the retry loop.
+
+A switch needs an idle main: no recorded, queued, sending, delivered or uncertain delivery, no unconfirmed stop, no open native task and no unsettled native lifecycle operation. Failing to establish idleness returns `409` and changes nothing. The old native Session is suspended, kept in the audit history, and has its MCP credential revoked. The new provider gets a new native identity and credential. Its create request, Agent reference and idempotency key are committed before any kagent call, and no transaction or lock is held across a kagent call. The product session, conversation, messages, topics, child task identities, parent references and capacity stay as they are. The new Session starts empty: Mainloop does not seed it with earlier messages, and no delivery is replayed.
+
+A fresh main is created on the configured first-use provider's Agent and follows that setting. A switch pins the target's Agent on the binding, so a later change to the catalog or to `KAGENT_MAIN_CODEX_AGENT` does not move a pending or finished selection. Both main Agents must have the matching native harness and ModelConfig, MCP credential routing and `sessionIdleTTL: 0s`. Claude uses `KAGENT_MAIN_AGENT`, Codex uses `KAGENT_MAIN_CODEX_AGENT` (`mainloop-main-codex`), and one Agent cannot serve both providers. Explicit provider profiles may override the main Agent references. The Kind manifests install both.
+
+Repeating the current selection is idempotent. Repeating a pending selection recovers the same create contract and sends no prompt. After a failed request or restart, read the status and repeat the same PUT. Another provider cannot replace an unresolved selection (`409`). Nothing retries a switch in the background.
+
+If a repeat finds the pending target absent, or settled failed or deleted, in kagent, it records `recoverable=true` durably. The owner can then select the other provider, or repeat the same provider with `{"provider":"codex","restart_failed":true}` to admit a fresh native identity and credential; the abandoned target stays in the history. A lost create reply or an unsettled failure keeps the original contract even when `restart_failed=true` is sent. The target's credential reuses the binding's Secret name, so creating it can wait for the old Secret's cleanup (bounded by `SESSION_READY_WAIT_SECONDS`); if cleanup has not finished by then the switch stays `pending` with an error, and a repeated PUT retries.
+
+While a switch is pending, `POST /chat` returns `409`. A child report to the main waits in the report queue and is delivered by the normal delivery reconciliation once the target is ready.
+
+Bootstrap reuses a main only while its binding has active coordination authority. Otherwise it creates the replacement and releases the old owner slot in one transaction; concurrent requests share one replacement, on the first-use provider, and the old binding's credential is revoked. The Go/React server is greenfield, so there is no backfill or migration of earlier main rows.
+
 ## Sending messages
 
 - The input field submits one user message to the main session.

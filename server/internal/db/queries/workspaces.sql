@@ -228,7 +228,10 @@ WHERE kind <> 'create' AND state NOT IN ('pending', 'retrying')
   AND created_at < now() - make_interval(secs => sqlc.arg(keep_seconds)::float8);
 
 -- name: ListBoundKagentSessionIDs :many
-SELECT kagent_session_id AS kagent_session_id FROM agent_bindings WHERE kagent_session_id IS NOT NULL;
+SELECT kagent_session_id AS kagent_session_id FROM agent_bindings WHERE kagent_session_id IS NOT NULL
+UNION
+-- A main thread's retired native Sessions are kept, suspended, as history.
+SELECT kagent_session_id FROM main_provider_history WHERE kagent_session_id IS NOT NULL;
 
 -- name: CountUnresolvedBindings :one
 -- Bindings that may own a kagent Session Mainloop has not recorded: a create was sent (or may have

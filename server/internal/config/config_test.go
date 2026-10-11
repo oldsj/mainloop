@@ -578,3 +578,23 @@ func TestMCPHostsMustServeTheMCPOriginInACluster(t *testing.T) {
 		t.Errorf("outside a cluster: %v", err)
 	}
 }
+
+func TestMainProviderAndItsCodexAgentHaveDefaults(t *testing.T) {
+	cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Main.Provider != "claude" || cfg.Kagent.MainAgent != "mainloop-main" || cfg.Kagent.MainCodexAgent != "mainloop-main-codex" {
+		t.Fatalf("defaults: provider %q, agents %q %q", cfg.Main.Provider, cfg.Kagent.MainAgent, cfg.Kagent.MainCodexAgent)
+	}
+	cfg, err = Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAIN_PROVIDER": "codex", "KAGENT_MAIN_CODEX_AGENT": "other-main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Main.Provider != "codex" || cfg.Kagent.MainCodexAgent != "other-main" {
+		t.Fatalf("overrides: provider %q, agent %q", cfg.Main.Provider, cfg.Kagent.MainCodexAgent)
+	}
+	if _, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAIN_PROVIDER": "gemini"}); err == nil || !strings.Contains(err.Error(), "MAIN_PROVIDER") {
+		t.Fatalf("an unknown provider was accepted: %v", err)
+	}
+}

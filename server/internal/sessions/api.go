@@ -57,6 +57,8 @@ func (a *SessionsAPI) SendMessage(ctx context.Context, r api.SendMessageRequestO
 		return nil, apierr.NotFound("Conversation not found")
 	case errors.Is(err, ErrBusy):
 		return nil, apierr.Conflict("A turn is already in progress for this conversation")
+	case errors.Is(err, ErrConflict):
+		return nil, apierr.Conflict(reason(err, ErrConflict))
 	case errors.Is(err, ErrInvalid):
 		return nil, apierr.Invalid(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
 	case err != nil:
@@ -118,12 +120,71 @@ func (a *SessionsAPI) GetMainThread(ctx context.Context, _ api.GetMainThreadRequ
 	native, err := a.native(ctx, q, nativeBinding{
 		SessionID: row.SessionID, Kind: row.Kind, Role: row.Role, ParentSessionID: row.ParentSessionID,
 		TopicID: row.TopicID, KagentSessionID: row.KagentSessionID, Model: row.Model, Turns: row.Turns,
-	}, a.Svc.Agent.Name)
+	}, a.Svc.mainAgentName(row))
 	if err != nil {
 		return nil, err
 	}
-	info.ConversationId, info.SessionId, info.Native = &row.SessionID, &row.SessionID, native
+	st, err := a.Svc.stateOf(ctx, q, row)
+	if err != nil {
+		return nil, err
+	}
+	provider := providerInfo(st)
+	info.ConversationId, info.SessionId, info.Native, info.Provider = &row.SessionID, &row.SessionID, native, &provider
 	return api.GetMainThread200JSONResponse(info), nil
+}
+
+// providerInfo is the wire form of the main thread's provider state.
+func providerInfo(st MainProviderState) api.MainProviderInfo {
+	history := make([]api.MainProviderHistoryEntry, 0, len(st.History))
+	for _, h := range st.History {
+		history = append(history, api.MainProviderHistoryEntry{Provider: h.Provider, KagentSessionId: h.KagentSessionID})
+	}
+	var effective *api.MainProvider
+	if st.Effective != nil {
+		e := api.MainProvider(*st.Effective)
+		effective = &e
+	}
+	var detail *string
+	if st.Error != nil {
+		if d := safeDetail(*st.Error); d != "" {
+			detail = &d
+		}
+	}
+	return api.MainProviderInfo{
+		SessionId: st.SessionID, DesiredProvider: api.MainProvider(st.Desired), EffectiveProvider: effective,
+		Status: api.MainProviderInfoStatus(st.Status), KagentSessionId: st.KagentSessionID, Error: detail,
+		Recoverable: st.Recoverable, History: history,
+	}
+}
+
+// GetMainProvider implements api.StrictServerInterface. It creates the main thread's rows when they
+// are missing and contacts no provider.
+func (a *SessionsAPI) GetMainProvider(ctx context.Context, _ api.GetMainProviderRequestObject) (api.GetMainProviderResponseObject, error) {
+	st, err := a.Svc.MainProviderState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetMainProvider200JSONResponse(providerInfo(st)), nil
+}
+
+// PutMainProvider implements api.StrictServerInterface.
+func (a *SessionsAPI) PutMainProvider(ctx context.Context, r api.PutMainProviderRequestObject) (api.PutMainProviderResponseObject, error) {
+	if r.Body == nil {
+		return nil, apierr.Invalid("the body is required")
+	}
+	restart := r.Body.RestartFailed != nil && *r.Body.RestartFailed
+	st, err := a.Svc.SelectMainProvider(ctx, string(r.Body.Provider), restart)
+	switch {
+	case errors.Is(err, ErrUnavailable):
+		return nil, apierr.Unavailable("The agent runtime is not configured")
+	case errors.Is(err, ErrConflict):
+		return nil, apierr.Conflict(reason(err, ErrConflict))
+	case errors.Is(err, ErrInvalid):
+		return nil, apierr.Invalid(reason(err, ErrInvalid))
+	case err != nil:
+		return nil, err
+	}
+	return api.PutMainProvider200JSONResponse(providerInfo(st)), nil
 }
 
 func (a *SessionsAPI) topics(ctx context.Context, q *dbq.Queries) ([]api.TopicLine, error) {
@@ -363,12 +424,12 @@ func (a *SessionsAPI) GetSessionNative(ctx context.Context, r api.GetSessionNati
 	if err != nil {
 		return nil, err
 	}
-	name := a.Svc.Agent.Name
-	if b.Role != dbstate.RoleMain {
-		name = ""
-		if ref, err := a.Svc.bindingAgentOf(b); err == nil {
-			name = ref.Name
-		}
+	name := ""
+	if b.Role == dbstate.RoleMain {
+		name = a.Svc.Agent.Name
+	}
+	if ref, err := a.Svc.bindingAgentOf(b); err == nil {
+		name = ref.Name
 	}
 	info, err := a.native(ctx, q, nativeBinding{
 		SessionID: b.SessionID, Kind: b.Kind, Role: b.Role, ParentSessionID: b.ParentSessionID,

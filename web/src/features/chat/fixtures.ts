@@ -53,6 +53,7 @@ export function mainThreadFixture(overrides: Partial<MainThreadInfo> = {}): Main
     session_id: MAIN_SESSION_ID,
     conversation_id: null,
     native: nativeFixture(),
+    provider: null,
     topics: [],
     ...overrides
   };

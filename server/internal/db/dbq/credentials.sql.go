@@ -319,7 +319,7 @@ func (q *Queries) RevokeStalePlannedCredentials(ctx context.Context, olderThanSe
 }
 
 const setBindingGrant = `-- name: SetBindingGrant :one
-UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name
+UPDATE agent_bindings SET mcp_grant_kind = $2, updated_at = now() WHERE session_id = $1 RETURNING session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, main_released_at
 `
 
 type SetBindingGrantParams struct {
@@ -353,6 +353,10 @@ func (q *Queries) SetBindingGrant(ctx context.Context, arg SetBindingGrantParams
 		&i.KagentCreateRequestID,
 		&i.KagentCreateAgentNamespace,
 		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.MainReleasedAt,
 	)
 	return i, err
 }

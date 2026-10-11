@@ -838,8 +838,11 @@ func (q *Queries) ListArchivedWorkspacesWithoutSession(ctx context.Context, limi
 
 const listBoundKagentSessionIDs = `-- name: ListBoundKagentSessionIDs :many
 SELECT kagent_session_id AS kagent_session_id FROM agent_bindings WHERE kagent_session_id IS NOT NULL
+UNION
+SELECT kagent_session_id FROM main_provider_history WHERE kagent_session_id IS NOT NULL
 `
 
+// A main thread's retired native Sessions are kept, suspended, as history.
 func (q *Queries) ListBoundKagentSessionIDs(ctx context.Context) ([]*string, error) {
 	rows, err := q.db.Query(ctx, listBoundKagentSessionIDs)
 	if err != nil {

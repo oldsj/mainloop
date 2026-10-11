@@ -86,7 +86,13 @@ RETURNING *;
 SELECT * FROM agent_bindings WHERE session_id = $1;
 
 -- name: GetAgentBindingByKagentSession :one
-SELECT * FROM agent_bindings WHERE kagent_session_id = $1;
+-- A retired main Session counts as bound too: the orphan sweep must not delete a kept history Session.
+SELECT * FROM (
+    SELECT b.* FROM agent_bindings b WHERE b.kagent_session_id = $1
+    UNION ALL
+    SELECT b.* FROM agent_bindings b JOIN main_provider_history h ON h.session_id = b.session_id
+    WHERE h.kagent_session_id = $1
+) bound LIMIT 1;
 
 -- name: ListAgentBindingsByParent :many
 SELECT * FROM agent_bindings WHERE parent_session_id = $1 ORDER BY created_at, session_id;

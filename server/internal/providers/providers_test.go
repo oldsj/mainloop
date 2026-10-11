@@ -343,3 +343,20 @@ func TestDefaultProviderConcurrentWritersHaveOneWinner(t *testing.T) {
 		t.Errorf("version = %v", r["version"])
 	}
 }
+
+func TestTheMainRoleResolvesPerProvider(t *testing.T) {
+	cfg := parse(t, map[string]string{"KAGENT_MAIN_AGENT": "claude-main", "KAGENT_MAIN_CODEX_AGENT": "codex-main"})
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for provider, want := range map[string]string{"claude": "claude-main", "codex": "codex-main"} {
+		p, err := reg.Resolve(provider, "main", true)
+		if err != nil {
+			t.Fatalf("%s: %v", provider, err)
+		}
+		if got := p.Agents["main"].Name; got != want {
+			t.Errorf("%s main Agent = %q, want %q", provider, got, want)
+		}
+	}
+}

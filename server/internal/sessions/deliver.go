@@ -163,7 +163,10 @@ func (s *Service) ResolveAgent(agentNamespace, agentName, kind *string, role dbs
 // bindingAgent is the Agent for a binding that has no workspace.
 func (s *Service) bindingAgent(kind *string, role dbstate.BindingRole) (kagent.AgentRef, error) {
 	if role == dbstate.RoleMain {
-		return s.Agent, nil
+		if kind == nil || *kind == ProviderClaude {
+			return s.Agent, nil
+		}
+		return s.mainAgent(*kind)
 	}
 	if s.Providers == nil || kind == nil {
 		return kagent.AgentRef{}, errors.New("no provider is configured for this session")

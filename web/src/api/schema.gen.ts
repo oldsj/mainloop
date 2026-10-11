@@ -347,6 +347,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/main-thread/provider': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Main Provider
+     * @description The owner's main-thread provider: the selection, the provider that is confirmed running, and the state of any switch in progress. Creates the main thread's database rows if they are missing; it contacts no provider.
+     */
+    get: operations['getMainProvider'];
+    /**
+     * Select Main Provider
+     * @description Select Claude or Codex for the main thread. Owner API only; there is no MCP tool. A switch needs an idle main and returns 409 without changing anything otherwise. Repeating the same selection is idempotent and recovers a pending switch with the same create contract. `restart_failed` admits a fresh native identity only once the pending target was seen absent or settled failed or deleted (`recoverable`). The response is the resulting state: a switch whose preparation did not finish returns 200 with status `pending` or `failed`.
+     */
+    put: operations['putMainProvider'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/orchestration-health': {
     parameters: {
       query?: never;
@@ -1354,6 +1378,55 @@ export interface components {
       /** @description Open pending records in the topic. */
       pending: number;
     };
+    /**
+     * MainProvider
+     * @enum {string}
+     */
+    MainProvider: 'claude' | 'codex';
+    /** MainProviderSelection */
+    MainProviderSelection: {
+      provider: components['schemas']['MainProvider'];
+      /**
+       * Restart Failed
+       * @description Admit a fresh native identity for a pending target that is `recoverable`. Ignored otherwise: the original create contract is recovered.
+       * @default false
+       */
+      restart_failed: boolean;
+    };
+    /** MainProviderHistoryEntry */
+    MainProviderHistoryEntry: {
+      /** Provider */
+      provider: string;
+      /** Kagent Session Id */
+      kagent_session_id: string | null;
+    };
+    /** MainProviderInfo */
+    MainProviderInfo: {
+      /** Session Id */
+      session_id: string;
+      desired_provider: components['schemas']['MainProvider'];
+      /** @description The provider whose native Session is confirmed; null while none is. */
+      effective_provider: components['schemas']['MainProvider'] | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'not_started' | 'pending' | 'ready' | 'failed';
+      /** Kagent Session Id */
+      kagent_session_id: string | null;
+      /** Error */
+      error: string | null;
+      /**
+       * Recoverable
+       * @default false
+       */
+      recoverable: boolean;
+      /**
+       * History
+       * @default []
+       */
+      history: components['schemas']['MainProviderHistoryEntry'][];
+    };
     /** MainThreadInfo */
     MainThreadInfo: {
       /** Mode */
@@ -1363,6 +1436,8 @@ export interface components {
       /** Conversation Id */
       conversation_id: string | null;
       native: components['schemas']['NativeSessionInfo'] | null;
+      /** @description The main-provider state; null before the main thread exists. */
+      provider: components['schemas']['MainProviderInfo'] | null;
       /**
        * Topics
        * @default []
@@ -5389,6 +5464,95 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getMainProvider: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MainProviderInfo'];
+        };
+      };
+    };
+  };
+  putMainProvider: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MainProviderSelection'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MainProviderInfo'];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Request Entity Too Large */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
         headers: {
           [name: string]: unknown;
         };

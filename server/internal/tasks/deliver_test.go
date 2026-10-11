@@ -136,3 +136,41 @@ func TestBusyParentGetsTheReportLater(t *testing.T) {
 		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession) == 1
 	})
 }
+
+// A main thread that is switching provider refuses chat; a child's report to it waits in the queue
+// and is delivered through the normal path once the switch has finished.
+func TestAReportToAMainThatIsSwitchingProviderWaitsThenDrains(t *testing.T) {
+	r := newRig(t)
+	_, _, child, kid := r.reportingChild()
+	if _, err := r.svc.Sessions.EnsureMain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.exec(`UPDATE agent_bindings SET main_pending = true WHERE role = 'main' AND main_released_at IS NULL`)
+	in := report(kid, "b1", dbstate.OutcomeBlocked)
+	if _, err := r.svc.Report(context.Background(), kid, in); err != nil {
+		t.Fatal(err)
+	}
+	// The supervisor's copy is delivered; main's waits, with no ledger message for main.
+	r.eventually("the supervisor's copy is queued", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'queued' AND delivery_id IS NOT NULL`) == 1
+	})
+	r.eventually("main's copy is prepared and retried", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE state = 'pending' AND delivery_id IS NOT NULL AND attempts > 0`) == 1
+	})
+	var main string
+	if err := r.pool.QueryRow(context.Background(), `SELECT session_id FROM agent_bindings WHERE role = 'main'`).Scan(&main); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, main); n != 0 {
+		t.Fatalf("a report reached a main that is switching: %d", n)
+	}
+	if got := r.taskStatus(child); got == "failed" {
+		t.Fatalf("child status = %s", got)
+	}
+
+	r.exec(`UPDATE agent_bindings SET main_pending = false WHERE role = 'main' AND main_released_at IS NULL`)
+	r.exec(`UPDATE task_event_deliveries SET next_attempt_at = now() WHERE state = 'pending'`)
+	r.eventually("the report drains to main", func() bool {
+		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, main) == 1
+	})
+}

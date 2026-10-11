@@ -99,6 +99,7 @@ type Kagent interface {
 	ObserveSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	DeleteSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	SuspendSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	ListTasks(ctx context.Context, agent kagent.AgentRef, contextID string) ([]*a2a.Task, error)
@@ -184,8 +185,17 @@ type Service struct {
 	// Kagent may be nil in a process that only serves reads: sends then stay recorded.
 	Kagent  Kagent
 	OwnerID string
-	// Agent is the kagent Agent that runs the main session.
+	// Agent is the kagent Agent that runs a main session that has no Agent of its own: the Claude
+	// main Agent. A switch pins the Agent of the target provider on the binding.
 	Agent kagent.AgentRef
+	// MainProvider is the provider a main thread starts with, claude or codex. An existing main
+	// keeps its own selection.
+	MainProvider string
+	// MainCodexAgent is the Agent a Codex main thread runs on, used when there is no registry.
+	MainCodexAgent kagent.AgentRef
+	// AfterIntent is a test seam: it runs after a main switch intent commits and before the create;
+	// an error it returns ends the request there, as a crash would.
+	AfterIntent func(ctx context.Context) error
 	// Providers resolves a session's Agent from its binding, and a new session's provider.
 	Providers *providers.Registry
 	// Waker, when set, readies a workspace session's runtime before each send.
@@ -230,26 +240,46 @@ func mainFrom(r dbq.GetMainBindingRow) Main {
 	}
 }
 
+// mainActive reports whether the main binding still has coordination authority: it is a
+// coordination grant on a session that has not ended or been archived. A main that lost it is
+// replaced.
+func mainActive(r dbq.GetMainBindingRow) bool {
+	return r.MCPGrantKind == dbstate.GrantCoordination && !endedStatus(r.SessionStatus) &&
+		r.SessionStatus != dbstate.SessionCompleted
+}
+
 // ensureMain returns the owner's main session, creating it (database rows only) if it is missing.
-// The advisory lock makes concurrent first calls share one; the unique index backs it up.
+// A main whose binding no longer has active coordination authority is replaced: its owner slot is
+// released and its credential revoked in the transaction that creates the replacement. The
+// advisory lock makes concurrent first calls share one; the unique index backs it up.
 func (s *Service) ensureMain(ctx context.Context, tx pgx.Tx) (dbq.GetMainBindingRow, error) {
 	q := dbq.New(tx)
 	row, err := q.GetMainBinding(ctx, s.OwnerID)
-	if err == nil {
+	if err == nil && mainActive(row) {
 		return row, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return row, fmt.Errorf("get main session: %w", err)
 	}
 	if err := db.XactLock(ctx, tx, "mainloop:ensure-main:"+s.OwnerID); err != nil {
 		return row, err
 	}
 	row, err = q.GetMainBinding(ctx, s.OwnerID)
-	if err == nil {
+	if err == nil && mainActive(row) {
 		return row, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return row, fmt.Errorf("get main session: %w", err)
+	}
+	if err == nil {
+		// The old binding keeps its row, history and Session. It stops owning the slot and
+		// authenticating in the same transaction that creates its replacement.
+		if _, err := agentauth.RevokeInTx(ctx, q, row.SessionID); err != nil {
+			return row, fmt.Errorf("revoke the released main's credential: %w", err)
+		}
+		if _, err := q.ReleaseMainBinding(ctx, row.SessionID); err != nil {
+			return row, fmt.Errorf("release the main session: %w", err)
+		}
 	}
 	id := uuid.NewString()
 	if _, err := q.CreateSession(ctx, dbq.CreateSessionParams{
@@ -261,8 +291,8 @@ func (s *Service) ensureMain(ctx context.Context, tx pgx.Tx) (dbq.GetMainBinding
 	if _, err := q.SetSessionStatus(ctx, dbq.SetSessionStatusParams{ID: id, Status: dbstate.SessionIdle}); err != nil {
 		return row, fmt.Errorf("create main session: %w", err)
 	}
-	if _, err := q.CreateAgentBinding(ctx, dbq.CreateAgentBindingParams{
-		SessionID: id, Kind: "claude", Role: dbstate.RoleMain, MCPGrantKind: dbstate.GrantCoordination,
+	if _, err := q.CreateMainBinding(ctx, dbq.CreateMainBindingParams{
+		SessionID: id, Kind: s.mainProvider(),
 	}); err != nil {
 		return row, fmt.Errorf("create main binding: %w", err)
 	}
@@ -312,6 +342,9 @@ func (s *Service) record(ctx context.Context, tx pgx.Tx, sessionID, messageID, t
 		return err
 	}
 	if err := checkTaskSendFence(ctx, q, sessionID); err != nil {
+		return err
+	}
+	if err := checkMainReady(ctx, q, sessionID); err != nil {
 		return err
 	}
 	if d, err := q.GetDelivery(ctx, messageID); err == nil {
@@ -443,8 +476,10 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
-		Agent:     kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
-		Opts:      OptionsFrom(cfg.Sessions),
-		MCPOrigin: cfg.MCPOrigin(),
+		Agent:          kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
+		MainProvider:   cfg.Main.Provider,
+		MainCodexAgent: kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainCodexAgent},
+		Opts:           OptionsFrom(cfg.Sessions),
+		MCPOrigin:      cfg.MCPOrigin(),
 	}
 }

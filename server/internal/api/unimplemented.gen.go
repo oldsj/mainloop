@@ -114,6 +114,11 @@ func (Unimplemented) GetHealth(context.Context, GetHealthRequestObject) (GetHeal
 	return nil, apierr.NotImplemented
 }
 
+// GetMainProvider is not implemented yet.
+func (Unimplemented) GetMainProvider(context.Context, GetMainProviderRequestObject) (GetMainProviderResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetMainThread is not implemented yet.
 func (Unimplemented) GetMainThread(context.Context, GetMainThreadRequestObject) (GetMainThreadResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -261,6 +266,11 @@ func (Unimplemented) ListWorkspaces(context.Context, ListWorkspacesRequestObject
 
 // OrchestrationHealth is not implemented yet.
 func (Unimplemented) OrchestrationHealth(context.Context, OrchestrationHealthRequestObject) (OrchestrationHealthResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// PutMainProvider is not implemented yet.
+func (Unimplemented) PutMainProvider(context.Context, PutMainProviderRequestObject) (PutMainProviderResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

@@ -8,7 +8,7 @@
 SELECT b.*, s.user_id, s.title, s.status AS session_status
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
-WHERE b.role = 'main' AND s.user_id = $1 AND s.archived_at IS NULL
+WHERE b.role = 'main' AND b.main_released_at IS NULL AND s.user_id = $1 AND s.archived_at IS NULL
 ORDER BY b.created_at
 LIMIT 1;
 
@@ -144,6 +144,7 @@ SELECT b.session_id, b.kind, b.role, b.mcp_grant_kind, b.kagent_create_request_i
        b.kagent_create_agent_namespace AS agent_namespace, b.kagent_create_agent_name AS agent_name
 FROM agent_bindings b
 WHERE b.kagent_create_request_id IS NOT NULL AND b.kagent_session_id IS NULL
+  AND NOT b.main_pending
   AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = b.session_id)
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
@@ -164,7 +165,7 @@ SET kagent_request_id = CASE
         THEN sqlc.arg(new_request_id)::text ELSE b.kagent_request_id END,
     updated_at = now()
 WHERE b.session_id = sqlc.arg(session_id) AND b.kagent_create_request_id = sqlc.arg(create_request_id)
-  AND b.kagent_session_id IS NULL
+  AND b.kagent_session_id IS NULL AND NOT b.main_pending
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
       WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'));
@@ -176,7 +177,7 @@ UPDATE agent_bindings b
 SET kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL, kagent_create_agent_name = NULL,
     updated_at = now()
 WHERE b.session_id = sqlc.arg(session_id) AND b.kagent_create_request_id = sqlc.arg(create_request_id)
-  AND b.kagent_session_id IS NULL
+  AND b.kagent_session_id IS NULL AND NOT b.main_pending
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d
       WHERE d.session_id = b.session_id AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'));
@@ -358,3 +359,82 @@ WHERE session_id = $1;
 -- name: ArchiveFinishedSession :execrows
 UPDATE sessions SET archived_at = coalesce(archived_at, now())
 WHERE id = $1 AND status IN ('completed', 'failed', 'cancelled');
+
+-- Main provider selection (internal/sessions/provider.go).
+--
+-- A switch changes the binding in two steps around the kagent create: the intent (target provider,
+-- Agent, request id and the frozen create contract) commits first, then the Session id and the
+-- ready flag are stored. Every write after the intent matches the request id, so a preparation
+-- that was superseded by a restart changes nothing.
+
+-- name: CreateMainBinding :one
+-- A first-use main follows the configured Agent of its provider until a switch pins one.
+INSERT INTO agent_bindings (session_id, kind, role, mcp_grant_kind)
+VALUES ($1, $2, 'main', 'coordination')
+RETURNING *;
+
+-- Hands the owner slot to a replacement: the old row stays for audit.
+-- name: ReleaseMainBinding :execrows
+UPDATE agent_bindings
+SET main_released_at = now(), main_pending = false, updated_at = now()
+WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL;
+
+-- name: InsertMainProviderHistory :exec
+INSERT INTO main_provider_history (
+    session_id, provider, kagent_session_id, agent_namespace, agent_name, request_id, create_request_id,
+    model, turns, abandoned, error
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+
+-- name: ListMainProviderHistory :many
+SELECT * FROM main_provider_history WHERE session_id = $1 ORDER BY retired_at, id;
+
+-- name: LockMainBinding :one
+-- The main binding row, locked for the intent transaction. Matches only the binding the caller read.
+SELECT * FROM agent_bindings
+WHERE session_id = $1 AND role = 'main' AND main_released_at IS NULL
+FOR UPDATE;
+
+-- Commits a switch intent. The caller holds the binding row lock and has read the identity it
+-- retires; the new identity is a clean one: no Session, no standing hash, no turns.
+-- name: BeginMainSwitch :execrows
+UPDATE agent_bindings
+SET kind = sqlc.arg(kind),
+    kagent_agent_namespace = sqlc.arg(agent_namespace), kagent_agent_name = sqlc.arg(agent_name),
+    kagent_session_id = NULL, kagent_request_id = sqlc.arg(request_id),
+    kagent_create_request_id = sqlc.arg(request_id),
+    kagent_create_agent_namespace = sqlc.arg(agent_namespace), kagent_create_agent_name = sqlc.arg(agent_name),
+    standing_hash = NULL, model = NULL, turns = 0, queue_held = false,
+    main_pending = true, main_error = NULL, main_recoverable = false, updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND role = 'main' AND main_released_at IS NULL;
+
+-- Stores the Session id the target's create returned. The binding stays pending.
+-- name: SetMainTargetSession :execrows
+UPDATE agent_bindings
+SET kagent_session_id = sqlc.arg(kagent_session_id), updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND main_pending
+  AND kagent_session_id IS NULL AND kagent_request_id = sqlc.arg(request_id)::text;
+
+-- name: FinishMainSwitch :execrows
+UPDATE agent_bindings
+SET main_pending = false, main_error = NULL, main_recoverable = false, updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND main_pending
+  AND kagent_session_id IS NOT DISTINCT FROM sqlc.narg(kagent_session_id)::text
+  AND kagent_request_id = sqlc.arg(request_id)::text;
+
+-- name: FailMainSwitch :execrows
+UPDATE agent_bindings
+SET main_error = sqlc.arg(error), main_recoverable = main_recoverable OR sqlc.arg(recoverable)::boolean,
+    updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND main_pending AND kagent_request_id = sqlc.arg(request_id)::text;
+
+-- name: ClearMainSwitchError :execrows
+UPDATE agent_bindings SET main_error = NULL, updated_at = now()
+WHERE session_id = sqlc.arg(session_id) AND main_pending AND kagent_request_id = sqlc.arg(request_id)::text;
+
+-- name: CountMainBlockingWork :one
+-- Work that stops a provider switch: an open or uncertain delivery, or an unconfirmed cancel.
+SELECT
+    (SELECT count(*) FROM deliveries d
+      WHERE d.session_id = sqlc.arg(session_id) AND d.state IN ('recorded', 'sending', 'delivered', 'uncertain'))::bigint AS deliveries,
+    (SELECT count(*) FROM sessions s
+      WHERE s.id = sqlc.arg(session_id) AND s.agent_cancel_outcome = 'unknown')::bigint AS cancels;
