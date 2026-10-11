@@ -1,0 +1,19 @@
+[
+  {
+    "template_name": "claude-workspace",
+    "provider": "claude",
+    "compiled_alias": "mainloop-merge-approval",
+    "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
+    "tool": "merge_pull_request_with_approval",
+    "require_approval": true
+  },
+  {
+    "template_name": "codex-workspace",
+    "provider": "codex",
+    "compiled_alias": "mainloop-merge-approval",
+    "endpoint": "http://mainloop-mcp.mainloop.svc.cluster.local/mcp/merge-approval",
+    "tool": "merge_pull_request_with_approval",
+    "require_approval": true,
+    "operation": "mainloop.merge_pull_request_with_approval.v1"
+  }
+]

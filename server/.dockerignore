@@ -1,0 +1,4 @@
+.golangci.yml
+README.md
+**/*_test.go
+**/testdata

@@ -1,0 +1,12 @@
+package: api
+output: api.gen.go
+generate:
+  std-http-server: true
+  strict-server: true
+  models: true
+  embedded-spec: true
+output-options:
+  skip-prune: true
+  overlay:
+    path: overlay.yaml
+    strict: false

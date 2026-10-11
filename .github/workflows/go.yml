@@ -1,0 +1,101 @@
+name: Go
+
+on:
+  pull_request:
+    branches: [main, go-react]
+    paths:
+      - server/**
+      - api/**
+      - .github/workflows/go.yml
+  push:
+    branches: [main, go-react]
+    paths:
+      - server/**
+      - api/**
+      - .github/workflows/go.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: server
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.0
+          working-directory: server
+
+  test:
+    name: go test -race
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mainloop
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: postgres
+          POSTGRES_INITDB_ARGS: --no-sync
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=2g
+          --health-cmd "pg_isready -U mainloop -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MAINLOOP_TEST_DATABASE_URL: postgresql://mainloop:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go test -race ./...
+
+  generate:
+    name: Generated code is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go generate ./...
+      - name: Fail if generation changed anything
+        run: git diff --exit-code -- .
+
+  image:
+    name: Build prod image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build (no push)
+        run: docker build --target prod --tag mainloop-server:ci .

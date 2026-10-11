@@ -1,0 +1,35 @@
+version: '2'
+
+run:
+  go: '1.27'
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - forbidigo
+    - gosec
+    - govet
+    - noctx
+    - staticcheck
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: read the environment only in internal/config
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+  exclusions:
+    generated: strict
+    rules:
+      - path: ^internal/config/
+        linters:
+          - forbidigo
+      - path: _test\.go$
+        linters:
+          - gosec
