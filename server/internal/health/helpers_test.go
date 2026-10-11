@@ -100,10 +100,14 @@ type env struct {
 	at    time.Time
 }
 
+// fixtureAt is shared by every env in the run, so two envs built a second apart
+// store identical fixtures and their dumps compare equal.
+var fixtureAt = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	pool := testdb.New(t).Pool
-	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	at := fixtureAt
 	kc := &fakeKagent{tasks: fixtureTasks(t, at), fail: map[string]error{}}
 	e := &env{pool: pool, kc: kc, tasks: kc.tasks, at: at}
 	e.svc = &health.Service{
