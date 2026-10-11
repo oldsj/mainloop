@@ -145,8 +145,9 @@ SELECT merge_policy, merge_policy_version FROM projects WHERE id = $1 AND user_i
 SELECT state FROM hitl_responses WHERE id = $1 FOR SHARE;
 
 -- name: LockBindingForMerge :one
--- The session's live runtime, shared so that replacing or archiving it waits for the decision.
-SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id
+-- The session's project authority and live runtime, shared so that project changes, replacement or
+-- archival wait for the decision.
+SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id, s.project_id
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.session_id = $1

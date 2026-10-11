@@ -79,19 +79,22 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
   the deadline passes. Re-calling it while it evaluates is a replay; read
   `get_pull_request_merge_status` instead. A sweep (every 30 s) starts any approved merge whose
   tool call never arrived or was lost: the approval is recorded, so completing it does not need
-  the agent.
+  the agent. The sweep requires the proposal's session to still have the same non-empty project
+  authority as the approved tool; otherwise it leaves the proposal prepared.
 - `get_pull_request_merge_status` reads the stored state for a proposal id and one of its request
   ids. It never approves or executes. Like the approved-merge tool, it loads the proposal's project
   and needs the actor's session project to be non-empty and equal to it (`forbidden` otherwise); the
   approved-merge tool also keeps the proposal's session and receipt gates.
 - The decision to start the PUT is made in one short transaction after all GitHub reads, with no
   transaction held across GitHub. It takes share locks on the owned project, the consent's
-  response and the binding, so it orders with a policy write or a withdrawal (which take the row
-  exclusively). It blocks the candidate unless, at that moment: the project is still the owner's
+  response, session and binding, so it orders with a policy write, project change or withdrawal
+  (which take the row exclusively). It blocks the candidate unless, at that moment: the project is still the owner's
   and its policy version is the one the evaluation began under (`policy_changed`); the consent's
   response is still accepted (`consent_withdrawn`); the consent's runtime is still the session's
-  bound, live runtime (`consent_runtime_changed`); the deadline has not passed (`expired`, `deadline_passed`); and
-  the facts pinned in the proposal still hold (below). The reads before it are advisory.
+  bound, live runtime (`consent_runtime_changed`); the approval session's project is non-empty and
+  still equals the proposal's project (`consent_project_changed`); the deadline has not passed
+  (`expired`, `deadline_passed`); and the facts pinned in the proposal still hold (below). The reads
+  before it are advisory.
 - Pinned facts: repository id and name, default branch and PR base, title, body and the file
   inventory are compared with the proposal and any difference blocks (`facts_changed`). The default
   branch tip is read again after the evidence and must be the one the evidence was judged against
@@ -111,8 +114,9 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
 - Merge detail paging (`GET /hitl/{request_id}/merge/{proposal_id}/details`) reads the frozen
   facts for the owner: a section (`description`, `files` or `checks`), an offset cursor and a limit
   of at most 50. A description page holds at most 16 K characters and stops earlier to keep the
-  encoded page under 64 KiB, so text that JSON escapes still pages; a files or checks page drops
-  items from its end until it fits. A single entry that cannot fit is refused with 409. The request
+  final encoded page, including its cursor and truncation flags, under 64 KiB, so text that JSON
+  escapes still pages; a files or checks page drops items from its end until it fits. A single entry
+  that cannot fit is refused with 409. The request
   must be an approval request of the owner that names the proposal; otherwise 404.
 
 ### Consent

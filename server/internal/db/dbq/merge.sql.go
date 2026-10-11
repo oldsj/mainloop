@@ -518,7 +518,7 @@ func (q *Queries) ListPreparedApprovalProposals(ctx context.Context, limit int32
 }
 
 const lockBindingForMerge = `-- name: LockBindingForMerge :one
-SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id
+SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id, s.project_id
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
 WHERE b.session_id = $1
@@ -531,9 +531,11 @@ type LockBindingForMergeRow struct {
 	KagentDeletedAt *time.Time
 	ArchivedAt      *time.Time
 	UserID          string
+	ProjectID       *string
 }
 
-// The session's live runtime, shared so that replacing or archiving it waits for the decision.
+// The session's project authority and live runtime, shared so that project changes, replacement or
+// archival wait for the decision.
 func (q *Queries) LockBindingForMerge(ctx context.Context, sessionID string) (LockBindingForMergeRow, error) {
 	row := q.db.QueryRow(ctx, lockBindingForMerge, sessionID)
 	var i LockBindingForMergeRow
@@ -543,6 +545,7 @@ func (q *Queries) LockBindingForMerge(ctx context.Context, sessionID string) (Lo
 		&i.KagentDeletedAt,
 		&i.ArchivedAt,
 		&i.UserID,
+		&i.ProjectID,
 	)
 	return i, err
 }

@@ -328,17 +328,29 @@ func (s *Service) Complete(ctx context.Context) error {
 }
 
 func (s *Service) completeOne(ctx context.Context, r dbq.ListPreparedApprovalProposalsRow) error {
-	consent, ok, err := s.consentFor(ctx, r.OwnerID, r.SessionID, r.ProposalID, "")
-	if err != nil || !ok {
-		return err
-	}
 	q := dbq.New(s.Pool)
-	view, _, err := s.view(ctx, q, r.OwnerID, r.ProposalID)
+	view, row, err := s.view(ctx, q, r.OwnerID, r.ProposalID)
 	if err != nil {
 		return err
 	}
+	// The sweep has the proposal's session as its actor and uses the approved tool's project gate.
+	// This read is advisory; recheck locks and validates the authority again before dispatch.
+	session, err := q.GetSessionRow(ctx, dbq.GetSessionRowParams{ID: r.SessionID, UserID: r.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if session.ProjectID == nil || ownsProject(*session.ProjectID, row.ProjectID) != nil {
+		return nil
+	}
 	if len(view.Summary.UnavailableReasons) > 0 {
 		return nil
+	}
+	consent, ok, err := s.consentFor(ctx, r.OwnerID, r.SessionID, r.ProposalID, "")
+	if err != nil || !ok {
+		return err
 	}
 	hash := digest(map[string]any{"proposal_id": r.ProposalID})
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
@@ -402,6 +414,8 @@ func (s *Service) recheck(ctx context.Context, q *dbq.Queries, work dbq.GetMerge
 		case b.UserID != work.OwnerID || b.ArchivedAt != nil || b.KagentDeletedAt != nil ||
 			b.KagentSessionID == nil || *b.KagentSessionID != pin.KagentSessionID || b.Kind != pin.Provider:
 			return "consent_runtime_changed", dbstate.MergeBlocked, nil
+		case b.ProjectID == nil || ownsProject(*b.ProjectID, work.ProjectID) != nil:
+			return "consent_project_changed", dbstate.MergeBlocked, nil
 		}
 	}
 	if work.Deadline != nil && !s.now().Before(*work.Deadline) {

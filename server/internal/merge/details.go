@@ -93,14 +93,32 @@ func (s *Service) Details(ctx context.Context, in DetailsInput) (api.HITLMergeDe
 			}
 			used += cost
 		}
-		if end == start && start < len(runes) {
-			return api.HITLMergeDetails{}, ErrTooLarge
-		}
-		text := string(runes[start:end])
-		out.Description = &text
-		if end < len(runes) {
-			out.DescriptionTruncated = ptr(true)
-			next = &end
+		// The initial budget excludes cursor metadata. Trim against the final envelope so its
+		// cursor and both truncation flags cannot push an otherwise readable page over the cap.
+		for {
+			if end == start && start < len(runes) {
+				return api.HITLMergeDetails{}, ErrTooLarge
+			}
+			text := string(runes[start:end])
+			out.Description = &text
+			out.Truncated = end < len(runes)
+			out.DescriptionTruncated = ptr(out.Truncated)
+			out.NextCursor = nil
+			if out.Truncated {
+				c := strconv.Itoa(end)
+				out.NextCursor = &c
+			}
+			raw, err := json.Marshal(out)
+			if err != nil {
+				return api.HITLMergeDetails{}, err
+			}
+			if len(raw) <= MaxDetailBytes {
+				break
+			}
+			if end == start {
+				return api.HITLMergeDetails{}, ErrTooLarge
+			}
+			end--
 		}
 	case api.GetHITLMergeDetailsParamsSectionFiles:
 		start := min(cursor, len(f.Files))
