@@ -402,3 +402,197 @@ func TestImportStopsWaitingForSlowGitHub(t *testing.T) {
 		t.Fatalf("%d metadata calls", remote.calls.Load())
 	}
 }
+
+// advancer records the policy advances the project service asks for and can refuse them.
+type advancer struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+	// seen reads the project's stored default branch at the moment of each call.
+	seen func(id string) string
+	was  []string
+}
+
+func (a *advancer) AdvanceDefaultBranch(_ context.Context, id, branch string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls = append(a.calls, id+"="+branch)
+	if a.seen != nil {
+		a.was = append(a.was, a.seen(id))
+	}
+	return a.err
+}
+
+type clock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *clock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.at }
+func (c *clock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+func projectRow(t *testing.T, svc *projects.Service, id string) (branch string, fetched bool) {
+	t.Helper()
+	p, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.DefaultBranch, p.MetadataUpdatedAt != nil
+}
+
+func TestSweepFillsEmptyMetadata(t *testing.T) {
+	fake, remote := newGitHub(t)
+	svc := newService(t, remote, false)
+	fake.Fail("GET", "/repos/oldsj/mainloop", 500)
+	p, err := svc.Import(context.Background(), "oldsj/mainloop")
+	if err != nil || p.DefaultBranch != "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	fake.Fail("GET", "/repos/oldsj/mainloop", 0)
+	if err := svc.MetadataSweep().Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), p.ID)
+	if err != nil || got.DefaultBranch != "trunk" || got.OpenPRCount != 2 || got.MetadataUpdatedAt == nil {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestSweepLeavesFreshMetadataAlone(t *testing.T) {
+	fake, remote := newGitHub(t)
+	svc := newService(t, remote, false)
+	if _, err := svc.Import(context.Background(), "oldsj/mainloop"); err != nil {
+		t.Fatal(err)
+	}
+	before := fake.Count("GET", "/repos/oldsj/mainloop")
+	if err := svc.MetadataSweep().Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.Count("GET", "/repos/oldsj/mainloop"); n != before {
+		t.Fatalf("fresh project read again: %d -> %d", before, n)
+	}
+	// Past the stale age it is read again.
+	svc.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	if err := svc.MetadataSweep().Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.Count("GET", "/repos/oldsj/mainloop"); n == before {
+		t.Fatal("stale project not read")
+	}
+}
+
+// A GitHub error changes nothing, does not stop the other projects, and the failing project is
+// asked again only after the pause.
+func TestSweepGitHubErrorChangesNothingAndRetriesLater(t *testing.T) {
+	fake, remote := newGitHub(t)
+	fake.AddRepo(githubtest.Repository{Owner: "oldsj", Name: "other", DefaultBranch: "dev"})
+	svc := newService(t, remote, false)
+	ctx := context.Background()
+	fake.Fail("GET", "/repos/oldsj/mainloop", 500)
+	fake.Fail("GET", "/repos/oldsj/other", 500)
+	bad, _ := svc.Import(ctx, "oldsj/mainloop")
+	good, _ := svc.Import(ctx, "oldsj/other")
+	fake.Fail("GET", "/repos/oldsj/other", 0)
+	c := &clock{at: time.Now()}
+	svc.Now = c.now
+	sweep := svc.MetadataSweep()
+
+	if err := sweep.Run(ctx); err != nil {
+		t.Fatalf("a GitHub error failed the pass: %v", err)
+	}
+	if b, fetched := projectRow(t, svc, bad.ID); b != "" || fetched {
+		t.Fatalf("failed refresh changed the row: %q %v", b, fetched)
+	}
+	if b, _ := projectRow(t, svc, good.ID); b != "dev" {
+		t.Fatalf("one failing project stopped the others: %q", b)
+	}
+
+	fake.Fail("GET", "/repos/oldsj/mainloop", 0)
+	asked := fake.Count("GET", "/repos/oldsj/mainloop")
+	if err := sweep.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := fake.Count("GET", "/repos/oldsj/mainloop"); n != asked {
+		t.Fatalf("asked again inside the pause: %d -> %d", asked, n)
+	}
+	c.add(6 * time.Minute)
+	if err := sweep.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, fetched := projectRow(t, svc, bad.ID); b != "trunk" || !fetched {
+		t.Fatalf("not retried after the pause: %q %v", b, fetched)
+	}
+}
+
+// The policy advances before the project row; when it cannot, the row is untouched and the next
+// pass tries again.
+func TestSweepPolicyFailureLeavesProjectUnchanged(t *testing.T) {
+	_, remote := newGitHub(t)
+	svc := newService(t, remote, false)
+	ctx := context.Background()
+	p, err := svc.Import(ctx, "oldsj/mainloop")
+	if err != nil || p.DefaultBranch != "trunk" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	// GitHub renamed it after the last read.
+	if _, err := svc.Pool.Exec(ctx, `UPDATE projects SET default_branch = 'main', metadata_updated_at = now() - interval '2 hours' WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	adv := &advancer{err: errors.New("policy_mismatch")}
+	svc.Policy = adv
+	c := &clock{at: time.Now()}
+	svc.Now = c.now
+	sweep := svc.MetadataSweep()
+	if err := sweep.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := projectRow(t, svc, p.ID); b != "main" {
+		t.Fatalf("project advanced past a refused policy: %q", b)
+	}
+	adv.mu.Lock()
+	adv.err = nil
+	adv.mu.Unlock()
+	c.add(6 * time.Minute)
+	if err := sweep.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := projectRow(t, svc, p.ID); b != "trunk" {
+		t.Fatalf("not retried: %q", b)
+	}
+	if len(adv.calls) != 2 || adv.calls[1] != p.ID+"=trunk" {
+		t.Fatalf("calls %v", adv.calls)
+	}
+}
+
+func TestMetadataAdvancesPolicyBeforeTheProjectRow(t *testing.T) {
+	_, remote := newGitHub(t)
+	svc := newService(t, remote, false)
+	adv := &advancer{}
+	adv.seen = func(id string) string { b, _ := projectRow(t, svc, id); return b }
+	svc.Policy = adv
+	p, err := svc.Import(context.Background(), "oldsj/mainloop")
+	if err != nil || p.DefaultBranch != "trunk" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if len(adv.calls) != 1 || adv.calls[0] != p.ID+"=trunk" || adv.was[0] != "" {
+		t.Fatalf("calls %v, stored branch at the call %v", adv.calls, adv.was)
+	}
+	// Unchanged default: no policy call.
+	if _, err := svc.Import(context.Background(), "oldsj/mainloop"); err != nil || len(adv.calls) != 1 {
+		t.Fatalf("%v %v", err, adv.calls)
+	}
+}
+
+func TestSweepWithoutGitHubIsANoOp(t *testing.T) {
+	svc := newService(t, nil, false)
+	if _, err := svc.Import(context.Background(), "a/b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MetadataSweep().Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

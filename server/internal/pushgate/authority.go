@@ -468,3 +468,31 @@ func (s *Service) SetPolicy(ctx context.Context, project string, version int64, 
 	}
 	return nil
 }
+
+// AdvanceDefaultBranch records a changed GitHub default branch in the project's push policy,
+// keeping the rest of the policy and retiring the old default into PreviousDefaults. It is the
+// project-metadata sweep's entry to [Service.SetPolicy]: it does nothing when the project has no
+// policy yet (enrollment writes one from GitHub's answer) or already names the branch, so a retry
+// after a partial refresh is safe. A concurrent policy change fails the compare-and-swap with
+// policy_mismatch and is retried on the next refresh.
+func (s *Service) AdvanceDefaultBranch(ctx context.Context, project, branch string) error {
+	if !gitref.Valid(branch) {
+		return denial("policy_mismatch")
+	}
+	row, err := dbq.New(s.Pool).GetPushPolicy(ctx, project)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var policy Policy
+	if json.Unmarshal(row.Policy, &policy) != nil {
+		return denial("policy_mismatch")
+	}
+	if policy.DefaultBranch == branch {
+		return nil
+	}
+	policy.DefaultBranch = branch
+	return s.SetPolicy(ctx, project, row.Version, policy)
+}

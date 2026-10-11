@@ -66,10 +66,19 @@ type Service struct {
 	// GitPush reserves creation-time references for writable task attempts. Enrollment waits for
 	// the task's active writer and a freshly confirmed native runtime.
 	GitPush *GitPush
+	// Projects creates the project of a workspace requested by repository. Nil imports through a
+	// [projects.Service] without GitHub access, which records the project and leaves its metadata
+	// to the project-metadata sweep.
+	Projects ProjectImporter
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
 	// PollEvery is how often a waiting request re-reads its operation; zero means 50ms.
 	PollEvery time.Duration
+}
+
+// ProjectImporter is the one way a project is created: [projects.Service.Import].
+type ProjectImporter interface {
+	Import(ctx context.Context, text string) (dbq.Project, error)
 }
 
 // Errors the API maps to statuses.

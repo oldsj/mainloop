@@ -19,8 +19,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
-	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gitref"
+	"github.com/oldsj/mainloop/server/internal/projects"
 )
 
 // InvalidError is a request that cannot be a workspace; the API answers 422 with the message.
@@ -516,7 +516,7 @@ func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, r
 		q := dbq.New(tx)
 		if _, err := q.CreateSession(ctx, dbq.CreateSessionParams{
 			ID: p.id, UserID: s.OwnerID, ProjectID: &p.project.ID, Title: p.project.FullName,
-			RepoURL: &p.repoURL, BranchName: &p.branch, BaseBranch: baseBranch(p.ref),
+			RepoURL: &p.repoURL, BranchName: &p.branch, BaseBranch: p.ref,
 		}); err != nil {
 			return nil, err
 		}
@@ -609,13 +609,6 @@ func (s *Service) dropRejected(ctx context.Context, id string, create dbq.Worksp
 	})
 }
 
-func baseBranch(ref string) string {
-	if ref == "" {
-		return "main"
-	}
-	return ref
-}
-
 type plan struct {
 	id      string
 	kind    string
@@ -677,14 +670,10 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			return plan{}, ErrProjectNotFound
 		}
 	} else {
-		repo, perr := github.ParseRepo(*body.Repo)
-		if perr != nil {
+		project, err = s.projectImporter().Import(ctx, *body.Repo)
+		if errors.Is(err, projects.ErrInvalidRepo) {
 			return plan{}, &InvalidError{"repo must be a GitHub repository (owner/name or its https URL)"}
 		}
-		project, err = q.ImportProject(ctx, dbq.ImportProjectParams{
-			ID: uuid.NewString(), UserID: s.OwnerID, Owner: repo.Owner, Name: repo.Name,
-			FullName: repo.FullName(), HTMLURL: repo.HTMLURL(),
-		})
 	}
 	if err != nil {
 		return plan{}, err
@@ -722,6 +711,14 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			IdleTimeoutMinutes: int32(idle), Environment: env, RequestID: uuid.NewString(),
 		},
 	}, nil
+}
+
+// projectImporter is the importer a workspace request creates its project through.
+func (s *Service) projectImporter() ProjectImporter {
+	if s.Projects != nil {
+		return s.Projects
+	}
+	return &projects.Service{Pool: s.Pool, OwnerID: s.OwnerID, Log: s.Log}
 }
 
 // environment resolves the project's selected development environment to the exact image the

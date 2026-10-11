@@ -259,6 +259,59 @@ func (q *Queries) ListProjectSessions(ctx context.Context, arg ListProjectSessio
 	return items, nil
 }
 
+const listProjectsNeedingMetadata = `-- name: ListProjectsNeedingMetadata :many
+SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects
+WHERE user_id = $1
+  AND (default_branch = '' OR html_url = '' OR metadata_updated_at IS NULL OR metadata_updated_at < $2)
+ORDER BY (default_branch = '' OR html_url = '') DESC, metadata_updated_at NULLS FIRST, id
+LIMIT $3
+`
+
+type ListProjectsNeedingMetadataParams struct {
+	UserID            string
+	MetadataUpdatedAt *time.Time
+	Limit             int32
+}
+
+// Projects whose GitHub facts are missing (never fetched, or fetched without a default branch)
+// or older than $2, empty ones first and then the longest-unrefreshed.
+func (q *Queries) ListProjectsNeedingMetadata(ctx context.Context, arg ListProjectsNeedingMetadataParams) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjectsNeedingMetadata, arg.UserID, arg.MetadataUpdatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Owner,
+			&i.Name,
+			&i.FullName,
+			&i.Description,
+			&i.DefaultBranch,
+			&i.AvatarURL,
+			&i.HTMLURL,
+			&i.MergePolicy,
+			&i.MergePolicyVersion,
+			&i.OpenPRCount,
+			&i.OpenIssueCount,
+			&i.MetadataUpdatedAt,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockOwnedProject = `-- name: LockOwnedProject :one
 SELECT id, user_id, owner, name, full_name, description, default_branch, avatar_url, html_url, merge_policy, merge_policy_version, open_pr_count, open_issue_count, metadata_updated_at, created_at, last_used_at FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE
 `

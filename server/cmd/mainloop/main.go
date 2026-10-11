@@ -176,6 +176,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	schedSvc.Providers = wsSvc.Providers
 	wsSvc.Deliveries = svc
 	apiServer := app.New(deps)
+	projectSvc := apiServer.ProjectsAPI.Svc
+	wsSvc.Projects = projectSvc // one way to create a project
 	handler, err := apiServer.Handler()
 	if err != nil {
 		return err
@@ -198,8 +200,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		(&pushgate.Service{Pool: pool, Native: kc, Upstream: upstream, Credentials: creds}).Register(runner)
+		gate := &pushgate.Service{Pool: pool, Native: kc, Upstream: upstream, Credentials: creds}
+		gate.Register(runner)
+		projectSvc.Policy = gate // a renamed default branch advances the push policy
 	}
+	runner.AddSweep(projectSvc.MetadataSweep())
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)

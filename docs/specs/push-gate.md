@@ -85,6 +85,16 @@ versions increase by one and former defaults cannot be removed. Existing grants 
 to the current policy. A remote default disagreement refuses publication until trusted metadata
 and policy agree.
 
+The `project-metadata` sweep (see [projects](projects.md#metadata)) is what makes them agree. It
+fills an empty `projects.default_branch`, which unblocks enrollment (`metadata_unavailable`
+otherwise). When GitHub's default branch changes, it calls `AdvanceDefaultBranch`, which reads the
+policy and moves the new default in through `SetPolicy`'s compare-and-swap, keeping the owner's
+patterns and retiring the old default into the previous defaults, so pushes to either are refused.
+A project with no policy yet is left for enrollment, and a policy already naming the branch is not
+changed. A lost swap or a GitHub error leaves everything as it was and is retried by the next
+pass. The policy advances before the project row, so a failure between the two is refused as a
+disagreement until the next pass completes it.
+
 Exactly one `refs/heads/<granted-branch>` update is allowed, creating a branch or fast-forwarding
 its trusted current head. Deletion, tags, notes, multiple refs, rewind/divergence, protected or
 default branches, missing objects and missing authority refuse. LFS routes and push certificates

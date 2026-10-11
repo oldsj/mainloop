@@ -200,9 +200,11 @@ workspace operations.
   (the default) or Codex. The selected agent kind is stored in the workspace manifest and shown
   in workspace and session lists. Creation opens the workspace; a `422` and other API errors show
   inline.
-- A project created this way stores the canonical `https://github.com/owner/name` URL and no
-  default branch. `POST /projects/{id}/refresh` (no UI calls it yet) records the default branch
-  from GitHub. A project that already exists for that repository keeps its stored URL and
+- A project created this way goes through the same import as `POST /projects`, so there is one
+  way to create a project. It stores the canonical `https://github.com/owner/name` URL and, when
+  the GitHub App can read the repository within the import's time limit, GitHub's default branch;
+  otherwise the default branch stays empty until the `project-metadata` sweep fills it. There is
+  no refresh route. A project that already exists for that repository keeps its stored URL and
   metadata. A bad `branch` or `ref` is refused before any project is created; the project does
   outlive a workspace that kagent then rejects, so a retry finds it again.
 - With both `GIT_TRANSPORT_ENABLED` and `PUSH_GATE_ENABLED` enabled, enrollment resolves the
@@ -442,9 +444,10 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
   display case and cached metadata and updates its last-used time. Another owner's row is
   never reused. Invalid repository references return a sanitized `400`; invalid request
   shapes return `422`, before any database effects.
-  Import makes no GitHub metadata request and starts no workspace or native Session. A new
-  project has an empty (unknown) default branch until the existing refresh endpoint records
-  it. It creates no task, capability or push grant, selects no environment, and does not
+  Import starts no workspace or native Session. It makes one best-effort GitHub read, bounded
+  by a time limit; if that read fails, the project is still recorded with an empty (unknown)
+  default branch and the `project-metadata` sweep fills it later. There is no refresh route. The
+  import creates no task, capability or push grant, selects no environment, and does not
   enable merging. This owner REST endpoint allows project import before explicit environment
   selection and Actor creation; a frontend import control is not implemented by this endpoint.
 - `POST /workspaces` creates a workspace:
@@ -459,7 +462,8 @@ delete those workspaces first. The exit status is non-zero if any delete failed.
     `project_id` is `404`.
   - `ref` defaults to the project's default branch, or is empty (the remote's default) when the
     project has none recorded.
-    The associated session's `base_branch` preserves that ref, including the empty string.
+    The associated session's `base_branch` preserves that ref, including the empty string; it is
+    never replaced by a fixed `main`.
     Legacy NULL base refs are read as empty, so they do not break session list or detail requests.
   - `branch` is the local branch to create or switch to. When empty it is always a new
     `mainloop/<8 hex>` branch, whatever `ref` or the project's default is, so the working branch

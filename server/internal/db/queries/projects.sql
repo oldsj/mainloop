@@ -42,3 +42,12 @@ RETURNING *;
 -- name: InsertMergePolicyAudit :exec
 INSERT INTO project_merge_policy_audit (project_id, owner_id, old_policy, new_policy, version)
 VALUES ($1, $2, $3, $4, $5);
+
+-- name: ListProjectsNeedingMetadata :many
+-- Projects whose GitHub facts are missing (never fetched, or fetched without a default branch)
+-- or older than $2, empty ones first and then the longest-unrefreshed.
+SELECT * FROM projects
+WHERE user_id = $1
+  AND (default_branch = '' OR html_url = '' OR metadata_updated_at IS NULL OR metadata_updated_at < $2)
+ORDER BY (default_branch = '' OR html_url = '') DESC, metadata_updated_at NULLS FIRST, id
+LIMIT $3;

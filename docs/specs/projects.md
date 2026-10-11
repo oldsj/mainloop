@@ -17,6 +17,25 @@ See [merge policy](merge-policy.md) for server gates and unproved production pre
 Project detail lists unarchived project sessions and excludes bindings with the `main` role.
 Unbound sessions remain visible.
 
+## Metadata
+
+Mainloop owns the project row; GitHub supplies its description, URL, default branch, avatar and
+open pull request and issue counts. Import makes one best-effort GitHub read, so a GitHub outage
+or a missing App installation never fails an import and leaves an empty default branch.
+
+The `project-metadata` sweep keeps that metadata current. Every minute it reads projects whose
+default branch or URL is empty, or whose metadata is older than 15 minutes, empty ones first, up
+to 25 per pass. It reads GitHub with no database transaction open and writes only what GitHub
+answered: a GitHub error, a reply for a different repository or a reply without a usable default
+branch changes nothing. The failing project is asked again after five minutes, and other projects
+are still refreshed. There is no owner refresh route; the sweep replaces it.
+
+When GitHub's default branch differs from the stored one and the push gate is on, the sweep
+advances the project's push policy first (see [push gate](push-gate.md)) and only then writes the
+project row. If the policy cannot advance, the row stays as it was and the next pass retries; a
+manual import takes the same path. Proven by Postgres tests against a fake GitHub, including a real
+push through the gate; not measured against live GitHub.
+
 ## React status (migration F7)
 
 The React projects list, project page, merge policy section and new workspace from a repository

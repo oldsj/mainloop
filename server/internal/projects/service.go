@@ -20,6 +20,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gitref"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
 // Typed failures the API layer maps to the contract's statuses.
@@ -37,6 +39,25 @@ type Remote interface {
 	OpenPullRequests(ctx context.Context, repo github.Repo, limit int) ([]github.PullRequest, error)
 	RecentCommits(ctx context.Context, repo github.Repo, branch string, limit int) ([]github.Commit, error)
 }
+
+// PolicyAdvancer records a changed default branch in the project's push policy. The push gate
+// implements it; nil means no push gate runs here and there is no policy to advance.
+type PolicyAdvancer interface {
+	AdvanceDefaultBranch(ctx context.Context, projectID, branch string) error
+}
+
+// Sweep tuning: how often the sweep looks, how old metadata may get before it is read again, how
+// long a failing project is left alone, and how many projects one run reads.
+const (
+	metadataSweepEvery  = time.Minute
+	metadataStaleAfter  = 15 * time.Minute
+	metadataRetryAfter  = 5 * time.Minute
+	metadataSweepBatch  = 25
+	metadataSweepWindow = 200
+)
+
+// errRepoMismatch means GitHub answered for a different repository than the one asked about.
+var errRepoMismatch = errors.New("projects: GitHub answered for another repository")
 
 // defaultMetadataTimeout bounds the whole GitHub fetch of an import. A healthy import is four
 // short calls (installation, token, repository, pull requests) and finishes in a second or two;
@@ -60,7 +81,11 @@ type Service struct {
 	// MetadataTimeout bounds the best-effort GitHub fetch during import; zero means
 	// [defaultMetadataTimeout].
 	MetadataTimeout time.Duration
-	Log             *slog.Logger
+	// Policy advances the push policy when GitHub's default branch changes. Nil skips that step.
+	Policy PolicyAdvancer
+	// Now is the clock for staleness and retry decisions; nil means time.Now.
+	Now func() time.Time
+	Log *slog.Logger
 	// NeedsOwner reports whether a session is waiting on the owner. The attention projection
 	// owns that answer; until it is wired every session reads false.
 	NeedsOwner func(ctx context.Context, sessionID string) bool
@@ -84,6 +109,36 @@ func (s *Service) Import(ctx context.Context, text string) (dbq.Project, error) 
 	if s.Remote == nil {
 		return p, nil
 	}
+	refreshed, err := s.refresh(ctx, p)
+	switch {
+	case err == nil:
+		return refreshed, nil
+	case errors.Is(err, errRepoMismatch):
+		return p, nil
+	default:
+		var w *writeError
+		if errors.As(err, &w) {
+			return dbq.Project{}, err
+		}
+		s.Log.WarnContext(ctx, "project metadata unavailable", "project_id", p.ID, "error", err.Error())
+		return p, nil
+	}
+}
+
+// writeError marks a failure of Mainloop's own database, as opposed to GitHub or the push gate.
+type writeError struct{ err error }
+
+func (e *writeError) Error() string { return e.err.Error() }
+func (e *writeError) Unwrap() error { return e.err }
+
+// refresh reads the project's repository from GitHub and stores the answer. The network read
+// happens first and alone; nothing is written when GitHub cannot be read, answers for another
+// repository or returns no usable default branch, so a failure leaves the row as it was. When the
+// default branch changed, the push policy advances before the project row does: a failure between
+// the two leaves policy and project disagreeing, which the push gate refuses, and the next refresh
+// finishes the job.
+func (s *Service) refresh(ctx context.Context, p dbq.Project) (dbq.Project, error) {
+	repo := github.Repo{Owner: p.Owner, Name: p.Name}
 	timeout := s.MetadataTimeout
 	if timeout <= 0 {
 		timeout = defaultMetadataTimeout
@@ -92,11 +147,18 @@ func (s *Service) Import(ctx context.Context, text string) (dbq.Project, error) 
 	defer cancel()
 	md, err := s.Remote.Metadata(fetchCtx, repo)
 	if err != nil {
-		s.Log.WarnContext(ctx, "project metadata unavailable", "project_id", p.ID, "error", err.Error())
-		return p, nil
+		return p, fmt.Errorf("read GitHub metadata: %w", err)
 	}
 	if !md.Repo.Same(repo) {
-		return p, nil
+		return p, errRepoMismatch
+	}
+	if !gitref.Valid(md.DefaultBranch) {
+		return p, errors.New("GitHub returned no usable default branch")
+	}
+	if md.DefaultBranch != p.DefaultBranch && s.Policy != nil {
+		if err := s.Policy.AdvanceDefaultBranch(ctx, p.ID, md.DefaultBranch); err != nil {
+			return p, fmt.Errorf("advance push policy: %w", err)
+		}
 	}
 	refreshed, err := dbq.New(s.Pool).RefreshProjectMetadata(ctx, dbq.RefreshProjectMetadataParams{
 		ID: p.ID, UserID: s.OwnerID, Owner: md.Repo.Owner, Name: md.Repo.Name, FullName: md.Repo.FullName(),
@@ -105,9 +167,96 @@ func (s *Service) Import(ctx context.Context, text string) (dbq.Project, error) 
 		OpenIssueCount: count32(md.OpenIssues),
 	})
 	if err != nil {
-		return dbq.Project{}, fmt.Errorf("refresh project metadata: %w", err)
+		return p, &writeError{fmt.Errorf("refresh project metadata: %w", err)}
 	}
 	return refreshed, nil
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// MetadataSweep keeps project metadata current. It reads projects whose default branch or URL is
+// empty, or whose metadata is older than a quarter hour, from GitHub, so the push gate's check
+// that GitHub and the project agree on the default branch can pass and a renamed default branch
+// reaches the push policy. It replaces an owner-triggered refresh route. Each sweep value keeps
+// its own memory of recent failures.
+func (s *Service) MetadataSweep() reconcile.Sweep {
+	failures := &failures{at: map[string]time.Time{}}
+	return reconcile.Sweep{Name: "project-metadata", Every: metadataSweepEvery, Run: func(ctx context.Context) error {
+		return s.refreshStale(ctx, failures)
+	}}
+}
+
+// failures remembers when a project's refresh last failed so that one project GitHub cannot
+// answer for (no installation, an outage) is not asked about every minute.
+type failures struct {
+	mu sync.Mutex
+	at map[string]time.Time
+}
+
+func (f *failures) due(id string, now time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	at, ok := f.at[id]
+	return !ok || now.Sub(at) >= metadataRetryAfter
+}
+
+func (f *failures) record(id string, now time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.at[id] = now
+}
+
+func (f *failures) clear(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.at, id)
+}
+
+// refreshStale is one pass of the sweep. A GitHub or push-policy failure on one project is logged
+// and leaves it unchanged; it is tried again after a pause, and the other projects are still
+// refreshed. Only an error of Mainloop's own database fails the pass.
+func (s *Service) refreshStale(ctx context.Context, f *failures) error {
+	if s.Remote == nil {
+		return nil
+	}
+	now := s.now()
+	before := now.Add(-metadataStaleAfter)
+	rows, err := dbq.New(s.Pool).ListProjectsNeedingMetadata(ctx, dbq.ListProjectsNeedingMetadataParams{
+		UserID: s.OwnerID, MetadataUpdatedAt: &before, Limit: metadataSweepWindow,
+	})
+	if err != nil {
+		return fmt.Errorf("list projects needing metadata: %w", err)
+	}
+	attempts := 0
+	for _, p := range rows {
+		if attempts >= metadataSweepBatch {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !f.due(p.ID, now) {
+			continue
+		}
+		attempts++
+		_, err := s.refresh(ctx, p)
+		if err == nil {
+			f.clear(p.ID)
+			continue
+		}
+		var w *writeError
+		if errors.As(err, &w) {
+			return err
+		}
+		f.record(p.ID, now)
+		s.Log.WarnContext(ctx, "project metadata refresh failed", "project_id", p.ID, "error", err.Error())
+	}
+	return nil
 }
 
 // count32 fits a GitHub count into the integer column.
