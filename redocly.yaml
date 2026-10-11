@@ -3,7 +3,5 @@ extends:
   - recommended
 
 rules:
-  # Baseline operations have no 4xx responses yet; C1b adds the error schemas.
-  operation-4xx-response: off
   # No licence is chosen for the API document; the repository LICENSE.md governs.
   info-license: off
