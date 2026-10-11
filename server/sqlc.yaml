@@ -160,6 +160,21 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: TaskDeliveryState
               }
+          - column: git_enrollments.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GitEnrollmentState
+              }
+          - column: git_push_grants.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: GitGrantState }
+          - column: git_publications.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: GitPublicationState
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

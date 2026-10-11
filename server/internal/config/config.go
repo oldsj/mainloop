@@ -450,3 +450,14 @@ func checkControlTokenFile(path string) error {
 	}
 	return nil
 }
+
+// GitReadHosts returns the lower-case host names the git read listener serves besides loopback:
+// the instance's in-cluster Service name, which is the origin agents' git is pointed at.
+func (c *Config) GitReadHosts() map[string]bool {
+	return hostSet([]string{"mainloop-git-read." + c.Namespace + ".svc.cluster.local"})
+}
+
+// GitPushHosts is [Config.GitReadHosts] for the push listener.
+func (c *Config) GitPushHosts() map[string]bool {
+	return hostSet([]string{"mainloop-git-push." + c.Namespace + ".svc.cluster.local"})
+}

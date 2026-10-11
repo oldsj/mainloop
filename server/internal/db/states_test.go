@@ -112,6 +112,13 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.AttentionApproval), string(dbstate.AttentionQuestion), string(dbstate.AttentionOwnerDecision))},
 		{"attention_items", "state", strs(
 			string(dbstate.AttentionOpen), string(dbstate.AttentionResolved), string(dbstate.AttentionDismissed))},
+		{"git_enrollments", "state", strs(
+			string(dbstate.GitEnrollmentPlanned), string(dbstate.GitEnrollmentPublished), string(dbstate.GitEnrollmentRevoked))},
+		{"git_push_grants", "state", strs(
+			string(dbstate.GitGrantPlanned), string(dbstate.GitGrantPublished), string(dbstate.GitGrantRevoked))},
+		{"git_publications", "state", strs(
+			string(dbstate.PublicationPending), string(dbstate.PublicationDispatching), string(dbstate.PublicationConfirmed),
+			string(dbstate.PublicationRejected), string(dbstate.PublicationUnknown))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},

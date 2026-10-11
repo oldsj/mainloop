@@ -52,6 +52,10 @@ type Options struct {
 	// Transport carries the requests once the allowlist has passed them. Nil means a clone of
 	// the default transport.
 	Transport http.RoundTripper
+	// GitBaseURL is the host git smart HTTP is spoken to. Empty means [DefaultGitBaseURL]; tests
+	// point it at a local server. It is not read from the environment: the installation token is
+	// sent to it.
+	GitBaseURL string
 }
 
 // App authenticates as a GitHub App and hands out clients scoped to one repository and the
@@ -69,6 +73,11 @@ type App struct {
 	// flights collapses concurrent first uses: one client build per scope and one installation
 	// lookup per repository, however many callers arrive together.
 	flights singleflight.Group
+
+	// The git read path: the git host, its client, and per-scope token sources.
+	gitBase   *url.URL
+	gitHTTP   *http.Client
+	gitTokens map[string]*ghinstallation.Transport
 }
 
 // NewApp validates the credentials. Errors never include the key.
@@ -96,10 +105,15 @@ func NewApp(o Options) (*App, error) {
 	if net == nil {
 		net = http.DefaultTransport.(*http.Transport).Clone()
 	}
+	gitBase, err := parseGitBase(o.GitBaseURL)
+	if err != nil {
+		return nil, err
+	}
 	return &App{
 		id: id, key: key, base: base, net: net,
 		installs: map[string]int64{},
 		clients:  map[string]*gh.Client{},
+		gitBase:  gitBase, gitHTTP: newGitClient(net), gitTokens: map[string]*ghinstallation.Transport{},
 	}, nil
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gittransport"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -81,7 +82,7 @@ func usage(w io.Writer) {
 commands:
   serve-api       owner API on :8000
   serve-mcp       MCP listener on :8002
-  serve-git       git transport on :8003 and :8004 (health only for now)
+  serve-git       git transport: read on :8003 (upload-pack proxy), push on :8004 (health only for now)
   migrate         up | status | reset the database schema
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them)
   smoke           not implemented yet
@@ -100,19 +101,7 @@ func serve(ctx context.Context, cmd string, log *slog.Logger) error {
 	case "serve-mcp":
 		return serveMCP(ctx, cfg, log)
 	case "serve-git":
-		// Git clients address the read and push Services by name; neither is the owner API.
-		hosts := map[string]bool{
-			"mainloop-git-read." + cfg.Namespace + ".svc.cluster.local": true,
-			"mainloop-git-push." + cfg.Namespace + ".svc.cluster.local": true,
-		}
-		g, gctx := errgroup.WithContext(ctx)
-		g.Go(func() error {
-			return httpx.Serve(gctx, log, "git-read", gitReadAddr, app.StubHandler(cfg, log, hosts))
-		})
-		g.Go(func() error {
-			return httpx.Serve(gctx, log, "git-push", gitPushAddr, app.StubHandler(cfg, log, hosts))
-		})
-		return g.Wait()
+		return serveGit(ctx, cfg, log)
 	}
 	return errors.New("unreachable")
 }
@@ -187,6 +176,9 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)
+	if cfg.InCluster() {
+		(&gittransport.Enroller{Pool: pool, Creds: creds, Log: log}).Register(runner)
+	}
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	runner.AddSweep(svc.ResolveCreatesSweep())

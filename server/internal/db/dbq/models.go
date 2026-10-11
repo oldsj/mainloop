@@ -144,6 +144,48 @@ type EventFloor struct {
 	PrunedThrough int64
 }
 
+type GitBranchPolicy struct {
+	ProjectID string
+	Version   int64
+	Policy    json.RawMessage
+	UpdatedAt time.Time
+}
+
+type GitEnrollment struct {
+	WorkspaceID  string
+	Repository   string
+	State        dbstate.GitEnrollmentState
+	CredentialID *string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	RevokedAt    *time.Time
+}
+
+type GitPublication struct {
+	ID                string
+	WorkspaceID       string
+	RequestID         string
+	Repository        string
+	Branch            string
+	Attempt           json.RawMessage
+	State             dbstate.GitPublicationState
+	TransportEvidence json.RawMessage
+	TransportReceipt  json.RawMessage
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type GitPushGrant struct {
+	WorkspaceID   string
+	Branch        string
+	PolicyVersion int64
+	CredentialID  *string
+	State         dbstate.GitGrantState
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	RevokedAt     *time.Time
+}
+
 type HitlDiagnostic struct {
 	ID               int64
 	OwnerID          string

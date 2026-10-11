@@ -438,3 +438,17 @@ func (s *Server) commits(w http.ResponseWriter, r *http.Request, repo *Repositor
 	s.link(w, r, pageNo, last)
 	writeJSON(w, http.StatusOK, out)
 }
+
+// TokenAllows reports whether value is a live token the fake minted for owner/name that grants
+// permission at read level or better. A test git server uses it to judge the Basic password a
+// proxy sends, the way real GitHub judges an installation token on a git request.
+func (s *Server) TokenAllows(value, owner, name, permission string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tok, ok := s.tokens[value]
+	if !ok || time.Now().After(tok.expires) || tok.repo != lower(owner, name) {
+		return false
+	}
+	lvl := tok.perms[permission]
+	return lvl == "read" || lvl == "write"
+}
