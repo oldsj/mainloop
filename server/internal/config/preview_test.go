@@ -6,12 +6,8 @@ import (
 )
 
 func TestPreviewSettingsAreValidated(t *testing.T) {
-	good, err := Parse(fixtureEnv(t, "prod.env"))
-	if err != nil {
+	if _, err := Parse(fixtureEnv(t, "prod.env")); err != nil {
 		t.Fatal(err)
-	}
-	if scheme, host, _ := good.Preview.PreviewOrigin(); scheme == "" || host == "" {
-		t.Fatalf("origin = %q %q", scheme, host)
 	}
 	cases := []struct {
 		key, value, want string

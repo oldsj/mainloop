@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"net/url"
-	"strings"
 )
 
 // validate checks the preview settings. The base URL names the wildcard domain preview hosts sit
@@ -27,14 +26,4 @@ func (p Preview) validate(atespace string) []error {
 		errs = append(errs, errors.New("KAGENT_ACTOR_ATESPACE must be a DNS label"))
 	}
 	return errs
-}
-
-// PreviewOrigin returns the scheme, lower-case host name and port (empty when the base URL has
-// none) of the preview base URL.
-func (p Preview) PreviewOrigin() (scheme, host, port string) {
-	u, err := url.Parse(p.BaseURL)
-	if err != nil {
-		return "", "", ""
-	}
-	return strings.ToLower(u.Scheme), strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), u.Port()
 }

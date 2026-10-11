@@ -51,7 +51,7 @@ var (
 		"authorization": true, "proxy-authorization": true, "cookie": true, "forwarded": true,
 		"x-real-ip": true, "x-user-id": true,
 	}
-	privateHeaderPrefixes = []string{"tailscale-", "x-forwarded-"}
+	privateHeaderPrefixes = []string{"tailscale-", "x-forwarded-", "x-envoy-"}
 )
 
 func privateHeader(name string) bool {
@@ -90,6 +90,13 @@ func (p *Proxy) reverseProxy() *httputil.ReverseProxy {
 					delete(out.Header, name)
 				}
 			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			// A dev server must not set cookies on the owner's domain: a Domain-scoped Set-Cookie
+			// would reach the owner's other apps. Mainloop uses no cookies, so nothing needs one.
+			// This runs for the WebSocket 101 as well.
+			resp.Header.Del("Set-Cookie")
+			return nil
 		},
 		Transport: tr,
 		// Dev servers stream (HMR, SSE); never hold a chunk back.

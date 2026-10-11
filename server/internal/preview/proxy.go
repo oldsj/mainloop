@@ -128,6 +128,10 @@ func (p *Proxy) resolve(ctx context.Context, workspaceID string) (target, error)
 }
 
 func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
+	if refusedMethod(r.Method) {
+		refuse(w, http.StatusMethodNotAllowed, "Preview method not allowed")
+		return
+	}
 	upgrade := r.Header.Get("Upgrade") != ""
 	if upgrade && (!isWebSocket(r) || r.Method != http.MethodGet) {
 		refuse(w, http.StatusBadRequest, "Unsupported protocol upgrade")
@@ -160,7 +164,8 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 		var unc *workspaces.UnconfirmedError
 		var rej *workspaces.RejectedError
 		switch {
-		case errors.As(err, &unc):
+		case errors.As(err, &unc), errors.Is(err, workspaces.ErrBusy):
+			// Another operation (an idle suspend, say) is in flight; this clears on its own.
 			wakingPage(w)
 		case errors.As(err, &rej):
 			refuse(w, http.StatusConflict, "Workspace cannot be resumed")
@@ -181,6 +186,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 
 func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
+// refusedMethod reports methods refused outright: a browser cannot send them, and a dev server has
+// no use for them. CONNECT would otherwise reach the dev server as a tunnel request of its own.
+func refusedMethod(m string) bool {
+	return m == http.MethodConnect || m == http.MethodTrace || m == "TRACK"
 }
 
 func isWebSocket(r *http.Request) bool {

@@ -258,11 +258,13 @@ func TestPrivateHeadersNeverReachTheDevServer(t *testing.T) {
 		"Authorization": "Bearer s", "Proxy-Authorization": "x", "Cookie": "sid=1", "Forwarded": "for=1.2.3.4",
 		"X-Forwarded-For": "1.2.3.4", "X-Forwarded-Host": "h", "X-Forwarded-Proto": "https", "X-Real-Ip": "1.2.3.4",
 		"X-User-Id": "owner-1", "Tailscale-User-Login": "me@example.test", "Tailscale-User-Name": "Me",
-		"X-Csrf-Token": "keep", "X-Requested-With": "XMLHttpRequest", "Accept": "text/html",
+		"X-Envoy-External-Address": "1.2.3.4", "X-Csrf-Token": "keep", "X-Requested-With": "XMLHttpRequest",
+		"Accept": "text/html",
 	})
 	for _, name := range []string{
 		"Authorization", "Proxy-Authorization", "Cookie", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host",
 		"X-Forwarded-Proto", "X-Real-Ip", "X-User-Id", "Tailscale-User-Login", "Tailscale-User-Name",
+		"X-Envoy-External-Address",
 	} {
 		if v := got.Values(name); len(v) != 0 {
 			t.Errorf("%s reached the dev server: %v", name, v)
@@ -374,12 +376,16 @@ func TestRequestBodyCap(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge || len(e.router.seen()) != 0 {
 		t.Fatalf("declared oversize: got %d with %d tunnels", rec.Code, len(e.router.seen()))
 	}
-	// Unknown length (chunked) that runs over: cut off by the cap, never fully delivered.
+	// Unknown length (chunked) that runs over: cut off by the cap, never fully delivered, and the
+	// client gets the 413.
 	req = httptest.NewRequestWithContext(context.Background(), "POST", "http://"+wsHost+"/", io.LimitReader(zeros{}, maxRequestBytes+1024))
 	req.Host = wsHost
 	req.ContentLength = -1
 	rec = httptest.NewRecorder()
 	e.proxy.Route(e.next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-cap chunked body: got %d, want 413", rec.Code)
+	}
 	if got.Load() > maxRequestBytes {
 		t.Fatalf("dev server received %d bytes, over the cap", got.Load())
 	}
@@ -413,6 +419,13 @@ func TestWakeOnPreview(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" ||
 		!strings.Contains(rec.Body.String(), "waking up") {
 		t.Fatalf("unconfirmed wake: %d %v %q", rec.Code, rec.Header(), rec.Body.String())
+	}
+
+	// Another operation is in flight (an idle suspend, say): the same waking page, not a 502.
+	e.waker.wakeErr = workspaces.ErrBusy
+	rec = e.do("GET", wsHost, "/", nil, nil)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("busy wake: %d %v, want 503 with Retry-After", rec.Code, rec.Header())
 	}
 
 	e.waker.wakeErr = &workspaces.RejectedError{Detail: "gone"}
@@ -528,7 +541,7 @@ func TestWebSocketUpgradeIsRelayedAndHoldsALease(t *testing.T) {
 			return
 		}
 		defer func() { _ = c.Close() }()
-		_, _ = io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_, _ = io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSet-Cookie: s=1; Domain=localhost; HttpOnly\r\n\r\n")
 		line, _ := brw.ReadString('\n')
 		_, _ = io.WriteString(c, "echo:"+line)
 	})))
@@ -552,6 +565,9 @@ func TestWebSocketUpgradeIsRelayedAndHoldsALease(t *testing.T) {
 	}
 	if gotUpgrade != "websocket" || gotKey != "abc" {
 		t.Fatalf("dev server saw Upgrade=%q key=%q", gotUpgrade, gotKey)
+	}
+	if v := resp.Header.Values("Set-Cookie"); len(v) != 0 {
+		t.Fatalf("Set-Cookie reached the client on the 101: %v", v)
 	}
 	if n := e.activeLeases(); n != 1 {
 		t.Fatalf("leases while the socket is open = %d, want 1", n)
@@ -598,6 +614,35 @@ func TestWebSocketRules(t *testing.T) {
 	}
 	if len(e.router.seen()) != 0 {
 		t.Fatal("a refused upgrade opened a tunnel")
+	}
+}
+
+// CONNECT, TRACE and TRACK are refused before any lookup, wake or tunnel.
+func TestRefusedMethodsAreNotLookedUpWokenOrTunnelled(t *testing.T) {
+	e := newEnv(t)
+	for _, m := range []string{"CONNECT", "TRACE", "TRACK"} {
+		if rec := e.do(m, wsHost, "/", nil, nil); rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: got %d, want 405", m, rec.Code)
+		}
+	}
+	if w, tc := e.waker.counts(); w != 0 || tc != 0 || len(e.router.seen()) != 0 {
+		t.Fatalf("wakes=%d touches=%d tunnels=%d, want none", w, tc, len(e.router.seen()))
+	}
+}
+
+// The dev server cannot set cookies on the owner's domain: its Set-Cookie is dropped.
+func TestUpstreamSetCookieIsDropped(t *testing.T) {
+	e := newEnv(t)
+	e.devHandler.Store(http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Set-Cookie", "s=1; Domain=localhost; HttpOnly")
+		_, _ = io.WriteString(w, "ok")
+	})))
+	rec := e.do("GET", wsHost, "/", nil, nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+	if v := rec.Header().Values("Set-Cookie"); len(v) != 0 {
+		t.Fatalf("Set-Cookie reached the client: %v", v)
 	}
 }
 

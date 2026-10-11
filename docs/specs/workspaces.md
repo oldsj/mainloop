@@ -297,9 +297,10 @@ API middleware (so the Host guard, API Origin guard, CORS and body validation ne
 request id, access log and panic recovery still wrap it. Any other host is the API.
 
 - **Host.** `<port>--<workspace>--preview.<domain>` exactly as above, matched case-insensitively
-  against `SUBSTRATE_PREVIEW_BASE_URL`: the scheme's default port or the URL's port must match, the
-  label is at most 63 characters, the port is 1 to 65535 with no leading zero, and the workspace id
-  is a lower-case DNS-label-shaped id that may contain `--`.
+  against `SUBSTRATE_PREVIEW_BASE_URL`: the Host's port must equal the base URL's port, and a base
+  URL with no port means the Host has no port (so `:443` is refused for `https://x`, and no port is
+  refused for `https://x:443`). The label is at most 63 characters, the port is 1 to 65535 with no
+  leading zero, and the workspace id is a lower-case DNS-label-shaped id that may contain `--`.
 - **Admission.** The owner's workspace must exist, not be archived and have a live kagent Session,
   and the port must be in its declared `ports`: `404` otherwise for the workspace, `403` for the
   port. The lookup repeats at every tunnel dial, so a workspace archived or re-bound between the
@@ -307,18 +308,22 @@ request id, access log and panic recovery still wrap it. Any other host is the A
 - **Origin.** As specified above, checked first. A refused WebSocket handshake is an HTTP `403`
   (the Go proxy answers before upgrading, so there is no close code `4403`), and an `Upgrade` that
   is not a `GET` WebSocket handshake is `400`.
+- **Methods.** `CONNECT`, `TRACE` and `TRACK` are `405` before any lookup, wake or tunnel.
 - **Wake.** `workspaces.Service.WakeForPreview`, whose result is trusted for 5 seconds so a page
   load's many requests do not each ask kagent; the idle clock is still touched on each request.
-  Not confirmed in time shows a `503` "Workspace waking up" page with `Retry-After: 2`; a workspace
-  that cannot be resumed is `409`; any other failure is `502`.
+  Not confirmed in time, or another workspace operation is in progress, shows a `503` "Workspace
+  waking up" page with `Retry-After: 2`; a workspace that cannot be resumed is `409`; any other
+  failure is `502`.
 - **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
   `ate-target-actor: <KAGENT_ACTOR_ATESPACE>/session-<kagent session id>`, timed by
   `SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS`. A router refusal before anything was sent is retried
   once, then the waking page; a failure after the request was forwarded is `502` and is never
   replayed. One tunnel per request (no pooling), no compression, streaming responses are flushed
   at once, and the dev server has 60 seconds to start answering.
-- **Headers.** The `Host` sent upstream is `actor-upstream:<port>`; the headers listed above are
-  removed from requests and upgrades, along with hop-by-hop headers.
+- **Headers.** The `Host` sent upstream is `actor-upstream:<port>`. Besides the headers listed above,
+  requests also lose any `X-Envoy-*` header (the gateway's client address), and hop-by-hop headers
+  go. Responses lose every upstream `Set-Cookie`, including on the WebSocket `101`, so a dev server
+  cannot set cookies on the owner's domain.
 - **Request cap.** A body over 10 MiB is `413`: at once when `Content-Length` says so, and cut off
   when a streamed body runs over.
 - **Keep-awake.** A WebSocket takes a lease row (`preview_leases`) when it opens; an HTTP request
