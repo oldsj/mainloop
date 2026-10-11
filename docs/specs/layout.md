@@ -39,3 +39,9 @@ server reports; it never decides a task's state locally.
 - **Updates**: `task:updated` events only prompt a re-read; duplicates are ignored, and after the event stream reconnects the page re-reads every task it holds.
 - **Links**: the session and workspace pages link to the task that owns them (noting when the attempt is superseded), and an Inbox approval card links to its task. Approvals are still answered in the Inbox; the task page only points to it.
 - **Mobile**: the same sections in a single column. Buttons and the provider picker are at least 44px tall.
+
+## React status (F5)
+
+- **Implemented:** the desktop inbox panel is always mounted, so its **Needs you** tab carries the count and polls while the page is visible. The compact Inbox tab shows the same panel. Inbox buttons, links and the reply field are at least 44 px tall.
+- **Not built:** a badge on the compact tab bar, and any header badge on desktop. The shells have no slot for one, and `InboxBadge` is not mounted. Until it is, compact polling stops when the Inbox tab is not open. Details: [inbox.md](inbox.md#react-status-f5).
+- **Not proven:** layout at phone width in a browser. Playwright journeys are deferred to F9.

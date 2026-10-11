@@ -98,3 +98,19 @@ has completed before refresh, the helper authenticates an active ancestor and re
 tree. The terminal leaf keeps its terminal status and cannot submit work; its parent gains
 no leaf receipt or consent. Local PostgreSQL/fake-upstream regressions cover this integration;
 they provide no live-provider proof.
+
+## React status (F5)
+
+Labels: **implemented** means built in `web/src/features/inbox` and covered by component, model or
+poll tests against MSW fakes. Nothing here is live-proven.
+
+- **Implemented:** the **Needs you** list from `GET /attention`. A HITL row shows the shared request card from `features/hitl`. Other queue rows show option buttons, a free-text reply for open questions and plan reviews, a folded plan, and a **View PR** link only for `https` URLs. A row without a queue item links to its task. The empty state says **Nothing needs you**.
+- **Implemented:** the **Activity** view from `GET /activity`, read only while it is open. Provider reports keep the server's `unverified` label and link to their task.
+- **Implemented:** **Dismiss notice** on a queue notice that has no structured request reference, through `POST /queue/{id}/dismiss`. The row is removed and the count drops at once. A failure restores the row and shows the server's reason. A `409` also re-reads attention, so the owner sees the current state.
+- **Implemented:** the count covers unresolved attention only and reads `99+` above 99. Attention polls only while the page is visible, one read at a time, on the shared cadence and deadline. `inbox:updated` refreshes attention and activity.
+- **Not mounted:** the badge component (`InboxBadge`) is built and tested, but no shell slot mounts it. On desktop the count is on the **Needs you** tab, in the always-mounted panel. On compact it shows only while the Inbox tab is open, and polling stops on other tabs. Mounting a tab-bar badge needs a `CompactShell.tsx` change, which is outside F5's scope.
+- **Contract gap:** the response has no `dismissible` field. The client shows Dismiss on the server's rule (`hitl_request` with no `hitl_request_id`), so the rule is copied. A `409` from the server still rolls back and re-reads.
+- **Not built:** the notification toast. The plan drops it (production never creates notification rows, and the inbox covers attention), but F4's result assigned it to F5. The supervisor needs to settle this.
+- **Not built:** the `?inbox` URL parameter from the frozen app. Opening the inbox is local state, with no deep link.
+- **Not built:** skeleton loading, and the **Last checked** and offline timestamps. Loading shows a status line. A failed refresh keeps the rows already shown.
+- **Not proven:** the Playwright journeys for inbox (tabs, badge, Needs you, Activity, dismiss at phone width), deferred to F9 (`web/e2e/**`). Also not proven: live SSE delivery, poll timing in a real browser, and any run against the Go server.

@@ -1,15 +1,26 @@
+import { InboxPanel as InboxFeature } from '@/features/inbox';
+import { SessionsPanel as SessionsFeature } from '@/features/sessions';
 import { RoutePlaceholder } from './RoutePlaceholder';
 
 /**
- * Panels the shells host. Feature slices replace the bodies: sessions (F4), inbox (F5) and
- * projects (F7). The shell only decides where they sit.
+ * Panels the shells host. Feature slices own their bodies: sessions (F4) and inbox (F5). Projects
+ * (F7) is still a placeholder. The shell only decides where they sit. The slot wrappers carry the
+ * test ids, and `contents` keeps the feature's own layout as it was.
  */
 export function SessionsPanel() {
-  return <RoutePlaceholder title="Sessions" slice="F4" testId="sessions-panel" />;
+  return (
+    <div data-testid="sessions-panel" className="contents">
+      <SessionsFeature />
+    </div>
+  );
 }
 
 export function InboxPanel() {
-  return <RoutePlaceholder title="Inbox" slice="F5" testId="inbox-panel" />;
+  return (
+    <div data-testid="inbox-panel" className="contents">
+      <InboxFeature />
+    </div>
+  );
 }
 
 export function ProjectsPanel() {
