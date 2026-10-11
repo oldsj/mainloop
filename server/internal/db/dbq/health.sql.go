@@ -38,6 +38,28 @@ func (q *Queries) AbandonOrphanHealthReceipts(ctx context.Context, arg AbandonOr
 	return result.RowsAffected(), nil
 }
 
+const closeStaleHealthReceipts = `-- name: CloseStaleHealthReceipts :execrows
+UPDATE health_collection
+SET state = 'unavailable', reasons = ARRAY['source_unavailable']::text[], updated_at = now()
+WHERE owner_id = $1 AND gateway = $2 AND state = 'pending' AND receipt_at <= $3::timestamptz
+`
+
+type CloseStaleHealthReceiptsParams struct {
+	OwnerID string
+	Gateway string
+	Since   time.Time
+}
+
+// A receipt still pending after the event window is closed: whatever it could still store would
+// already be expired.
+func (q *Queries) CloseStaleHealthReceipts(ctx context.Context, arg CloseStaleHealthReceiptsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, closeStaleHealthReceipts, arg.OwnerID, arg.Gateway, arg.Since)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countHealthReceiptEvents = `-- name: CountHealthReceiptEvents :one
 SELECT count(*) FROM health_events
 WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND a2a_task_id = $4
@@ -133,36 +155,46 @@ func (q *Queries) DeleteExpiredHealthTurns(ctx context.Context, arg DeleteExpire
 }
 
 const discoverHealthReceipts = `-- name: DiscoverHealthReceipts :execrows
+WITH batch AS (
+    SELECT d.id, d.session_id, d.task_id, d.created_at
+    FROM deliveries AS d
+    WHERE d.state IN ('delivered', 'completed', 'failed', 'cancelled')
+      AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
+      AND d.created_at > $2::timestamptz
+      AND EXISTS (SELECT 1 FROM sessions AS o WHERE o.id = d.session_id AND o.user_id = $3::text)
+      AND NOT EXISTS (
+          SELECT 1 FROM health_collection AS c
+          WHERE c.owner_id = $3::text AND c.gateway = $1::text AND c.session_id = d.session_id
+            AND c.a2a_task_id = d.task_id)
+    ORDER BY d.created_at, d.id
+    LIMIT $4::int
+)
 INSERT INTO health_collection (owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id)
-SELECT s.user_id, $1::text, d.session_id, d.task_id, d.id, d.created_at,
+SELECT s.user_id, $1::text, b.session_id, b.task_id, b.id, b.created_at,
        (CASE WHEN a.id IS NULL THEN s.project_id ELSE t.project_id END)::text
-FROM deliveries AS d
-JOIN sessions AS s ON s.id = d.session_id
+FROM batch AS b
+JOIN sessions AS s ON s.id = b.session_id
 LEFT JOIN task_attempts AS a ON a.session_id = s.id
 LEFT JOIN tasks AS t ON t.id = a.task_id
-WHERE s.user_id = $2::text
-  AND d.state IN ('completed', 'failed', 'cancelled')
-  AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
-  AND d.created_at > $3::timestamptz
-ORDER BY d.created_at, d.id
-LIMIT $4::int
 ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO NOTHING
 `
 
 type DiscoverHealthReceiptsParams struct {
 	Gateway string
-	OwnerID string
 	Since   time.Time
+	OwnerID string
 	MaxRows int32
 }
 
-// Terminal deliveries that carry a kagent task become receipts to collect. A receipt is written
-// once; an existing one (collected, pending or unavailable) is left alone.
+// Deliveries that carry a kagent task, finished or still running, become receipts to collect. A
+// receipt is written once. Deliveries that already have one are excluded before the LIMIT, so a
+// window holding more than one batch of them never hides the newer ones; the walk follows the
+// deliveries_health index in created_at order and sorts nothing.
 func (q *Queries) DiscoverHealthReceipts(ctx context.Context, arg DiscoverHealthReceiptsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, discoverHealthReceipts,
 		arg.Gateway,
-		arg.OwnerID,
 		arg.Since,
+		arg.OwnerID,
 		arg.MaxRows,
 	)
 	if err != nil {
@@ -438,6 +470,7 @@ func (q *Queries) InsertHealthEvent(ctx context.Context, arg InsertHealthEventPa
 
 const listDueHealthReceipts = `-- name: ListDueHealthReceipts :many
 SELECT c.session_id, c.a2a_task_id, c.delivery_id, c.receipt_at, c.attempts,
+       (d.state IN ('completed', 'failed', 'cancelled'))::bool AS delivery_final,
        d.kagent_session_id AS runtime_session_id, b.kind, b.role,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM health_collection AS c
@@ -464,6 +497,7 @@ type ListDueHealthReceiptsRow struct {
 	DeliveryID              string
 	ReceiptAt               time.Time
 	Attempts                int32
+	DeliveryFinal           bool
 	RuntimeSessionID        *string
 	Kind                    string
 	Role                    dbstate.BindingRole
@@ -494,6 +528,7 @@ func (q *Queries) ListDueHealthReceipts(ctx context.Context, arg ListDueHealthRe
 			&i.DeliveryID,
 			&i.ReceiptAt,
 			&i.Attempts,
+			&i.DeliveryFinal,
 			&i.RuntimeSessionID,
 			&i.Kind,
 			&i.Role,
@@ -606,7 +641,7 @@ func (q *Queries) ListHealthEventRows(ctx context.Context, arg ListHealthEventRo
 const listHealthExpectedReceipts = `-- name: ListHealthExpectedReceipts :many
 SELECT session_id, count(*)::int AS expected
 FROM deliveries
-WHERE session_id = ANY($1::text[]) AND task_id IS NOT NULL
+WHERE session_id = ANY($1::text[]) AND task_id IS NOT NULL AND kagent_session_id IS NOT NULL
   AND state IN ('completed', 'failed', 'cancelled') AND created_at > $2::timestamptz
 GROUP BY session_id
 `
@@ -621,7 +656,7 @@ type ListHealthExpectedReceiptsRow struct {
 	Expected  int32
 }
 
-// Turns that should have left a receipt: terminal deliveries that carry a kagent task.
+// Turns that should have left a receipt: the finished deliveries discovery tracks.
 func (q *Queries) ListHealthExpectedReceipts(ctx context.Context, arg ListHealthExpectedReceiptsParams) ([]ListHealthExpectedReceiptsRow, error) {
 	rows, err := q.db.Query(ctx, listHealthExpectedReceipts, arg.SessionIds, arg.Since)
 	if err != nil {
@@ -1173,29 +1208,39 @@ func (q *Queries) SmokePushConfirmed(ctx context.Context, arg SmokePushConfirmed
 
 const upsertHealthReceipt = `-- name: UpsertHealthReceipt :exec
 INSERT INTO health_collection (
-    owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id, state, reasons, attempts, collected_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, 'collected', $8::text[], 0, now())
+    owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id, state, reasons, attempts,
+    next_attempt_at, collected_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8::bool THEN 'pending' ELSE 'collected' END, $9::text[], 0,
+    $10::timestamptz, CASE WHEN $8::bool THEN NULL ELSE now() END)
 ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO UPDATE SET
-    state = 'collected',
-    reasons = excluded.reasons,
+    state = CASE WHEN NOT $8::bool OR health_collection.state = 'collected' THEN 'collected' ELSE 'pending' END,
+    reasons = CASE WHEN $8::bool AND health_collection.state = 'collected' THEN health_collection.reasons ELSE excluded.reasons END,
     project_id = excluded.project_id,
-    collected_at = now(),
+    attempts = CASE WHEN health_collection.state = 'collected' THEN health_collection.attempts ELSE 0 END,
+    next_attempt_at = CASE WHEN health_collection.state = 'collected' OR NOT $8::bool
+        THEN health_collection.next_attempt_at ELSE excluded.next_attempt_at END,
+    collected_at = CASE WHEN $8::bool THEN health_collection.collected_at ELSE now() END,
     updated_at = now()
 `
 
 type UpsertHealthReceiptParams struct {
-	OwnerID    string
-	Gateway    string
-	SessionID  string
-	A2aTaskID  string
-	DeliveryID string
-	ReceiptAt  time.Time
-	ProjectID  *string
-	Reasons    []string
+	OwnerID       string
+	Gateway       string
+	SessionID     string
+	A2aTaskID     string
+	DeliveryID    string
+	ReceiptAt     time.Time
+	ProjectID     *string
+	Open          bool
+	Reasons       []string
+	NextAttemptAt time.Time
 }
 
-// The receipt of a task: written by the collector when it stores the task's events. A receipt the
-// sweep already knows keeps its delivery and moves to collected.
+// The receipt of a task: written by the collector when it stores the task's events. A read of a
+// finished turn (@open false) makes the receipt collected for good. A read of a turn still running
+// leaves it pending, due again at @next_attempt_at, with its failure count cleared; it never takes
+// a collected receipt back.
 func (q *Queries) UpsertHealthReceipt(ctx context.Context, arg UpsertHealthReceiptParams) error {
 	_, err := q.db.Exec(ctx, upsertHealthReceipt,
 		arg.OwnerID,
@@ -1205,7 +1250,9 @@ func (q *Queries) UpsertHealthReceipt(ctx context.Context, arg UpsertHealthRecei
 		arg.DeliveryID,
 		arg.ReceiptAt,
 		arg.ProjectID,
+		arg.Open,
 		arg.Reasons,
+		arg.NextAttemptAt,
 	)
 	return err
 }

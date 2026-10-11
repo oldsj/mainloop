@@ -14,9 +14,10 @@
 --     same payload is a no-op while the same id with a different payload is an identity conflict.
 --     The event rows are the source of truth; a turn summary is a pure function of them, so a
 --     summary can always be rebuilt (aggregation_version records which rules built it).
---   * Collection is durable intent, not a queue. A terminal delivery that carries a kagent task
---     gets one health_collection row (pending). The recovery sweep reads the task from kagent with
---     no transaction open, then writes the events and marks the row collected in one transaction.
+--   * Collection is durable intent, not a queue. A delivery that carries a kagent task
+--     (running or finished) gets one health_collection row (pending). The recovery sweep reads the
+--     task from kagent with no transaction open, then writes the events in one transaction. A task
+--     still running stays pending and is read again soon; a finished one is marked collected.
 --     A failure leaves the row pending with a growing delay and records source_unavailable; a row
 --     that keeps failing becomes unavailable, which stays visible as a gap. Nothing in memory is
 --     lost by a restart.
@@ -28,9 +29,11 @@
 --
 -- State machine (the health package owns the transitions):
 --   health_collection.state
---     pending      the receipt is known and has not been read from kagent yet (or the read failed)
+--     pending      the receipt is known and not read from kagent yet, its turn is still running, or the
+--                  last read failed
 --     collected    the task was read and its events stored (final)
---     unavailable  kagent could not give the task after the attempts allowed (final)
+--     unavailable  kagent could not give the task after the attempts allowed, or the receipt aged
+--                  out of the event window before it was read (final)
 
 CREATE TABLE health_events (
     owner_id text NOT NULL,

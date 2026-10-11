@@ -57,6 +57,10 @@ type Input struct {
 	// not stored.
 	Now            time.Time
 	EventRetention time.Duration
+	// Open says the delivery has not finished: the task may still produce observations. The receipt
+	// then stays pending and is due again at Now+RereadAfter; a finished read (Open false) closes it.
+	Open        bool
+	RereadAfter time.Duration
 }
 
 // Result says what an Ingest stored.
@@ -253,6 +257,7 @@ func Ingest(ctx context.Context, tx pgx.Tx, in Input) (Result, error) {
 	if err := q.UpsertHealthReceipt(ctx, dbq.UpsertHealthReceiptParams{
 		OwnerID: in.OwnerID, Gateway: in.Gateway, SessionID: in.SessionID, A2aTaskID: in.TaskID,
 		DeliveryID: in.DeliveryID, ReceiptAt: in.ReceiptAt, ProjectID: projectID, Reasons: res.Reasons,
+		Open: in.Open, NextAttemptAt: in.Now.Add(in.RereadAfter),
 	}); err != nil {
 		return Result{}, fmt.Errorf("health: write receipt: %w", err)
 	}

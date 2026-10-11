@@ -187,13 +187,13 @@ func (s *Service) groups(sessions []dbq.ListHealthSessionsRow, unassigned []dbq.
 		if r.AttemptID != nil {
 			project = r.TaskProjectID
 		}
-		entry := api.HealthSession{SessionId: str(r.ID), Provider: r.Provider, ProjectId: project, TaskId: r.TaskID, AttemptId: r.AttemptID}
+		entry := api.HealthSession{SessionId: str(r.ID), Provider: r.Provider, ProjectId: project, TaskId: r.TaskID, AttemptId: r.AttemptID, Title: str(r.Title)}
 		var title *string
 		key := "unassigned:" + r.ID
 		switch {
 		case r.TaskID != nil:
 			key = *r.TaskID
-			entry.Title, entry.TaskTitle = str(r.Title), r.TaskTitle
+			entry.TaskTitle = r.TaskTitle
 			title = nonEmpty(r.TaskTitle)
 			if title == nil {
 				title = str(r.Title)

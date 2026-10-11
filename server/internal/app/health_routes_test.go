@@ -134,8 +134,8 @@ func TestOrchestrationHealthRoute(t *testing.T) {
 		t.Errorf("totals = %v", tm)
 	}
 	session := row.(map[string]any)["sessions"].([]any)[0]
-	// task_title is optional in the contract and absent for a session with no task, and the title of an unassigned session is not exposed.
-	sameKeys(t, "session", session, "session_id", "provider", "project_id", "task_id", "attempt_id", "totals")
+	// task_title is optional in the contract and absent for a session with no task; the session title is always there.
+	sameKeys(t, "session", session, "session_id", "provider", "project_id", "task_id", "attempt_id", "title", "totals")
 
 	// A filter that matches nothing is an empty page, not an error.
 	r = send(h, "GET", "/orchestration-health?provider=codex&hours=168", "", nil)

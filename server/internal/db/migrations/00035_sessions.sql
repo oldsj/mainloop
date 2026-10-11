@@ -96,6 +96,10 @@ WHERE state IN ('recorded', 'sending', 'delivered');
 CREATE INDEX deliveries_claim ON deliveries (next_attempt_at, id)
 WHERE state IN ('recorded', 'sending', 'delivered', 'uncertain');
 CREATE INDEX deliveries_session ON deliveries (session_id, created_at DESC);
+-- The health collector's discovery walk: deliveries that carry a kagent task, in creation order.
+CREATE INDEX deliveries_health ON deliveries (created_at, id)
+WHERE task_id IS NOT NULL AND kagent_session_id IS NOT NULL
+  AND state IN ('delivered', 'completed', 'failed', 'cancelled');
 
 -- One main thread. The partial index is the backstop for the ensure step's advisory lock. It is
 -- global, not per owner: agent_bindings has no owner column, and the deployment has one owner. The

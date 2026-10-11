@@ -15,9 +15,9 @@ import (
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
-// RecoverSweep is the collector as a reconcile sweep. Every terminal delivery that carries a kagent
-// task becomes a receipt row (state pending), and each pending receipt is read from kagent and
-// stored. The receipt rows are the durable queue: a restart, a crash or a lost read leaves the row
+// RecoverSweep is the collector as a reconcile sweep. Every delivery that carries a kagent task,
+// running or finished, becomes a receipt row (state pending), and each pending receipt is read from
+// kagent and stored; a running turn is read again until it ends. The receipt rows are the durable queue: a restart, a crash or a lost read leaves the row
 // pending, and the next pass picks it up. Only one process runs a pass at a time (the runner holds
 // the sweep's advisory lock).
 func (s *Service) RecoverSweep() reconcile.Sweep {
@@ -45,6 +45,9 @@ func (s *Service) Recover(ctx context.Context) error {
 		Gateway: s.Gateway, OwnerID: s.OwnerID, Since: since, MaxRows: discoverBatch,
 	}); err != nil {
 		return fmt.Errorf("health: discover receipts: %w", err)
+	}
+	if _, err := q.CloseStaleHealthReceipts(ctx, dbq.CloseStaleHealthReceiptsParams{OwnerID: s.OwnerID, Gateway: s.Gateway, Since: since}); err != nil {
+		return fmt.Errorf("health: close stale receipts: %w", err)
 	}
 	if _, err := q.AbandonOrphanHealthReceipts(ctx, dbq.AbandonOrphanHealthReceiptsParams{OwnerID: s.OwnerID, Gateway: s.Gateway}); err != nil {
 		return fmt.Errorf("health: abandon receipts: %w", err)
@@ -87,6 +90,7 @@ func (s *Service) collect(ctx context.Context, r dbq.ListDueHealthReceiptsRow) e
 		OwnerID: s.OwnerID, Gateway: s.Gateway, SessionID: r.SessionID, DeliveryID: r.DeliveryID, ReceiptAt: r.ReceiptAt,
 		TaskID: r.A2aTaskID, ContextID: task.ContextID, RuntimeSessionID: runtimeSession, Artifacts: task.Artifacts,
 		Now: s.now(), EventRetention: s.EventRetention,
+		Open: !r.DeliveryFinal, RereadAfter: orDefault(s.FirstBackoff, defaultFirstBackoff),
 	}
 	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		_, err := Ingest(ctx, tx, in)

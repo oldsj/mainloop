@@ -57,41 +57,60 @@ ON CONFLICT (owner_id, gateway, session_id, a2a_task_id, turn_key) DO UPDATE SET
     occurred_at = excluded.occurred_at
 WHERE NOT health_turns.frozen;
 
--- The receipt of a task: written by the collector when it stores the task's events. A receipt the
--- sweep already knows keeps its delivery and moves to collected.
+-- The receipt of a task: written by the collector when it stores the task's events. A read of a
+-- finished turn (@open false) makes the receipt collected for good. A read of a turn still running
+-- leaves it pending, due again at @next_attempt_at, with its failure count cleared; it never takes
+-- a collected receipt back.
 -- name: UpsertHealthReceipt :exec
 INSERT INTO health_collection (
-    owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id, state, reasons, attempts, collected_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, 'collected', @reasons::text[], 0, now())
+    owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id, state, reasons, attempts,
+    next_attempt_at, collected_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, CASE WHEN @open::bool THEN 'pending' ELSE 'collected' END, @reasons::text[], 0,
+    @next_attempt_at::timestamptz, CASE WHEN @open::bool THEN NULL ELSE now() END)
 ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO UPDATE SET
-    state = 'collected',
-    reasons = excluded.reasons,
+    state = CASE WHEN NOT @open::bool OR health_collection.state = 'collected' THEN 'collected' ELSE 'pending' END,
+    reasons = CASE WHEN @open::bool AND health_collection.state = 'collected' THEN health_collection.reasons ELSE excluded.reasons END,
     project_id = excluded.project_id,
-    collected_at = now(),
+    attempts = CASE WHEN health_collection.state = 'collected' THEN health_collection.attempts ELSE 0 END,
+    next_attempt_at = CASE WHEN health_collection.state = 'collected' OR NOT @open::bool
+        THEN health_collection.next_attempt_at ELSE excluded.next_attempt_at END,
+    collected_at = CASE WHEN @open::bool THEN health_collection.collected_at ELSE now() END,
     updated_at = now();
 
--- Terminal deliveries that carry a kagent task become receipts to collect. A receipt is written
--- once; an existing one (collected, pending or unavailable) is left alone.
+-- Deliveries that carry a kagent task, finished or still running, become receipts to collect. A
+-- receipt is written once. Deliveries that already have one are excluded before the LIMIT, so a
+-- window holding more than one batch of them never hides the newer ones; the walk follows the
+-- deliveries_health index in created_at order and sorts nothing.
 -- name: DiscoverHealthReceipts :execrows
+WITH batch AS (
+    SELECT d.id, d.session_id, d.task_id, d.created_at
+    FROM deliveries AS d
+    WHERE d.state IN ('delivered', 'completed', 'failed', 'cancelled')
+      AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
+      AND d.created_at > @since::timestamptz
+      AND EXISTS (SELECT 1 FROM sessions AS o WHERE o.id = d.session_id AND o.user_id = @owner_id::text)
+      AND NOT EXISTS (
+          SELECT 1 FROM health_collection AS c
+          WHERE c.owner_id = @owner_id::text AND c.gateway = @gateway::text AND c.session_id = d.session_id
+            AND c.a2a_task_id = d.task_id)
+    ORDER BY d.created_at, d.id
+    LIMIT @max_rows::int
+)
 INSERT INTO health_collection (owner_id, gateway, session_id, a2a_task_id, delivery_id, receipt_at, project_id)
-SELECT s.user_id, @gateway::text, d.session_id, d.task_id, d.id, d.created_at,
+SELECT s.user_id, @gateway::text, b.session_id, b.task_id, b.id, b.created_at,
        (CASE WHEN a.id IS NULL THEN s.project_id ELSE t.project_id END)::text
-FROM deliveries AS d
-JOIN sessions AS s ON s.id = d.session_id
+FROM batch AS b
+JOIN sessions AS s ON s.id = b.session_id
 LEFT JOIN task_attempts AS a ON a.session_id = s.id
 LEFT JOIN tasks AS t ON t.id = a.task_id
-WHERE s.user_id = @owner_id::text
-  AND d.state IN ('completed', 'failed', 'cancelled')
-  AND d.task_id IS NOT NULL AND d.kagent_session_id IS NOT NULL
-  AND d.created_at > @since::timestamptz
-ORDER BY d.created_at, d.id
-LIMIT @max_rows::int
 ON CONFLICT (owner_id, gateway, session_id, a2a_task_id) DO NOTHING;
 
 -- The receipts due for a read, oldest first, with what is needed to find the Agent that owns the
 -- task (as the HITL observer does).
 -- name: ListDueHealthReceipts :many
 SELECT c.session_id, c.a2a_task_id, c.delivery_id, c.receipt_at, c.attempts,
+       (d.state IN ('completed', 'failed', 'cancelled'))::bool AS delivery_final,
        d.kagent_session_id AS runtime_session_id, b.kind, b.role,
        w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM health_collection AS c
@@ -113,6 +132,13 @@ SET attempts = attempts + 1,
     next_attempt_at = @next_attempt_at::timestamptz,
     updated_at = now()
 WHERE owner_id = $1 AND gateway = $2 AND session_id = $3 AND a2a_task_id = $4 AND state = 'pending';
+
+-- A receipt still pending after the event window is closed: whatever it could still store would
+-- already be expired.
+-- name: CloseStaleHealthReceipts :execrows
+UPDATE health_collection
+SET state = 'unavailable', reasons = ARRAY['source_unavailable']::text[], updated_at = now()
+WHERE owner_id = $1 AND gateway = $2 AND state = 'pending' AND receipt_at <= @since::timestamptz;
 
 -- A receipt whose session, binding or delivery is gone cannot be read again.
 -- name: AbandonOrphanHealthReceipts :execrows
@@ -239,11 +265,11 @@ WHERE health_collection.owner_id = $1 AND health_collection.session_id = ANY(@se
              AND t.session_id = health_collection.session_id AND t.a2a_task_id = health_collection.a2a_task_id
              AND t.occurred_at > @since::timestamptz));
 
--- Turns that should have left a receipt: terminal deliveries that carry a kagent task.
+-- Turns that should have left a receipt: the finished deliveries discovery tracks.
 -- name: ListHealthExpectedReceipts :many
 SELECT session_id, count(*)::int AS expected
 FROM deliveries
-WHERE session_id = ANY(@session_ids::text[]) AND task_id IS NOT NULL
+WHERE session_id = ANY(@session_ids::text[]) AND task_id IS NOT NULL AND kagent_session_id IS NOT NULL
   AND state IN ('completed', 'failed', 'cancelled') AND created_at > @since::timestamptz
 GROUP BY session_id;
 
