@@ -83,6 +83,10 @@ type SessionError struct {
 	Op     string
 	Code   connect.Code // equals the gRPC status
 	Detail string
+	// Wire is true when kagent itself sent the status. connect also synthesizes codes on the client,
+	// for example InvalidArgument for a reply it could not decode or that was cut short; those prove
+	// nothing about what kagent did.
+	Wire bool
 }
 
 func (e *SessionError) Error() string {
@@ -212,7 +216,7 @@ func classifyConnect(op string, err error) error {
 		// connect reports its own cancellation and transport failures this way.
 		return &OutcomeUnknown{Op: op, Detail: errorKind(err), Err: err}
 	}
-	return &SessionError{Op: op, Code: code, Detail: ce.Message()}
+	return &SessionError{Op: op, Code: code, Detail: ce.Message(), Wire: connect.IsWireError(err)}
 }
 
 // classifyRPCError turns a JSON-RPC error object into a typed error by its ErrorInfo. A JSON-RPC

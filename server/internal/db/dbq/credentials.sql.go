@@ -98,6 +98,48 @@ func (q *Queries) GetMCPActor(ctx context.Context, tokenHash string) (GetMCPActo
 	return i, err
 }
 
+const lockAgentBinding = `-- name: LockAgentBinding :one
+SELECT session_id, kind, role, mcp_grant_kind, parent_session_id, topic_id, kagent_session_id, kagent_request_id, model, standing_hash, turns, queue_held, child_start_failure, reported_at, kagent_deleted_at, created_at, updated_at, kagent_agent_namespace, kagent_agent_name, kagent_create_request_id, kagent_create_agent_namespace, kagent_create_agent_name, main_pending, main_error, main_recoverable, credential_identity, main_released_at FROM agent_bindings WHERE session_id = $1 FOR SHARE
+`
+
+// The binding row, locked FOR SHARE until the credential plan commits. A main-provider switch
+// updates this row (it moves the credential identity on), so it waits for the plan, and a plan
+// that comes after it reads the new identity instead of a stale one.
+func (q *Queries) LockAgentBinding(ctx context.Context, sessionID string) (AgentBinding, error) {
+	row := q.db.QueryRow(ctx, lockAgentBinding, sessionID)
+	var i AgentBinding
+	err := row.Scan(
+		&i.SessionID,
+		&i.Kind,
+		&i.Role,
+		&i.MCPGrantKind,
+		&i.ParentSessionID,
+		&i.TopicID,
+		&i.KagentSessionID,
+		&i.KagentRequestID,
+		&i.Model,
+		&i.StandingHash,
+		&i.Turns,
+		&i.QueueHeld,
+		&i.ChildStartFailure,
+		&i.ReportedAt,
+		&i.KagentDeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentAgentNamespace,
+		&i.KagentAgentName,
+		&i.KagentCreateRequestID,
+		&i.KagentCreateAgentNamespace,
+		&i.KagentCreateAgentName,
+		&i.MainPending,
+		&i.MainError,
+		&i.MainRecoverable,
+		&i.CredentialIdentity,
+		&i.MainReleasedAt,
+	)
+	return i, err
+}
+
 const lockPublishedCredential = `-- name: LockPublishedCredential :one
 SELECT id FROM credentials WHERE id = $1 AND state = 'published' FOR SHARE
 `

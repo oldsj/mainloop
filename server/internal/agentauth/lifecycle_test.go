@@ -348,3 +348,38 @@ func TestIssueBoundsTheSecretCreate(t *testing.T) {
 		t.Fatalf("create deadline = %v (set %v), want one under a minute", rec.deadline, rec.has)
 	}
 }
+
+// An Issue for the old native identity that straddles a main-provider switch waits for the switch
+// and is refused, instead of planning a credential for an identity the binding already left.
+func TestIssueForAnIdentityWaitsForASwitchInFlightAndIsRefused(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	ctx := context.Background()
+	s := env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination})
+	freeName(t, env, s)
+
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE agent_bindings SET credential_identity = 'next' WHERE session_id = $1`, s.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := env.Creds.IssueFor(ctx, s.SessionID, dbstate.CredentialMCP, ""); done <- err }()
+	select {
+	case err := <-done:
+		t.Fatalf("IssueFor returned %v before the switch committed", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, agentauth.ErrRevoked) {
+		t.Fatalf("IssueFor err = %v, want ErrRevoked", err)
+	}
+	if live, err := dbq.New(d.Pool).GetLiveCredential(ctx, dbq.GetLiveCredentialParams{BindingID: s.SessionID, Kind: dbstate.CredentialMCP}); err == nil {
+		t.Fatalf("a credential %s was planned for the retired identity", live.ID)
+	}
+}

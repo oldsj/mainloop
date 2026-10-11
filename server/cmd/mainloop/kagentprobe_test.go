@@ -39,16 +39,18 @@ func TestKagentProbeReportsTheAgentAndSessions(t *testing.T) {
 	}
 }
 
-func TestKagentProbeFailsWhenTheAgentIsMissing(t *testing.T) {
+func TestKagentProbeReportsBothAgentsWhenBothAreMissing(t *testing.T) {
 	srv := kagenttest.New()
 	defer srv.Close()
 	var out bytes.Buffer
 	err := kagentProbe(context.Background(), probeSettings(srv.URL), &out)
-	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main") {
-		t.Fatalf("got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main:") || !strings.Contains(err.Error(), "get agent kagent/mainloop-main-codex:") {
+		t.Fatalf("got %v, want both agents named", err)
 	}
-	if out.Len() != 0 {
-		t.Errorf("printed %q on failure", out.String())
+	for _, want := range []string{"agent kagent/mainloop-main: UNAVAILABLE", "agent kagent/mainloop-main-codex: UNAVAILABLE"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output %q lacks %q", out.String(), want)
+		}
 	}
 }
 
@@ -58,11 +60,27 @@ func TestKagentProbeFailsWhenTheCodexMainIsMissing(t *testing.T) {
 	srv.AddAgent("kagent", "mainloop-main")
 	var out bytes.Buffer
 	err := kagentProbe(context.Background(), probeSettings(srv.URL), &out)
-	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main-codex") {
+	if err == nil || !strings.Contains(err.Error(), "get agent kagent/mainloop-main-codex") || strings.Contains(err.Error(), "kagent/mainloop-main:") {
 		t.Fatalf("got %v", err)
 	}
-	if out.Len() != 0 {
-		t.Errorf("printed %q on failure", out.String())
+	if !strings.Contains(out.String(), "agent kagent/mainloop-main: found") || !strings.Contains(out.String(), "agent kagent/mainloop-main-codex: UNAVAILABLE") {
+		t.Errorf("output %q", out.String())
+	}
+}
+
+// An Agent that exists but has no ready revision cannot create Sessions, so it is not "found".
+func TestKagentProbeFailsForAnAgentThatIsNotReady(t *testing.T) {
+	srv := kagenttest.New()
+	defer srv.Close()
+	srv.AddAgentNotReady("kagent", "mainloop-main")
+	srv.AddAgentNotReady("kagent", "mainloop-main-codex")
+	var out bytes.Buffer
+	err := kagentProbe(context.Background(), probeSettings(srv.URL), &out)
+	if err == nil || strings.Count(err.Error(), "no ready revision") != 2 {
+		t.Fatalf("got %v, want both agents reported as not ready", err)
+	}
+	if strings.Contains(out.String(), "found") || !strings.Contains(out.String(), "agent kagent/mainloop-main-codex: UNAVAILABLE") {
+		t.Errorf("output %q", out.String())
 	}
 }
 

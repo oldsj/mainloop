@@ -168,7 +168,9 @@ func (c *Credentials) plan(ctx context.Context, bindingID string, kind dbstate.C
 	var row dbq.Credential
 	err := db.InTx(ctx, c.Pool, func(tx pgx.Tx) error {
 		q := dbq.New(tx)
-		b, err := q.GetAgentBinding(ctx, bindingID)
+		// The binding is locked FOR SHARE before its identity is compared, so a switch that moves the
+		// identity on cannot commit between the comparison and the credential that follows.
+		b, err := q.LockAgentBinding(ctx, bindingID)
 		if err != nil {
 			return fmt.Errorf("agentauth: read binding: %w", err)
 		}

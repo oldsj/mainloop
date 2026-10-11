@@ -34,6 +34,7 @@ const host = "mainloop-mcp.test"
 type harness struct {
 	env     *authtest.Env
 	handler http.Handler
+	auth    *agentauth.Authenticator
 }
 
 func newHarness(t *testing.T, mergeTools bool) *harness {
@@ -85,7 +86,7 @@ func buildHarness(t *testing.T, mergeTools, realDepth bool, mod func(*mcpserver.
 	if mod != nil {
 		mod(srv, d.Pool)
 	}
-	return &harness{env: env, handler: srv.Handler()}
+	return &harness{env: env, handler: srv.Handler(), auth: auth}
 }
 
 // rpc is the parts of a JSON-RPC reply the tests read.

@@ -108,6 +108,44 @@ func (q *Queries) ClearMainSwitchError(ctx context.Context, arg ClearMainSwitchE
 	return result.RowsAffected(), nil
 }
 
+const clearUnprovenMainPin = `-- name: ClearUnprovenMainPin :execrows
+UPDATE agent_bindings b
+SET kagent_agent_namespace = NULL, kagent_agent_name = NULL, updated_at = now()
+FROM deliveries d
+WHERE d.id = $1 AND d.lease_owner = $2 AND d.attempts = $3
+  AND b.session_id = d.session_id
+  AND b.role = 'main' AND NOT b.main_pending
+  AND b.kagent_session_id IS NULL AND b.kagent_request_id IS NULL
+  AND b.kagent_agent_namespace = $4 AND b.kagent_agent_name = $5
+`
+
+type ClearUnprovenMainPinParams struct {
+	ID             string
+	LeaseOwner     *string
+	Attempts       int32
+	AgentNamespace *string
+	AgentName      *string
+}
+
+// A first-use main pins the Agent its first create names (MarkCreateRequested). When kagent
+// proves that create was refused before it reserved anything, the pin was never confirmed by a
+// Session, so it is dropped and the next create follows the configured Agent again. A main that has
+// had a Session (a replacement has a request id of its own) or a switch in flight keeps its pin.
+// Fenced like MarkCreateRequested.
+func (q *Queries) ClearUnprovenMainPin(ctx context.Context, arg ClearUnprovenMainPinParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearUnprovenMainPin,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.AgentNamespace,
+		arg.AgentName,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countMainBlockingWork = `-- name: CountMainBlockingWork :one
 SELECT
     (SELECT count(*) FROM deliveries d

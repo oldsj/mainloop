@@ -308,6 +308,16 @@ func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, err
 		Credentials: creds,
 	})
 	if err != nil {
+		// A create kagent refused before reserving anything leaves the first-use pin unproven, so
+		// a configuration fix takes effect on the next create.
+		var se *kagent.SessionError
+		if errors.As(err, &se) && createRejectedBeforeReservation(se) {
+			if _, cerr := dbq.New(t.s.Pool).ClearUnprovenMainPin(ctx, dbq.ClearUnprovenMainPinParams{
+				ID: id, LeaseOwner: owner, Attempts: attempts, AgentNamespace: &t.agent.Namespace, AgentName: &t.agent.Name,
+			}); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("clear the unproven Agent pin: %w", cerr))
+			}
+		}
 		return nil, err
 	}
 	if err := lost(dbq.New(t.s.Pool).SetDeliveryKagentSession(ctx, dbq.SetDeliveryKagentSessionParams{
@@ -1027,6 +1037,11 @@ func (t *turn) mcpCredentials(ctx context.Context) ([]*kagentapi.SessionCredenti
 // back with nothing stored. A refusal that its request id belongs to a deleted Session is the other
 // FAILED_PRECONDITION; see createHitDeleted.
 func createRejectedBeforeReservation(e *kagent.SessionError) bool {
+	// Only a status kagent sent counts: connect synthesizes InvalidArgument for a reply it cannot
+	// decode, and then the create may have committed.
+	if !e.Wire {
+		return false
+	}
 	return e.Code == connect.CodeInvalidArgument || (e.Code == connect.CodeFailedPrecondition && !createHitDeleted(e))
 }
 

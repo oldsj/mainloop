@@ -82,3 +82,9 @@ RETURNING id;
 -- row, so it waits for the write transaction that holds this lock, and a write that starts after
 -- the revoke finds no published row.
 SELECT id FROM credentials WHERE id = $1 AND state = 'published' FOR SHARE;
+
+-- name: LockAgentBinding :one
+-- The binding row, locked FOR SHARE until the credential plan commits. A main-provider switch
+-- updates this row (it moves the credential identity on), so it waits for the plan, and a plan
+-- that comes after it reads the new identity instead of a stale one.
+SELECT * FROM agent_bindings WHERE session_id = $1 FOR SHARE;

@@ -362,7 +362,11 @@ func (s *Service) begin(ctx context.Context, proposalID, ownerID string, consent
 		}
 		params.ReceiptActionID, params.InvocationRequestID, params.ConsentPin = &consent.ResponseID, &consent.InvocationRequestID, pin
 	}
-	_, err = q.BeginMergeEvaluation(ctx, params)
+	// A tool call's write: guarded, so a revoked MCP credential cannot start the evaluation.
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		_, berr := dbq.New(tx).BeginMergeEvaluation(ctx, params)
+		return berr
+	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}

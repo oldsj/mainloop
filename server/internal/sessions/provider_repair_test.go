@@ -15,6 +15,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
 )
@@ -173,6 +175,10 @@ func TestEveryProviderConflictCarriesAStableCode(t *testing.T) {
 		_, err := e.API().SendMessage(context.Background(), api.SendMessageRequestObject{Body: &api.ChatRequest{Message: "hello"}})
 		if code := codeOf(t, err); code != "pending" {
 			t.Fatalf("chat: code = %q", code)
+		}
+		_, err = e.API().SendSessionMessage(context.Background(), api.SendSessionMessageRequestObject{SessionId: e.mainID(), Body: &api.SessionMessageRequest{Message: "hello"}})
+		if code := codeOf(t, err); code != "pending" {
+			t.Fatalf("POST /sessions/{main}/message: code = %q", code)
 		}
 	})
 	t.Run("unconfirmed", func(t *testing.T) {
@@ -381,5 +387,52 @@ func TestEachNativeIdentityHasItsOwnSecretAndTheSwitchDoesNotWaitForCleanup(t *t
 	}
 	if e.liveCredentialCount(main) != 1 {
 		t.Fatalf("credentials = %+v", e.credentialRows(main))
+	}
+}
+
+// ---- a reply Mainloop could not decode is not a refusal -------------------------------------------
+
+// kagent commits the create and the reply body is cut short. connect reports that on the client as
+// InvalidArgument, which must not be read as "kagent refused before it reserved the request id": the
+// Session exists. The target is not recoverable, the other provider cannot take over while the replay
+// stays undecodable, and a repeat binds the Session that committed.
+func TestATruncatedCreateReplyIsNeitherAbsentNorAbandoned(t *testing.T) {
+	e := providerEnv(t)
+	stop, claudeKsid := e.warm()
+	stop()
+	e.srv.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Truncate: true})
+	st := e.mustSelect("codex", false)
+	if st.Status != "failed" || st.Recoverable || st.KagentSessionID != nil {
+		t.Fatalf("state = %+v, want failed, not recoverable", st)
+	}
+	if n := e.liveSessionsOn(codexAgentName); n != 1 {
+		t.Fatalf("%d Codex Sessions, want the one that committed", n)
+	}
+	// Not recoverable, so the other provider cannot take over.
+	if code := e.putCode("claude", false); code != "pending" {
+		t.Fatalf("code = %q, want pending", code)
+	}
+	// Even if the target were marked recoverable (as a decode failure used to do), the abandon check
+	// replays the create, and that reply is cut short too: it is unconfirmed, and nothing is abandoned.
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE agent_bindings SET main_recoverable = true WHERE session_id = $1`, e.mainID()); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.FailNext(kagent.ProcCreateSession, kagenttest.Fault{Truncate: true})
+	before := e.bindingRow()
+	historyBefore := len(e.historyRows())
+	if code := e.putCode("claude", false); code != "unconfirmed" {
+		t.Fatalf("code = %q, want unconfirmed", code)
+	}
+	if now := e.bindingRow(); deref(now.KagentRequestID) != deref(before.KagentRequestID) || len(e.historyRows()) != historyBefore {
+		t.Fatalf("the target was abandoned: %+v, history %+v", now, e.historyRows())
+	}
+	// A repeat of the same selection binds the Session that committed.
+	st = e.mustSelect("codex", false)
+	if st.Status != "ready" || st.KagentSessionID == nil || *st.KagentSessionID == claudeKsid {
+		t.Fatalf("state = %+v", st)
+	}
+	if n := e.liveSessionsOn(codexAgentName); n != 1 {
+		t.Fatalf("%d Codex Sessions, want 1", n)
 	}
 }

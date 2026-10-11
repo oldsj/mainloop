@@ -49,6 +49,9 @@ type Fault struct {
 	Message string
 	// RPC answers an A2A call with this JSON-RPC error (HTTP 200).
 	RPC *RPCError
+	// Truncate runs the call to completion, so its effects commit, then cuts the reply body short: the
+	// client sees a reply that fails to decode, not an error kagent sent.
+	Truncate bool
 }
 
 // RPCError is a JSON-RPC error object with google.rpc.ErrorInfo details.
@@ -312,8 +315,26 @@ func (s *Server) guard(proc string, next http.Handler) http.Handler {
 			if f.GRPC != nil {
 				h = grpcFailure(*f.GRPC, f.Message)
 			}
+			if f.Truncate {
+				h = truncated(h)
+			}
 		}
 		h.ServeHTTP(w, r)
+	})
+}
+
+// truncated runs next, then replays its reply with the body cut in half.
+func truncated(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		next.ServeHTTP(rec, r)
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+		w.Header().Del("Content-Length")
+		w.WriteHeader(rec.Code)
+		body := rec.Body.Bytes()
+		_, _ = w.Write(body[:len(body)/2])
 	})
 }
 

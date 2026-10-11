@@ -455,7 +455,7 @@ func (a *SessionsAPI) SendSessionMessage(ctx context.Context, r api.SendSessionM
 	case errors.Is(err, ErrBusy):
 		return nil, apierr.Conflict("A turn is already in progress for this session")
 	case errors.Is(err, ErrConflict):
-		return nil, apierr.Conflict(reason(err, ErrConflict))
+		return nil, conflictResponse(err)
 	case errors.Is(err, ErrInvalid):
 		return nil, apierr.Invalid(reason(err, ErrInvalid))
 	case err != nil:

@@ -7377,7 +7377,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['HTTPError'];
+          'application/json': components['schemas']['CodedHTTPError'];
         };
       };
       /** @description Request Entity Too Large */

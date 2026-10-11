@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
@@ -208,10 +209,17 @@ func (s *Service) Open(ctx context.Context, in OpenInput) (Result, error) {
 	if in.SessionID != "" {
 		sess = &in.SessionID
 	}
-	n, err := q.InsertPRCreation(ctx, dbq.InsertPRCreationParams{
-		ID: id, IdempotencyKey: key, OwnerID: in.OwnerID, ProjectID: in.ProjectID, SessionID: sess,
-		RequestID: in.RequestID, PayloadHash: hash, RepoID: detail.ID, RepoFullName: detail.FullName,
-		Head: in.Branch, Base: base, ExpectedSha: in.ExpectedSHA, Title: in.Title, Body: in.Body,
+	// The intent is the tool call's write, so it runs in a guarded transaction (the MCP credential is
+	// re-checked in it); the GitHub reads above stay outside any transaction.
+	var n int64
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		var ierr error
+		n, ierr = dbq.New(tx).InsertPRCreation(ctx, dbq.InsertPRCreationParams{
+			ID: id, IdempotencyKey: key, OwnerID: in.OwnerID, ProjectID: in.ProjectID, SessionID: sess,
+			RequestID: in.RequestID, PayloadHash: hash, RepoID: detail.ID, RepoFullName: detail.FullName,
+			Head: in.Branch, Base: base, ExpectedSha: in.ExpectedSHA, Title: in.Title, Body: in.Body,
+		})
+		return ierr
 	})
 	if err != nil {
 		return Result{}, err

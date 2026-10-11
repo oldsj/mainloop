@@ -115,3 +115,32 @@ func TestAReplacementSessionInTheTurnStaysOnThePinnedAgent(t *testing.T) {
 		t.Fatalf("replacement created on %s/%s, want the pinned mainloop-main", sess.GetAgent().GetNamespace(), sess.GetAgent().GetName())
 	}
 }
+
+// A first-use main pins the Agent of its first create. When kagent refuses that create before it
+// reserved anything (the Agent named by a typo in the configuration is not prepared), the pin is
+// dropped, so the corrected configuration is used by the next create.
+func TestATypoInTheMainAgentIsNotPinnedOnceTheCreateIsRefused(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Agent = kagent.AgentRef{Namespace: agent.Namespace, Name: "mainloop-mian"} // no such Agent
+	stop := e.run()
+	id := e.send("hello")
+	e.waitFor("the create was refused and the pin dropped", func() bool {
+		d := e.delivery(id)
+		b := e.bindingRow()
+		return d.CreateFailures > 0 && b.KagentAgentName == nil
+	})
+	if n := e.liveSessionsOn("mainloop-mian"); n != 0 {
+		t.Fatalf("%d Sessions on the typo'd Agent", n)
+	}
+	// The configuration is fixed: the next create runs on the fixed Agent and pins it.
+	e.svc.Agent = agent
+	d := e.waitState(id, dbstate.DeliveryCompleted)
+	stop()
+	b := e.bindingRow()
+	if b.KagentAgentName == nil || *b.KagentAgentName != agent.Name || b.KagentSessionID == nil {
+		t.Fatalf("pin = %v, session %v, want the fixed Agent and a Session (delivery %s)", b.KagentAgentName, b.KagentSessionID, d.State)
+	}
+	if n := e.liveSessionsOn(agent.Name); n != 1 {
+		t.Fatalf("%d Sessions on the fixed Agent, want 1", n)
+	}
+}

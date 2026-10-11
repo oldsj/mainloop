@@ -141,6 +141,21 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
   AND b.kagent_session_id IS NULL
   AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(request_id)::text;
 
+-- A first-use main pins the Agent its first create names (MarkCreateRequested). When kagent
+-- proves that create was refused before it reserved anything, the pin was never confirmed by a
+-- Session, so it is dropped and the next create follows the configured Agent again. A main that has
+-- had a Session (a replacement has a request id of its own) or a switch in flight keeps its pin.
+-- Fenced like MarkCreateRequested.
+-- name: ClearUnprovenMainPin :execrows
+UPDATE agent_bindings b
+SET kagent_agent_namespace = NULL, kagent_agent_name = NULL, updated_at = now()
+FROM deliveries d
+WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
+  AND b.session_id = d.session_id
+  AND b.role = 'main' AND NOT b.main_pending
+  AND b.kagent_session_id IS NULL AND b.kagent_request_id IS NULL
+  AND b.kagent_agent_namespace = sqlc.arg(agent_namespace) AND b.kagent_agent_name = sqlc.arg(agent_name);
+
 -- The bindings that sent a create whose Session id never came back and whose session has nothing
 -- open any more, so nothing is about to retry the create. The workspace service owns the creates
 -- of workspace bindings.
