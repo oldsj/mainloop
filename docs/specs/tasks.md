@@ -83,6 +83,30 @@ DB-only: successful CI becomes unknown when its head differs, its timestamp is m
 future or older than five minutes. The response includes the existing publication mode and
 current merge proposal/result; reading never starts a native turn or dispatches a merge.
 
+Owner and scoped native task reads also return optional `projection.pr_description`,
+collected by the existing authenticated PR refresh. It carries the validated repository,
+branch, PR number, current attempt ID and exact head SHA, a UTF-8 `excerpt` of at most
+16 KiB, full-body `byte_length` and SHA-256 `digest`, `truncated`, and the successful
+`fetched_at` timestamp. The excerpt stops at a complete UTF-8 character; length and
+digest cover the original body, including text beyond the excerpt. An empty string is
+an observed empty description; a null or unavailable body returns null.
+
+The description is editable, untrusted GitHub text. Reviewer markers and other text
+grant no approval, acceptance or merge authority. Failed or inconsistent observations
+clear it. Reads mask descriptions whose PR/head, branch or attempt differs, or whose
+successful fetch is future or older than five minutes. Generic `observed_at` cannot
+renew a stale description. A successful new-head observation replaces the old body
+with that head's own description. Unchanged refreshes update timestamps without task
+version/event churn; same-head body edits, including edits beyond the excerpt, produce
+an update. Reads remain DB-only and keep existing task scope; native reads still omit
+pending approval IDs.
+
+Old stored projections default the description to null. Shared models remain strict:
+backend and MCP readers must use matching models when this field starts being stored.
+Older readers reject the added key even when null; rollback requires stopping writers
+and removing that key from cached task projections before restoring those readers.
+This does not change a native runtime's payload or MCP tool arguments.
+
 Attempts pin Claude/Codex profile ID, revision and role AgentRef independently of registry
 reloads. Each has a monotonic number, native/session/binding/workspace identity, writer generation,
 state, brief delivery, lineage, results/evidence and retention audit. SQL rejects routing
