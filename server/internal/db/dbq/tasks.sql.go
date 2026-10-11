@@ -392,6 +392,27 @@ func (q *Queries) FinishAttemptWorkspaceCreate(ctx context.Context, id string) e
 	return err
 }
 
+const getAttemptCreatedPR = `-- name: GetAttemptCreatedPR :one
+SELECT c.pr_number
+FROM pr_creations c
+JOIN task_attempts a ON a.binding_id = c.session_id
+JOIN tasks t ON t.id = a.task_id
+WHERE a.id = $1 AND c.state = 'created' AND c.pr_number > 0
+  AND c.owner_id = t.owner_id AND c.project_id = t.project_id AND c.head = t.checkout_branch
+ORDER BY c.created_at DESC, c.id DESC
+LIMIT 1
+`
+
+// The newest pull request the attempt itself opened through Mainloop. The attempt's binding id is
+// the session id recorded on the creation row, so a later attempt (a new binding) never matches an
+// earlier attempt's PR. Owner, project and head branch must also be the task's, as on main.
+func (q *Queries) GetAttemptCreatedPR(ctx context.Context, id string) (*int64, error) {
+	row := q.db.QueryRow(ctx, getAttemptCreatedPR, id)
+	var pr_number *int64
+	err := row.Scan(&pr_number)
+	return pr_number, err
+}
+
 const getAttemptDeliveryOutcomeVersion = `-- name: GetAttemptDeliveryOutcomeVersion :one
 SELECT coalesce(sum(d.outcome_version), 0)::bigint AS outcome_version
 FROM deliveries d

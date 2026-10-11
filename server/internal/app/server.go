@@ -176,8 +176,8 @@ type taskObserver struct{ remote *github.TaskObserver }
 
 var _ tasks.Observer = taskObserver{}
 
-func (o taskObserver) Observe(ctx context.Context, repo, branch string) (tasks.Observation, error) {
-	obs, err := o.remote.Observe(ctx, repo, branch)
+func (o taskObserver) Observe(ctx context.Context, repo, branch string, expectedPR int) (tasks.Observation, error) {
+	obs, err := o.remote.Observe(ctx, repo, branch, expectedPR)
 	return tasks.Observation(obs), err
 }
 

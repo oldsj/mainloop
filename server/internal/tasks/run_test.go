@@ -189,11 +189,16 @@ type fakeObserver struct {
 	obs   tasks.Observation
 	err   error
 	calls int
+	// expected is the PR number each call was asked for.
+	expected []int
+	// branch, when set, models the branch's PRs as GitHub shows them: a positive expected PR picks
+	// only that one (none when it is absent), and zero picks the open PR, else the highest number.
+	branch []tasks.Observation
 	// onObserve runs inside Observe, before it answers.
 	onObserve func()
 }
 
-func (o *fakeObserver) Observe(context.Context, string, string) (tasks.Observation, error) {
+func (o *fakeObserver) Observe(_ context.Context, _, _ string, expected int) (tasks.Observation, error) {
 	o.mu.Lock()
 	hook := o.onObserve
 	o.mu.Unlock()
@@ -203,7 +208,31 @@ func (o *fakeObserver) Observe(context.Context, string, string) (tasks.Observati
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.calls++
+	o.expected = append(o.expected, expected)
+	if o.branch != nil {
+		return o.pick(expected), o.err
+	}
 	return o.obs, o.err
+}
+
+// pick is the branch observation for the expected PR; see fakeObserver.branch.
+func (o *fakeObserver) pick(expected int) tasks.Observation {
+	var chosen tasks.Observation
+	for _, p := range o.branch {
+		switch {
+		case expected > 0:
+			if p.PRNumber == expected {
+				chosen = p
+			}
+		case chosen.PRNumber == 0 || (p.PRState == "open" && chosen.PRState != "open") ||
+			((p.PRState == "open") == (chosen.PRState == "open") && p.PRNumber > chosen.PRNumber):
+			chosen = p
+		}
+	}
+	if chosen.PRNumber == 0 {
+		return tasks.Observation{ObservedAt: time.Now()}
+	}
+	return chosen
 }
 
 func (o *fakeObserver) set(obs tasks.Observation, err error) {

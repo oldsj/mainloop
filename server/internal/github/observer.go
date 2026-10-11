@@ -38,7 +38,7 @@ type TaskObservation struct {
 }
 
 // TaskObserver reads a task branch's most recent open PR, or its most recent closed/merged PR
-// when none is open. It never caches observations or writes repository data. App tokens are
+// when none is open; or, given the number of the PR the task created, only that PR. It never caches observations or writes repository data. App tokens are
 // scoped to each read's permissions. Nil App means observation is unavailable.
 type TaskObserver struct {
 	App *App
@@ -50,7 +50,12 @@ type TaskObserver struct {
 // head, identity or body is not observed. Freshness is the age of this read, not the age of the CI job:
 // an old job freshly read for this exact head is valid. Persisted observations also need the
 // consumer's five-minute age guard after this method returns.
-func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (observation TaskObservation, err error) {
+//
+// A positive expectedPR is the pull request the task's attempt created. It is the only candidate:
+// open, closed or merged it is reported, and when it is missing or is not a PR for this branch in
+// this repository nothing is reported, even if the branch has other PRs. Zero or less picks as
+// described on TaskObserver.
+func (o *TaskObserver) Observe(ctx context.Context, repository, branch string, expectedPR int) (observation TaskObservation, err error) {
 	if o == nil || o.App == nil {
 		return TaskObservation{}, observationError(ErrUnavailable)
 	}
@@ -85,26 +90,30 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 		}
 		observation.ObservedAt = observedAt
 	}()
-	// No base filter: a task's PR may target a branch other than the default branch.
-	pulls, err := o.App.PullRequestsForHead(ctx, repo, branch, "")
-	if err != nil {
-		return absentOrError(err)
-	}
-	var chosen *PullRequestInfo
-	for i := range pulls {
-		p := &pulls[i]
-		if !taskPR(p, repo, branch) {
-			continue
+	number := expectedPR
+	if number <= 0 {
+		// No base filter: a task's PR may target a branch other than the default branch.
+		pulls, err := o.App.PullRequestsForHead(ctx, repo, branch, "")
+		if err != nil {
+			return absentOrError(err)
 		}
-		if chosen == nil || (p.State == "open" && chosen.State != "open") ||
-			((p.State == "open") == (chosen.State == "open") && p.Number > chosen.Number) {
-			chosen = p
+		var chosen *PullRequestInfo
+		for i := range pulls {
+			p := &pulls[i]
+			if !taskPR(p, repo, branch) {
+				continue
+			}
+			if chosen == nil || (p.State == "open" && chosen.State != "open") ||
+				((p.State == "open") == (chosen.State == "open") && p.Number > chosen.Number) {
+				chosen = p
+			}
 		}
+		if chosen == nil {
+			return TaskObservation{}, nil
+		}
+		number = chosen.Number
 	}
-	if chosen == nil {
-		return TaskObservation{}, nil
-	}
-	pr, err := o.App.PullRequest(ctx, repo, chosen.Number)
+	pr, err := o.App.PullRequest(ctx, repo, number)
 	if err != nil {
 		return absentOrError(err)
 	}

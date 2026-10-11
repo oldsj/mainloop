@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -50,9 +53,12 @@ type Observation struct {
 	ObservedAt time.Time
 }
 
-// Observer reads the pull request and CI of a branch from GitHub. It makes no changes.
+// Observer reads the pull request and CI of a branch from GitHub. It makes no changes. A positive
+// expectedPR is the pull request the task's attempt created through Mainloop: the observer reports
+// that one, or no pull request when it is missing or not the task's, and never picks another. Zero
+// means no PR is known, and the observer picks the branch's open PR, else its highest-numbered one.
 type Observer interface {
-	Observe(ctx context.Context, repo, branch string) (Observation, error)
+	Observe(ctx context.Context, repo, branch string, expectedPR int) (Observation, error)
 }
 
 // projectionBatch is how many tasks one sweep looks at.
@@ -134,7 +140,11 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 	if err != nil {
 		return err
 	}
-	obs, err := s.Observer.Observe(ctx, repo, branch)
+	expected, err := s.createdPR(ctx, before)
+	if err != nil {
+		return err
+	}
+	obs, err := s.Observer.Observe(ctx, repo, branch, expected)
 	if err != nil {
 		// Degrade to unknown rather than keep showing a state nobody can vouch for.
 		s.log().WarnContext(ctx, "task projection", "task", id, "error", err)
@@ -191,4 +201,25 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 		}
 		return []events.Draft{s.updated(after)}, nil
 	})
+}
+
+// createdPR is the number of the pull request the task's current attempt opened through Mainloop,
+// or zero when there is none (the agent opened it elsewhere, or has not yet). It is keyed by the
+// attempt's binding id, which is unique to the attempt, so a new attempt starts without its
+// predecessor's pull request, as on main.
+func (s *Service) createdPR(ctx context.Context, t dbq.Task) (int, error) {
+	if t.CurrentAttemptID == nil {
+		return 0, nil
+	}
+	n, err := dbq.New(s.Pool).GetAttemptCreatedPR(ctx, *t.CurrentAttemptID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if n == nil || *n <= 0 || *n > math.MaxInt32 {
+		return 0, nil
+	}
+	return int(*n), nil
 }

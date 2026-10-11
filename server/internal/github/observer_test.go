@@ -52,7 +52,7 @@ func TestTaskObserverRechecksPRAfterCIFailure(t *testing.T) {
 					cancel()
 				}
 			})
-			got, err := o.Observe(ctx, "o/n", "feature")
+			got, err := o.Observe(ctx, "o/n", "feature", 0)
 			if change == "cancel" {
 				if got != (github.TaskObservation{}) || !errors.Is(err, context.Canceled) {
 					t.Fatalf("cancelled CI read = %+v, %v", got, err)
@@ -70,11 +70,11 @@ func TestTaskObserverRejectsBodyChangeDuringCollection(t *testing.T) {
 	f.Before("GET", "/repos/o/n/commits/"+tipSHA+"/check-runs", func() {
 		f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = "after CI" })
 	})
-	got, err := o.Observe(context.Background(), "o/n", "feature")
+	got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 	if err != nil || got.PRNumber != 0 || got.PRBody != nil || got.ObservedAt.IsZero() {
 		t.Fatalf("inconsistent body observation = %+v, %v", got, err)
 	}
-	got, err = o.Observe(context.Background(), "o/n", "feature")
+	got, err = o.Observe(context.Background(), "o/n", "feature", 0)
 	if err != nil || got.PRBody == nil || *got.PRBody != "after CI" {
 		t.Fatalf("stable same-head edit = %+v, %v", got, err)
 	}
@@ -90,7 +90,7 @@ func TestTaskObserverPRStatesAndReadScope(t *testing.T) {
 				// A non-default base must not hide the task PR.
 				r.PullRequests[0].BaseRef = "release"
 			})
-			got, err := o.Observe(context.Background(), "O/N", "feature")
+			got, err := o.Observe(context.Background(), "O/N", "feature", 0)
 			if err != nil || got.PRNumber != 1 || got.PRState != state || got.CIState != "success" ||
 				got.PRHeadSHA != tipSHA || got.CIHeadSHA != tipSHA || got.PRHeadRef != "feature" ||
 				got.PRRepo != "O/N" || got.PRURL != "https://github.com/O/N/pull/1" {
@@ -126,13 +126,52 @@ func TestTaskObserverSelectsOpenThenNewestPR(t *testing.T) {
 					{Number: 99, HeadRef: "other", HeadSHA: tipSHA},
 				}
 			})
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			want := 9
 			if open {
 				want = 3
 			}
 			if err != nil || got.PRNumber != want {
 				t.Fatalf("observation = %+v, %v; want PR %d", got, err, want)
+			}
+		})
+	}
+}
+
+func TestTaskObserverReportsOnlyTheExpectedPR(t *testing.T) {
+	prs := []githubtest.PullRequest{
+		{Number: 3, HeadRef: "feature", HeadSHA: tipSHA, Closed: true},
+		{Number: 9, HeadRef: "feature", HeadSHA: tipSHA},
+		{Number: 20, HeadRef: "feature", HeadSHA: tipSHA, Closed: true, Merged: true},
+		{Number: 30, HeadRef: "other", HeadSHA: tipSHA},
+	}
+	for _, tc := range []struct {
+		name     string
+		expected int
+		want     int
+		state    string
+	}{
+		{"lower_number_beats_open_higher", 3, 3, "closed"},
+		{"open_expected", 9, 9, "open"},
+		{"merged_expected", 20, 20, "merged"},
+		{"missing", 4, 0, ""},
+		{"other_branch", 30, 0, ""},
+		{"no_expectation_picks_open", 0, 9, "open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, f := greenObservation(t)
+			f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests = prs })
+			got, err := o.Observe(context.Background(), "o/n", "feature", tc.expected)
+			if tc.want == 0 {
+				requireAbsentTaskObservation(t, got, err)
+				return
+			}
+			if err != nil || got.PRNumber != tc.want || got.PRState != tc.state ||
+				got.PRURL != fmt.Sprintf("https://github.com/o/n/pull/%d", tc.want) {
+				t.Fatalf("observation = %+v, %v; want PR %d %s", got, err, tc.want, tc.state)
+			}
+			if listed := f.Count("GET", "/repos/o/n/pulls") != 0; listed != (tc.expected == 0) {
+				t.Fatalf("listed the branch's PRs = %v with expected PR %d", listed, tc.expected)
 			}
 		})
 	}
@@ -173,7 +212,7 @@ func TestTaskObserverCIStates(t *testing.T) {
 				r.Runs[tipSHA] = tc.runs
 				r.Statuses = map[string][]githubtest.Status{tipSHA: tc.statuses}
 			})
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if err != nil || got.CIState != tc.want || got.PRNumber != 1 {
 				t.Fatalf("observation = %+v, %v; want CI %s", got, err, tc.want)
 			}
@@ -211,7 +250,7 @@ func TestTaskObserverRejectsMismatchedHeadsAndIdentity(t *testing.T) {
 					})
 				})
 			}
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if scenario == "check_head" {
 				// Reject the mismatched CI evidence while keeping the independently rechecked PR.
 				requirePRWithUnknownCI(t, got, err)
@@ -257,7 +296,7 @@ func TestTaskObserverReadsAllPages(t *testing.T) {
 					}
 				}
 			})
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if err != nil || got.PRNumber != wantNumber || got.CIState != wantCI || f.Count("GET", path) != 2 {
 				t.Fatalf("observation = %+v, %v; %d pages", got, err, f.Count("GET", path))
 			}
@@ -278,7 +317,7 @@ func TestTaskObserverStaleObservationAndNoCache(t *testing.T) {
 				}
 				return at.Add(elapsed)
 			}
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if elapsed == 5*time.Minute {
 				if err != nil || got.CIState != "success" || !got.ObservedAt.Equal(at.Add(elapsed)) {
 					t.Fatalf("boundary = %+v, %v", got, err)
@@ -289,15 +328,15 @@ func TestTaskObserverStaleObservationAndNoCache(t *testing.T) {
 		})
 	}
 	o, f := greenObservation(t)
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); err != nil || got.CIState != "success" {
+	if got, err := o.Observe(context.Background(), "o/n", "feature", 0); err != nil || got.CIState != "success" {
 		t.Fatalf("initial = %+v, %v", got, err)
 	}
 	f.Update("o", "n", func(r *githubtest.Repository) { r.Runs[tipSHA][0].Conclusion = "failure" })
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); err != nil || got.CIState != "failure" {
+	if got, err := o.Observe(context.Background(), "o/n", "feature", 0); err != nil || got.CIState != "failure" {
 		t.Fatalf("fresh read reused a cached pass: %+v, %v", got, err)
 	}
 	f.Fail("GET", "/repos/o/n/pulls", http.StatusServiceUnavailable)
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
+	if got, err := o.Observe(context.Background(), "o/n", "feature", 0); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
 		t.Fatalf("failed read reused cached CI: %+v, %v", got, err)
 	}
 }
@@ -312,7 +351,7 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 			t.Run(path+fmt.Sprint(status), func(t *testing.T) {
 				o, f := greenObservation(t)
 				f.Fail("GET", path, status)
-				got, err := o.Observe(context.Background(), "o/n", "feature")
+				got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 				if strings.Contains(path, "/commits/") {
 					requirePRWithUnknownCI(t, got, err)
 					return
@@ -342,7 +381,7 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 		t.Run(path+"_rate_limit_403", func(t *testing.T) {
 			o, f := greenObservation(t)
 			f.RateLimit("GET", path)
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if strings.Contains(path, "/commits/") {
 				requirePRWithUnknownCI(t, got, err)
 				return
@@ -356,11 +395,11 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 
 func TestTaskObserverMissingPRAndInvalidInputs(t *testing.T) {
 	o, f := greenObservation(t)
-	got, err := o.Observe(context.Background(), "o/n", "missing")
+	got, err := o.Observe(context.Background(), "o/n", "missing", 0)
 	requireAbsentTaskObservation(t, got, err)
 	before := len(f.Requests())
 	for _, input := range [][2]string{{"invalid", "feature"}, {"o/n", ""}, {"o/n", "x/../feature"}} {
-		if got, err := o.Observe(context.Background(), input[0], input[1]); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRefused) {
+		if got, err := o.Observe(context.Background(), input[0], input[1], 0); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRefused) {
 			t.Fatalf("invalid input = %+v, %v", got, err)
 		}
 	}
@@ -368,12 +407,12 @@ func TestTaskObserverMissingPRAndInvalidInputs(t *testing.T) {
 		t.Fatal("invalid input sent a request")
 	}
 	var disconnected *github.TaskObserver
-	if _, err := disconnected.Observe(context.Background(), "o/n", "feature"); !errors.Is(err, github.ErrObservationRetry) {
+	if _, err := disconnected.Observe(context.Background(), "o/n", "feature", 0); !errors.Is(err, github.ErrObservationRetry) {
 		t.Fatalf("nil observer = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := o.Observe(ctx, "o/n", "feature"); got != (github.TaskObservation{}) || !errors.Is(err, context.Canceled) {
+	if got, err := o.Observe(ctx, "o/n", "feature", 0); got != (github.TaskObservation{}) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled = %+v, %v", got, err)
 	}
 }
@@ -382,7 +421,7 @@ func TestTaskObserverTokenMintErrorClasses(t *testing.T) {
 	for _, status := range []int{401, 403, 404, 429, 503, 0} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			o, f := greenObservation(t)
-			if _, err := o.Observe(context.Background(), "o/n", "feature"); err != nil {
+			if _, err := o.Observe(context.Background(), "o/n", "feature", 0); err != nil {
 				t.Fatal(err)
 			}
 			path := fmt.Sprintf("/app/installations/%d/access_tokens", f.Mints()[0].InstallationID)
@@ -397,7 +436,7 @@ func TestTaskObserverTokenMintErrorClasses(t *testing.T) {
 				t.Fatal(err)
 			}
 			o.App = a
-			got, err := o.Observe(context.Background(), "o/n", "feature")
+			got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 			if status == 404 {
 				requireAbsentTaskObservation(t, got, err)
 				return
@@ -416,14 +455,14 @@ func TestTaskObserverTokenMintErrorClasses(t *testing.T) {
 func TestTaskObserverLostReadReplyAndDisappearingPR(t *testing.T) {
 	o, f := greenObservation(t)
 	f.LoseReply("GET", "/repos/o/n/pulls/1", 3)
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
+	if got, err := o.Observe(context.Background(), "o/n", "feature", 0); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
 		t.Fatalf("lost read reply = %+v, %v", got, err)
 	}
 	o, f = greenObservation(t)
 	f.Before("GET", "/repos/o/n/commits/"+tipSHA+"/check-runs", func() {
 		f.Fail("GET", "/repos/o/n/pulls/1", http.StatusNotFound)
 	})
-	got, err := o.Observe(context.Background(), "o/n", "feature")
+	got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 	requireAbsentTaskObservation(t, got, err)
 }
 
@@ -445,7 +484,7 @@ func TestTaskObserverAbsentObservationTime(t *testing.T) {
 		}
 		return finished
 	}
-	got, err := o.Observe(context.Background(), "o/n", "missing")
+	got, err := o.Observe(context.Background(), "o/n", "missing", 0)
 	requireAbsentTaskObservation(t, got, err)
 	if clockCalls != 2 || !got.ObservedAt.Equal(finished) {
 		t.Fatalf("absent observation time = %v, want %v; clock calls %d", got.ObservedAt, finished, clockCalls)
@@ -460,7 +499,7 @@ func TestTaskObserverRejectsPartialPages(t *testing.T) {
 			r.Runs[tipSHA] = append(r.Runs[tipSHA], githubtest.CheckRun{ID: int64(i), AppID: 2, Name: fmt.Sprint(i), Conclusion: "success"})
 		}
 	})
-	got, err := o.Observe(context.Background(), "o/n", "feature")
+	got, err := o.Observe(context.Background(), "o/n", "feature", 0)
 	requirePRWithUnknownCI(t, got, err)
 	// A failure on a later page must discard all the earlier successful results.
 	o, f = greenObservation(t)
@@ -474,7 +513,7 @@ func TestTaskObserverRejectsPartialPages(t *testing.T) {
 	f.Before("GET", path, func() {
 		f.Before("GET", path, func() { f.Fail("GET", path, http.StatusServiceUnavailable) })
 	})
-	got, err = o.Observe(context.Background(), "o/n", "feature")
+	got, err = o.Observe(context.Background(), "o/n", "feature", 0)
 	requirePRWithUnknownCI(t, got, err)
 	var pages []string
 	for _, req := range f.Requests() {
