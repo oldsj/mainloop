@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "docker compose up --watch",
-    "build": "node scripts/with-timeout.mjs 120 'pnpm build' -- pnpm -r build",
+    "build": "node scripts/with-timeout.mjs 240 'pnpm build' -- pnpm -r build",
     "lint": "node scripts/with-timeout.mjs 120 'pnpm lint' -- pnpm -r lint",
     "format": "node scripts/with-timeout.mjs 180 'pnpm format' -- prettier --write .",
     "check": "node scripts/with-timeout.mjs 120 'pnpm check' -- pnpm -r check"

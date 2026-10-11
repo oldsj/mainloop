@@ -29,18 +29,38 @@ if (
 }
 
 const started = performance.now();
-console.error(`[cap ${seconds} s] ${label}`);
 // Each owner reserves time after its children escalate. Non-Node supervisors
 // must use the same inherited budget; the backend runner does so explicitly.
 const inheritedGrace = Number(process.env.MAINLOOP_TIMEOUT_GRACE_MS);
-const grace =
-  Number.isFinite(inheritedGrace) && inheritedGrace > 0
-    ? Math.min(requestedGrace * 1000, inheritedGrace - Math.min(1000, inheritedGrace / 4))
-    : requestedGrace * 1000;
+const nested = Number.isFinite(inheritedGrace) && inheritedGrace > 0;
+const grace = nested
+  ? Math.min(requestedGrace * 1000, inheritedGrace - Math.min(1000, inheritedGrace / 4))
+  : requestedGrace * 1000;
+// A nested cap expires one reserve before its parent, so its timeout is the one
+// reported. Its cleanup then runs inside the parent's longer grace.
+const parentDeadline = Number(process.env.MAINLOOP_TIMEOUT_DEADLINE_MS);
+const now = Date.now();
+const limit =
+  Number.isFinite(parentDeadline) && parentDeadline > 0
+    ? parentDeadline - (nested ? Math.min(1000, inheritedGrace / 4) : 0)
+    : Infinity;
+const effective = Math.min(seconds, Math.max(0, Math.floor(limit - now) / 1000));
+const deadlineAt = now + effective * 1000;
+console.error(
+  `[cap ${effective < seconds ? `${effective} s (${seconds} s, clamped to the enclosing deadline)` : `${seconds} s`}] ${label}`
+);
+if (effective <= 0) {
+  console.error(`${label}: timed out after 0 s; the enclosing deadline left no time`);
+  process.exit(124);
+}
 const child = spawn(command, args, {
   detached: true,
   stdio: 'inherit',
-  env: { ...process.env, MAINLOOP_TIMEOUT_GRACE_MS: String(grace) }
+  env: {
+    ...process.env,
+    MAINLOOP_TIMEOUT_GRACE_MS: String(grace),
+    MAINLOOP_TIMEOUT_DEADLINE_MS: String(deadlineAt)
+  }
 });
 let result;
 let finished = false;
@@ -86,9 +106,9 @@ function stop(code, signal = 'SIGTERM') {
 }
 
 const deadline = setTimeout(() => {
-  console.error(`${label}: timed out after ${seconds} s; terminating its process group`);
+  console.error(`${label}: timed out after ${effective} s; terminating its process group`);
   stop(124);
-}, seconds * 1000);
+}, effective * 1000);
 
 for (const name of ['SIGINT', 'SIGQUIT', 'SIGTERM']) {
   process.on(name, () => stop(128 + constants.signals[name], name));

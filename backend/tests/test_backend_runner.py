@@ -9,9 +9,11 @@ import sys
 import tempfile
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from pathlib import Path
 from textwrap import indent
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from scripts import test_backend as runner
 
@@ -87,7 +89,7 @@ class BackendRunnerTests(unittest.TestCase):
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=40,
+                timeout=suite_seconds + 10,
             )
             timings = (
                 json.loads((root / "timings.json").read_text())
@@ -264,6 +266,130 @@ class BackendRunnerTests(unittest.TestCase):
             ):
                 self.assertAlmostEqual(runner.cleanup_budget(), expected)
 
+    def test_recorded_timings_override_committed_module_weights(self):
+        with tempfile.TemporaryDirectory() as directory:
+            committed = Path(directory) / "weights.json"
+            committed.write_text(json.dumps({"a": 10, "b": 9}))
+            timings = Path(directory) / "timings.json"
+            with patch.object(runner, "MODULE_WEIGHTS", committed):
+                self.assertEqual(runner.module_weights(None), {"a": 10, "b": 9})
+                self.assertEqual(runner.module_weights(str(timings)), {"a": 10, "b": 9})
+                timings.write_text(
+                    json.dumps({"status": "timed_out", "modules": {"b": 1}})
+                )
+                self.assertEqual(runner.module_weights(str(timings)), {"a": 10, "b": 9})
+                timings.write_text(
+                    json.dumps({"status": "complete", "modules": {"b": 1, "c": 2}})
+                )
+                self.assertEqual(
+                    runner.module_weights(str(timings)), {"a": 10, "b": 1, "c": 2}
+                )
+        self.assertIn(
+            "tests.runtime.test_postgres_task_handoff", runner.module_weights(None)
+        )
+
+    def test_worker_crash_names_signal_phase_and_modules(self):
+        result, _ = self.probe(
+            {
+                "probe_crash": "import os, signal\nos.kill(os.getpid(), signal.SIGSEGV)\n",
+                "probe_ok": "import unittest\nclass Case(unittest.TestCase):\n def test_ok(self): pass\n",
+            },
+            workers=2,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        for worker in ("0", "1"):
+            self.assertIn(
+                f"Backend worker {worker} killed by SIGSEGV during test discovery/imports;"
+                " modules: none planned yet",
+                result.stderr,
+            )
+        self.assertTrue(result.stderr.rstrip().endswith("modules: none planned yet"))
+        # After planning, the crash line names the dead worker's own modules.
+        result, timings = self.probe(
+            {
+                "probe_crash": (
+                    "import os, signal, unittest\nclass Case(unittest.TestCase):\n"
+                    " def test_crash(self): os.kill(os.getpid(), signal.SIGSEGV)\n"
+                ),
+                "probe_ok": "import unittest\nclass Case(unittest.TestCase):\n def test_ok(self): pass\n",
+            },
+            workers=2,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertRegex(
+            result.stderr,
+            r"Backend worker \d killed by SIGSEGV during probe_crash\.Case\.test_crash;"
+            r" modules: probe_crash\n",
+        )
+        self.assertNotRegex(result.stderr, r"Backend worker \d .*modules: probe_ok")
+        self.assertEqual(timings["status"], "failed")
+
+    def test_default_workers_leave_memory_for_each_worker(self):
+        def meminfo(megabytes):
+            return mock_open(read_data=f"MemAvailable: {megabytes * 1024} kB\n")
+
+        with (
+            patch.object(runner.os, "cpu_count", return_value=16),
+            patch.dict(os.environ, {"MAINLOOP_TEST_RESERVE_CPUS": "0"}),
+        ):
+            with patch("builtins.open", meminfo(8192)):
+                self.assertEqual(runner.default_workers(), 6)
+            with patch("builtins.open", meminfo(1536)):
+                self.assertEqual(runner.default_workers(), 3)
+            with patch("builtins.open", meminfo(100)):
+                self.assertEqual(runner.default_workers(), 1)
+            with patch("builtins.open", side_effect=OSError):
+                self.assertEqual(runner.default_workers(), 6)
+            for cpus, expected in ((6, 6), (2, 2), (1, 1), (None, 1)):
+                with self.subTest(cpus=cpus):
+                    with (
+                        patch.object(runner.os, "cpu_count", return_value=cpus),
+                        patch("builtins.open", meminfo(8192)),
+                    ):
+                        self.assertEqual(runner.default_workers(), expected)
+            with patch.dict(os.environ, {"MAINLOOP_TEST_RESERVE_CPUS": "1"}):
+                with patch("builtins.open", meminfo(8192)):
+                    self.assertEqual(runner.default_workers(), 6)
+                with patch.object(runner.os, "cpu_count", return_value=6):
+                    with patch("builtins.open", meminfo(8192)):
+                        self.assertEqual(runner.default_workers(), 5)
+                with patch.object(runner.os, "cpu_count", return_value=1):
+                    with patch("builtins.open", meminfo(8192)):
+                        self.assertEqual(runner.default_workers(), 1)
+
+    def test_empty_cleanup_timeout_reports_phase_and_remains_a_failure(self):
+        result, timings = self.probe(
+            "import unittest\nclass Case(unittest.TestCase):\n def test_ok(self): pass\n",
+            database_url="postgresql://fixture-mocked/postgres",
+            supervisor_setup=(
+                "import asyncio\n"
+                "async def expired_cleanup(*args):\n"
+                " async with asyncio.timeout(0): await asyncio.sleep(1)\n"
+                "runner.cleanup_databases = expired_cleanup\n"
+            ),
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertRegex(
+            result.stderr,
+            r"Backend cleanup failed during scratch databases: TimeoutError\(\); "
+            r"shared budget remaining [\d.]+s",
+        )
+        self.assertEqual(timings["status"], "failed")
+        self.assertEqual(timings["tests_run"], 1)
+
+    def test_suite_cap_ends_just_before_an_enclosing_deadline(self):
+        with patch.dict(os.environ):
+            os.environ.pop("MAINLOOP_TIMEOUT_DEADLINE_MS", None)
+            self.assertEqual(runner.suite_seconds(), runner.SUITE_SECONDS)
+            with patch.object(runner.time, "time", return_value=1000.0):
+                os.environ["MAINLOOP_TIMEOUT_GRACE_MS"] = "3000"
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "1100000"
+                self.assertAlmostEqual(runner.suite_seconds(), 99.25)
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "1000500"
+                self.assertEqual(runner.suite_seconds(), 0)
+                os.environ["MAINLOOP_TIMEOUT_DEADLINE_MS"] = "9000000"
+                self.assertEqual(runner.suite_seconds(), runner.SUITE_SECONDS)
+
     def test_one_worker_failure_preserves_other_worker_results(self):
         result, timings = self.probe(
             {
@@ -401,116 +527,134 @@ class BackendRunnerTests(unittest.TestCase):
             finally:
                 await connection.close()
 
+        def run_mode(mode, directory):
+            root = Path(directory)
+            sources = {}
+            for name in ("probe_a", "probe_b"):
+                sources[name] = (
+                    "import asyncio, json, os, sys\nfrom pathlib import Path\n"
+                    # Reproduce startup slower than the old 4 s cap.
+                    + (
+                        "import time\n"
+                        "if os.environ['MAINLOOP_TEST_NAMESPACE'].endswith('_w1'): time.sleep(5)\n"
+                        if mode == "timeout"
+                        else ""
+                    )
+                    + "from tests.runtime import test_postgres_ledger as ledger\n"
+                    "class Case(ledger.PostgresTestCase):\n"
+                    " async def test_hung(self):\n"
+                    "  namespace = os.environ['MAINLOOP_TEST_NAMESPACE']\n"
+                    # Sharing the namespace text is insufficient ownership.
+                    "  foreign = 'mainloop_test_' + namespace + '_foreign'\n"
+                    "  await ledger._admin(ledger.TEST_URL, f'CREATE DATABASE \"{foreign}\"')\n"
+                    f"  root = Path({str(root)!r})\n"
+                    "  marker = root / (__name__ + '.json')\n"
+                    "  temporary = marker.with_suffix('.tmp')\n"
+                    "  temporary.write_text(json.dumps({'pid': os.getpid(), 'databases': [self.database, ledger._template_database], 'foreign': foreign}))\n"
+                    "  temporary.replace(marker)\n"
+                    # Hold every worker's databases until the supervisor
+                    # has captured their existence and releases the probes.
+                    "  while not (root / 'release').exists(): await asyncio.sleep(0.01)\n"
+                    + (
+                        "  ledger.atexit.unregister(ledger._drop_database)\n"
+                        "  type(self)._class_cleanups.clear()\n"
+                        if mode == "normal"
+                        else (
+                            "  sys.modules['__main__'].TEST_SECONDS = 1\n"
+                            "  with sys.modules['__main__'].deadline('phase probe'): await asyncio.Event().wait()\n"
+                            if mode == "phase"
+                            else "  await asyncio.Event().wait()\n"
+                        )
+                    )
+                )
+            setup = (
+                "import asyncio, asyncpg, json, signal\nfrom pathlib import Path\n"  # nosec B608 - constant catalog SQL in synthetic probe source
+                "async def snapshot_databases():\n"
+                f" connection = await asyncpg.connect({url!r})\n"
+                " try:\n"
+                "  names = await connection.fetchval('SELECT array_agg(datname) FROM pg_database')\n"
+                f"  Path({str(root / 'before.json')!r}).write_text(json.dumps(names))\n"
+                " finally: await connection.close()\n"
+            )
+            return self.probe(
+                sources,
+                workers=2,
+                supervisor_setup=setup,
+                ready_when=f"all((Path({str(root)!r}) / (name + '.json')).exists() for name in {list(sources)!r})",
+                on_ready=(
+                    "asyncio.run(snapshot_databases())\n"
+                    f"Path({str(root / 'release')!r}).touch()\n"
+                    + (
+                        f"signal.raise_signal(signal.SIG{mode})\n"
+                        if mode in ("INT", "QUIT", "TERM")
+                        else ""
+                    )
+                ),
+                ready_timeout=1 if mode == "timeout" else None,
+                suite_seconds=45,
+                database_url=url,
+            )
+
+        modes = ("normal", "timeout", "INT", "QUIT", "TERM", "phase")
+        expected = {
+            "normal": (0, "complete"),
+            "timeout": (124, "timed_out"),
+            "phase": (1, "failed"),
+            **{
+                mode: (128 + getattr(signal, f"SIG{mode}"), "cancelled")
+                for mode in ("INT", "QUIT", "TERM")
+            },
+        }
         # An exact fixture name owned by a different run must survive every path.
         other = f"mainloop_test_{uuid.uuid4().hex[:12]}_w0_{uuid.uuid4().hex[:12]}"
         asyncio.run(admin(f'CREATE DATABASE "{other}"'))
         try:
-            for mode in ("normal", "timeout", "INT", "QUIT", "TERM", "phase"):
-                with self.subTest(
-                    mode=mode
-                ), tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
-                    sources = {}
-                    for name in ("probe_a", "probe_b"):
-                        sources[name] = (
-                            "import asyncio, json, os, sys\nfrom pathlib import Path\n"
-                            # Reproduce startup slower than the old 4 s cap.
-                            + (
-                                "import time\n"
-                                "if os.environ['MAINLOOP_TEST_NAMESPACE'].endswith('_w1'): time.sleep(5)\n"
-                                if mode == "timeout"
-                                else ""
-                            )
-                            + "from tests.runtime import test_postgres_ledger as ledger\n"
-                            "class Case(ledger.PostgresTestCase):\n"
-                            " async def test_hung(self):\n"
-                            "  namespace = os.environ['MAINLOOP_TEST_NAMESPACE']\n"
-                            # Sharing the namespace text is insufficient ownership.
-                            "  foreign = 'mainloop_test_' + namespace + '_foreign'\n"
-                            "  await ledger._admin(ledger.TEST_URL, f'CREATE DATABASE \"{foreign}\"')\n"
-                            f"  root = Path({str(root)!r})\n"
-                            "  marker = root / (__name__ + '.json')\n"
-                            "  temporary = marker.with_suffix('.tmp')\n"
-                            "  temporary.write_text(json.dumps({'pid': os.getpid(), 'databases': [self.database, ledger._template_database], 'foreign': foreign}))\n"
-                            "  temporary.replace(marker)\n"
-                            # Hold every worker's databases until the supervisor
-                            # has captured their existence and releases the probes.
-                            "  while not (root / 'release').exists(): await asyncio.sleep(0.01)\n"
-                            + (
-                                "  ledger.atexit.unregister(ledger._drop_database)\n"
-                                "  type(self)._class_cleanups.clear()\n"
-                                if mode == "normal"
-                                else (
-                                    "  sys.modules['__main__'].TEST_SECONDS = 1\n"
-                                    "  with sys.modules['__main__'].deadline('phase probe'): await asyncio.Event().wait()\n"
-                                    if mode == "phase"
-                                    else "  await asyncio.Event().wait()\n"
-                                )
-                            )
-                        )
-                    setup = (
-                        "import asyncio, asyncpg, json, signal\nfrom pathlib import Path\n"  # nosec B608 - constant catalog SQL in synthetic probe source
-                        "async def snapshot_databases():\n"
-                        f" connection = await asyncpg.connect({url!r})\n"
-                        " try:\n"
-                        "  names = await connection.fetchval('SELECT array_agg(datname) FROM pg_database')\n"
-                        f"  Path({str(root / 'before.json')!r}).write_text(json.dumps(names))\n"
-                        " finally: await connection.close()\n"
-                    )
-                    try:
-                        result, timings = self.probe(
-                            sources,
-                            workers=2,
-                            supervisor_setup=setup,
-                            ready_when=f"all((Path({str(root)!r}) / (name + '.json')).exists() for name in {list(sources)!r})",
-                            on_ready=(
-                                "asyncio.run(snapshot_databases())\n"
-                                f"Path({str(root / 'release')!r}).touch()\n"
-                                + (
-                                    f"signal.raise_signal(signal.SIG{mode})\n"
-                                    if mode in ("INT", "QUIT", "TERM")
-                                    else ""
-                                )
-                            ),
-                            ready_timeout=1 if mode == "timeout" else None,
-                            database_url=url,
-                        )
-                        expected = {
-                            "normal": (0, "complete"),
-                            "timeout": (124, "timed_out"),
-                            "phase": (1, "failed"),
+            with ExitStack() as stack:
+                roots = {
+                    mode: stack.enter_context(tempfile.TemporaryDirectory())
+                    for mode in modes
+                }
+                try:
+                    # Each mode is an independent runner with its own namespace,
+                    # so run them together: serially they exceeded a test
+                    # deadline in a loaded gVisor workspace.
+                    with ThreadPoolExecutor(len(modes)) as pool:
+                        futures = {
+                            mode: pool.submit(run_mode, mode, roots[mode])
+                            for mode in modes
                         }
-                        if mode in ("INT", "QUIT", "TERM"):
-                            expected[mode] = (
-                                128 + getattr(signal, f"SIG{mode}"),
-                                "cancelled",
+                    remaining = asyncio.run(admin())
+                    self.assertIn(other, remaining)
+                    for mode in modes:
+                        with self.subTest(mode=mode):
+                            root = Path(roots[mode])
+                            result, timings = futures[mode].result()
+                            self.assertEqual(
+                                result.returncode, expected[mode][0], result.stderr
                             )
-                        self.assertEqual(
-                            result.returncode, expected[mode][0], result.stderr
-                        )
-                        self.assertEqual(timings["status"], expected[mode][1])
-                        states = [
-                            json.loads(path.read_text())
-                            for path in root.glob("probe_*.json")
-                        ]
-                        self.assertEqual(len(states), 2, result.stderr)
-                        before = set(json.loads((root / "before.json").read_text()))
-                        remaining = asyncio.run(admin())
-                        self.assertIn(other, remaining)
-                        for state in states:
-                            self.assertTrue(
-                                set(state["databases"]) <= before, result.stderr
-                            )
-                            self.assertFalse(
-                                set(state["databases"]) & remaining, result.stderr
-                            )
-                            self.assertIn(state["foreign"], remaining)
-                            status = Path(f"/proc/{state['pid']}/stat")
-                            if status.exists():
-                                self.assertEqual(status.read_text().split()[2], "Z")
-                    finally:
-                        # Keep the owned server clean even if this regression fails.
-                        for path in root.glob("probe_*.json"):
+                            self.assertEqual(timings["status"], expected[mode][1])
+                            states = [
+                                json.loads(path.read_text())
+                                for path in root.glob("probe_*.json")
+                            ]
+                            self.assertEqual(len(states), 2, result.stderr)
+                            before = set(json.loads((root / "before.json").read_text()))
+                            for state in states:
+                                self.assertTrue(
+                                    set(state["databases"]) <= before, result.stderr
+                                )
+                                self.assertFalse(
+                                    set(state["databases"]) & remaining,
+                                    result.stderr,
+                                )
+                                self.assertIn(state["foreign"], remaining)
+                                status = Path(f"/proc/{state['pid']}/stat")
+                                if status.exists():
+                                    self.assertEqual(status.read_text().split()[2], "Z")
+                finally:
+                    # Keep the owned server clean even if this regression fails.
+                    for root in roots.values():
+                        for path in Path(root).glob("probe_*.json"):
                             state = json.loads(path.read_text())
                             try:
                                 os.killpg(state["pid"], signal.SIGKILL)

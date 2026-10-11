@@ -82,8 +82,9 @@ pnpm check               # workspace frontend/type checks
 ```
 
 Use `make install-backend install-frontend` for bounded dependency setup and
-`dev-postgres run make check` for the complete offline check set under a
-560-second aggregate deadline plus up to 30 seconds for cleanup. [Foreground deadline table](docs/dev-environment.md#foreground-deadlines)
+`dev-postgres run make check` for the complete offline check set inside
+`dev-postgres`'s command budget (515 seconds with an image that predates deadline
+export), plus up to 30 seconds for cleanup. [Foreground deadline table](docs/dev-environment.md#foreground-deadlines)
 lists all caps and timeout diagnostics, including CI jobs.
 
 Set `MAINLOOP_TEST_DATABASE_URL` to a disposable PostgreSQL server first, or use

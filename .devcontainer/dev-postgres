@@ -14,6 +14,7 @@ if [[ ! -f ${helper} ]]; then
 fi
 cap() { node "${helper}" --grace 8 "$@" || return $?; }
 # Include setup, the supplied command, and cleanup in one foreground bound.
+# 570 + 25 leaves five seconds for startup and return below the 600-second tool cap.
 if [[ ${MAINLOOP_DEV_POSTGRES_WORKER:-0} != 1 ]]; then
 	exec node "${helper}" --grace 25 570 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
 fi

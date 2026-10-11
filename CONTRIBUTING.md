@@ -142,7 +142,8 @@ make lint
 ```
 
 After dependency setup, `dev-postgres run make check` runs the complete offline
-check set with a 560-second aggregate deadline plus up to 30 seconds for cleanup. See the
+check set inside `dev-postgres`'s command budget (515 seconds with an image that
+predates deadline export), plus up to 30 seconds for cleanup. See the
 [foreground deadline table](docs/dev-environment.md#foreground-deadlines) for
 per-command caps, network retry limits and timeout diagnostics.
 

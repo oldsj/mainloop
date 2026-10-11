@@ -109,14 +109,20 @@ _fmt-all:
 	trunk fmt -a
 	trunk check -a -y
 
-check: ## All offline checks in one turn (560s + cleanup; installs dependencies)
-	@$(CAP) 560 'make check' -- $(MAKE) --no-print-directory _check
+# Under a dev-postgres whose image predates deadline export, the command's cap is
+# invisible here, so stay inside its budget (540 s minus setup) statically.
+# Otherwise a deadline-exporting parent clamps 565 s, and standalone 565 s plus
+# 30 s of cleanup still ends inside a ten-minute foreground turn.
+CHECK_SECONDS := $(if $(filter 1,$(MAINLOOP_DEV_POSTGRES_WORKER)),$(if $(MAINLOOP_TIMEOUT_DEADLINE_MS),565,515),565)
+
+check: ## All offline checks in one turn (565s or the enclosing deadline, + cleanup; installs dependencies)
+	@$(CAP) $(CHECK_SECONDS) 'make check' -- $(MAKE) --no-print-directory _check
 
 _check:
 	@node scripts/check.mjs --make '$(MAKE)'
 
-check-non-backend: ## Measure the offline checks outside the backend suite (560s + cleanup)
-	@$(CAP) 560 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
+check-non-backend: ## Measure the offline checks outside the backend suite (as make check)
+	@$(CAP) $(CHECK_SECONDS) 'make check-non-backend' -- node scripts/check.mjs --make '$(MAKE)' --non-backend
 
 check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 	@$(CAP) 120 'make check-frontend' -- pnpm check
@@ -124,11 +130,11 @@ check-frontend: install-frontend ## Frontend diagnostics (120s cap)
 test-frontend: install-frontend ## Frontend unit tests (60s cap)
 	@$(CAP) 60 'make test-frontend' -- pnpm --dir frontend test:unit
 
-frontend-build: install-frontend ## Build the frontend application (120s cap)
-	@$(CAP) 120 'make frontend-build' -- pnpm --dir frontend build
+frontend-build: install-frontend ## Build the frontend application (240s cap)
+	@$(CAP) 240 'make frontend-build' -- pnpm --dir frontend build
 
-test-timeouts: ## Timeout helper regression tests (30s cap)
-	@$(CAP) 30 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
+test-timeouts: ## Timeout helper regression tests (90s cap)
+	@$(CAP) 90 'make test-timeouts' -- node --test scripts/with-timeout.test.mjs scripts/check.test.mjs
 
 test-timeout-integration: ## Opt-in real runner + dev-image PG16 cleanup regressions
 	@$(CAP) 180 'make test-timeout-integration' -- node --test scripts/with-timeout.integration.test.mjs

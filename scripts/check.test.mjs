@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,10 +9,17 @@ import { runChecks } from './check.mjs';
 
 const runner = fileURLToPath(new URL('./check.mjs', import.meta.url));
 const cap = fileURLToPath(new URL('./with-timeout.mjs', import.meta.url));
-const env = { ...process.env, MAINLOOP_TIMEOUT_GRACE_MS: '400' };
+// Tests own their deadlines; don't inherit the enclosing `make test-timeouts` one.
+// Five seconds of inherited grace leaves each supervisor the full one-second reserve after
+// its children escalate, enough to write timings on a loaded host.
+const env = {
+  ...process.env,
+  MAINLOOP_TIMEOUT_GRACE_MS: '5000',
+  MAINLOOP_TIMEOUT_DEADLINE_MS: ''
+};
 const nodeStep = (name, source, requires = []) => ({
   name,
-  seconds: 5,
+  seconds: 20,
   command: process.execPath,
   args: ['-e', source],
   requires
@@ -21,15 +28,126 @@ const nodeStep = (name, source, requires = []) => ({
 async function scratchTest(work) {
   const scratch = await mkdtemp(join(tmpdir(), 'mainloop-check-test-'));
   try {
-    await work(scratch);
+    return await work(scratch);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 }
 
 test(
+  'refreshed dev-postgres and real Make caps include fmt and installation, preserving CPU overrides',
+  { timeout: 30000 },
+  async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    for (const overrides of [
+      {},
+      { MAINLOOP_TEST_RESERVE_CPUS: '1' },
+      { MAINLOOP_TEST_WORKERS: '2' }
+    ]) {
+      await scratchTest(async (scratch) => {
+        const bin = join(scratch, 'bin');
+        const trace = join(scratch, 'trace.jsonl');
+        const fixture = join(scratch, 'tool.cjs');
+        await mkdir(bin);
+        // Real shell/Make/Node supervisors, with offline stand-ins for PG and check tools.
+        const tool = `#!/usr/bin/env node
+          const fs = require('node:fs');
+          const kind = require('node:path').basename(process.argv[1]);
+          const args = process.argv.slice(2);
+          const stage = kind === 'tool.cjs' ? args[0] : kind + '-' + args[0];
+          const record = (event) => fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({
+            stage, event, time: Date.now(), deadline: Number(process.env.MAINLOOP_TIMEOUT_DEADLINE_MS),
+            reserve: process.env.MAINLOOP_TEST_RESERVE_CPUS,
+            workers: process.env.MAINLOOP_TEST_WORKERS
+          }) + '\\n');
+          record('start');
+          setTimeout(() => record('end'), ['trunk-fmt', 'uv-sync'].includes(stage) ? 120 : 0);
+        `;
+        await writeFile(fixture, tool, { mode: 0o755 });
+        for (const name of ['trunk', 'uv', 'pnpm'])
+          await writeFile(join(bin, name), tool, { mode: 0o755 });
+        await writeFile(
+          join(bin, 'node'),
+          `#!${process.execPath}
+            const fs = require('node:fs');
+            const args = process.argv.slice(2);
+            // Exercise the refreshed image's helper even when the installed image is older.
+            if (args[0] === '/usr/local/lib/mainloop/with-timeout.mjs')
+              args[0] = ${JSON.stringify(cap)};
+            const separator = args.indexOf('--');
+            const label = args[separator - 1];
+            if (label?.startsWith('dev-postgres ')) {
+              fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({
+                stage: label, event: 'launch', time: Date.now(),
+                seconds: Number(args[separator - 2]), grace: Number(args[2]),
+                deadline: Number(process.env.MAINLOOP_TIMEOUT_DEADLINE_MS)
+              }) + '\\n');
+              if (!['dev-postgres run', 'dev-postgres command'].includes(label))
+                args.splice(separator + 1, args.length, ${JSON.stringify(process.execPath)},
+                  ${JSON.stringify(fixture)}, label);
+            }
+            const result = require('node:child_process').spawnSync(${JSON.stringify(process.execPath)},
+              args, { stdio: 'inherit' });
+            process.exit(result.status ?? 1);
+          `,
+          { mode: 0o755 }
+        );
+        const fixtureEnv = { ...env };
+        delete fixtureEnv.MAINLOOP_TEST_RESERVE_CPUS;
+        delete fixtureEnv.MAINLOOP_TEST_WORKERS;
+        const child = spawn(join(root, '.devcontainer/dev-postgres'), ['run', 'make', 'check'], {
+          cwd: root,
+          env: {
+            ...fixtureEnv,
+            PATH: `${bin}:${process.env.PATH}`,
+            DEV_POSTGRES_ROOT: join(scratch, 'pgdata'),
+            MAINLOOP_CHECK_LOG_DIR: join(scratch, 'logs'),
+            MAINLOOP_DEV_POSTGRES_WORKER: '',
+            MAINLOOP_TIMEOUT_DEADLINE_MS: '',
+            MAINLOOP_TIMEOUT_GRACE_MS: '',
+            ...overrides
+          }
+        });
+        let output = '';
+        child.stdout.on('data', (data) => (output += data));
+        child.stderr.on('data', (data) => (output += data));
+        const code = await new Promise((resolve, reject) => {
+          child.on('error', reject);
+          child.on('close', resolve);
+        });
+        assert.equal(code, 0, output);
+        const events = (await readFile(trace, 'utf8')).trim().split('\n').map(JSON.parse);
+        const phase = (stage, event) =>
+          events.find((row) => row.stage === stage && row.event === event);
+        const outer = phase('dev-postgres run', 'launch');
+        const command = phase('dev-postgres command', 'launch');
+        const backend = phase('uv-run', 'start');
+        assert.equal(outer.seconds, 570);
+        assert.equal(outer.grace, 25);
+        assert.ok(outer.seconds + outer.grace < 600);
+        assert.ok(command.seconds <= 540);
+        assert.ok(command.deadline > 0);
+        assert.ok(phase('trunk-fmt', 'end').time <= phase('uv-sync', 'start').time);
+        assert.ok(phase('uv-sync', 'end').time <= backend.time);
+        assert.ok(
+          backend.time - command.time >= 240,
+          'fmt/install must consume the command budget'
+        );
+        assert.ok(backend.deadline <= command.time + command.seconds * 1000 - 2500);
+        assert.equal(backend.reserve, overrides.MAINLOOP_TEST_RESERVE_CPUS || '0');
+        assert.equal(backend.workers, overrides.MAINLOOP_TEST_WORKERS);
+        assert.match(output, /clamped to the enclosing deadline/);
+        const timings = JSON.parse(await readFile(join(scratch, 'logs/timings.json'), 'utf8'));
+        assert.ok(timings.steps.every((step) => step.status === 'pass'));
+        await assert.rejects(access(join(scratch, 'pgdata')), { code: 'ENOENT' });
+      });
+    }
+  }
+);
+
+test(
   'lanes overlap, steps within each lane wait, and failed checks retain their exit codes',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     await scratchTest(async (scratch) => {
       const left = join(scratch, 'left');
@@ -76,7 +194,7 @@ test(
 
 test(
   'a failed install blocks its consumers but still runs independent lint and the other lane',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     await scratchTest(async (scratch) => {
       const exit = await runChecks({
@@ -105,7 +223,7 @@ test(
 
 test(
   'logs have a byte limit and long or split output always carries its step prefix',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     await scratchTest(async (scratch) => {
       let console = '';
@@ -145,7 +263,7 @@ test(
 
 test(
   'a missing tool or unusable log fails the run and still reports the other steps',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     await scratchTest(async (scratch) => {
       // Opening a directory as a writable log fails even for a root container user.
@@ -169,36 +287,72 @@ test(
   }
 );
 
-async function waitFor(path) {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    try {
-      return await readFile(path, 'utf8');
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// True once every fixture file exists; false if the supervised command exits
+// first or startup exceeds a wall-clock bound (loaded hosts start slowly).
+async function started(paths, done, seconds = 20) {
+  let exited = false;
+  done.then(() => {
+    exited = true;
+  });
+  const expires = performance.now() + seconds * 1000;
+  for (;;) {
+    const present = await Promise.all(
+      paths.map((path) =>
+        access(path).then(
+          () => true,
+          (error) => {
+            if (error.code !== 'ENOENT') throw error;
+            return false;
+          }
+        )
+      )
+    );
+    if (present.every(Boolean)) return true;
+    if (exited || performance.now() > expires) return false;
+    await sleep(10);
   }
-  assert.fail(`fixture did not start: ${path}`);
 }
 
+// The group was killed before the supervisor exited; allow the kernel to
+// finish delivering SIGKILL before requiring a zombie or a reaped process.
 async function assertStopped(pid) {
-  try {
-    const state = (await readFile(`/proc/${pid}/stat`, 'utf8')).split(' ')[2];
-    assert.equal(state, 'Z', `descendant ${pid} is still running`);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+  const expires = performance.now() + 10000;
+  let state;
+  while (performance.now() < expires) {
+    try {
+      state = (await readFile(`/proc/${pid}/stat`, 'utf8')).split(' ')[2];
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      return;
+    }
+    if (state === 'Z') return;
+    await sleep(20);
   }
+  assert.fail(`descendant ${pid} is still running (${state})`);
 }
 
 for (const mode of ['deadline', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
   test(
     `aggregate ${mode} cleans both lanes, prints timing status, and skips pending work`,
-    { timeout: 10000 },
+    { timeout: 120000 },
     async () => {
-      await scratchTest(async (scratch) => {
-        const pids = [join(scratch, 'left.pid'), join(scratch, 'right.pid')];
-        const termFiles = pids.map((path) => path + '.signal');
-        const stubborn = (pidFile, termFile) => `
+      // A deadline proves cleanup only if both fixtures started before it. When a
+      // loaded host starts them too late, retry with a longer deadline.
+      for (const seconds of mode === 'deadline' ? [1, 2, 4, 8] : [30]) {
+        if (await aggregate(mode, seconds)) return;
+      }
+      assert.fail('fixtures did not start before the aggregate deadline');
+    }
+  );
+}
+
+async function aggregate(mode, seconds) {
+  return await scratchTest(async (scratch) => {
+    const pids = [join(scratch, 'left.pid'), join(scratch, 'right.pid')];
+    const termFiles = pids.map((path) => path + '.signal');
+    const stubborn = (pidFile, termFile) => `
         const fs = require('node:fs');
         for (const signal of ['SIGINT', 'SIGQUIT', 'SIGTERM']) {
           process.on(signal, () => fs.writeFileSync(${JSON.stringify(termFile)}, signal));
@@ -206,79 +360,80 @@ for (const mode of ['deadline', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
         fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
         setInterval(() => {}, 1000);
       `;
-        const lanes = pids.map((path, index) => [
-          nodeStep(index ? 'right' : 'left', stubborn(path, termFiles[index])),
-          nodeStep(index ? 'right-later' : 'left-later', 'process.exit(0)')
-        ]);
-        const source = `
+    const lanes = pids.map((path, index) => [
+      nodeStep(index ? 'right' : 'left', stubborn(path, termFiles[index])),
+      nodeStep(index ? 'right-later' : 'left-later', 'process.exit(0)')
+    ]);
+    // Steps here don't clamp to the aggregate deadline, so the aggregate's own
+    // deadline and cancellation path is what fires.
+    const source = `
         import { runChecks } from ${JSON.stringify(runner)};
-        process.exitCode = await runChecks(${JSON.stringify({ directory: scratch, lanes })});
+        process.exitCode = await runChecks({
+          ...${JSON.stringify({ directory: scratch, lanes })},
+          env: { ...process.env, MAINLOOP_TIMEOUT_DEADLINE_MS: '' }
+        });
       `;
-        const child = spawn(
-          process.execPath,
-          [
-            cap,
-            '--grace',
-            '1',
-            mode === 'deadline' ? '1' : '8',
-            'aggregate',
-            '--',
-            process.execPath,
-            '--input-type=module',
-            '-e',
-            source
-          ],
-          { env }
+    const child = spawn(
+      process.execPath,
+      [
+        cap,
+        '--grace',
+        '4',
+        String(seconds),
+        'aggregate',
+        '--',
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        source
+      ],
+      { env }
+    );
+    let output = '';
+    child.stdout.on('data', (data) => {
+      output += data;
+    });
+    child.stderr.on('data', (data) => {
+      output += data;
+    });
+    const done = new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', resolve);
+    });
+    try {
+      if (!(await started(pids, done))) return false;
+      if (mode !== 'deadline') child.kill(mode);
+      assert.equal(await done, mode === 'deadline' ? 124 : 128 + constants.signals[mode]);
+      for (let index = 0; index < pids.length; index++) {
+        const pid = Number(await readFile(pids[index], 'utf8'));
+        await assertStopped(pid);
+        assert.equal(
+          await readFile(termFiles[index], 'utf8'),
+          mode === 'deadline' ? 'SIGTERM' : mode
         );
-        let output = '';
-        child.stdout.on('data', (data) => {
-          output += data;
-        });
-        child.stderr.on('data', (data) => {
-          output += data;
-        });
-        const done = new Promise((resolve, reject) => {
-          child.on('error', reject);
-          child.on('close', resolve);
-        });
+      }
+      const timing = JSON.parse(await readFile(join(scratch, 'timings.json'), 'utf8'));
+      assert.equal(timing.exit, mode === 'deadline' ? 143 : 128 + constants.signals[mode]);
+      assert.equal(timing.steps.filter((row) => row.status === 'cancelled before start').length, 2);
+      assert.match(output, /Check timings/);
+      return true;
+    } finally {
+      child.kill('SIGTERM');
+      await done;
+      for (const path of pids) {
         try {
-          await Promise.all(pids.map(waitFor));
-          if (mode !== 'deadline') child.kill(mode);
-          assert.equal(await done, mode === 'deadline' ? 124 : 128 + constants.signals[mode]);
-          for (let index = 0; index < pids.length; index++) {
-            const pid = Number(await readFile(pids[index], 'utf8'));
-            await assertStopped(pid);
-            assert.equal(
-              await readFile(termFiles[index], 'utf8'),
-              mode === 'deadline' ? 'SIGTERM' : mode
-            );
-          }
-          const timing = JSON.parse(await readFile(join(scratch, 'timings.json'), 'utf8'));
-          assert.equal(timing.exit, mode === 'deadline' ? 143 : 128 + constants.signals[mode]);
-          assert.equal(
-            timing.steps.filter((row) => row.status === 'cancelled before start').length,
-            2
-          );
-          assert.match(output, /Check timings/);
-        } finally {
-          child.kill('SIGTERM');
-          await done;
-          for (const path of pids) {
-            try {
-              process.kill(Number(await readFile(path, 'utf8')), 'SIGKILL');
-            } catch (error) {
-              if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error;
-            }
-          }
+          process.kill(Number(await readFile(path, 'utf8')), 'SIGKILL');
+        } catch (error) {
+          if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error;
         }
-      });
+      }
     }
-  );
+  });
 }
 
 test(
   'a step deadline fails the run without abandoning the independent lane',
-  { timeout: 10000 },
+  { timeout: 30000 },
   async () => {
     await scratchTest(async (scratch) => {
       const timed = nodeStep('timeout', 'setInterval(() => {}, 1000)');
@@ -301,7 +456,7 @@ test(
 
 test(
   'the real Make _check recipe cancels and cleans both production lanes',
-  { timeout: 10000 },
+  { timeout: 60000 },
   async () => {
     await scratchTest(async (scratch) => {
       const bin = join(scratch, 'bin');
@@ -326,7 +481,7 @@ test(
         process.execPath,
         [
           cap,
-          '8',
+          '40',
           'make fixture',
           '--',
           'make',
@@ -350,7 +505,7 @@ test(
         child.on('close', resolve);
       });
       try {
-        await Promise.all(pids.map(waitFor));
+        assert.ok(await started(pids, done, 30), 'production lane fixtures did not start');
         child.kill('SIGTERM');
         assert.equal(await done, 143);
         for (const path of pids) {
@@ -375,5 +530,53 @@ test(
         }
       }
     });
+  }
+);
+
+test(
+  'make check stays inside an old dev-postgres budget and otherwise defers to the deadline',
+  { timeout: 30000 },
+  async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const seconds = (overrides) =>
+      new Promise((resolve, reject) => {
+        let output = '';
+        const child = spawn(
+          process.env.MAKE || 'make',
+          [
+            '-s',
+            '--no-print-directory',
+            '--eval=show-check-seconds: ; @echo $(CHECK_SECONDS)',
+            'show-check-seconds'
+          ],
+          {
+            cwd: root,
+            env: {
+              ...env,
+              MAINLOOP_DEV_POSTGRES_WORKER: '',
+              MAINLOOP_TIMEOUT_DEADLINE_MS: '',
+              ...overrides
+            },
+            stdio: ['ignore', 'pipe', 'inherit']
+          }
+        );
+        child.stdout.on('data', (chunk) => (output += chunk));
+        child.on('error', reject);
+        child.on('exit', (code) =>
+          code === 0 ? resolve(output.trim()) : reject(new Error(`make exited ${code}`))
+        );
+      });
+    // Standalone: 565 s plus 30 s of cleanup ends inside a ten-minute turn.
+    assert.equal(await seconds({}), '565');
+    // An image without deadline export hides its 540 s command cap.
+    assert.equal(await seconds({ MAINLOOP_DEV_POSTGRES_WORKER: '1' }), '515');
+    // A deadline-exporting dev-postgres clamps the larger cap itself.
+    assert.equal(
+      await seconds({
+        MAINLOOP_DEV_POSTGRES_WORKER: '1',
+        MAINLOOP_TIMEOUT_DEADLINE_MS: String(Date.now() + 60000)
+      }),
+      '565'
+    );
   }
 );

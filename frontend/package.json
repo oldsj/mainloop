@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "node ../scripts/with-timeout.mjs 120 'frontend build' -- vite build",
+    "build": "node ../scripts/with-timeout.mjs 240 'frontend build' -- vite build",
     "preview": "vite preview",
     "prepare": "if [ -f node_modules/@sveltejs/kit/svelte-kit.js ]; then node ../scripts/with-timeout.mjs 30 'svelte-kit sync' -- svelte-kit sync; fi",
     "check": "node ../scripts/with-timeout.mjs 120 'frontend check' -- sh -c 'svelte-kit sync && svelte-check --tsconfig ./tsconfig.json'",

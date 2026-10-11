@@ -186,7 +186,8 @@ class StubbornWorker(unittest.TestCase):
             helper,
             '--grace',
             mode === 'short budget' ? '3' : '30',
-            expires ? '2' : '30',
+            // Leave startup time after the Make wrapper and runner reserve their deadlines.
+            expires ? '6' : '30',
             'enclosing backend cap',
             '--',
             'make',
@@ -208,7 +209,15 @@ class StubbornWorker(unittest.TestCase):
           descendant = Number(await ready(pidFile + '.child'));
           if (!expires) child.kill(mode);
           const result = await done;
-          assert.equal(result.code, expires ? 124 : 128 + constants.signals[mode], result.stderr);
+          if (expires) {
+            // A nested timeout can finish before this cap: Make then returns 2 for recipe 124.
+            assert.ok([2, 124].includes(result.code), result.stderr);
+            assert.match(result.stderr, /Backend status: timed_out/);
+            assert.match(result.stderr, /\[done [^\n]*exit 124\] make test-backend/);
+            if (result.code === 2) assert.match(result.stderr, /Error 124/);
+          } else {
+            assert.equal(result.code, 128 + constants.signals[mode], result.stderr);
+          }
           await assertStopped(worker);
           await assertStopped(descendant);
         } finally {
