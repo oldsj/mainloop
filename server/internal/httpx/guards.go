@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	localhostOrigin = regexp.MustCompile(`^http://localhost:\d+$`)
-	loopbackHosts   = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	loopbackOrigin = regexp.MustCompile(`^http://(localhost|127\.0\.0\.1|\[::1\]):\d+$`)
+	loopbackHosts  = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
 )
 
 // HostGuard answers 404 {"detail":"Not Found"} for a Host that is not in allowed. Loopback is
@@ -69,7 +69,7 @@ func originAllowed(origin, host, frontendOrigin string, dev bool) bool {
 	if origin == frontendOrigin {
 		return true
 	}
-	if dev && localhostOrigin.MatchString(origin) {
+	if dev && loopbackOrigin.MatchString(origin) {
 		return true
 	}
 	// The API's own origin: scheme-independent, port-sensitive, as in the Python guard. The

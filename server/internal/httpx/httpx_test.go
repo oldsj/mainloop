@@ -72,6 +72,15 @@ func TestOriginGuard(t *testing.T) {
 		{"frontend origin", false, "POST", p(frontend), "api.test", false},
 		{"localhost port in dev", true, "POST", p("http://localhost:5173"), "api.test", false},
 		{"localhost port in prod", false, "POST", p("http://localhost:5173"), "api.test", true},
+		{"127.0.0.1 port in dev", true, "POST", p("http://127.0.0.1:5173"), "api.test", false},
+		{"127.0.0.1 port in prod", false, "POST", p("http://127.0.0.1:5173"), "api.test", true},
+		{"ipv6 loopback port in dev", true, "POST", p("http://[::1]:5173"), "api.test", false},
+		{"ipv6 loopback port in prod", false, "POST", p("http://[::1]:5173"), "api.test", true},
+		{"127.0.0.1 without port in dev", true, "POST", p("http://127.0.0.1"), "api.test", true},
+		{"127.0.0.1 lookalike in dev", true, "POST", p("http://127.0.0.1:5173.evil.example"), "api.test", true},
+		{"127.0.0.1 prefix host in dev", true, "POST", p("http://127.0.0.1.evil.example:5173"), "api.test", true},
+		{"127.0.0.1 https in dev", true, "POST", p("https://127.0.0.1:5173"), "api.test", true},
+		{"other loopback address in dev", true, "POST", p("http://127.0.0.2:5173"), "api.test", true},
 		{"localhost lookalike in dev", true, "POST", p("http://localhost:5173.evil.example"), "api.test", true},
 		{"localhost https in dev", true, "POST", p("https://localhost:5173"), "api.test", true},
 		{"own origin", false, "POST", p("http://api.test"), "api.test", false},
@@ -183,6 +192,14 @@ func TestCORS(t *testing.T) {
 		}
 		if got := preflight(httpx.CORS(frontend, false)(ok), "http://localhost:5173").Header().Get("Access-Control-Allow-Origin"); got != "" {
 			t.Errorf("prod allow-origin = %q", got)
+		}
+		for _, origin := range []string{"http://127.0.0.1:5173", "http://[::1]:5173"} {
+			if got := preflight(httpx.CORS(frontend, true)(ok), origin).Header().Get("Access-Control-Allow-Origin"); got != origin {
+				t.Errorf("dev allow-origin for %s = %q", origin, got)
+			}
+			if got := preflight(httpx.CORS(frontend, false)(ok), origin).Header().Get("Access-Control-Allow-Origin"); got != "" {
+				t.Errorf("prod allow-origin for %s = %q", origin, got)
+			}
 		}
 	})
 }

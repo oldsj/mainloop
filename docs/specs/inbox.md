@@ -136,7 +136,10 @@ Built:
   carries the HITL extension becomes a `hitl_requests` row (`pending`), identified by a hash of
   the session, task, status message and request body. Each open request gets an `attention_items`
   row, and `inbox:updated` is published in the same transaction. A request appears within one scan
-  interval.
+  interval, or within one observer sweep (5 s) when its delivery turn just parked: the delivery marks
+  the session due (`hitl_sessions.scanned_at` cleared) and does nothing else. The mark is a hint that
+  coalesces; it skips a task that already has a live request and a session in failure backoff, and a
+  lost one falls back to the scan interval.
 - **Availability.** `pending` becomes `answered` when the task shows the response message,
   `unavailable` when the task moves on or disappears or a newer ask replaces it, and `stale`
   (not answerable) when its own refresh has not been confirmed by kagent for two minutes. A stale request reopens when

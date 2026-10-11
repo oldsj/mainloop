@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -759,6 +760,18 @@ func (t *turn) parkedDelay() time.Duration {
 	return backoff(o.FollowPoll, o.ParkedMax, t.c.Attempts)
 }
 
+// hintHITL marks the session due for the HITL observer's next sweep. It is only a hint: it is one
+// short write with no transaction open, and a failure is logged, not returned, since the observer's
+// periodic scan finds the request anyway.
+func (t *turn) hintHITL(ctx context.Context, task *a2a.Task) {
+	if t.ksid == "" {
+		return
+	}
+	if err := hitl.RequestScan(ctx, t.s.Pool, t.ksid, string(task.ID)); err != nil && ctx.Err() == nil {
+		t.s.log().WarnContext(ctx, "hint the hitl observer failed", "message_id", t.c.ID, "task_id", task.ID, "error", err)
+	}
+}
+
 // adopt records that the message has a task and moves the turn along: finalize a finished task,
 // wait on a parked one, follow a running one.
 func (t *turn) adopt(ctx context.Context, task *a2a.Task) (reconcile.Outcome, error) {
@@ -783,7 +796,9 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		return t.settle(ctx, dbstate.DeliveryFailed, "task "+st+": "+statusText(task), task, st == "failed")
 	case st == "input_required" || st == "auth_required":
 		// Parked for someone else: it keeps the session's turn open until it is answered, which can
-		// take long, so look again less and less often.
+		// take long, so look again less and less often. Tell the HITL observer to list this
+		// session's tasks now, so the owner sees the request at once instead of after its scan period.
+		t.hintHITL(ctx, task)
 		return reconcile.RetryAfter(t.parkedDelay()), nil
 	case !follow:
 		// Still running after we followed it to the end of its stream: look again soon.
