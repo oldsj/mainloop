@@ -14,16 +14,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
 type pinger func(context.Context) error
 
 func (p pinger) Ping(ctx context.Context) error { return p(ctx) }
 
-func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Handler {
+func newConfig(t *testing.T, vars map[string]string) *config.Config {
 	t.Helper()
 	all := map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"}
 	for k, v := range vars {
@@ -33,12 +35,36 @@ func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Hand
 	if err != nil {
 		t.Fatal(err)
 	}
+	return cfg
+}
+
+func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Handler {
+	t.Helper()
+	cfg := newConfig(t, vars)
 	deps := app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: ping}
 	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return h
+}
+
+// Every contract operation has a domain handler. Exercise the app's embedded fallback explicitly
+// rather than treating an implemented route with an unavailable dependency as unimplemented.
+func newUnimplementedHandler(t *testing.T, vars map[string]string) http.Handler {
+	t.Helper()
+	cfg := newConfig(t, vars)
+	stub := (&app.Server{}).Unimplemented
+	strict := api.NewStrictHandlerWithOptions(stub, nil, api.StrictHTTPServerOptions{
+		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+			httpx.WriteErr(w, err)
+		},
+	})
+	routes := api.HandlerWithOptions(strict, api.StdHTTPServerOptions{})
+	return httpx.Chain(routes,
+		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
+		httpx.RequestIDMiddleware,
+	)
 }
 
 func up() app.Pinger { return pinger(func(context.Context) error { return nil }) }
@@ -81,7 +107,7 @@ func detail(t *testing.T, r result) any {
 }
 
 func TestUnimplementedOperationReturns501WithErrorShape(t *testing.T) {
-	h := newHandler(t, nil, up())
+	h := newUnimplementedHandler(t, nil)
 	for _, path := range []string{"/hitl/r1/merge/p1/details?section=files"} {
 		r := send(h, "GET", path, "", nil)
 		if r.status != http.StatusNotImplemented {
@@ -231,9 +257,13 @@ func TestGuardsApplyToTheAPI(t *testing.T) {
 		}
 	})
 	t.Run("dev allows loopback host", func(t *testing.T) {
-		dev := newHandler(t, map[string]string{"DEV_MODE": "true"}, up())
+		dev := newUnimplementedHandler(t, map[string]string{"DEV_MODE": "true"})
 		if r := send(dev, "GET", "/hitl/r1/merge/p1/details?section=files", "", map[string]string{"Host": "localhost:8000"}); r.status != 501 {
 			t.Fatalf("got %d", r.status)
+		}
+		live := newHandler(t, map[string]string{"DEV_MODE": "true"}, up())
+		if r := send(live, "GET", "/schedules", "", map[string]string{"Host": "localhost:8000"}); r.status != http.StatusServiceUnavailable {
+			t.Fatalf("implemented route got %d: %s", r.status, r.body)
 		}
 		if r := send(h, "GET", "/hitl/r1/merge/p1/details?section=files", "", map[string]string{"Host": "localhost:8000"}); r.status != 404 {
 			t.Fatalf("prod loopback got %d", r.status)
