@@ -423,8 +423,7 @@ def suite_seconds():
 def default_workers():
     """One per CPU up to six, fewer when available memory cannot hold them.
 
-    MAINLOOP_TEST_RESERVE_CPUS leaves CPUs for concurrent work (make check's
-    frontend lane).
+    MAINLOOP_TEST_RESERVE_CPUS optionally leaves CPUs for concurrent work.
     """
     reserve = int(os.environ.get("MAINLOOP_TEST_RESERVE_CPUS") or 0)
     workers = max(1, min((os.cpu_count() or 1) - reserve, 6))
@@ -805,6 +804,7 @@ def supervise(args):
                 signal.signal(signum, signal.SIG_IGN)
             try:
                 cleanup_expires = time.monotonic() + cleanup_budget()
+                cleanup_phase = "worker process groups"
                 try:
                     cleanup(
                         [
@@ -816,6 +816,7 @@ def supervise(args):
                         cleanup_expires,
                         supervisor.pending_signal or signal.SIGTERM,
                     )
+                    cleanup_phase = "scratch databases"
                     asyncio.run(
                         cleanup_databases(
                             [
@@ -826,7 +827,11 @@ def supervise(args):
                         )
                     )
                 except Exception as error:
-                    print(f"Backend cleanup failed: {error}", file=sys.stderr)
+                    print(
+                        f"Backend cleanup failed during {cleanup_phase}: {error!r}; "
+                        f"shared budget remaining {max(0, cleanup_expires - time.monotonic()):.3f}s",
+                        file=sys.stderr,
+                    )
                     if code == 0:
                         code = 1
                         supervisor.timings["status"] = "failed"

@@ -328,7 +328,10 @@ class BackendRunnerTests(unittest.TestCase):
         def meminfo(megabytes):
             return mock_open(read_data=f"MemAvailable: {megabytes * 1024} kB\n")
 
-        with patch.object(runner.os, "cpu_count", return_value=16):
+        with (
+            patch.object(runner.os, "cpu_count", return_value=16),
+            patch.dict(os.environ, {"MAINLOOP_TEST_RESERVE_CPUS": "0"}),
+        ):
             with patch("builtins.open", meminfo(8192)):
                 self.assertEqual(runner.default_workers(), 6)
             with patch("builtins.open", meminfo(1536)):
@@ -337,6 +340,13 @@ class BackendRunnerTests(unittest.TestCase):
                 self.assertEqual(runner.default_workers(), 1)
             with patch("builtins.open", side_effect=OSError):
                 self.assertEqual(runner.default_workers(), 6)
+            for cpus, expected in ((6, 6), (2, 2), (1, 1), (None, 1)):
+                with self.subTest(cpus=cpus):
+                    with (
+                        patch.object(runner.os, "cpu_count", return_value=cpus),
+                        patch("builtins.open", meminfo(8192)),
+                    ):
+                        self.assertEqual(runner.default_workers(), expected)
             with patch.dict(os.environ, {"MAINLOOP_TEST_RESERVE_CPUS": "1"}):
                 with patch("builtins.open", meminfo(8192)):
                     self.assertEqual(runner.default_workers(), 6)
@@ -346,6 +356,26 @@ class BackendRunnerTests(unittest.TestCase):
                 with patch.object(runner.os, "cpu_count", return_value=1):
                     with patch("builtins.open", meminfo(8192)):
                         self.assertEqual(runner.default_workers(), 1)
+
+    def test_empty_cleanup_timeout_reports_phase_and_remains_a_failure(self):
+        result, timings = self.probe(
+            "import unittest\nclass Case(unittest.TestCase):\n def test_ok(self): pass\n",
+            database_url="postgresql://fixture-mocked/postgres",
+            supervisor_setup=(
+                "import asyncio\n"
+                "async def expired_cleanup(*args):\n"
+                " async with asyncio.timeout(0): await asyncio.sleep(1)\n"
+                "runner.cleanup_databases = expired_cleanup\n"
+            ),
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertRegex(
+            result.stderr,
+            r"Backend cleanup failed during scratch databases: TimeoutError\(\); "
+            r"shared budget remaining [\d.]+s",
+        )
+        self.assertEqual(timings["status"], "failed")
+        self.assertEqual(timings["tests_run"], 1)
 
     def test_suite_cap_ends_just_before_an_enclosing_deadline(self):
         with patch.dict(os.environ):

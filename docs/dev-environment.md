@@ -40,7 +40,7 @@ Standalone frontend targets have a separate 120-second install phase before
 the check, test or build cap. The aggregate cap is 565 seconds, including
 cold installs; standalone, that plus 30 seconds of cleanup ends inside a ten-minute
 turn. Under a `dev-postgres` that exports its deadline, the cap is clamped to one
-second before the command's deadline (545 seconds minus setup), leaving room for
+second before the command's deadline (540 seconds minus setup), leaving room for
 `make check`'s own cleanup (at most seven seconds there). An older image's
 `dev-postgres` (570 s / 540 s minus setup) exports no deadline, so `make check`
 recognises it and uses a static 515 seconds instead. With such an image,
@@ -133,7 +133,7 @@ into bounded jobs.
 | `make lint-all`, `make fmt-all`                              | 240 s / 300 s             | Whole-repository Trunk                                                       |
 | `make build-backend`, `make build-frontend`                  | 480 s each                | Local Docker image builds                                                    |
 | `make build-all`, `make build-all-parallel`                  | 550 s / 480 s total       | Serial or parallel image builds                                              |
-| `dev-postgres run` / supplied command                        | 575 s / 545 s minus setup | Reserves 30 s for teardown; at most 600 s including cancellation cleanup     |
+| `dev-postgres run` / supplied command                        | 570 s / 540 s minus setup | Reserves 30 s for teardown; at most 595 s including cancellation cleanup     |
 | PostgreSQL init / start / readiness / stop                   | 30 s / 35 s / 5 s / 15 s  | `pg_ctl` also has 30 s start and 10 s stop waits                             |
 | Scripted Docker Git fetch / tool download                    | 120 s / about 95 s        | Git low-speed cutoff 30 s; curl connect 10 s, transfer 45 s, one retry       |
 | Dev-image Trunk installation                                 | 300 s                     | Includes lint tool/runtime downloads                                         |
@@ -208,8 +208,9 @@ Keep build/package caches and `TMPDIR` at their usual locations, outside `/tmp`.
 It requires `MAINLOOP_TEST_DATABASE_URL` and already-synced backend dependencies.
 `MAINLOOP_TEST_WORKERS` overrides the default `min(os.cpu_count(), 6)` processes,
 further limited to one per 512 MiB of available memory; set it to `1` for serial execution.
-`make check` sets `MAINLOOP_TEST_RESERVE_CPUS=1`, so the backend uses one CPU fewer
-(at least one worker) and the frontend lane keeps a CPU.
+`make check` defaults `MAINLOOP_TEST_RESERVE_CPUS=0`, so the backend uses all six
+CPUs in a six-CPU workspace while the other lane runs concurrently. Set a reserve
+explicitly to leave CPUs for other work; at least one backend worker remains.
 Workers are separate interpreters started with fork and exec, not forked copies
 of the supervisor. Each worker discovers the whole suite, derives the same
 deterministic module plan and runs only its share, so there is no separate
@@ -229,7 +230,8 @@ leaving headroom under the harness's ten-minute foreground limit. The Make wrapp
 bounds uv startup. CI's job cap is ten minutes.
 The supervisor kills every worker process group on timeout or cancellation, including
 test subprocesses, then drops this run's class/template databases within the same
-cleanup budget; `dev-postgres` also removes its disposable cluster. Success requires
+cleanup budget; failures report the cleanup phase, exception type and remaining
+shared budget. `dev-postgres` also removes its disposable cluster. Success requires
 every planned ID to execute exactly once, including skips and expected failures.
 Each worker migrates one empty template in its own database namespace. Schema and
 fixture-isolation tests retain independent class clones. Explicitly qualified

@@ -198,10 +198,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       ...checkPlan(make, args[0] === '--non-backend'),
       directory,
       // Keep backend module timings with the logs; a later run balances on them.
-      // Leave the frontend lane one CPU unless workers are set explicitly.
+      // The backend is the critical path; use all CPUs unless the caller reserves some.
       env: {
         MAINLOOP_TEST_TIMINGS: resolve(directory, 'backend-timings.json'),
-        MAINLOOP_TEST_RESERVE_CPUS: '1',
+        MAINLOOP_TEST_RESERVE_CPUS: '0',
         ...process.env
       }
     });

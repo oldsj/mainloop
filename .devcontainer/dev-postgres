@@ -14,8 +14,9 @@ if [[ ! -f ${helper} ]]; then
 fi
 cap() { node "${helper}" --grace 8 "$@" || return $?; }
 # Include setup, the supplied command, and cleanup in one foreground bound.
+# 570 + 25 leaves five seconds for startup and return below the 600-second tool cap.
 if [[ ${MAINLOOP_DEV_POSTGRES_WORKER:-0} != 1 ]]; then
-	exec node "${helper}" --grace 25 575 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
+	exec node "${helper}" --grace 25 570 'dev-postgres run' -- env MAINLOOP_DEV_POSTGRES_WORKER=1 "$0" run "$@"
 fi
 # Teardown needs the active phase's eight seconds, the stop phase's 15+1 seconds,
 # and one second of scheduling/removal headroom. Refuse before claiming PGDATA
@@ -126,9 +127,9 @@ cap 5 'dev-postgres readiness' -- "${pg[0]}/pg_isready" -h 127.0.0.1 -p "${port}
 export MAINLOOP_TEST_DATABASE_URL="postgresql://mainloop@127.0.0.1:${port}/postgres"
 echo "MAINLOOP_TEST_DATABASE_URL=${MAINLOOP_TEST_DATABASE_URL}"
 # Setup consumes the same budget; leave 30 seconds for command and PG cleanup.
-command_seconds=$((545 - SECONDS))
+command_seconds=$((540 - SECONDS))
 if ((command_seconds <= 0)); then
-	echo 'dev-postgres setup: timed out after 545 s' >&2
+	echo 'dev-postgres setup: timed out after 540 s' >&2
 	exit 124
 fi
 # Bash background jobs inherit ignored INT/QUIT; restore them before exec.

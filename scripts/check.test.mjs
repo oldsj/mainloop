@@ -35,6 +35,117 @@ async function scratchTest(work) {
 }
 
 test(
+  'refreshed dev-postgres and real Make caps include fmt and installation, preserving CPU overrides',
+  { timeout: 30000 },
+  async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    for (const overrides of [
+      {},
+      { MAINLOOP_TEST_RESERVE_CPUS: '1' },
+      { MAINLOOP_TEST_WORKERS: '2' }
+    ]) {
+      await scratchTest(async (scratch) => {
+        const bin = join(scratch, 'bin');
+        const trace = join(scratch, 'trace.jsonl');
+        const fixture = join(scratch, 'tool.cjs');
+        await mkdir(bin);
+        // Real shell/Make/Node supervisors, with offline stand-ins for PG and check tools.
+        const tool = `#!/usr/bin/env node
+          const fs = require('node:fs');
+          const kind = require('node:path').basename(process.argv[1]);
+          const args = process.argv.slice(2);
+          const stage = kind === 'tool.cjs' ? args[0] : kind + '-' + args[0];
+          const record = (event) => fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({
+            stage, event, time: Date.now(), deadline: Number(process.env.MAINLOOP_TIMEOUT_DEADLINE_MS),
+            reserve: process.env.MAINLOOP_TEST_RESERVE_CPUS,
+            workers: process.env.MAINLOOP_TEST_WORKERS
+          }) + '\\n');
+          record('start');
+          setTimeout(() => record('end'), ['trunk-fmt', 'uv-sync'].includes(stage) ? 120 : 0);
+        `;
+        await writeFile(fixture, tool, { mode: 0o755 });
+        for (const name of ['trunk', 'uv', 'pnpm'])
+          await writeFile(join(bin, name), tool, { mode: 0o755 });
+        await writeFile(
+          join(bin, 'node'),
+          `#!${process.execPath}
+            const fs = require('node:fs');
+            const args = process.argv.slice(2);
+            // Exercise the refreshed image's helper even when the installed image is older.
+            if (args[0] === '/usr/local/lib/mainloop/with-timeout.mjs')
+              args[0] = ${JSON.stringify(cap)};
+            const separator = args.indexOf('--');
+            const label = args[separator - 1];
+            if (label?.startsWith('dev-postgres ')) {
+              fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({
+                stage: label, event: 'launch', time: Date.now(),
+                seconds: Number(args[separator - 2]), grace: Number(args[2]),
+                deadline: Number(process.env.MAINLOOP_TIMEOUT_DEADLINE_MS)
+              }) + '\\n');
+              if (!['dev-postgres run', 'dev-postgres command'].includes(label))
+                args.splice(separator + 1, args.length, ${JSON.stringify(process.execPath)},
+                  ${JSON.stringify(fixture)}, label);
+            }
+            const result = require('node:child_process').spawnSync(${JSON.stringify(process.execPath)},
+              args, { stdio: 'inherit' });
+            process.exit(result.status ?? 1);
+          `,
+          { mode: 0o755 }
+        );
+        const fixtureEnv = { ...env };
+        delete fixtureEnv.MAINLOOP_TEST_RESERVE_CPUS;
+        delete fixtureEnv.MAINLOOP_TEST_WORKERS;
+        const child = spawn(join(root, '.devcontainer/dev-postgres'), ['run', 'make', 'check'], {
+          cwd: root,
+          env: {
+            ...fixtureEnv,
+            PATH: `${bin}:${process.env.PATH}`,
+            DEV_POSTGRES_ROOT: join(scratch, 'pgdata'),
+            MAINLOOP_CHECK_LOG_DIR: join(scratch, 'logs'),
+            MAINLOOP_DEV_POSTGRES_WORKER: '',
+            MAINLOOP_TIMEOUT_DEADLINE_MS: '',
+            MAINLOOP_TIMEOUT_GRACE_MS: '',
+            ...overrides
+          }
+        });
+        let output = '';
+        child.stdout.on('data', (data) => (output += data));
+        child.stderr.on('data', (data) => (output += data));
+        const code = await new Promise((resolve, reject) => {
+          child.on('error', reject);
+          child.on('close', resolve);
+        });
+        assert.equal(code, 0, output);
+        const events = (await readFile(trace, 'utf8')).trim().split('\n').map(JSON.parse);
+        const phase = (stage, event) =>
+          events.find((row) => row.stage === stage && row.event === event);
+        const outer = phase('dev-postgres run', 'launch');
+        const command = phase('dev-postgres command', 'launch');
+        const backend = phase('uv-run', 'start');
+        assert.equal(outer.seconds, 570);
+        assert.equal(outer.grace, 25);
+        assert.ok(outer.seconds + outer.grace < 600);
+        assert.ok(command.seconds <= 540);
+        assert.ok(command.deadline > 0);
+        assert.ok(phase('trunk-fmt', 'end').time <= phase('uv-sync', 'start').time);
+        assert.ok(phase('uv-sync', 'end').time <= backend.time);
+        assert.ok(
+          backend.time - command.time >= 240,
+          'fmt/install must consume the command budget'
+        );
+        assert.ok(backend.deadline <= command.time + command.seconds * 1000 - 2500);
+        assert.equal(backend.reserve, overrides.MAINLOOP_TEST_RESERVE_CPUS || '0');
+        assert.equal(backend.workers, overrides.MAINLOOP_TEST_WORKERS);
+        assert.match(output, /clamped to the enclosing deadline/);
+        const timings = JSON.parse(await readFile(join(scratch, 'logs/timings.json'), 'utf8'));
+        assert.ok(timings.steps.every((step) => step.status === 'pass'));
+        await assert.rejects(access(join(scratch, 'pgdata')), { code: 'ENOENT' });
+      });
+    }
+  }
+);
+
+test(
   'lanes overlap, steps within each lane wait, and failed checks retain their exit codes',
   { timeout: 30000 },
   async () => {
