@@ -190,7 +190,7 @@ async def publish_for_binding(binding: dict, *, conn=None) -> SessionCredential:
         raise RuntimeError("credential publication requires committed connection")
     async with _binding_lock(conn, binding_id):
         row = await conn.fetchrow(
-            """SELECT b.role,b.mcp_grant_kind,b.token_hash,b.credential_ref,
+            """SELECT b.role,b.mcp_grant_kind,b.token_hash,b.credential_ref,b.credential_identity,
                       s.status,s.archived_at
                FROM native_bindings b JOIN sessions s ON s.id=b.session_id
                WHERE b.session_id=$1""",
@@ -230,13 +230,16 @@ async def publish_for_binding(binding: dict, *, conn=None) -> SessionCredential:
             or not row["token_hash"]
             or row["archived_at"] is not None
             or row["status"] in {"completed", "failed", "cancelled"}
-            or row["token_hash"] != hash_token(token_for(binding_id))
+            or row["token_hash"]
+            != hash_token(token_for(row.get("credential_identity") or binding_id))
         ):
             raise RuntimeError("agent credential binding is revoked or unavailable")
         reference = reference_from_data(row["credential_ref"])
         if reference is None:
             raise RuntimeError("agent credential reference is unavailable")
-        return await credentials.publish(binding_id, reference)
+        return await credentials.publish(
+            row.get("credential_identity") or binding_id, reference
+        )
 
 
 async def revoke(binding_id: str, *, conn=None):
@@ -259,7 +262,7 @@ async def revoke(binding_id: str, *, conn=None):
         async with conn.transaction():
             row = await conn.fetchrow(
                 """SELECT mcp_grant_kind,credential_ref,token_hash,
-                          credential_cleanup_pending
+                          credential_cleanup_pending,credential_identity
                    FROM native_bindings WHERE session_id=$1 FOR UPDATE""",
                 binding_id,
             )
@@ -282,12 +285,13 @@ async def revoke(binding_id: str, *, conn=None):
                 binding_id,
             )
             await conn.execute(
-                """INSERT INTO agent_credential_cleanup(session_id,credential_ref)
-                   VALUES($1,$2::jsonb)
+                """INSERT INTO agent_credential_cleanup(session_id,credential_ref,credential_identity)
+                   VALUES($1,$2::jsonb,$3)
                    ON CONFLICT(session_id) DO UPDATE
-                     SET credential_ref=EXCLUDED.credential_ref""",
+                     SET credential_ref=EXCLUDED.credential_ref,credential_identity=EXCLUDED.credential_identity""",
                 binding_id,
                 reference_value,
+                row["credential_identity"],
             )
 
 
@@ -297,7 +301,7 @@ async def _cleanup(binding_id: str):
     async with db.connection() as conn:
         async with _binding_lock(conn, binding_id):
             row = await conn.fetchrow(
-                "SELECT credential_ref FROM agent_credential_cleanup WHERE session_id=$1",
+                "SELECT credential_ref,credential_identity FROM agent_credential_cleanup WHERE session_id=$1",
                 binding_id,
             )
             if row is None:
@@ -306,7 +310,9 @@ async def _cleanup(binding_id: str):
             if reference is None:
                 raise RuntimeError("agent credential cleanup reference is unavailable")
             try:
-                await credentials.remove(binding_id, reference)
+                await credentials.remove(
+                    row["credential_identity"] or binding_id, reference
+                )
             except Exception as exc:
                 # Auth is already revoked. Do not lose cancellation to a Kubernetes outage.
                 logger.warning(
@@ -370,7 +376,7 @@ async def revoke_deferred(conn, binding_id: str):
     await revoke_git(conn, binding_id)
     async with _binding_lock(conn, binding_id):
         row = await conn.fetchrow(
-            "SELECT credential_ref FROM native_bindings WHERE session_id=$1 FOR UPDATE",
+            "SELECT credential_ref,credential_identity FROM native_bindings WHERE session_id=$1 FOR UPDATE",
             binding_id,
         )
         if row is None:
@@ -385,9 +391,10 @@ async def revoke_deferred(conn, binding_id: str):
             binding_id,
         )
         await conn.execute(
-            """INSERT INTO agent_credential_cleanup(session_id,credential_ref)
-               VALUES($1,$2::jsonb) ON CONFLICT(session_id) DO UPDATE
-               SET credential_ref=excluded.credential_ref""",
+            """INSERT INTO agent_credential_cleanup(session_id,credential_ref,credential_identity)
+               VALUES($1,$2::jsonb,$3) ON CONFLICT(session_id) DO UPDATE
+               SET credential_ref=excluded.credential_ref,credential_identity=excluded.credential_identity""",
             binding_id,
             reference,
+            row["credential_identity"],
         )

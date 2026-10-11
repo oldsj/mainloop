@@ -1,6 +1,52 @@
 # Chat
 
-The home chat is the user's native Claude Code main session, run by a kagent Agent. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
+The home chat is the owner's native Claude Code or Codex main session, run by a matching kagent Agent. Claude is the default. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
+
+## Selecting the main provider
+
+`MAIN_PROVIDER=claude|codex` selects the first-use default. Existing main bindings keep
+their persisted selection across restarts and configuration changes. The owner can read
+`GET /main-thread/provider` and explicitly select a provider with
+`PUT /main-thread/provider` and `{"provider":"codex"}` (or `"claude"`). These routes use
+the existing owner API boundary and cross-origin write guard; MCP agents cannot select
+the main provider. There is no quota-driven fallback or new frontend control.
+
+The response exposes `desired_provider`, `effective_provider`, `status`, the current
+`kagent_session_id`, a bounded `error`, and retained native identity `history`.
+`/main-thread` includes this provider state alongside its current native identity.
+`not_started` means the default binding has not created a native Session. `pending`
+means a switch contract is committed but preparation has not completed; `failed`
+means its latest preparation failed. Both have a null effective provider. A pending
+target may have a native Session ID before readiness is confirmed.
+
+A switch requires the main to be idle, with no recorded, queued, sending, delivered or
+uncertain deliveries, no active native task and no unsettled native lifecycle operation.
+Failure to establish native idleness returns `409` without changing the selection.
+The old native Session is suspended, preserved in the audit history and has its MCP
+authority revoked. The new provider receives a new native identity and credential;
+its create request and Agent reference are persisted before creation. The product
+session, conversation, messages, topics, child task identities, parent references and
+capacity remain unchanged. Provider-native history stays with its original provider;
+only stored standing context and recent completed conversation messages carry over.
+Failed and cancelled instructions are excluded from that carry-over.
+
+Repeating the current selection is idempotent. Repeating a pending selection recovers
+its same native create contract; it does not send a prompt. Chat returns `409` while
+preparation remains pending, and arriving child reports are queued until readiness is
+confirmed. After a failed request or restart, read status and repeat the same PUT to
+recover. Another provider cannot replace an unresolved selection. There is no automatic
+switch recovery loop; normal delivery reconciliation drains reports after preparation.
+If a suspend response is lost before the switch commits, the original provider remains
+current and a repeated PUT first reconciles that same old native Session. No failed
+delivery or old prompt is replayed by a provider selection.
+
+Both main Agents must be installed with matching native harnesses and ModelConfigs,
+MCP credential routing and `sessionIdleTTL: 0s`. Claude uses `KAGENT_MAIN_AGENT`;
+Codex uses `KAGENT_MAIN_CODEX_AGENT`. Explicit provider profiles may override their main
+Agent references. The repository's Kind main-Agent example includes both providers;
+production installations must supply reviewed images and their existing provider
+authentication through GitOps before selecting Codex. This behavior is covered by
+offline fixtures and scratch PostgreSQL tests; a live switch remains a deployment check.
 
 ## Sending messages
 

@@ -245,9 +245,14 @@ async def binding_agent_ref(binding: dict, *, conn=None) -> AgentRef:
 
     A delegated attempt routes to the AgentRef pinned when it was admitted, never to the live
     registry, so a later provider configuration change cannot move a running attempt. Every
-    other binding keeps the registry-resolved ref. A supervisor is delegated by definition, so a
-    missing attempt is an error rather than a fall back to the registry.
+    new main binding pins its own main AgentRef. Other bindings keep the registry-resolved
+    ref. A supervisor is delegated by definition, so a missing attempt is an error rather
+    than a fall back to the registry.
     """
+    if binding["role"] == "main" and binding.get("main_agent_ref"):
+        data = binding["main_agent_ref"]
+        data = json.loads(data) if isinstance(data, str) else data
+        return AgentRef(data["namespace"], data["name"])
     attempt = await attempt_row(binding, conn=conn)
     if attempt is None:
         if binding["role"] == "supervisor":
@@ -510,13 +515,21 @@ class Ledger:
             held = await conn.fetchval(
                 "SELECT queue_held FROM native_bindings WHERE session_id=$1", session_id
             )
+            pending = await conn.fetchval(
+                "SELECT main_provider_pending FROM native_bindings WHERE session_id=$1",
+                session_id,
+            )
+            if pending and source in ("user", "brief"):
+                raise ValueError(
+                    "The main provider is being prepared; retry its provider selection first."
+                )
             if source == "user" and held:
                 await conn.execute(
                     "UPDATE native_bindings SET queue_held=FALSE WHERE session_id=$1",
                     session_id,
                 )
                 held = False
-            state = "queued" if busy or held else "recorded"
+            state = "queued" if busy or held or pending else "recorded"
             message_id = await self._insert_message(
                 conn, session_id, conversation_id, text, state, source
             )
@@ -949,6 +962,7 @@ class Ledger:
                      AND state='queued'
                      AND NOT EXISTS (SELECT 1 FROM native_deliveries WHERE session_id=$1 AND state = ANY($2))
                      AND NOT COALESCE((SELECT queue_held FROM native_bindings WHERE session_id=$1), FALSE)
+                     AND NOT COALESCE((SELECT main_provider_pending FROM native_bindings WHERE session_id=$1), FALSE)
                    RETURNING message_id""",
                 session_id,
                 list(OPEN_STATES),
@@ -1448,6 +1462,8 @@ async def _ensure_kagent_session(binding: dict) -> KagentSession:
     the standing context again, because ``standing_hash`` belongs to the Session it went to.
     """
     binding.update(await ledger.get_binding(binding["session_id"]) or {})
+    if binding.get("main_provider_pending"):
+        raise PreSendRefused("main provider selection is pending")
     legacy_child = binding["role"] == "child" and not await is_delegated(binding)
     for replaced in (False, True):
         if binding["kagent_session_id"] is None:

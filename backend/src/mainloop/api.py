@@ -66,6 +66,7 @@ from models import (
 )
 from models.attention import ActivityItem, AttentionSnapshot
 from models.hitl import HITLResponse, Identifier
+from models.main_provider import MainProviderInfo, MainProviderSelection
 from models.merge_policy import MergePolicyUpdate, MergePolicyView
 
 logger = logging.getLogger(__name__)
@@ -345,24 +346,63 @@ class MainThreadInfo(BaseModel):
     conversation_id: str | None = None
     native: NativeSessionInfo | None = None
     topics: list[dict] = []
+    provider: MainProviderInfo | None = None
+
+
+@app.get("/main-thread/provider", response_model=MainProviderInfo)
+async def get_main_provider(user_id: str = Depends(current_user)):
+    from mainloop.runtime import delegation, main_provider
+    from mainloop.tasks import lifecycle
+
+    if user_id != settings.owner_id:
+        raise HTTPException(status_code=403, detail="main_provider_owner_required")
+    binding = await delegation.ensure_main_session(user_id)
+    async with db.connection() as conn, lifecycle.authority_locked(
+        conn, binding["session_id"]
+    ):
+        return await main_provider.info(binding["session_id"], conn=conn)
+
+
+@app.put("/main-thread/provider", response_model=MainProviderInfo)
+async def select_main_provider(
+    request: MainProviderSelection, user_id: str = Depends(current_user)
+):
+    from mainloop.runtime import main_provider
+    from mainloop.runtime.kagent_client import KagentError
+
+    try:
+        return await main_provider.select(user_id, request.provider)
+    except main_provider.MainProviderError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KagentError as exc:
+        raise HTTPException(
+            status_code=409, detail="main native idle state could not be confirmed"
+        ) from exc
 
 
 @app.get("/main-thread", response_model=MainThreadInfo)
 async def get_main_thread_info(user_id: str = Depends(current_user)):
     """Main-thread mode, native identity strip, and the topic index."""
-    from mainloop.runtime import delegation, native_sessions
+    from mainloop.runtime import delegation, main_provider, native_sessions
+    from mainloop.tasks import lifecycle
 
     binding = await delegation.ensure_main_session(user_id)
     await native_sessions.sync(binding["session_id"])
-    session = await db.get_session(binding["session_id"])
-    topics = await delegation._topic_lines(user_id)
-    return MainThreadInfo(
-        mode="native",
-        session_id=binding["session_id"],
-        conversation_id=session.conversation_id,
-        native=await native_sessions.identity(binding["session_id"]),
-        topics=[asdict(t) for t in topics],
-    )
+    async with db.connection() as conn, lifecycle.authority_locked(
+        conn, binding["session_id"]
+    ):
+        session = await db.get_session(binding["session_id"])
+        topics = await delegation._topic_lines(user_id)
+        return MainThreadInfo(
+            mode="native",
+            session_id=binding["session_id"],
+            conversation_id=session.conversation_id,
+            native=await native_sessions.identity(binding["session_id"]),
+            provider=await main_provider.info(binding["session_id"], conn=conn),
+            topics=[asdict(t) for t in topics],
+        )
 
 
 @app.get("/topics")

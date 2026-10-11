@@ -6,6 +6,7 @@ application service; committed report notifications use its existing reconciler 
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from mainloop.config import settings
@@ -19,7 +20,7 @@ from mainloop.runtime.standing import (
     render_standing,
 )
 
-from models import MainThread, Session, SessionStatus
+from models import Session, SessionStatus
 
 INBOX = "inbox"
 
@@ -34,10 +35,6 @@ async def ensure_main_session(user_id: str) -> dict:
     query = """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
                WHERE b.role='main' AND s.user_id=$1 AND s.archived_at IS NULL ORDER BY b.created_at LIMIT 1"""
     async with db.connection() as conn:
-        row = await conn.fetchrow(query, user_id)
-    if row:
-        return dict(row)
-    async with db.connection() as conn:
         async with conn.transaction():
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtext($1))", f"main-thread:{user_id}"
@@ -46,29 +43,65 @@ async def ensure_main_session(user_id: str) -> dict:
             if row:
                 return dict(row)
             # Reused on the next attempt if the transaction below rolls back.
-            thread = await db.get_main_thread_by_user(user_id)
-            if not thread:
-                thread = await db.create_main_thread(
-                    MainThread(user_id=user_id, workflow_run_id="native")
+            thread_id = await conn.fetchval(
+                "SELECT id FROM main_threads WHERE user_id=$1 ORDER BY created_at LIMIT 1",
+                user_id,
+            )
+            if not thread_id:
+                thread_id = str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"main-thread:{user_id}")
                 )
-            convs = await db.list_conversations(user_id, limit=1)
-            conversation = convs[0] if convs else await db.create_conversation(user_id)
+                await conn.execute(
+                    "INSERT INTO main_threads(id,user_id,workflow_run_id) VALUES($1,$2,'native') ON CONFLICT DO NOTHING",
+                    thread_id,
+                    user_id,
+                )
+            conversation_id = await conn.fetchval(
+                """SELECT c.id FROM conversations c WHERE c.user_id=$1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM sessions s WHERE s.conversation_id=c.id
+                     AND NOT EXISTS (SELECT 1 FROM native_bindings b
+                                     WHERE b.session_id=s.id AND b.role='main')
+                   ) ORDER BY c.updated_at DESC LIMIT 1""",
+                user_id,
+            )
+            if not conversation_id:
+                conversation_id = str(uuid.uuid4())
+                await conn.execute(
+                    "INSERT INTO conversations(id,user_id,title) VALUES($1,$2,'Main thread')",
+                    conversation_id,
+                    user_id,
+                )
+            from mainloop.providers import registry
+
+            kind = settings.main_provider
+            profile = registry().resolve(kind, "main", selecting=True)
+            if profile.native_provider != kind:
+                raise ValueError("main provider profile must match its native provider")
+            ref = profile.agents["main"]
             session = await db.create_session(
                 Session(
                     id=str(uuid.uuid4()),
                     user_id=user_id,
-                    main_thread_id=thread.id,
+                    main_thread_id=thread_id,
                     title="Main thread",
-                    description="Native Claude main thread",
+                    description=f"Native {kind} main thread",
                     prompt="",
-                    conversation_id=conversation.id,
+                    conversation_id=conversation_id,
                     status=SessionStatus.IDLE,
                 ),
                 conn=conn,
             )
-            return await native_sessions.create_binding(
-                session.id, "claude", role="main", conn=conn
+            await native_sessions.create_binding(
+                session.id, kind, role="main", conn=conn
             )
+            await conn.execute(
+                "UPDATE native_bindings SET main_owner_id=$2,main_agent_ref=$3::jsonb WHERE session_id=$1",
+                session.id,
+                user_id,
+                json.dumps(ref.model_dump()),
+            )
+            return await native_sessions.get_binding(session.id, conn=conn)
 
 
 async def _topic_lines(user_id: str) -> list[TopicLine]:
@@ -130,7 +163,7 @@ async def render_for_binding(binding: dict) -> str:
             """SELECT m.role, m.content FROM messages m
                WHERE m.conversation_id=$1
                  AND NOT EXISTS (SELECT 1 FROM native_deliveries d WHERE d.message_id=m.id
-                                 AND (d.state = ANY($3) OR d.state='queued'))
+                                 AND (d.state = ANY($3) OR d.state IN ('queued','failed','cancelled')))
                ORDER BY m.created_at DESC LIMIT $2""",
             session.conversation_id,
             settings.main_carry_over_messages,

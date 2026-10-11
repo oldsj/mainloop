@@ -37,3 +37,38 @@ metadata:
 spec:
   harnessRef: { name: mainloop-main-harness }
   templateRef: { name: mainloop-main-template }
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: mainloop-main-codex-harness
+  namespace: kagent
+spec:
+  codex: {}
+  sessionIdleTTL: 0s
+  substrate:
+    snapshotPolicy: { location: s3://ate-snapshots/kagent/ }
+    workerPoolRef: { name: kagent-default }
+  workload:
+    image: kagent-codex-harness:kind
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: mainloop-main-codex-template
+  namespace: kagent
+spec:
+  modelConfig: { name: codex-subscription-model }
+  systemPrompt: You are the Mainloop main thread. Use the mainloop MCP tools when asked.
+  tools:
+    - mcp:
+        server: { kind: RemoteMCPServer, name: mainloop }
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: mainloop-main-codex
+  namespace: kagent
+spec:
+  harnessRef: { name: mainloop-main-codex-harness }
+  templateRef: { name: mainloop-main-codex-template }
