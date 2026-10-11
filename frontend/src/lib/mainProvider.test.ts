@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
+import { transpileModule, ModuleKind } from 'typescript';
 import {
   providerSwitchBlocked,
   providerReady,
@@ -123,4 +125,86 @@ test('selection invalidation and newer reads prevent stale poll results overwrit
   resolve(info);
   await poll;
   assert.deepEqual(applied, [fresh]);
+});
+
+test('Chat keeps uncertain selection locked against a poll begun during selection until a fresh read', async () => {
+  const source = await readFile(new URL('./components/Chat.svelte', import.meta.url), 'utf8');
+  const start = source.indexOf('async function refreshMainThread()');
+  const end = source.indexOf('let sendPending', start);
+  assert.ok(start >= 0 && end > start);
+  const handlers = transpileModule(source.slice(start, end), {
+    compilerOptions: { module: ModuleKind.None }
+  }).outputText;
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<T>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+  const write = deferred<MainProviderInfo>();
+  const oldPoll = deferred<MainThreadInfo>();
+  const fresh: MainThreadInfo = {
+    ...info,
+    provider: { ...provider, desired_provider: 'codex', effective_provider: 'codex' }
+  };
+  let writes = 0;
+  let gets = 0;
+  const api = {
+    setMainProvider: () => {
+      writes++;
+      return write.promise;
+    },
+    getMainThread: async () => {
+      gets++;
+      if (gets === 1) return oldPoll.promise;
+      if (gets === 2) throw new Error('reconciliation unavailable');
+      return fresh;
+    }
+  };
+  const chat = new Function(
+    'api',
+    'mainReads',
+    'providerReady',
+    'selectMainProvider',
+    'initial',
+    `
+    let mainThread = initial;
+    let selectingProvider = false;
+    let providerUnconfirmed = false;
+    let providerError = null;
+    let providerBlocked = false;
+    ${handlers}
+    return { changeMainProvider, refreshMainThread,
+      snapshot: () => ({ mainThread, selectingProvider, providerUnconfirmed, providerError }) };
+  `
+  )(api, createMainThreadReads(), providerReady, selectMainProvider, info);
+
+  const selection = chat.changeMainProvider('codex');
+  const poll = chat.refreshMainThread();
+  write.reject(new Error('PUT outcome unknown'));
+  await selection;
+  const failed = chat.snapshot();
+  assert.equal(failed.selectingProvider, false);
+  assert.equal(failed.providerUnconfirmed, true);
+  assert.match(failed.providerError, /Waiting for a successful refresh/);
+
+  // This Claude-ready observation predates the PUT, but arrives after failed settlement.
+  oldPoll.resolve(info);
+  await poll;
+  assert.deepEqual(chat.snapshot(), failed);
+  assert.equal(providerSwitchBlocked(failed.mainThread, failed.providerUnconfirmed), true);
+
+  // A read begun after settlement may confirm the actual outcome and unlock recovery.
+  await chat.refreshMainThread();
+  const reconciled = chat.snapshot();
+  assert.equal(reconciled.providerUnconfirmed, false);
+  assert.equal(reconciled.providerError, null);
+  assert.equal(reconciled.mainThread, fresh);
+  assert.equal(providerSwitchBlocked(reconciled.mainThread, reconciled.providerUnconfirmed), false);
+  await chat.changeMainProvider('codex');
+  assert.equal(writes, 1);
+  assert.equal(gets, 3);
 });

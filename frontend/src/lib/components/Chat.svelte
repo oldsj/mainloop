@@ -51,21 +51,26 @@
     providerError = null;
     mainReads.invalidate();
     providerUnconfirmed = true;
-    await selectMainProvider(
-      provider,
-      restartFailed,
-      api.setMainProvider,
-      async () => {
-        const info = await api.getMainThread();
-        mainReads.invalidate();
-        mainThread = info;
-        providerUnconfirmed = false;
-      },
-      (message) => {
-        providerError = message;
-      }
-    );
-    selectingProvider = false;
+    try {
+      await selectMainProvider(
+        provider,
+        restartFailed,
+        api.setMainProvider,
+        async () => {
+          const info = await api.getMainThread();
+          mainReads.invalidate();
+          mainThread = info;
+          providerUnconfirmed = false;
+        },
+        (message) => {
+          providerError = message;
+        }
+      );
+    } finally {
+      // Reads begun during selection cannot confirm its outcome after settlement.
+      mainReads.invalidate();
+      selectingProvider = false;
+    }
   }
 
   let sendPending = $state(false);
