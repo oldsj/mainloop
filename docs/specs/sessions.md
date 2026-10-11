@@ -2,6 +2,17 @@
 
 Sessions are native Claude Code or Codex work started from the home thread or the `/agents` page. Mainloop keeps the product session, workspace lifecycle, native binding, and message delivery as separate records.
 
+## Go server status (G6a)
+
+Status: **implemented** for the main session in `server/internal/sessions`; tests use a scratch PostgreSQL and the fake kagent. **Not measured** against a live kagent. The rest of this page describes the frozen Python backend until each slice lands.
+
+- The main session is created by the reconciler (a periodic sweep) and by the first `POST /chat`, never by a GET. Concurrent first calls share one session.
+- Delivery states in the Go ledger: `recorded`, `sending`, `delivered`, `completed`, `failed`, `cancelled`, `uncertain`. `queued` arrives with the report queue. Only `recorded` is ever sent: the claimer commits `sending` before the kagent call, holds no database lock or transaction across it, and fences every outcome write on its lease and attempt count, so a claimer that lost its lease changes nothing.
+- kagent is retried only when it says the message was not accepted, with the same message id and inside the send retry budget (the kagent client does this). Every other doubt makes the delivery `uncertain`, and it is settled by looking the message up (`GetTask`, else `ListTasks`), never by sending again. A `sending` row reclaimed after a crash goes straight to `uncertain` and is looked up. If no task shows the message once the hold has passed, the delivery fails with "not sent again" and the owner may send a new message.
+- A task that finished while no process was watching is finalized from `GetTask` on restart. A task parked for input keeps the turn open.
+- Failure reasons are stored with best-effort redaction and a 300 character cut (see [chat](chat.md)).
+- Cancelling a turn (`CancelTask`) is not implemented yet: the kagent client has no cancel call.
+
 ## Session list
 
 At widths of 1024px and above, sessions appear in a sidebar beside the conversation.

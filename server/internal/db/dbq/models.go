@@ -44,6 +44,23 @@ type Credential struct {
 	RevokedAt  *time.Time
 }
 
+type Delivery struct {
+	ID             string
+	IdempotencyKey string
+	SessionID      string
+	State          dbstate.DeliveryState
+	Source         string
+	TaskID         *string
+	EvidenceRef    *string
+	Detail         *string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LeaseOwner     *string
+	LeaseUntil     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type DevEnvironment struct {
 	ID               string
 	OwnerID          string
@@ -162,6 +179,14 @@ type Session struct {
 	StartedAt   *time.Time
 	CompletedAt *time.Time
 	ArchivedAt  *time.Time
+}
+
+type SessionMessage struct {
+	ID        string
+	SessionID string
+	Role      string
+	Content   string
+	CreatedAt time.Time
 }
 
 type Topic struct {

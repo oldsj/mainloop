@@ -2,6 +2,16 @@
 
 The home chat is the user's native Claude Code main session, run by a kagent Agent. The provider owns native session history and tools; Mainloop records logical messages and delivery state.
 
+## Go server status (G6a)
+
+Status: **implemented** in `server/internal/sessions`, proven by tests against a scratch PostgreSQL and the fake kagent (`kagenttest`). **Not measured** against a live kagent. The sections below describe the frozen Python backend until the cutover; where they differ, this section is the Go behavior.
+
+- `POST /chat` records the user message and a delivery row in one transaction and answers `200` with `pending: true`, `message: null`, `spawned_session_id: null` and `delivery_message_id`. It makes no kagent call; a reconcile loop delivers the row. `conversation_id`, when sent, must be the main session's (`404` otherwise). An empty or over-long message is `422`. A second message is `409` while a turn is open (`recorded`, `sending` or `delivered`) or while an `uncertain` delivery is within its hold (30 minutes by default, `SESSION_UNCERTAIN_HOLD_SECONDS`). The open-turn rule is a partial unique index on `deliveries(session_id)`, not only a check.
+- `POST /chat` has no message id in the request, so the API gives each call a new id. The service call `Send(messageID, …)` is idempotent per id: repeating an id records nothing new.
+- The reply is the task's artifact text, else the last agent message of its history. It is mirrored into `session_messages` with an id derived from the task id, in the same transaction that settles the delivery as `completed`, and `session:message` is published in that transaction.
+- `GET /main-thread` and `GET /conversations/{id}` only read. Before the reconciler has created the main session (it runs a sweep every `SESSION_ENSURE_SECONDS`), `GET /main-thread` answers with `session_id`, `conversation_id` and `native` null. The conversation has no summary (`summary` and `summarized_through_id` are null). `session_state` is read from kagent best effort; if kagent is down the note says so.
+- `queued` deliveries and stop turn are not part of this slice (see [sessions](sessions.md)).
+
 ## Sending messages
 
 - The input field submits one user message to the main session.

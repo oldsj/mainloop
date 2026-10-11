@@ -57,9 +57,14 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.OpRejected), string(dbstate.OpGaveUp), string(dbstate.OpCancelled))},
 		{"project_merge_policy_audit", "old_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
 		{"project_merge_policy_audit", "new_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
+		{"deliveries", "state", strs(
+			string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending), string(dbstate.DeliveryDelivered),
+			string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed), string(dbstate.DeliveryCancelled),
+			string(dbstate.DeliveryUncertain))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},
+		{"session_messages", "role", strs(string(api.MessageRoleUser), string(api.MessageRoleAssistant))},
 	}
 	// Every enumerated CHECK in the schema needs a case above, so a new state column cannot be
 	// added without constants that are held to it.

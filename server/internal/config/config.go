@@ -26,6 +26,7 @@ type Config struct {
 	Preview    Preview
 	Health     Health
 	Events     Events
+	Sessions   Sessions
 	Server     Server
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
@@ -287,6 +288,9 @@ func (c *Config) validate() error {
 	}
 	if c.Events.SubscriberBuffer < 8 || c.Events.SubscriberBuffer > 4096 {
 		fail("MAINLOOP_EVENTS_SUBSCRIBER_BUFFER must be between 8 and 4096")
+	}
+	if c.Sessions.DeliveryConcurrency < 1 || c.Sessions.DeliveryConcurrency > 256 {
+		fail("SESSION_DELIVERY_CONCURRENCY must be between 1 and 256")
 	}
 	if c.WorkspaceDevelopmentPlatform != "linux/arm64" && c.WorkspaceDevelopmentPlatform != "linux/amd64" {
 		fail("WORKSPACE_DEVELOPMENT_PLATFORM must be linux/arm64 or linux/amd64")

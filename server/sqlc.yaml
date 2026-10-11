@@ -50,6 +50,9 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: ValidationStatus
               }
+          - column: deliveries.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: DeliveryState }
           - column: environment_versions.provenance_kind
             go_type:
               { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ProvenanceKind }

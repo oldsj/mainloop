@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -37,6 +38,7 @@ type Server struct {
 	*environments.EnvironmentsAPI
 	*events.EventsAPI
 	*workspaces.WorkspacesAPI
+	*sessions.SessionsAPI
 
 	fallback
 
@@ -62,6 +64,9 @@ type Deps struct {
 	GitHub projects.Remote
 	// Workspaces runs the workspace lifecycle. Nil answers the workspace routes with 503.
 	Workspaces *workspaces.Service
+	// Sessions is the main thread service, shared with the delivery loop. Nil builds one with no
+	// kagent client, which records sends but does not deliver them.
+	Sessions *sessions.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -81,6 +86,7 @@ func New(d Deps) *Server {
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
 		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
 		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
+		SessionsAPI:     sessions.NewAPI(d.Sessions, d.Config, d.Pool, d.Log),
 		deps:            d,
 		initErr:         err,
 	}
