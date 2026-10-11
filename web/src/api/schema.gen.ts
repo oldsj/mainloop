@@ -588,13 +588,13 @@ export interface paths {
     };
     /**
      * List Schedules
-     * @description The owner's schedules, one page at a time. Ordered by schedule id, not by creation time.
+     * @description The schedules this deployment made, one page at a time. Ordered by schedule id, not by creation time. A page can hold fewer items than the limit; follow next_page_token until it is null.
      */
     get: operations['listSchedules'];
     put?: never;
     /**
      * Create Schedule
-     * @description Create a scheduled agent run. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body returns 409.
+     * @description Create a scheduled agent run on one of this deployment's Agents; any other Agent returns 403. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body, or with a schedule that has since been deleted, returns 409.
      */
     post: operations['createSchedule'];
     delete?: never;
@@ -2106,7 +2106,7 @@ export interface components {
       deadline: string;
       /**
        * Session Id
-       * @description Null until a session is reserved. Kept after that session is deleted, so it is history, not proof the session still exists.
+       * @description The Mainloop session the execution became; null until it is adopted, which happens within one sweep period of kagent reserving a session for it. Kept after that session is deleted, so it is history, not proof the session still exists.
        */
       session_id: string | null;
       /**
@@ -6132,6 +6132,15 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunPage'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6150,6 +6159,15 @@ export interface operations {
           'application/json':
             | components['schemas']['HTTPValidationError']
             | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -6249,6 +6267,15 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunOutput'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6267,6 +6294,15 @@ export interface operations {
           'application/json':
             | components['schemas']['HTTPValidationError']
             | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
@@ -6448,6 +6484,15 @@ export interface operations {
           'application/json': components['schemas']['ScheduledRunExecutionPage'];
         };
       };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
       /** @description Not Found */
       404: {
         headers: {
@@ -6466,6 +6511,15 @@ export interface operations {
           'application/json':
             | components['schemas']['HTTPValidationError']
             | components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Bad Gateway */
+      502: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
     };
