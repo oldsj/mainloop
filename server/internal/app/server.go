@@ -195,14 +195,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	}
 	cfg := d.Config
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			if httpx.IsBodyTooLarge(err) {
-				httpx.WriteError(w, http.StatusRequestEntityTooLarge, "Request body too large")
-				return
-			}
-			httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")
-			d.Log.Debug("request decode failed", "error", err)
-		},
+		RequestErrorHandlerFunc: requestDecodeError(d.Log),
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			var he *httpx.Error
 			if !errors.As(err, &he) {
@@ -234,6 +227,19 @@ func (s *Server) Handler() (http.Handler, error) {
 		httpx.RequestIDMiddleware,
 		httpx.Recover(d.Log),
 	), nil
+}
+
+// requestDecodeError is the strict handler's body-decode failure callback: a body past the cap
+// (even wrapped by the JSON decoder) is 413, anything else is a 400 without the decoder's detail.
+func requestDecodeError(log *slog.Logger) func(http.ResponseWriter, *http.Request, error) {
+	return func(w http.ResponseWriter, _ *http.Request, err error) {
+		if httpx.IsBodyTooLarge(err) {
+			httpx.WriteError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
+		httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")
+		log.Debug("request decode failed", "error", err)
+	}
 }
 
 func hitlService(d Deps) *hitl.Service {
