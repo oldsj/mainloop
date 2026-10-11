@@ -8,9 +8,15 @@ import {
   mainThreadFixture,
   messageFixture,
   nativeFixture,
+  providerFixture,
   sessionFixture
 } from './fixtures';
-import type { ChatMessage, MainThreadInfo, NativeSessionInfo } from './types';
+import type {
+  ChatMessage,
+  MainProviderInfo,
+  MainThreadInfo,
+  NativeSessionInfo
+} from './types';
 
 type Schemas = components['schemas'];
 
@@ -46,6 +52,29 @@ export interface ChatBackendState {
   lostSend: LostSend | null;
   /** Sessions other than the main one, created on first use: their native state and messages. */
   sessionThreads: Record<string, SessionThreadState>;
+  /** Every `PUT /main-thread/provider` body the backend received, in order. */
+  providerPosts: Schemas['MainProviderSelection'][];
+  /** The next provider PUT is refused with this status and detail, then the field clears. */
+  rejectNextProvider: { status: number; detail: string } | null;
+  /** The next provider PUT loses its reply, as `lostSend` does for a send. The flag clears after one. */
+  lostProvider: LostSend | null;
+  /** How many provider reads fail before they succeed again. Each failed read counts once. */
+  failProviderReads: number;
+}
+
+/** The provider a completed selection leaves behind: chosen, prepared and confirmed. */
+function providerAfterSelection(
+  current: MainThreadInfo['provider'],
+  selection: Schemas['MainProviderSelection']
+): MainProviderInfo {
+  return {
+    ...(current ?? providerFixture()),
+    desired_provider: selection.provider,
+    effective_provider: selection.provider,
+    status: 'ready',
+    error: null,
+    recoverable: false
+  };
 }
 
 const url = (path: string) => `${API_URL}${path}`;
@@ -96,6 +125,10 @@ export function createChatBackend(
     rejectNextChat: null,
     lostSend: null,
     sessionThreads: {},
+    providerPosts: [],
+    rejectNextProvider: null,
+    lostProvider: null,
+    failProviderReads: 0,
     ...initial
   });
   const state = freshState();
@@ -117,6 +150,13 @@ export function createChatBackend(
   function takeLostSend(): LostSend | null {
     const lost = state.lostSend;
     state.lostSend = null;
+    return lost;
+  }
+
+  /** Takes the lost-provider flag, so only the write that is starting now loses its reply. */
+  function takeLostProvider(): LostSend | null {
+    const lost = state.lostProvider;
+    state.lostProvider = null;
     return lost;
   }
 
@@ -188,6 +228,28 @@ export function createChatBackend(
     http.get(url('/main-thread'), () => {
       state.mainThreadReads += 1;
       return HttpResponse.json(state.mainThread);
+    }),
+    http.get(url('/main-thread/provider'), () => {
+      if (state.failProviderReads > 0) {
+        state.failProviderReads -= 1;
+        return HttpResponse.error();
+      }
+      return HttpResponse.json(state.mainThread.provider ?? providerFixture());
+    }),
+    http.put(url('/main-thread/provider'), async ({ request }) => {
+      const body = (await request.json()) as Schemas['MainProviderSelection'];
+      state.providerPosts = [...state.providerPosts, body];
+      if (state.rejectNextProvider) {
+        const { status, detail } = state.rejectNextProvider;
+        state.rejectNextProvider = null;
+        return HttpResponse.json({ detail }, { status });
+      }
+      const lost = takeLostProvider();
+      if (lost === 'unrecorded') return HttpResponse.error();
+      const next = providerAfterSelection(state.mainThread.provider, body);
+      state.mainThread = { ...state.mainThread, provider: next };
+      if (lost === 'recorded') return HttpResponse.error();
+      return HttpResponse.json(next);
     }),
     http.get(url('/conversations/:conversationId'), ({ params }) => {
       if (params.conversationId !== state.mainThread.conversation_id)

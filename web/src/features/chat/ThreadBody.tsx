@@ -11,10 +11,18 @@ export interface ThreadBodyProps {
   label: string;
   /** Why the thread takes no more messages. Set, the box is locked and this line says why. */
   closedReason?: string | null;
+  /** The locked box's placeholder, when the thread's lock is not "closed to new messages". */
+  closedPlaceholder?: string;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
-export function ThreadBody({ thread, offline, label, closedReason = null }: ThreadBodyProps) {
+export function ThreadBody({
+  thread,
+  offline,
+  label,
+  closedReason = null,
+  closedPlaceholder
+}: ThreadBodyProps) {
   return (
     <>
       {thread.loadFailed && !offline ? (
@@ -77,6 +85,7 @@ export function ThreadBody({ thread, offline, label, closedReason = null }: Thre
         unavailable={thread.loadFailed}
         offline={offline}
         closed={closedReason !== null}
+        closedPlaceholder={closedPlaceholder}
         onSend={(text) => thread.send(text, thread.conversationId)}
       />
     </>

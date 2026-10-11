@@ -2,7 +2,14 @@ import { useState, type ReactNode } from 'react';
 import { cn } from '@/components/ui/cn';
 import { agentLabel } from '@/lib/agentLabel';
 import { threadStatus, type ThreadStatus } from '@/lib/delivery';
-import type { MainThreadInfo } from './types';
+import {
+  boundedText,
+  MAIN_PROVIDERS,
+  providerLabel,
+  providerStateWords,
+  type MainProviderControl
+} from './mainProvider';
+import type { MainProvider, MainThreadInfo } from './types';
 
 const DOT: Record<ThreadStatus, string> = {
   ready: 'bg-term-green',
@@ -28,6 +35,98 @@ export interface MainThreadHeaderProps {
   stopping?: boolean;
   /** The native identity strip for the main session; the sessions slice supplies it. */
   renderIdentity?: (sessionId: string) => ReactNode;
+  /** The owner's main-provider controls. Omitted, the provider row is not shown. */
+  provider?: MainProviderControl;
+}
+
+/** The main provider row: the desired select, the confirmed provider, the status and any notice. */
+function ProviderRow({
+  info,
+  offline,
+  provider
+}: {
+  info: MainThreadInfo;
+  offline: boolean;
+  provider: MainProviderControl;
+}) {
+  const current = info.provider;
+  const desired: MainProvider | null = current?.desired_provider ?? null;
+  const words = providerStateWords(current, {
+    offline,
+    selecting: provider.selecting,
+    unconfirmed: provider.unconfirmed
+  });
+  const stateError = current?.status === 'failed' && current.error ? boundedText(current.error) : null;
+  const buttonClass =
+    'border-border text-foreground px-md min-h-11 border disabled:opacity-50';
+
+  return (
+    <div
+      className="gap-sm px-md flex flex-wrap items-center pb-xs"
+      data-testid="mt-provider"
+    >
+      <label htmlFor="main-provider-select" className="text-muted-foreground">
+        Main provider
+      </label>
+      <select
+        id="main-provider-select"
+        className="border-border bg-background text-foreground px-sm min-h-11 border text-sm disabled:opacity-50"
+        value={desired ?? ''}
+        disabled={provider.switchBlocked}
+        onChange={(event) => provider.select(event.target.value as MainProvider)}
+        data-testid="mt-provider-select"
+      >
+        {desired ? null : (
+          <option value="" disabled>
+            unknown
+          </option>
+        )}
+        {MAIN_PROVIDERS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <span data-testid="mt-provider-effective">
+        effective: {current?.effective_provider ? providerLabel(current.effective_provider) : 'none confirmed'}
+      </span>
+      <span className="text-foreground" data-testid="mt-provider-status">
+        {words}
+      </span>
+      {provider.retryOffered ? (
+        <button
+          type="button"
+          className={buttonClass}
+          disabled={provider.switchBlocked}
+          onClick={provider.retry}
+          data-testid="mt-provider-retry"
+        >
+          Retry
+        </button>
+      ) : null}
+      {provider.restartOffered ? (
+        <button
+          type="button"
+          className={buttonClass}
+          disabled={provider.switchBlocked}
+          onClick={provider.restart}
+          data-testid="mt-provider-restart"
+        >
+          Restart
+        </button>
+      ) : null}
+      {provider.notice ? (
+        <p className="text-destructive w-full [overflow-wrap:anywhere]" role="alert" data-testid="mt-provider-notice">
+          {provider.notice}
+        </p>
+      ) : null}
+      {stateError ? (
+        <p className="text-destructive w-full [overflow-wrap:anywhere]" data-testid="mt-provider-error">
+          {stateError}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 /** State, model and pending count of the main thread, with the stop button and topic index. */
@@ -36,7 +135,8 @@ export function MainThreadHeader({
   offline,
   onStop,
   stopping = false,
-  renderIdentity
+  renderIdentity,
+  provider
 }: MainThreadHeaderProps) {
   const [open, setOpen] = useState(false);
   const { native } = info;
@@ -91,8 +191,18 @@ export function MainThreadHeader({
         </button>
       </div>
 
+      {provider ? (
+        <ProviderRow info={info} offline={offline} provider={provider} />
+      ) : null}
+
       {open ? (
         <div id="main-thread-details" className="border-border border-t">
+          {provider ? (
+            <p className="px-md py-xs" data-testid="mt-provider-help">
+              Conversation and tasks stay. Switching starts a fresh native session; prior native history
+              is retained.
+            </p>
+          ) : null}
           {info.session_id && renderIdentity ? renderIdentity(info.session_id) : null}
           <div className="px-md py-xs font-mono" data-testid="topic-index">
             topics:{' '}

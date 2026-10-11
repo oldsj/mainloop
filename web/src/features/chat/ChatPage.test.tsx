@@ -5,6 +5,7 @@ import { delay, http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
+import { keys } from '@/api';
 import { server } from '@/test/msw/server';
 import { ChatPage } from './ChatPage';
 import { loadDraft, saveDraft } from './drafts';
@@ -14,10 +15,12 @@ import {
   MAIN_SESSION_ID,
   mainThreadFixture,
   messageFixture,
-  nativeFixture
+  nativeFixture,
+  providerFixture
 } from './fixtures';
 import { createChatBackend, type ChatBackendState } from './handlers';
-import type { NativeDeliveryInfo } from './types';
+import type { MainProviderInfo, NativeDeliveryInfo } from './types';
+import { RECONCILE_MS } from './useMainProvider';
 import { LOST_REPLY_RECORDED, POLL_MS, POLL_WINDOW_MS } from './useThread';
 
 // The card has its own tests in features/hitl; these only check where the page renders it.
@@ -750,5 +753,186 @@ describe('inline requests', () => {
         { timeout: 5000 }
       )
     ).toBeInTheDocument();
+  });
+});
+
+/** A main thread with a conversation and nothing in flight, so the provider select is open. */
+function idleThread(provider: MainProviderInfo | null = providerFixture()): Partial<ChatBackendState> {
+  return {
+    mainThread: mainThreadFixture({
+      conversation_id: CONVERSATION_ID,
+      provider,
+      native: nativeFixture()
+    }),
+    messages: [messageFixture({ id: 'm1', content: 'build it' })]
+  };
+}
+
+const providerSelect = () => screen.getByTestId('mt-provider-select');
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('the main provider', () => {
+  it('sends one explicit selection and shows the provider once it is confirmed', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    await waitFor(() =>
+      expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
+    );
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
+    expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }]);
+    expect(input()).toBeEnabled();
+  });
+
+  it('sends nothing when the provider that is already ready is chosen', async () => {
+    const { state } = setup(idleThread());
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'claude');
+    await pause(20);
+    expect(state.providerPosts).toHaveLength(0);
+  });
+
+  it('holds the selection and the main input while a turn is open', async () => {
+    setup({
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        native: nativeFixture({
+          turn_in_flight: true,
+          deliveries: [deliveryFixture({ message_id: 'm1', state: 'sending' })]
+        })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
+    await screen.findByText('build it');
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+  });
+
+  it('locks the selection and the main input while the provider is preparing', async () => {
+    setup(idleThread(providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })));
+    await screen.findByText('build it');
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+    expect(input()).toHaveAttribute('placeholder', 'Main input is locked');
+    expect(screen.getByText('Main provider is preparing.')).toBeInTheDocument();
+  });
+
+  it('locks the main input when the provider state is unknown', async () => {
+    setup(idleThread(null));
+    await screen.findByText('build it');
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('state unknown');
+  });
+
+  it('lets the first message go out while the provider has not started', async () => {
+    const { state } = setup(
+      idleThread(providerFixture({ status: 'not_started', effective_provider: null }))
+    );
+    await screen.findByText('build it');
+    expect(input()).toBeEnabled();
+    await userEvent.type(input(), 'first{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+  });
+
+  it('holds the selection while the backend is unreachable', async () => {
+    connectionState.current = { status: 'offline', offlineSince: '2026-01-01T00:00:00Z', recoveries: 0 };
+    setup(idleThread());
+    await screen.findByText('build it');
+    expect(providerSelect()).toBeDisabled();
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('offline, selection unavailable');
+  });
+
+  it('shows a 409 and the refreshed state, and offers no retry', async () => {
+    const { state } = setup(idleThread(), {});
+    state.rejectNextProvider = { status: 409, detail: 'Main provider is busy.' };
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Provider change blocked (409): Main provider is busy.'
+    );
+    expect(state.providerPosts).toHaveLength(1);
+    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Claude');
+    expect(screen.queryByTestId('mt-provider-retry')).toBeNull();
+  });
+
+  it('does not repeat a write that failed on the network, and Retry repeats the same write', async () => {
+    const { state } = setup(idleThread());
+    state.lostProvider = 'unrecorded';
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Provider selection was not confirmed');
+    // The read after the failed write shows the old provider, so Retry is offered.
+    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Claude');
+    await pause(2 * RECONCILE_MS);
+    expect(state.providerPosts).toHaveLength(1);
+
+    await userEvent.click(screen.getByTestId('mt-provider-retry'));
+    await waitFor(() =>
+      expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
+    );
+    expect(state.providerPosts).toEqual([
+      { provider: 'codex', restart_failed: false },
+      { provider: 'codex', restart_failed: false }
+    ]);
+    expect(screen.queryByTestId('mt-provider-retry')).toBeNull();
+  });
+
+  it('keeps the page locked until a read succeeds, without repeating the write', async () => {
+    const { state } = setup(idleThread());
+    state.failProviderReads = 1;
+    await screen.findByText('build it');
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    expect(await screen.findByText(/Could not confirm provider state/)).toBeInTheDocument();
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('provider state unconfirmed');
+
+    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 3000 });
+    expect(input()).toBeEnabled();
+    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
+    expect(state.providerPosts).toHaveLength(1);
+  });
+
+  it('shows the bounded error of a failed start, and offers Retry without Restart when it is not recoverable', async () => {
+    setup(idleThread(providerFixture({ status: 'failed', effective_provider: null, error: 'Codex did not start.' })));
+    await screen.findByText('build it');
+    expect(screen.getByTestId('mt-provider-error')).toHaveTextContent('Codex did not start.');
+    expect(screen.getByTestId('mt-provider-retry')).toBeInTheDocument();
+    expect(screen.queryByTestId('mt-provider-restart')).toBeNull();
+    expect(input()).toBeDisabled();
+  });
+
+  it('offers Restart for a recoverable failure, which sends restart_failed', async () => {
+    const { state } = setup(
+      idleThread(providerFixture({ status: 'failed', effective_provider: null, error: 'Codex did not start.', recoverable: true }))
+    );
+    await screen.findByText('build it');
+    await userEvent.click(screen.getByTestId('mt-provider-restart'));
+    await waitFor(() => expect(input()).toBeEnabled());
+    expect(state.providerPosts).toEqual([{ provider: 'claude', restart_failed: true }]);
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
+  });
+
+  it('does not let an older read overwrite a newer selection', async () => {
+    const { queryClient, state } = setup(idleThread());
+    await screen.findByText('build it');
+    const stale = state.mainThread;
+    // A read of the thread that started before the selection, and answers after it.
+    server.use(
+      http.get(`${API_URL}/main-thread`, async () => {
+        await delay(300);
+        return HttpResponse.json(stale);
+      })
+    );
+    void queryClient.invalidateQueries({ queryKey: keys.mainThread() });
+    await pause(20);
+    await userEvent.selectOptions(providerSelect(), 'codex');
+    await waitFor(() =>
+      expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex')
+    );
+    await pause(400);
+    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
+    expect(screen.getByTestId('mt-provider-select')).toHaveValue('codex');
   });
 });

@@ -2,9 +2,11 @@ import type { ReactNode } from 'react';
 import { HITLCard } from '@/features/hitl';
 import { PanelBoundary } from '@/shell/PanelBoundary';
 import { useConnection } from '@/shell/ConnectionBanner';
+import { mainInputLock } from './mainProvider';
 import { MainThreadHeader } from './MainThreadHeader';
 import { SessionRequests } from './SessionRequests';
 import { ThreadBody } from './ThreadBody';
+import { useMainProvider } from './useMainProvider';
 import { MAIN_THREAD, useThread } from './useThread';
 
 export interface ChatPageProps {
@@ -19,6 +21,9 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
   const chat = useThread(MAIN_THREAD);
   const offline = useConnection().status === 'offline';
   const { info } = chat;
+  // A send, a stop or an unread thread holds the provider selection as well as offline does.
+  const provider = useMainProvider(info, offline || chat.sendPending || chat.stopping || !chat.loaded);
+  const inputLock = mainInputLock(info, provider);
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="main-thread">
@@ -29,6 +34,7 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
           onStop={chat.stop}
           stopping={chat.stopping}
           renderIdentity={renderIdentity}
+          provider={provider}
         />
       ) : null}
 
@@ -41,7 +47,13 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
         {info?.session_id ? <SessionRequests sessionId={info.session_id} skip={hitlId} /> : null}
       </PanelBoundary>
 
-      <ThreadBody thread={chat} offline={offline} label="main thread" />
+      <ThreadBody
+        thread={chat}
+        offline={offline}
+        label="main thread"
+        closedReason={inputLock}
+        closedPlaceholder="Main input is locked"
+      />
     </div>
   );
 }
