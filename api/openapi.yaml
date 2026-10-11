@@ -447,7 +447,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: unpaginated list of one environment's versions
                 type: array
                 items:
                   $ref: '#/components/schemas/EnvironmentVersion'
@@ -506,19 +506,15 @@ paths:
       tags:
         - events
       summary: Sse Events
-      description: 'SSE endpoint for real-time updates.
-
+      description: |-
+        SSE endpoint for real-time updates.
 
         Streams events for:
-
         - inbox:updated - when inbox items change
-
         - heartbeat - periodic keepalive (every 30s)
 
-
         The client should reconnect automatically on disconnect.
-
-        EventSource handles this natively.'
+        EventSource handles this natively.
       operationId: getEvents
       responses:
         '200':
@@ -567,8 +563,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
-        '404':
-          description: Not Found
+        '503':
+          description: Service Unavailable
           content:
             application/json:
               schema:
@@ -910,7 +906,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: unpaginated owner-scoped list
                 type: array
                 items:
                   $ref: '#/components/schemas/Project'
@@ -1150,9 +1146,9 @@ paths:
           content:
             application/json:
               schema:
-                anyOf:
-                  - $ref: '#/components/schemas/ProjectEnvironmentSelection'
-                  - type: 'null'
+                $ref: '#/components/schemas/ProjectEnvironmentSelection'
+        '204':
+          description: No environment is selected for the project.
         '404':
           description: Not Found
           content:
@@ -1357,7 +1353,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: the configured provider profiles; not paginated
                 items:
                   $ref: '#/components/schemas/ProviderProfile'
                 type: array
@@ -1486,7 +1482,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: unpaginated owner-scoped list
                 type: array
                 items:
                   $ref: '#/components/schemas/Session'
@@ -1822,13 +1818,11 @@ paths:
       tags:
         - sessions
       summary: Stop Session Turn
-      description:
-        'Stop the open turn of a session (the main thread included) without ending the session.
-
+      description: |-
+        Stop the open turn of a session (the main thread included) without ending the session.
 
         ``status`` is ``stopped``, ``finished`` (the turn ended on its own first) or ``no_open_turn``.
-
-        A kagent error is returned as 502 and leaves the delivery as it was.'
+        A kagent error is returned as 502 and leaves the delivery as it was.
       operationId: stopTurn
       parameters:
         - name: session_id
@@ -1943,7 +1937,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: unpaginated owner-scoped list
                 type: array
                 items:
                   $ref: '#/components/schemas/TaskView'
@@ -2233,7 +2227,7 @@ paths:
           content:
             application/json:
               schema:
-                # No cap in the code: unpaginated owner-scoped list
+                # no cap in the code: unpaginated owner-scoped list
                 items:
                   $ref: '#/components/schemas/WorkspaceLifecycle'
                 type: array
@@ -2588,6 +2582,7 @@ components:
         - title
         - content
         - created_at
+        - href
       title: ActivityItem
     AskUserAnswer:
       properties:
@@ -2650,7 +2645,7 @@ components:
           type: string
           title: Href
         session_ids:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: sessions behind one item; limited only by the owner's data
           items:
             type: string
           type: array
@@ -2671,11 +2666,14 @@ components:
         - title
         - needed
         - href
+        - session_ids
+        - task_id
+        - queue_item
       title: AttentionItem
     AttentionSnapshot:
       properties:
         items:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one entry per open item; not paginated
           items:
             $ref: '#/components/schemas/AttentionItem'
           type: array
@@ -2685,13 +2683,17 @@ components:
           title: Count
           default: 0
         sessions:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one entry per session behind an item; not paginated
           items:
             $ref: '#/components/schemas/Session'
           type: array
           title: Sessions
       type: object
       title: AttentionSnapshot
+      required:
+        - items
+        - count
+        - sessions
     CapabilityResult:
       properties:
         capability:
@@ -2724,6 +2726,10 @@ components:
       type: object
       required:
         - capability
+        - state
+        - scope
+        - evidence_ref
+        - detail
       title: CapabilityResult
     CapabilityState:
       type: string
@@ -2776,6 +2782,10 @@ components:
       type: object
       required:
         - conversation_id
+        - message
+        - spawned_session_id
+        - pending
+        - delivery_message_id
       title: ChatResponse
       description: Response model for chat interaction.
     CommitSummary:
@@ -2852,6 +2862,12 @@ components:
       required:
         - id
         - user_id
+        - title
+        - summary
+        - summarized_through_id
+        - message_count
+        - created_at
+        - updated_at
       title: Conversation
       description: A conversation thread.
     ConversationResponse:
@@ -2859,7 +2875,7 @@ components:
         conversation:
           $ref: '#/components/schemas/Conversation'
         messages:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the whole transcript; not paginated
           items:
             $ref: '#/components/schemas/Message'
           type: array
@@ -2867,6 +2883,7 @@ components:
       type: object
       required:
         - conversation
+        - messages
       title: ConversationResponse
       description: Response model for conversation with messages.
     CreateWorkspaceRequest:
@@ -2972,7 +2989,7 @@ components:
     HTTPValidationError:
       properties:
         detail:
-          # No cap in the code: FastAPI-generated validation error list
+          # no cap in the code: FastAPI-generated validation error list
           items:
             $ref: '#/components/schemas/ValidationError'
           type: array
@@ -3015,7 +3032,7 @@ components:
             - $ref: '#/components/schemas/NativeSessionInfo'
             - type: 'null'
         topics:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one entry per topic; not paginated
           items:
             $ref: '#/components/schemas/TopicLine'
           type: array
@@ -3024,6 +3041,10 @@ components:
       type: object
       required:
         - mode
+        - session_id
+        - conversation_id
+        - native
+        - topics
       title: MainThreadInfo
     MergePolicy:
       type: string
@@ -3076,6 +3097,9 @@ components:
       required:
         - merge_policy
         - merge_policy_version
+        - writes_enabled
+        - protected_globs
+        - protected_globs_version
       title: MergePolicyView
     Message:
       properties:
@@ -3109,6 +3133,7 @@ components:
         - conversation_id
         - role
         - content
+        - created_at
       title: Message
       description: A single message in a conversation.
     NativeDeliveryInfo:
@@ -3143,6 +3168,10 @@ components:
       required:
         - message_id
         - state
+        - task_id
+        - evidence_ref
+        - detail
+        - source
       title: NativeDeliveryInfo
       description: Delivery ledger row for one message sent to a native agent.
     NativeSessionInfo:
@@ -3197,7 +3226,7 @@ components:
           title: Turn In Flight
           default: false
         deliveries:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the session's ledgered deliveries; not trimmed
           items:
             $ref: '#/components/schemas/NativeDeliveryInfo'
           type: array
@@ -3212,6 +3241,16 @@ components:
         - session_id
         - kind
         - agent_name
+        - role
+        - parent_session_id
+        - topic
+        - kagent_session_id
+        - session_state
+        - model
+        - turns
+        - turn_in_flight
+        - deliveries
+        - note
       title: NativeSessionInfo
       description: Identity strip for a session bound to a native agent session in kagent.
     Project:
@@ -3299,6 +3338,17 @@ components:
         - name
         - full_name
         - html_url
+        - id
+        - merge_policy
+        - merge_policy_version
+        - description
+        - default_branch
+        - avatar_url
+        - created_at
+        - last_used_at
+        - metadata_updated_at
+        - open_pr_count
+        - open_issue_count
       title: Project
       description: A GitHub repository project tracked by the user.
     ProjectDetail:
@@ -3318,7 +3368,7 @@ components:
           title: Recent Commits
           maxItems: 10
         sessions:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one entry per session of the project; not paginated
           items:
             $ref: '#/components/schemas/Session'
           type: array
@@ -3461,7 +3511,7 @@ components:
           type: object
           title: Agents
         aliases:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: profile ids are unique, but their number is not limited
           items:
             type: string
             maxLength: 80
@@ -3475,7 +3525,7 @@ components:
           title: Enabled
           default: true
         capabilities:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: capability names are unique, but their number is not limited
           items:
             $ref: '#/components/schemas/CapabilityResult'
           type: array
@@ -3489,6 +3539,10 @@ components:
         - native_provider
         - configuration_revision
         - agents
+        - runtime_adapter
+        - aliases
+        - enabled
+        - capabilities
       title: ProviderProfile
     QueueItem:
       properties:
@@ -3537,8 +3591,8 @@ components:
           description: Extra context
         options:
           anyOf:
-            - x-ckv21: 'the code has no cap: unpaginated owner-scoped list'
-              items:
+            # Agent-supplied choices; the code sets no limit on their number.
+            - items:
                 type: string
               type: array
             - type: 'null'
@@ -3593,6 +3647,18 @@ components:
         - item_type
         - title
         - content
+        - id
+        - task_id
+        - hitl_request_id
+        - priority
+        - context
+        - options
+        - status
+        - response
+        - responded_at
+        - read_at
+        - created_at
+        - expires_at
       title: QueueItem
       description: An item in the human review queue.
     QueueItemPriority:
@@ -3927,25 +3993,53 @@ components:
         - description
         - prompt
         - conversation_id
+        - id
+        - parent_session_id
+        - topic
+        - agent_kind
+        - status
+        - needs_owner
+        - worker_pod_name
+        - created_at
+        - started_at
+        - completed_at
+        - archived_at
+        - summary
+        - error
+        - repo_url
+        - project_id
+        - branch_name
+        - base_branch
+        - model
+        - issue_url
+        - issue_number
+        - issue_etag
+        - issue_last_modified
+        - pr_url
+        - pr_number
+        - pr_etag
+        - pr_last_modified
+        - commit_sha
+        - anchor_message_id
+        - color
+        - result
       title: Session
-      description: 'A background task that runs independently from the main thread.
-
+      description: |-
+        A background task that runs independently from the main thread.
 
         Sessions can be:
-
         - Simple Claude conversations (no repo_url)
-
         - Code work with GitHub integration (with repo_url)
 
-
-        Both types have their own conversation and can notify the user when input is needed.'
+        Both types have their own conversation and can notify the user when input is needed.
     SessionConversationResponse:
       properties:
         session:
           $ref: '#/components/schemas/Session'
         messages:
-          # No cap in the code: unpaginated owner-scoped list
-          items: {}
+          # no cap in the code: the whole transcript; not paginated
+          items:
+            $ref: '#/components/schemas/Message'
           type: array
           title: Messages
       type: object
@@ -4212,7 +4306,7 @@ components:
     ValidationError:
       properties:
         loc:
-          # No cap in the code: FastAPI-generated error location path
+          # no cap in the code: FastAPI-generated error location path
           items:
             anyOf:
               - type: string
@@ -4234,7 +4328,7 @@ components:
     WorkspaceDev:
       properties:
         ports:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: ports are unique per workspace, but their number is not limited
           items:
             $ref: '#/components/schemas/WorkspacePort'
           type: array
@@ -4337,6 +4431,10 @@ components:
         - observed_state
         - manifest
         - updated_at
+        - publication_mode
+        - publication_reason
+        - detail
+        - last_activity_at
       title: WorkspaceLifecycle
       description: A workspace as last observed from kagent. Nothing here is stored except the manifest.
     WorkspaceManifest:
@@ -4370,7 +4468,7 @@ components:
           title: Agent Kind
           default: claude
         dev:
-          $ref: '#/components/schemas/WorkspaceDev'
+          $ref: '#/components/schemas/WorkspaceDevOutput'
           default:
             ports: []
             idle_timeout_minutes: 30
@@ -4383,16 +4481,18 @@ components:
       required:
         - repo_url
         - branch
+        - ref
+        - depth
+        - agent_kind
+        - dev
+        - development_environment
       title: WorkspaceManifest
-      description:
-        "What kagent clones into the harness (``repo_url``/``ref``/``branch``/``depth``), which
-
+      description: |-
+        What kagent clones into the harness (``repo_url``/``ref``/``branch``/``depth``), which
         agent runs there, and the dev server settings.
 
-
         The repository fields are the Session's ``workspace``. They are stored once and resent
-
-        unchanged if the Session is replaced."
+        unchanged if the Session is replaced.
     WorkspaceObservedState:
       type: string
       enum:
@@ -4441,7 +4541,7 @@ components:
           type: integer
           description: parent_capacity only.
         held_tasks:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: bounded by `limit`, which is configuration
           type: array
           items:
             $ref: '#/components/schemas/TaskCapacityHolder'
@@ -4541,10 +4641,18 @@ components:
       properties:
         status:
           type: string
-          description: Session status after the call; the unchanged status when already finished.
+          enum:
+            - completed
+            - failed
+            - cancelled
+          description: Session status after the call; the unchanged status when it had already finished.
         agent:
           type: string
-          description: not_running when the session was already finished; otherwise the runtime outcome.
+          enum:
+            - stopped
+            - not_running
+            - unknown
+          description: '`not_running` when the session had already finished; otherwise the runtime outcome.'
       required:
         - status
         - agent
@@ -4578,14 +4686,13 @@ components:
           type: string
           enum:
             - healthy
-        dbos:
+        database:
           type: string
-          enum:
-            - active
-          description: Python-only liveness field; the Go server omits it.
       required:
         - status
+        - database
       additionalProperties: false
+      description: 'Liveness: `status` is always `healthy`; `database` is `ok` while the database answers.'
     HITLObserverDiagnostic:
       type: object
       properties:
@@ -4641,7 +4748,7 @@ components:
       type: object
       properties:
         ports:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: mirrors the workspace's configured ports; not limited
           type: array
           items:
             $ref: '#/components/schemas/WorkspacePreviewPort'
@@ -4690,7 +4797,7 @@ components:
         parent_capacity:
           type: integer
         capacity_holders:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: bounded by `parent_capacity`, which is configuration
           type: array
           items:
             type: string
@@ -4767,6 +4874,9 @@ components:
         - owner_id
         - name
         - source_kind
+        - watched_tag
+        - accepted_default_version_id
+        - definition
       title: DevEnvironment
       type: object
     PackageDeclaration:
@@ -4779,7 +4889,7 @@ components:
           title: Manager
           type: string
         packages:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the model sets a minimum but no maximum
           items:
             $ref: '#/components/schemas/PackageSpec'
           minItems: 1
@@ -4793,7 +4903,7 @@ components:
           title: Policy Version
           type: integer
         repositories:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the model sets no limit
           items:
             type: string
           title: Repositories
@@ -4805,7 +4915,7 @@ components:
           default: null
           title: Generator Version
         metadata_hashes:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one digest per repository; the model sets no limit
           items:
             pattern: ^sha256:[0-9a-f]{64}$
             type: string
@@ -4828,6 +4938,11 @@ components:
         - packages
         - policy_id
         - policy_version
+        - repositories
+        - generator_version
+        - metadata_hashes
+        - project_id
+        - task_id
       title: PackageDeclaration
       type: object
     PackageSpec:
@@ -4853,6 +4968,8 @@ components:
           title: Resolved Version
       required:
         - name
+        - requested_version
+        - resolved_version
       title: PackageSpec
       type: object
     EnvironmentVersion:
@@ -4974,6 +5091,20 @@ components:
         - validation_status
         - validator_version
         - provenance_kind
+        - registry
+        - repository
+        - index_digest
+        - platform_manifest_digest
+        - config_digest
+        - declared_user
+        - architecture
+        - capability_profile
+        - validation_result
+        - base_provenance
+        - parent_version_id
+        - package_declaration
+        - approval_reference
+        - definition
       title: EnvironmentVersion
       type: object
     ProjectEnvironmentGrant:
@@ -5034,6 +5165,10 @@ components:
         - project_id
         - environment_id
         - revision
+        - version_id
+        - follow_default
+        - access_revoked
+        - resolved_version_id
       title: ProjectEnvironmentSelection
       type: object
     OwnerDecision:
@@ -5200,7 +5335,7 @@ components:
           type: integer
         checkout:
           anyOf:
-            - $ref: '#/components/schemas/TaskCheckout'
+            - $ref: '#/components/schemas/TaskCheckoutOutput'
             - type: 'null'
           default: null
         created_at:
@@ -5222,6 +5357,18 @@ components:
         - selection_source
         - created_at
         - updated_at
+        - project_id
+        - topic_id
+        - parent_task_id
+        - creator_binding_id
+        - provider_constraint
+        - accepted_environment
+        - status
+        - reason
+        - owner_decision
+        - current_attempt_id
+        - version
+        - checkout
       title: Task
       type: object
     TaskArtifact:
@@ -5465,6 +5612,24 @@ components:
         - depth
         - created_at
         - updated_at
+        - writer_generation
+        - session_id
+        - binding_id
+        - workspace_id
+        - state
+        - brief_delivery_id
+        - predecessor_id
+        - successor_id
+        - evidence_refs
+        - result_ref
+        - environment
+        - initial_ref
+        - checkpoint_ref
+        - manifest_ref
+        - superseded_at
+        - archived_at
+        - native_deleted_at
+        - retention_hold
       title: TaskAttempt
       type: object
     TaskEligibility:
@@ -5493,6 +5658,9 @@ components:
           title: Reason
       title: TaskEligibility
       type: object
+      required:
+        - available
+        - reason
     TaskOperation:
       additionalProperties: false
       properties:
@@ -5643,6 +5811,16 @@ components:
         - kind
         - created_at
         - updated_at
+        - request_payload
+        - task_id
+        - attempt_id
+        - state
+        - last_confirmed_step
+        - source_attempt_id
+        - target_attempt_id
+        - checkpoint_ref
+        - manifest_ref
+        - reason
       title: TaskOperation
       type: object
     TaskProjection:
@@ -5745,7 +5923,7 @@ components:
           default: null
           title: Publication State
         pending_approval_ids:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one id per pending approval; not limited
           default: []
           items:
             type: string
@@ -5760,6 +5938,24 @@ components:
           title: Observed At
       title: TaskProjection
       type: object
+      required:
+        - agent_activity
+        - delivery_state
+        - workspace_health
+        - environment_version_id
+        - repository
+        - branch
+        - pr_url
+        - pr_number
+        - pr_head_sha
+        - pr_state
+        - ci_state
+        - ci_head_sha
+        - merge_state
+        - merge_proposal_id
+        - publication_state
+        - pending_approval_ids
+        - observed_at
     TaskReport:
       additionalProperties: false
       properties:
@@ -5814,6 +6010,8 @@ components:
         - request_id
         - summary
         - outcome
+        - owner_action
+        - evidence_refs
       title: TaskReport
       type: object
     TaskView:
@@ -5822,28 +6020,28 @@ components:
         task:
           $ref: '#/components/schemas/Task'
         attempts:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: grows with the task's history; not paginated
           default: []
           items:
             $ref: '#/components/schemas/TaskAttempt'
           title: Attempts
           type: array
         operations:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: grows with the task's history; not paginated
           default: []
           items:
             $ref: '#/components/schemas/TaskOperation'
           title: Operations
           type: array
         artifacts:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: grows with the task's history; not paginated
           default: []
           items:
             $ref: '#/components/schemas/TaskArtifact'
           title: Artifacts
           type: array
         reports:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: grows with the task's history; not paginated
           default: []
           items:
             $ref: '#/components/schemas/TaskReport'
@@ -5864,6 +6062,11 @@ components:
       required:
         - task
         - actions
+        - attempts
+        - operations
+        - artifacts
+        - reports
+        - projection
       title: TaskView
       type: object
     ProjectProviderPreference:
@@ -5889,6 +6092,8 @@ components:
           type: integer
       required:
         - project_id
+        - profile_id
+        - version
       title: ProjectProviderPreference
       type: object
     TaskUpdated:
@@ -5943,6 +6148,7 @@ components:
         - root_task_id
         - parent_task_id
         - occurred_at
+        - type
       title: TaskUpdated
       type: object
     AskUserRequest:
@@ -5973,6 +6179,7 @@ components:
         - type
         - id
         - questions
+        - nested
       title: AskUserRequest
       type: object
     ContinuationIdentity:
@@ -6138,6 +6345,7 @@ components:
         - owner_id
         - pending_request_id
         - request_hash
+        - binding_id
       title: LeafIdentity
       type: object
     NestedHITLRequest:
@@ -6169,6 +6377,7 @@ components:
         - task_id
         - context_id
         - tools
+        - subagent_name
       title: NestedHITLRequest
       type: object
     TaskIdentity:
@@ -6234,6 +6443,8 @@ components:
       required:
         - type
         - tools
+        - hint
+        - nested
       title: ToolApprovalRequest
       type: object
     VerifiedAssociation:
@@ -6327,6 +6538,9 @@ components:
         - outer
         - payload
         - availability
+        - leaves
+        - associations
+        - unavailable_reason
       title: HITLProjection
       type: object
     CallSnapshot:
@@ -6387,6 +6601,13 @@ components:
       required:
         - leaf
         - arguments_hash
+        - call_id
+        - tool_name
+        - approved
+        - configuration
+        - mapping
+        - mapping_evidence
+        - merge_key
       title: CallSnapshot
       type: object
     MergeReceiptKey:
@@ -6428,6 +6649,7 @@ components:
         - leaf_runtime_session_id
         - proposal_id
         - invocation_request_id
+        - operation
       title: MergeReceiptKey
       type: object
     TemplateMappingEvidence:
@@ -6500,6 +6722,7 @@ components:
         - endpoint
         - tool
         - require_approval
+        - operation
       title: TemplateMergeConfiguration
       type: object
     TrustedToolMapping:
@@ -6553,6 +6776,7 @@ components:
         - endpoint
         - tool
         - require_approval
+        - operation
       title: TrustedToolMapping
       type: object
     VerifiedLeafConfiguration:
@@ -6637,10 +6861,10 @@ components:
           discriminator:
             mapping:
               ask_user_response: '#/components/schemas/AskUserResponse'
-              tool_approval_response: '#/components/schemas/ToolApprovalResponse'
+              tool_approval_response: '#/components/schemas/ToolApprovalResponseOutput'
             propertyName: type
           oneOf:
-            - $ref: '#/components/schemas/ToolApprovalResponse'
+            - $ref: '#/components/schemas/ToolApprovalResponseOutput'
             - $ref: '#/components/schemas/AskUserResponse'
           title: Response
         outer:
@@ -6673,6 +6897,7 @@ components:
         - outer
         - calls
         - outbound_message_id
+        - associations
       title: DecisionReceipt
       type: object
     HealthTool:
@@ -7130,9 +7355,8 @@ components:
         provider:
           anyOf:
             - type: string
-              enum:
-                - claude
-                - codex
+              maxLength: 80
+              pattern: ^[a-z][a-z0-9_-]*$
             - type: 'null'
       additionalProperties: false
       description: Display context from the owned binding; empty when the session is unknown.
@@ -7192,6 +7416,10 @@ components:
           type: boolean
         inventory_digest:
           type: string
+        ignored_suite_count:
+          type: integer
+          minimum: 0
+          description: Present only when the recorded CI facts list ignored suites.
       required:
         - complete
         - captured_at
@@ -7260,12 +7488,12 @@ components:
         paths_preview_truncated:
           type: boolean
         protected_matches:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: bounded by the changed paths, which have no explicit cap
           type: array
           items:
             type: string
         approval_reasons:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: one entry per matched path; no explicit cap
           type: array
           items:
             $ref: '#/components/schemas/MergeApprovalReason'
@@ -7419,7 +7647,7 @@ components:
             - type: string
             - type: 'null'
         protected_matches:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: bounded by the changed paths, which have no explicit cap
           type: array
           items:
             type: string
@@ -7483,7 +7711,7 @@ components:
             - type: array
               items:
                 $ref: '#/components/schemas/VerifiedMergeContext'
-              maxItems: 200
+              maxItems: 100
             - type: 'null'
       required:
         - request
@@ -7512,7 +7740,9 @@ components:
           maxLength: 4096
           description: files section.
         previous_filename:
-          type: string
+          type:
+            - string
+            - 'null'
           maxLength: 4096
         status:
           type: string
@@ -7868,17 +8098,17 @@ components:
         totals:
           $ref: '#/components/schemas/HealthTotals'
         reports:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the query has no limit
           type: array
           items:
             $ref: '#/components/schemas/HealthReport'
         approvals:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the query has no limit
           type: array
           items:
             $ref: '#/components/schemas/HealthApproval'
         gaps:
-          # No cap in the code: unpaginated owner-scoped list
+          # no cap in the code: the query has no limit
           type: array
           items:
             type: string
@@ -8041,3 +8271,103 @@ components:
       allOf:
         - $ref: '#/components/schemas/TaskUpdated'
       description: '`task:updated`: names a change; read the task with getTask.'
+    TaskCheckoutOutput:
+      properties:
+        branch:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Branch
+        ref:
+          type: string
+          maxLength: 255
+          title: Ref
+          default: ''
+        depth:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Depth
+          default: 0
+      additionalProperties: false
+      type: object
+      required:
+        - branch
+        - ref
+        - depth
+      title: TaskCheckout
+    ToolApprovalOutput:
+      properties:
+        id:
+          type: string
+          maxLength: 2048
+          minLength: 1
+          title: Id
+        approved:
+          type: boolean
+          title: Approved
+        rejection_reason:
+          anyOf:
+            - type: string
+              maxLength: 8192
+            - type: 'null'
+          title: Rejection Reason
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - approved
+        - rejection_reason
+      title: ToolApproval
+    ToolApprovalResponseOutput:
+      properties:
+        type:
+          type: string
+          const: tool_approval_response
+          title: Type
+        approvals:
+          items:
+            $ref: '#/components/schemas/ToolApprovalOutput'
+          type: array
+          maxItems: 100
+          minItems: 1
+          title: Approvals
+        reviewed_context:
+          additionalProperties:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          propertyNames:
+            maxLength: 2048
+            minLength: 1
+          type: object
+          maxProperties: 100
+          title: Reviewed Context
+      additionalProperties: false
+      type: object
+      required:
+        - type
+        - approvals
+        - reviewed_context
+      title: ToolApprovalResponse
+    WorkspaceDevOutput:
+      properties:
+        ports:
+          # no cap in the code: ports are unique per workspace, but their number is not limited
+          items:
+            $ref: '#/components/schemas/WorkspacePort'
+          type: array
+          title: Ports
+          default: []
+        idle_timeout_minutes:
+          type: integer
+          maximum: 1440.0
+          minimum: 1.0
+          title: Idle Timeout Minutes
+          default: 30
+      additionalProperties: false
+      type: object
+      title: WorkspaceDev
+      description: 'Dev server settings: which ports the preview URL may reach, and when to idle out.'
+      required:
+        - ports
+        - idle_timeout_minutes
