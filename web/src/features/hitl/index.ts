@@ -2,7 +2,8 @@
  * Public surface of the HITL feature. The prop shapes are final; F3 builds the components.
  * Until then the components throw on render, so a caller that uses them early fails loudly.
  */
-import type { HITLDraft, HITLMergeDetailSection, HITLMergeDetails, HITLState } from '@/lib/hitl';
+import type { HITLMergeDetailSection, HITLMergeDetails } from '@/lib/contract';
+import type { HITLDraft, HITLState } from '@/lib/hitl';
 
 export interface HITLCardProps {
   /** The approval or question request to show. The card reads its owning task from the cache. */

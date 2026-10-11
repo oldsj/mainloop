@@ -1,132 +1,201 @@
 /** Display and response contracts. Only the server decides whether a request is answerable. */
-export interface HITLTool {
-  id: string;
-  call_id: string;
-  name: string;
-  args: Record<string, unknown>;
+import type {
+  AskUserRequest,
+  HITLQuestion,
+  HITLResponse,
+  HITLTool,
+  HITLView,
+  MergeSummary,
+  NestedHITLRequest,
+  ToolApprovalRequest,
+  VerifiedMergeContext
+} from './contract';
+
+/** A request as the server sends it: a tool approval or a question. parseHITL checks it. */
+export type HITLPayload = ToolApprovalRequest | AskUserRequest;
+
+type MergeCI = NonNullable<MergeSummary['ci']>;
+type MergeMapping = NonNullable<MergeSummary['mapping_evidence']>;
+type MergeReason = MergeSummary['approval_reasons'][number];
+
+// Each check mirrors one generated type. A null passes only where the schema allows null.
+const record = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v);
+const text = (v: unknown): v is string => typeof v === 'string';
+const bounded = (v: unknown, max = 2048): v is string =>
+  typeof v === 'string' && v.length > 0 && v.length <= max;
+const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
+const positive = (v: unknown): v is number => count(v) && v > 0;
+const digest = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+const sha = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
+const repo = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]+\/[\w.-]+$/.test(v);
+const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every(text);
+const choiceList = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.length <= 100 && v.every((c) => typeof c === 'string' && c.length <= 4096);
+const nullOr = <T>(check: (v: unknown) => v is T, v: unknown): v is T | null =>
+  v === null || check(v);
+
+const isTool = (t: unknown): t is HITLTool =>
+  record(t) && bounded(t.id) && bounded(t.call_id) && bounded(t.name) && record(t.args);
+const isTools = (v: unknown): v is HITLTool[] =>
+  Array.isArray(v) &&
+  v.length > 0 &&
+  v.length <= 100 &&
+  v.every(isTool) &&
+  new Set(v.map((t) => t.id)).size === v.length;
+const isNested = (v: unknown): v is NestedHITLRequest =>
+  record(v) &&
+  text(v.subagent_name) &&
+  bounded(v.task_id) &&
+  bounded(v.context_id) &&
+  isTools(v.tools);
+const isQuestion = (q: unknown): q is HITLQuestion =>
+  record(q) &&
+  bounded(q.question, 8192) &&
+  typeof q.multiple === 'boolean' &&
+  nullOr(choiceList, q.choices);
+const isApproval = (v: unknown): v is ToolApprovalRequest =>
+  record(v) &&
+  v.type === 'tool_approval_request' &&
+  text(v.hint) &&
+  v.hint.length <= 4096 &&
+  isTools(v.tools) &&
+  nullOr(isNested, v.nested);
+const isAskUser = (v: unknown): v is AskUserRequest =>
+  record(v) &&
+  v.type === 'ask_user_request' &&
+  bounded(v.id) &&
+  Array.isArray(v.questions) &&
+  v.questions.length > 0 &&
+  v.questions.length <= 100 &&
+  v.questions.every(isQuestion) &&
+  (v.nested === null || (isNested(v.nested) && v.nested.tools.length === 1));
+
+const isReason = (v: unknown): v is MergeReason =>
+  record(v) &&
+  (v.type === 'project_policy' || (v.type === 'protected_path' && text(v.glob) && text(v.path)));
+const isCI = (v: unknown): v is MergeCI =>
+  record(v) &&
+  typeof v.complete === 'boolean' &&
+  nullOr(text, v.captured_at) &&
+  count(v.result_count) &&
+  count(v.passed_count) &&
+  count(v.failed_count) &&
+  count(v.pending_count) &&
+  typeof v.green_at_preparation === 'boolean' &&
+  digest(v.inventory_digest) &&
+  (v.ignored_suite_count === undefined || count(v.ignored_suite_count));
+const isMapping = (v: unknown): v is MergeMapping =>
+  record(v) &&
+  bounded(v.template_name) &&
+  (v.provider === 'claude' || v.provider === 'codex') &&
+  text(v.config_digest);
+const policy = (v: unknown): v is 'auto' | 'approval' => v === 'auto' || v === 'approval';
+/** The shape the generated type allows. Evidence is judged separately by isEvidenceSummary. */
+const isSummary = (v: unknown): v is MergeSummary =>
+  record(v) &&
+  v.version === 1 &&
+  bounded(v.proposal_id) &&
+  nullOr(repo, v.repository) &&
+  nullOr(positive, v.pr_number) &&
+  nullOr(text, v.title) &&
+  text(v.description_excerpt) &&
+  typeof v.description_truncated === 'boolean' &&
+  nullOr(digest, v.description_digest) &&
+  nullOr(count, v.description_length) &&
+  nullOr(count, v.file_count) &&
+  nullOr(count, v.additions) &&
+  nullOr(count, v.deletions) &&
+  nullOr(digest, v.paths_digest) &&
+  strings(v.paths_preview) &&
+  typeof v.paths_preview_truncated === 'boolean' &&
+  strings(v.protected_matches) &&
+  Array.isArray(v.approval_reasons) &&
+  v.approval_reasons.every(isReason) &&
+  nullOr(policy, v.policy) &&
+  nullOr(count, v.policy_version) &&
+  nullOr(count, v.globs_version) &&
+  nullOr(bounded, v.head) &&
+  nullOr(sha, v.head_sha) &&
+  nullOr(bounded, v.base) &&
+  nullOr(sha, v.base_sha) &&
+  nullOr(isCI, v.ci) &&
+  nullOr(isMapping, v.mapping_evidence) &&
+  (v.availability === 'ready' || v.availability === 'unavailable') &&
+  strings(v.unavailable_reasons) &&
+  (v.merge_file_count === undefined || count(v.merge_file_count)) &&
+  (v.merge_only_file_count === undefined || count(v.merge_only_file_count)) &&
+  (v.merge_paths_digest === undefined || nullOr(digest, v.merge_paths_digest));
+const isContext = (v: unknown): v is VerifiedMergeContext =>
+  record(v) &&
+  nullOr(bounded, v.tool_id) &&
+  nullOr(bounded, v.proposal_id) &&
+  nullOr(isSummary, v.summary) &&
+  nullOr(digest, v.summary_digest) &&
+  (v.availability === 'ready' || v.availability === 'unavailable' || v.availability === 'stale') &&
+  nullOr(text, v.freshness_reason) &&
+  nullOr(text, v.details_url) &&
+  (v.pr_url === undefined || text(v.pr_url)) &&
+  (v.compare_url === undefined || text(v.compare_url)) &&
+  nullOr(repo, v.repository) &&
+  nullOr(positive, v.pr_number) &&
+  nullOr(bounded, v.head) &&
+  nullOr(sha, v.head_sha) &&
+  nullOr(bounded, v.base) &&
+  nullOr(sha, v.base_sha) &&
+  strings(v.protected_matches) &&
+  typeof v.stale === 'boolean' &&
+  nullOr(text, v.state) &&
+  nullOr(text, v.deadline);
+
+/**
+ * Approval reads these summary fields. A null in any of them leaves the approver without proof.
+ * ci, mapping_evidence and the merge_* counts may be null by design, so they are not required here.
+ */
+function isEvidenceSummary(s: MergeSummary): boolean {
+  return (
+    s.repository !== null &&
+    s.pr_number !== null &&
+    s.title !== null &&
+    s.description_digest !== null &&
+    s.description_length !== null &&
+    s.file_count !== null &&
+    s.additions !== null &&
+    s.deletions !== null &&
+    s.paths_digest !== null &&
+    s.policy !== null &&
+    s.policy_version !== null &&
+    s.globs_version !== null &&
+    s.head !== null &&
+    s.head_sha !== null &&
+    s.base !== null &&
+    s.base_sha !== null
+  );
 }
-export interface HITLQuestion {
-  question: string;
-  choices: string[] | null;
-  multiple: boolean;
-}
-export type HITLPayload = (
-  | { type: 'tool_approval_request'; tools: HITLTool[]; hint?: string }
-  | { type: 'ask_user_request'; id: string; questions: HITLQuestion[] }
-) & {
-  nested?: { tools: HITLTool[]; task_id: string; context_id: string } | null;
-  [key: string]: unknown;
-};
-export type HITLResponse =
-  | {
-      type: 'tool_approval_response';
-      approvals: { id: string; approved: boolean; rejection_reason?: string }[];
-      reviewed_context?: Record<string, string>;
-    }
-  | { type: 'ask_user_response'; id: string; answers: { answer: string[] }[] };
-export interface HITLView {
-  request: {
-    id: string;
-    payload: unknown;
-    availability: string;
-    outer: {
-      runtime_session_id: string;
-      task_id: string;
-      context_id: string;
-      request_hash: string;
-    };
-    [key: string]: unknown;
-  };
-  response: { response: HITLResponse; [key: string]: unknown } | null;
-  route_request_id: string;
-  answerable: boolean;
-  writes_enabled: boolean;
-  transport_state: string | null;
-  unavailable_reason: string | null;
-  context?: {
-    session_id?: string;
-    title?: string;
-    project_id?: string;
-    project_name?: string;
-    provider?: string | null;
-    role?: string;
-  };
-  merge?: VerifiedMergeContext[] | null;
-}
-export interface MergeSummary {
-  version: number;
-  proposal_id: string;
-  repository: string;
-  pr_number: number;
-  title: string;
-  description_excerpt: string;
-  description_truncated: boolean;
-  description_digest: string;
-  description_length: number;
-  file_count: number;
-  additions: number;
-  deletions: number;
-  paths_digest: string;
-  paths_preview: string[];
-  paths_preview_truncated: boolean;
-  protected_matches: string[];
-  approval_reasons: (
-    | { type: 'project_policy' }
-    | { type: 'protected_path'; glob: string; path: string }
-  )[];
-  policy: 'auto' | 'approval';
-  policy_version: number;
-  globs_version: number;
-  head: string;
-  head_sha: string;
-  base: string;
-  base_sha: string;
-  ci: {
-    complete: boolean;
-    captured_at: string;
-    result_count: number;
-    passed_count: number;
-    failed_count: number;
-    pending_count: number;
-    green_at_preparation: boolean;
-    inventory_digest: string;
-  } | null;
-  availability: 'ready' | 'unavailable';
-  unavailable_reasons: string[];
-}
-export interface VerifiedMergeContext {
-  tool_id: string;
-  proposal_id: string;
-  summary: MergeSummary | null;
-  summary_digest: string | null;
-  availability: 'ready' | 'unavailable' | 'stale';
-  freshness_reason: string | null;
-  details_url: string | null;
-  pr_url?: string;
-  compare_url?: string;
-  repository: string;
-  pr_number: number;
-  head: string;
-  head_sha: string;
-  base: string;
-  base_sha: string;
-  protected_matches: string[];
-  stale: boolean;
-  state?: string | null;
-  deadline?: string | null;
-}
-export type HITLMergeDetailSection = 'description' | 'files' | 'checks';
-export interface HITLMergeDetails {
-  section: HITLMergeDetailSection;
-  summary_digest: string;
-  captured_at: string | null;
-  description?: string;
-  description_truncated?: boolean;
-  truncated: boolean;
-  items?: Record<string, unknown>[];
-  next_cursor: string | null;
+function isEvidence(v: VerifiedMergeContext): boolean {
+  const s = v.summary;
+  return (
+    v.tool_id !== null &&
+    v.proposal_id !== null &&
+    s !== null &&
+    s.proposal_id === v.proposal_id &&
+    v.summary_digest !== null &&
+    v.repository !== null &&
+    v.pr_number !== null &&
+    v.head !== null &&
+    v.head_sha !== null &&
+    v.base !== null &&
+    v.base_sha !== null &&
+    isEvidenceSummary(s)
+  );
 }
 
+export interface HITLDraft {
+  decisions: Record<string, 'approve' | 'reject'>;
+  reasons: Record<string, string>;
+  answers: string[][];
+  reviewedContext?: Record<string, string>;
+}
 /** Missing, malformed or ambiguous resolver evidence must not look verified. */
 export function mergeContexts(view: HITLView) {
   const payload = parseHITL(view.request.payload);
@@ -135,114 +204,11 @@ export function mergeContexts(view: HITLView) {
     const matches = entries.filter((v) => record(v) && v.tool_id === tool.id);
     // A public name is only a hint to show an unavailable notice, never evidence.
     if (!matches.length && !tool.name.endsWith('merge_pull_request_with_approval')) return [];
-    const v = matches.length === 1 ? matches[0] : null;
-    const valid =
-      record(v) &&
-      bounded(v.proposal_id) &&
-      typeof v.repository === 'string' &&
-      /^[\w.-]+\/[\w.-]+$/.test(v.repository) &&
-      Number.isSafeInteger(v.pr_number) &&
-      (v.pr_number as number) > 0 &&
-      typeof v.summary_digest === 'string' &&
-      /^[a-f0-9]{64}$/.test(v.summary_digest) &&
-      validSummary(v.summary) &&
-      (v.summary as MergeSummary).proposal_id === v.proposal_id &&
-      ['ready', 'unavailable', 'stale'].includes(String(v.availability)) &&
-      (v.freshness_reason === null || typeof v.freshness_reason === 'string') &&
-      bounded(v.head) &&
-      bounded(v.base) &&
-      typeof v.head_sha === 'string' &&
-      /^[a-f0-9]{40}$/.test(v.head_sha) &&
-      typeof v.base_sha === 'string' &&
-      /^[a-f0-9]{40}$/.test(v.base_sha) &&
-      Array.isArray(v.protected_matches) &&
-      v.protected_matches.every((p) => typeof p === 'string') &&
-      typeof v.stale === 'boolean';
-    return [{ toolId: tool.id, facts: valid ? (v as unknown as VerifiedMergeContext) : null }];
+    const v: unknown = matches.length === 1 ? matches[0] : null;
+    const facts = isContext(v) && isEvidence(v) ? v : null;
+    return [{ toolId: tool.id, facts }];
   });
 }
-
-function validSummary(value: unknown): value is MergeSummary {
-  return (
-    record(value) &&
-    value.version === 1 &&
-    bounded(value.proposal_id) &&
-    typeof value.title === 'string' &&
-    typeof value.description_excerpt === 'string' &&
-    typeof value.description_truncated === 'boolean' &&
-    typeof value.description_digest === 'string' &&
-    /^[a-f0-9]{64}$/.test(value.description_digest) &&
-    Number.isSafeInteger(value.description_length) &&
-    Number.isSafeInteger(value.file_count) &&
-    Number.isSafeInteger(value.additions) &&
-    Number.isSafeInteger(value.deletions) &&
-    typeof value.paths_digest === 'string' &&
-    /^[a-f0-9]{64}$/.test(value.paths_digest) &&
-    Array.isArray(value.paths_preview) &&
-    value.paths_preview.every((path) => typeof path === 'string') &&
-    typeof value.paths_preview_truncated === 'boolean' &&
-    Array.isArray(value.protected_matches) &&
-    value.protected_matches.every((path) => typeof path === 'string') &&
-    Array.isArray(value.approval_reasons) &&
-    value.approval_reasons.every(
-      (reason) =>
-        record(reason) &&
-        (reason.type === 'project_policy' ||
-          (reason.type === 'protected_path' &&
-            typeof reason.glob === 'string' &&
-            typeof reason.path === 'string'))
-    ) &&
-    (value.policy === 'auto' || value.policy === 'approval') &&
-    Number.isSafeInteger(value.policy_version) &&
-    Number.isSafeInteger(value.globs_version) &&
-    bounded(value.head) &&
-    typeof value.head_sha === 'string' &&
-    /^[a-f0-9]{40}$/.test(value.head_sha) &&
-    bounded(value.base) &&
-    typeof value.base_sha === 'string' &&
-    /^[a-f0-9]{40}$/.test(value.base_sha) &&
-    (value.ci === null ||
-      (record(value.ci) &&
-        typeof value.ci.complete === 'boolean' &&
-        typeof value.ci.captured_at === 'string' &&
-        Number.isSafeInteger(value.ci.result_count) &&
-        Number.isSafeInteger(value.ci.passed_count) &&
-        Number.isSafeInteger(value.ci.failed_count) &&
-        Number.isSafeInteger(value.ci.pending_count) &&
-        typeof value.ci.green_at_preparation === 'boolean' &&
-        typeof value.ci.inventory_digest === 'string' &&
-        /^[a-f0-9]{64}$/.test(value.ci.inventory_digest))) &&
-    (value.availability === 'ready' || value.availability === 'unavailable') &&
-    Array.isArray(value.unavailable_reasons) &&
-    value.unavailable_reasons.every((reason) => typeof reason === 'string')
-  );
-}
-
-export interface MergePolicyView {
-  merge_policy: 'auto' | 'approval';
-  merge_policy_version: number;
-  writes_enabled: boolean;
-  protected_globs: string[];
-  protected_globs_version: number;
-}
-export interface HITLDraft {
-  decisions: Record<string, 'approve' | 'reject'>;
-  reasons: Record<string, string>;
-  answers: string[][];
-  reviewedContext?: Record<string, string>;
-}
-const record = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === 'object' && !Array.isArray(v);
-const bounded = (v: unknown, max = 2048): v is string =>
-  typeof v === 'string' && v.length > 0 && v.length <= max;
-const toolsValid = (v: unknown): v is HITLTool[] =>
-  Array.isArray(v) &&
-  v.length > 0 &&
-  v.length <= 100 &&
-  v.every(
-    (t) => record(t) && bounded(t.id) && bounded(t.call_id) && bounded(t.name) && record(t.args)
-  ) &&
-  new Set(v.map((t) => t.id)).size === v.length;
 export function parseHITL(payload: unknown): HITLPayload | null {
   if (!record(payload)) return null;
   try {
@@ -250,41 +216,8 @@ export function parseHITL(payload: unknown): HITLPayload | null {
   } catch {
     return null;
   }
-  if (
-    payload.nested != null &&
-    (!record(payload.nested) ||
-      !toolsValid(payload.nested.tools) ||
-      !bounded(payload.nested.task_id) ||
-      !bounded(payload.nested.context_id))
-  )
-    return null;
-  if (
-    payload.type === 'tool_approval_request' &&
-    toolsValid(payload.tools) &&
-    (payload.hint === undefined ||
-      (typeof payload.hint === 'string' && payload.hint.length <= 4096))
-  )
-    return payload as HITLPayload;
-  if (
-    payload.type === 'ask_user_request' &&
-    bounded(payload.id) &&
-    Array.isArray(payload.questions) &&
-    payload.questions.length > 0 &&
-    payload.questions.length <= 100 &&
-    payload.questions.every(
-      (q) =>
-        record(q) &&
-        bounded(q.question, 8192) &&
-        typeof q.multiple === 'boolean' &&
-        (q.choices === null ||
-          (Array.isArray(q.choices) &&
-            q.choices.length <= 100 &&
-            q.choices.every((c) => typeof c === 'string' && c.length <= 4096)))
-    )
-  ) {
-    if (payload.nested && (payload.nested as { tools: HITLTool[] }).tools.length !== 1) return null;
-    return payload as HITLPayload;
-  }
+  if (isApproval(payload)) return payload;
+  if (isAskUser(payload)) return payload;
   return null;
 }
 export function requestTools(p: HITLPayload): HITLTool[] {
@@ -330,11 +263,13 @@ export function buildHITLResponse(payload: unknown, draft: HITLDraft): HITLRespo
       new Set(answer).size !== answer.length
     )
       throw new Error('Answer every question; select one answer unless multiple are allowed.');
-    if (q.choices?.length && answer.some((a) => !q.choices!.includes(a)))
+    const { choices } = q;
+    if (choices?.length && answer.some((a) => !choices.includes(a)))
       throw new Error('Choose one of the offered answers.');
     return { answer: [...answer] };
   });
-  return { type: 'ask_user_response', id: p.nested?.tools[0]!.id ?? p.id, answers };
+  const [nestedTool] = p.nested?.tools ?? [];
+  return { type: 'ask_user_response', id: nestedTool?.id ?? p.id, answers };
 }
 export function reasonNotice(provider?: string | null): string {
   return provider === 'codex'
@@ -344,18 +279,17 @@ export function reasonNotice(provider?: string | null): string {
       : 'Reason saved; delivery to this runtime is not verified.';
 }
 export function hitlStatus(v: HITLView): string {
-  if (v.response)
-    return (
-      (
-        {
-          accepted: 'Decision delivered',
-          recorded: 'Decision recorded; awaiting delivery',
-          sending: 'Decision delivery uncertain',
-          uncertain: 'Decision delivery uncertain',
-          rejected_transport: 'Decision destination unavailable'
-        } as Record<string, string>
-      )[v.transport_state ?? ''] ?? 'Decision recorded'
-    );
+  if (v.response) {
+    const labels: Record<string, string> = {
+      accepted: 'Decision delivered',
+      recorded: 'Decision recorded; awaiting delivery',
+      sending: 'Decision delivery uncertain',
+      uncertain: 'Decision delivery uncertain',
+      rejected_transport: 'Decision destination unavailable'
+    };
+    const key = v.transport_state ?? '';
+    return (Object.hasOwn(labels, key) && labels[key]) || 'Decision recorded';
+  }
   if (v.route_request_id !== v.request.id) return 'Continue on the linked request';
   if (v.request.availability === 'stale') return 'Observation stale; waiting for a fresh check';
   if (!v.answerable) return 'Request unavailable';

@@ -16,6 +16,7 @@ import {
   ancestors,
   attemptHistory,
   buildTree,
+  normalizeView,
   observationAge,
   openOperations,
   operationProgress,
@@ -140,6 +141,24 @@ test('missing PR, CI and merge fields are unknown, not passing or absent', () =>
   expect(facts.prUrl).toBe(null);
   expect(facts.observation.known).toBe(false);
   expect(facts.observation.stale).toBe(true);
+});
+
+test('a bare task view reads the same as a payload with no projection', () => {
+  // The frozen port kept an empty projection. normalizeView now fills the schema's own unknown
+  // defaults (pr_state and ci_state are 'unknown'); no helper may read those as a fact.
+  const bare = normalizeView({ task: task() });
+  expect(bare.projection.pr_state).toBe('unknown');
+  expect(bare.projection.ci_state).toBe('unknown');
+  expect(publicationFacts(bare.projection, NOW)).toStrictEqual(publicationFacts({}, NOW));
+  expect(workspaceFacts(bare)).toStrictEqual({
+    repository: null,
+    branch: 'task/retry',
+    environmentVersionId: null,
+    workspaceId: null,
+    sessionId: null
+  });
+  expect(switchBlockers(bare)).toStrictEqual([]);
+  expect(taskForApproval([bare], 'request-1')).toBe(null);
 });
 
 test('pending CI is not passing, and PR, CI and merge are independent facts', () => {

@@ -1,10 +1,9 @@
 /**
  * Names the UI uses for backend contract types. Every shape comes from the generated
  * `api/schema.gen.ts`, so a backend change that the UI does not handle fails tsc here.
- * Only the action kind and the health filters are written by hand: the schema has no named
- * type for either.
+ * Only the action kind is written by hand: the schema has no named type for it.
  */
-import type { components } from '@/api/schema.gen';
+import type { components, paths } from '@/api/schema.gen';
 
 type Schemas = components['schemas'];
 
@@ -35,11 +34,28 @@ export type TaskReassign = Schemas['TaskReassign'];
 /** The body the owner submits: retry and cancel send `TaskAction`, reassign adds a target. */
 export type TaskActionBody = TaskAction | TaskReassign;
 
-export interface HealthFilters {
-  project_id?: string;
-  task_id?: string;
-  attempt_id?: string;
-  session_id?: string;
-  provider?: string;
-  hours?: number;
-}
+/** Human-in-the-loop requests: the payload the server sends, the receipt it keeps, and the answer. */
+export type HITLTool = Schemas['HITLTool'];
+export type HITLQuestion = Schemas['HITLQuestion'];
+export type ToolApprovalRequest = Schemas['ToolApprovalRequest'];
+export type AskUserRequest = Schemas['AskUserRequest'];
+export type NestedHITLRequest = Schemas['NestedHITLRequest'];
+export type HITLProjection = Schemas['HITLProjection'];
+export type HITLContext = Schemas['HITLContext'];
+export type HITLView = Schemas['HITLView'];
+export type DecisionReceipt = Schemas['DecisionReceipt'];
+/** What the owner submits. A receipt holds the output form, which always carries `reviewed_context`. */
+export type HITLResponse = Schemas['ToolApprovalResponse'] | Schemas['AskUserResponse'];
+
+/** Merge evidence for an approval: the proposal summary, verified per tool call by the server. */
+export type MergeSummary = Schemas['MergeSummary'];
+export type VerifiedMergeContext = Schemas['VerifiedMergeContext'];
+export type MergePolicyView = Schemas['MergePolicyView'];
+export type HITLMergeDetails = Schemas['HITLMergeDetails'];
+export type HITLMergeDetailSection = HITLMergeDetails['section'];
+export type MergeDetailItem = Schemas['MergeDetailItem'];
+
+/** The orchestration health filters. The operation's query parameters are the source. */
+export type HealthFilters = NonNullable<
+  paths['/orchestration-health']['get']['parameters']['query']
+>;

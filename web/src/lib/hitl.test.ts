@@ -2,43 +2,20 @@ import { expect, test } from 'vitest';
 import {
   buildHITLResponse,
   createHITLChannel,
+  mergeContexts,
   parseHITL,
-  type HITLView,
   type HITLState
 } from './hitl';
+import type { HITLView } from './contract';
+import { approvalRequest, decisionReceipt, hitlView, mergeContext } from '../test/fixtures/hitl';
 
-const payload = {
-  type: 'tool_approval_request',
-  tools: [
-    { id: 'a', call_id: 'native-a', name: 'tool.a', args: { x: '<script>' } },
-    { id: 'b', call_id: 'native-b', name: 'tool.b', args: {} }
-  ],
-  unknown: { retained: true }
-};
+const payload = approvalRequest();
 const draft = () => ({
   decisions: { a: 'approve', b: 'reject' } as const,
   reasons: { b: 'Keep tests' },
   answers: []
 });
-const view = (id = 'request'): HITLView => ({
-  request: {
-    id,
-    payload,
-    availability: 'pending',
-    outer: {
-      runtime_session_id: 'session',
-      task_id: 'task',
-      context_id: 'context',
-      request_hash: 'hash'
-    }
-  },
-  response: null,
-  route_request_id: id,
-  answerable: true,
-  writes_enabled: true,
-  transport_state: null,
-  unavailable_reason: null
-});
+const view = (id = 'request'): HITLView => hitlView(id);
 const state = (v: HITLView): HITLState => ({
   view: v,
   busy: false,
@@ -79,9 +56,16 @@ test('complete per-call choices, exact nested IDs, and no contradictory reasons'
   expect(parseHITL({ type: 'future', tools: payload.tools })).toBe(null);
   expect(parseHITL({ ...payload, tools: [{ id: 'x' }] })).toBe(null);
   expect(parseHITL({ ...payload, nested: {} })).toBe(null);
+  // The server always sends nested, as null when absent. A missing key is not the same thing.
+  expect(parseHITL({ ...payload, nested: undefined })).toBe(null);
   const nested = {
     ...payload,
-    nested: { task_id: 'child-task', context_id: 'child-context', tools: [payload.tools[1]] }
+    nested: {
+      subagent_name: '',
+      task_id: 'child-task',
+      context_id: 'child-context',
+      tools: [payload.tools[1]]
+    }
   };
   expect(
     buildHITLResponse(nested, { decisions: { b: 'reject' }, reasons: {}, answers: [] })
@@ -96,6 +80,7 @@ test('questions with choices, multiple selection and native null free text', () 
   const question = {
     type: 'ask_user_request',
     id: 'q',
+    nested: null,
     questions: [
       { question: 'Targets?', choices: ['a', 'b'], multiple: true },
       { question: 'Why?', choices: null, multiple: false }
@@ -121,7 +106,7 @@ test('questions with choices, multiple selection and native null free text', () 
   );
   const nested = {
     ...question,
-    nested: { task_id: 'child', context_id: 'ctx', tools: [payload.tools[0]] }
+    nested: { subagent_name: '', task_id: 'child', context_id: 'ctx', tools: [payload.tools[0]] }
   };
   expect((buildHITLResponse(nested, input) as { id: string }).id).toBe('a');
 });
@@ -148,7 +133,7 @@ test('inbox/chat share a single flight; new requests do not inherit consent', as
   expect(chat.busy).toBe(true);
   await channel.respond('request', draft());
   expect(sends).toBe(1);
-  current.response = { response: buildHITLResponse(payload, draft()) };
+  current.response = decisionReceipt(current.request);
   current.answerable = false;
   current.transport_state = 'accepted';
   finish(current);
@@ -183,7 +168,7 @@ test('network uncertainty and stale reads block resubmission; receipts resolve u
   expect(latest.uncertain).toBe(true);
   await channel.respond('request', draft());
   expect(sends).toBe(1);
-  current.response = { response: buildHITLResponse(payload, draft()) };
+  current.response = decisionReceipt(current.request);
   current.answerable = false;
   await channel.refresh('request');
   expect(latest.uncertain).toBe(false);
@@ -199,7 +184,7 @@ test('another-device conflict refreshes the immutable decision', async () => {
   const channel = createHITLChannel(
     async () => current,
     async () => {
-      current.response = { response: buildHITLResponse(payload, draft()) };
+      current.response = decisionReceipt(current.request);
       current.answerable = false;
       current.transport_state = 'accepted';
       throw Object.assign(new Error('Already answered'), { status: 409 });
@@ -242,7 +227,9 @@ test('4xx refusals show the server detail and end recording even if refresh fail
 });
 
 test('opaque tool IDs do not inherit object prototype values', () => {
-  const p = { type: 'tool_approval_request', tools: [{ ...payload.tools[0], id: '__proto__' }] };
+  const p = approvalRequest({
+    tools: [{ id: '__proto__', call_id: 'native-proto', name: 'tool.proto', args: {} }]
+  });
   const decisions = Object.assign(Object.create(null), { ['__proto__']: 'reject' });
   expect(buildHITLResponse(p, { decisions, reasons: {}, answers: [] })).toStrictEqual({
     type: 'tool_approval_response',
@@ -259,7 +246,7 @@ test('an older in-flight read cannot undo a recorded response', async () => {
     ...pending,
     answerable: false,
     transport_state: 'accepted',
-    response: { response: buildHITLResponse(payload, draft()) }
+    response: decisionReceipt(pending.request)
   };
   const channel = createHITLChannel(
     async () => {
@@ -283,7 +270,7 @@ test('an older in-flight read cannot undo a recorded response', async () => {
 test('automatic reads stop for delivered receipts but continue for uncertain decisions', async () => {
   const current = view();
   let reads = 0;
-  current.response = { response: buildHITLResponse(payload, draft()) };
+  current.response = decisionReceipt(current.request);
   current.answerable = false;
   current.transport_state = 'uncertain';
   const channel = createHITLChannel(
@@ -325,4 +312,18 @@ test('intentional read cancellation preserves state; a read timeout disables sta
   deadline.abort(new DOMException('Timed out', 'TimeoutError'));
   await channel.refresh('request', deadline.signal);
   expect(latest.stale).toBe(true);
+});
+
+test('merge evidence counts only when the fields it checks are present', () => {
+  expect(mergeContexts(hitlView('request', { merge: [mergeContext()] }))).toStrictEqual([
+    { toolId: 'a', facts: mergeContext() }
+  ]);
+  // The contract marks these fields nullable. A null is not evidence, so it must not read as verified.
+  expect(
+    mergeContexts(hitlView('request', { merge: [mergeContext({ repository: null })] }))
+  ).toStrictEqual([{ toolId: 'a', facts: null }]);
+  expect(
+    mergeContexts(hitlView('request', { merge: [mergeContext({ summary: null })] }))
+  ).toStrictEqual([{ toolId: 'a', facts: null }]);
+  expect(mergeContexts(hitlView('request', { merge: null }))).toStrictEqual([]);
 });
