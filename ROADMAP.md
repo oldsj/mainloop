@@ -68,6 +68,17 @@ The workspace runtime is not an inference proxy. It does not rebuild model promp
 
 The workspace runtime is kagent. Mainloop is an A2A client of the kagent gateway: each native session binding maps to one kagent Session, and Mainloop records every message in its delivery ledger before sending it. kagent owns agent pods, native harness processes, workspace bootstrap, snapshots and session expiry. Mainloop does not run a second scheduler or session owner alongside it.
 
+### Implementation direction (proposed)
+
+Nothing in this subsection is implemented yet. Until cutover, production keeps the current Python backend, which [docs/architecture.md](docs/architecture.md) describes.
+
+The target keeps the control-plane model and changes the implementation stack:
+
+- **Backend.** A Go service built as one binary. PostgreSQL holds the durable product state, and DBOS is removed. Background work runs as a Postgres reconciler: each side effect is first written as an intent row with an explicit state and an idempotency key, workers claim rows and commit before any network I/O, and an uncertain outcome is resolved by observing the remote side before any retry. No database lock or transaction is held across network I/O.
+- **Kubernetes.** No operator, no custom resources, and no etcd-backed coordination. kagent and GitOps own workload resources. Mainloop's in-cluster writes are limited to the runtime credential Secrets it already creates.
+- **Contract.** `api/openapi.yaml` is the wire contract. Go and TypeScript types are generated from it, and contract changes come before implementation changes.
+- **Frontend.** A React single-page app that calls the API through the generated client. It replaces the SvelteKit app.
+
 ## Context and continuity
 
 The visible conversation may remain continuous while working context follows the active topic.

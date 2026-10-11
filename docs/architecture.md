@@ -13,7 +13,7 @@ verification gaps are listed below.
 ```mermaid
 flowchart LR
   person["Browser or phone"] --> app["SvelteKit app"]
-  app <--> api["FastAPI + DBOS"]
+  app <--> api["FastAPI + DBOS (current, being removed)"]
   api --> data[("PostgreSQL<br/>messages, deliveries, workspace state")]
   api -->|"agent turns (A2A) and Sessions"| kagent["kagent gateway"]
   person -->|tailnet preview URL| preview["Mainloop preview proxy"]
@@ -74,7 +74,7 @@ owed are listed in `docs/specs/workspaces.md`.
 sequenceDiagram
   actor Owner
   participant UI as SvelteKit
-  participant Mainloop as FastAPI + DBOS
+  participant Mainloop as FastAPI + DBOS (current, being removed)
   participant DB as PostgreSQL
   participant Kagent as kagent gateway
   participant Agent as Native agent session
@@ -241,3 +241,19 @@ server through the gateway, and blocked connections) passed on a Cilium cluster;
 overlay's default CNI does not enforce NetworkPolicy, so the blocked-connection check needs a
 policy-enforcing CNI. The Secret holds the complete `Bearer ml_…` header value; NetworkPolicy
 remains required.
+
+## Target architecture (in progress)
+
+Proposed, not implemented. The sections above describe the current code. The direction is in
+[ROADMAP.md](../ROADMAP.md#implementation-direction-proposed).
+
+| Path                                               | Role (target)                                                                                            |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `api/`                                             | Wire contract (`openapi.yaml`) and the MCP tool manifest. Go and TypeScript types are generated from it. |
+| `server/`                                          | Go backend, one binary. Replaces `backend/`.                                                             |
+| `web/`                                             | React frontend and its static server. Replaces `frontend/`.                                              |
+| `backend/`, `models/`, `frontend/`, `packages/ui/` | Frozen until deleted: bug fixes and the contract conformance test only.                                  |
+
+Durable work moves from DBOS to a Postgres reconciler. Each side effect is an intent row with an
+explicit state and an idempotency key, and no database lock is held across network I/O. The
+deployment shape stays the same, so infrastructure changes are image and commit pin bumps.

@@ -39,6 +39,8 @@ Thank you for your interest in contributing to mainloop! This document provides 
 
 ### Code Style
 
+New backend code goes in `server/` (Go), and new frontend code goes in `web/` (React). `backend/`, `models/`, `frontend/`, and `packages/ui/` are frozen: they take bug fixes and the contract conformance test only, until they are deleted. The API contract will be `api/openapi.yaml`. See [AGENTS.md](AGENTS.md) for the migration rules.
+
 #### Python (Backend)
 
 - Use **Python 3.13+** features and type hints
@@ -67,10 +69,13 @@ Thank you for your interest in contributing to mainloop! This document provides 
 
 ```text
 mainloop/
-├── backend/       # Python FastAPI + DBOS workflows
-├── frontend/      # SvelteKit + Tailwind v4
-├── models/        # Shared Pydantic models
-├── packages/ui/   # Design tokens + theme
+├── api/           # OpenAPI contract (in progress)
+├── server/        # Go backend for new work (in progress)
+├── web/           # React frontend for new work (in progress)
+├── backend/       # Frozen Python FastAPI backend
+├── frontend/      # Frozen SvelteKit + Tailwind v4
+├── models/        # Frozen shared Pydantic models
+├── packages/ui/   # Frozen design tokens + theme
 └── k8s/           # Kubernetes manifests
 ```
 
@@ -94,25 +99,16 @@ pnpm check               # Type check
 
 ## Key Patterns
 
-### Backend (Python)
+### Backend (Python, frozen)
 
 - Use **Pydantic models** from `models/` package for data validation
-- Use **DBOS workflows** for durable task execution (see `docs/DBOS.md`)
 - Import shared models: `from models import Conversation, Message`
 
-### Frontend (SvelteKit)
+### Frontend (SvelteKit, frozen)
 
 - Import theme: `@import '@mainloop/ui/theme.css'` in app.css
 - Use stores in `$lib/stores/` for state management
 - API calls go through `$lib/api.ts`
-
-### Workflow Versioning (CRITICAL)
-
-When modifying DBOS workflows:
-
-- **Bump `WORKFLOW_VERSION`** in `dbos_config.py` when changing workflow logic
-- DBOS replays workflows from checkpoints - changing step order/logic breaks running workflows
-- Current version tracked in workflow config
 
 ## Running the CI checks in a workspace
 
