@@ -14,7 +14,6 @@ func TestRun(t *testing.T) {
 		stdoutHas  string
 		stderrOnly bool
 	}{
-		{[]string{"migrate"}, 2, "migrate: not implemented yet", "", true},
 		{[]string{"sweep-orphans"}, 2, "not implemented yet", "", true},
 		{[]string{"smoke"}, 2, "not implemented yet", "", true},
 		{[]string{"kagent-probe"}, 2, "not implemented yet", "", true},

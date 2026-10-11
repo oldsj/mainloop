@@ -47,7 +47,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return exitFailure
 		}
 		return 0
-	case "migrate", "sweep-orphans", "smoke", "kagent-probe":
+	case "migrate":
+		return runMigrate(args[1:], stdout, stderr)
+	case "sweep-orphans", "smoke", "kagent-probe":
 		_, _ = fmt.Fprintf(stderr, "%s: not implemented yet\n", cmd)
 		return exitNotImplemented
 	case "help", "-h", "--help":
@@ -67,7 +69,7 @@ commands:
   serve-api       owner API on :8000
   serve-mcp       MCP listener on :8002 (health only for now)
   serve-git       git transport on :8003 and :8004 (health only for now)
-  migrate         not implemented yet
+  migrate         up | status | reset the database schema
   sweep-orphans   not implemented yet
   smoke           not implemented yet
   kagent-probe    not implemented yet

@@ -1,0 +1,60 @@
+version: '2'
+sql:
+  - engine: postgresql
+    schema: internal/db/migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: dbq
+        out: internal/db/dbq
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides:
+          - column: sessions.status
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: SessionStatus }
+          - column: agent_bindings.role
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: BindingRole }
+          - column: agent_bindings.mcp_grant_kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MCPGrantKind }
+          - column: credentials.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: CredentialKind }
+          - column: credentials.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: CredentialState
+              }
+          - column: projects.merge_policy
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: MergePolicy }
+          - column: topic_records.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TopicRecordKind
+              }
+          - column: topic_records.status
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TopicRecordStatus
+              }
+          - column: sessions.result
+            go_type: { import: encoding/json, type: RawMessage }
+          - db_type: timestamptz
+            go_type: { import: time, type: Time }
+          - db_type: timestamptz
+            nullable: true
+            go_type: { import: time, type: Time, pointer: true }
+        rename:
+          avatar_url: AvatarURL
+          html_url: HTMLURL
+          repo_url: RepoURL
+          secret_uid: SecretUID
+          mcp_grant_kind: MCPGrantKind
+          open_pr_count: OpenPRCount

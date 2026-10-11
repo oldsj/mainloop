@@ -292,12 +292,16 @@ func (c *Config) ListenAddr() string {
 
 // DatabaseURL builds the connection string. It contains the password: pass it straight to the
 // pool and never log it.
-func (c *Config) DatabaseURL() string {
+func (c *Config) DatabaseURL() string { return c.DB.URL() }
+
+// URL builds the connection string. It contains the password: pass it straight to the pool and
+// never log it.
+func (d Database) URL() string {
 	u := url.URL{
 		Scheme: "postgres",
-		User:   url.UserPassword(c.DB.User, c.DB.Password.Reveal()),
-		Host:   fmt.Sprintf("%s:%d", c.DB.Host, c.DB.Port),
-		Path:   "/" + c.DB.Name,
+		User:   url.UserPassword(d.User, d.Password.Reveal()),
+		Host:   fmt.Sprintf("%s:%d", d.Host, d.Port),
+		Path:   "/" + d.Name,
 	}
 	return u.String()
 }
