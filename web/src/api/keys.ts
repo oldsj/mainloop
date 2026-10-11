@@ -53,6 +53,13 @@ export const keys = {
   task: (taskId: string) => get('/tasks/{task_id}', { path: { task_id: taskId } }),
   providers: () => get('/providers'),
 
+  /** Scheduled runs: the deployment-wide list, and one schedule with its executions. */
+  schedules: () => get('/schedules'),
+  schedule: (scheduleId: string) =>
+    get('/schedules/{schedule_id}', { path: { schedule_id: scheduleId } }),
+  scheduleExecutions: (scheduleId: string) =>
+    get('/schedules/{schedule_id}/executions', { path: { schedule_id: scheduleId } }),
+
   orchestrationHealth: () => get('/orchestration-health')
 } as const;
 

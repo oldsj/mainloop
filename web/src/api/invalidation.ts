@@ -14,11 +14,14 @@ import type { SseMessage } from './sse';
  *   held version (duplicates are dropped by event id).
  * - `workspace:updated`: upsert the workspace.
  * - `session:message`: that session's conversation and native info, plus the main thread.
+ * - `schedule:updated`: the schedule list, that schedule, and its executions. The event names a
+ *   change only; the queries re-read.
  * - `heartbeat` and anything unknown: nothing.
  */
 type Schemas = components['schemas'];
 type TaskUpdated = Schemas['EventTaskUpdated'];
 type SessionMessage = Schemas['EventSessionMessage'];
+type ScheduleUpdated = Schemas['EventScheduleUpdated'];
 type WorkspaceUpdated = Schemas['EventWorkspaceUpdated'];
 type WorkspaceLifecycle = Schemas['WorkspaceLifecycle'];
 
@@ -36,6 +39,9 @@ const isTaskUpdated = (value: unknown): value is TaskUpdated =>
 
 const isSessionMessage = (value: unknown): value is SessionMessage =>
   isRecord(value) && typeof value.session_id === 'string';
+
+const isScheduleUpdated = (value: unknown): value is ScheduleUpdated =>
+  isRecord(value) && typeof value.schedule_id === 'string';
 
 const isWorkspaceUpdated = (value: unknown): value is WorkspaceUpdated =>
   isRecord(value) && isRecord(value.workspace) && typeof value.workspace.workspace_id === 'string';
@@ -90,6 +96,16 @@ export function planSseEvent(
             keys.mainThread(),
             keys.conversation()
           ]
+        }
+      ];
+    }
+    case 'schedule:updated': {
+      if (!isScheduleUpdated(payload)) return [{ kind: 'none' }];
+      const id = payload.schedule_id;
+      return [
+        {
+          kind: 'invalidate',
+          keys: [keys.schedules(), keys.schedule(id), keys.scheduleExecutions(id)]
         }
       ];
     }

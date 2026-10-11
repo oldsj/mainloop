@@ -1,26 +1,12 @@
 /**
  * Data hooks for the scheduled runs UI. Every read and write goes through the generated client.
- * Cache keys match what openapi-react-query builds, so the invalidations here reach the queries
- * below. `api/keys.ts` has no schedule keys yet (see the schedule:updated note in result.md), so
- * they are declared here.
+ * Cache keys come from `api/keys.ts`, the same keys the `schedule:updated` event invalidates.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { $api } from '@/api';
+import { $api, keys } from '@/api';
 import { ifMatch, type ScheduleConfigInput } from './model';
 
 export const PAGE_SIZE = 50;
-
-export const scheduleKeys = {
-  list: () => ['get', '/schedules'] as const,
-  detail: (scheduleId: string) =>
-    ['get', '/schedules/{schedule_id}', { params: { path: { schedule_id: scheduleId } } }] as const,
-  executions: (scheduleId: string) =>
-    [
-      'get',
-      '/schedules/{schedule_id}/executions',
-      { params: { path: { schedule_id: scheduleId } } }
-    ] as const
-};
 
 export function useProviders() {
   return $api.useQuery('get', '/providers');
@@ -64,9 +50,9 @@ function useRefreshSchedules() {
   const queryClient = useQueryClient();
   return (scheduleId?: string) =>
     Promise.all([
-      queryClient.invalidateQueries({ queryKey: scheduleKeys.list() }),
+      queryClient.invalidateQueries({ queryKey: keys.schedules() }),
       ...(scheduleId
-        ? [queryClient.invalidateQueries({ queryKey: scheduleKeys.detail(scheduleId) })]
+        ? [queryClient.invalidateQueries({ queryKey: keys.schedule(scheduleId) })]
         : [])
     ]);
 }
@@ -100,7 +86,7 @@ export function useTriggerSchedule(scheduleId: string) {
   const queryClient = useQueryClient();
   return $api.useMutation('post', '/schedules/{schedule_id}/trigger', {
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: scheduleKeys.executions(scheduleId) })
+      queryClient.invalidateQueries({ queryKey: keys.scheduleExecutions(scheduleId) })
   });
 }
 

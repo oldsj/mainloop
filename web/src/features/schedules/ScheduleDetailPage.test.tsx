@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
+import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
 import { execution, schedule } from './test/fixtures';
 import {
@@ -229,5 +230,41 @@ describe('schedule page', () => {
 
     await user.click(links[0]!);
     expect(await screen.findByText('Session page')).toBeInTheDocument();
+  });
+
+  it('refreshes an open page and its executions when schedule:updated arrives', async () => {
+    const store = serve();
+    server.use(executionsRead([execution({ id: 'exe-1' })]));
+    const { queryClient } = renderSchedules('/schedules/sch-1');
+    await screen.findByRole('heading', { level: 2, name: 'Nightly triage' });
+    expect(await screen.findByText('Scheduled run')).toBeInTheDocument();
+
+    // Another client renames the schedule and a manual run fails. Nothing re-reads the page
+    // until the server's event reaches the same applier the app uses.
+    store.view = schedule({
+      etag: 'etag-2',
+      config: { ...store.view.config, name: 'Renamed elsewhere' }
+    });
+    server.use(
+      executionsRead([
+        execution({ id: 'exe-1' }),
+        execution({
+          id: 'exe-2',
+          scheduled_time: null,
+          session_id: null,
+          state: 'failed',
+          failure_reason: 'Agent timed out'
+        })
+      ])
+    );
+    createSseApplier(queryClient)({
+      event: 'schedule:updated',
+      data: JSON.stringify({ schedule_id: 'sch-1' })
+    });
+
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'Renamed elsewhere' })
+    ).toBeInTheDocument();
+    expect(await screen.findByText('Agent timed out')).toBeInTheDocument();
   });
 });

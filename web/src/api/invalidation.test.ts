@@ -18,6 +18,23 @@ describe('planSseEvent', () => {
     ]);
   });
 
+  it('refreshes the schedule list, that schedule and its executions for schedule:updated', () => {
+    expect(
+      planSseEvent(message('schedule:updated', { schedule_id: 'sch-1' }), { firstConnect: false })
+    ).toEqual([
+      {
+        kind: 'invalidate',
+        keys: [keys.schedules(), keys.schedule('sch-1'), keys.scheduleExecutions('sch-1')]
+      }
+    ]);
+  });
+
+  it('skips a schedule:updated event that names no schedule', () => {
+    expect(planSseEvent(message('schedule:updated', {}), { firstConnect: false })).toEqual([
+      { kind: 'none' }
+    ]);
+  });
+
   it('refreshes attention and activity for inbox:updated', () => {
     expect(planSseEvent(message('inbox:updated'), { firstConnect: false })).toEqual([
       { kind: 'invalidate', keys: [keys.attention(), keys.activity()] }
