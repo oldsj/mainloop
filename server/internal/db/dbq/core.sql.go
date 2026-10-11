@@ -82,7 +82,7 @@ const createCredential = `-- name: CreateCredential :one
 
 INSERT INTO credentials (id, kind, binding_id, token_hash, secret_name)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
 `
 
 type CreateCredentialParams struct {
@@ -114,6 +114,10 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }
@@ -409,7 +413,7 @@ func (q *Queries) GetAgentBindingByKagentSession(ctx context.Context, kagentSess
 }
 
 const getCredential = `-- name: GetCredential :one
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at FROM credentials WHERE id = $1
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE id = $1
 `
 
 func (q *Queries) GetCredential(ctx context.Context, id string) (Credential, error) {
@@ -426,6 +430,10 @@ func (q *Queries) GetCredential(ctx context.Context, id string) (Credential, err
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }
@@ -492,7 +500,7 @@ func (q *Queries) GetProjectByFullName(ctx context.Context, arg GetProjectByFull
 }
 
 const getPublishedCredentialByHash = `-- name: GetPublishedCredentialByHash :one
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at FROM credentials WHERE token_hash = $1 AND state = 'published'
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE token_hash = $1 AND state = 'published'
 `
 
 func (q *Queries) GetPublishedCredentialByHash(ctx context.Context, tokenHash string) (Credential, error) {
@@ -509,6 +517,10 @@ func (q *Queries) GetPublishedCredentialByHash(ctx context.Context, tokenHash st
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }
@@ -631,7 +643,7 @@ func (q *Queries) ListAgentBindingsByParent(ctx context.Context, parentSessionID
 }
 
 const listCredentialsByBinding = `-- name: ListCredentialsByBinding :many
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at FROM credentials WHERE binding_id = $1 ORDER BY created_at, id
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE binding_id = $1 ORDER BY created_at, id
 `
 
 func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string) ([]Credential, error) {
@@ -654,6 +666,10 @@ func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RevokedAt,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -666,7 +682,7 @@ func (q *Queries) ListCredentialsByBinding(ctx context.Context, bindingID string
 }
 
 const listCredentialsPendingCleanup = `-- name: ListCredentialsPendingCleanup :many
-SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at FROM credentials WHERE state = 'revoked' ORDER BY updated_at, id LIMIT $1
+SELECT id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until FROM credentials WHERE state = 'revoked' ORDER BY updated_at, id LIMIT $1
 `
 
 func (q *Queries) ListCredentialsPendingCleanup(ctx context.Context, limit int32) ([]Credential, error) {
@@ -689,6 +705,10 @@ func (q *Queries) ListCredentialsPendingCleanup(ctx context.Context, limit int32
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RevokedAt,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseOwner,
+			&i.LeaseUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -873,7 +893,7 @@ const markCredentialDeleted = `-- name: MarkCredentialDeleted :one
 UPDATE credentials
 SET state = 'deleted', updated_at = now()
 WHERE id = $1 AND state = 'revoked'
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
 `
 
 func (q *Queries) MarkCredentialDeleted(ctx context.Context, id string) (Credential, error) {
@@ -890,6 +910,10 @@ func (q *Queries) MarkCredentialDeleted(ctx context.Context, id string) (Credent
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }
@@ -898,7 +922,7 @@ const markCredentialPublished = `-- name: MarkCredentialPublished :one
 UPDATE credentials
 SET state = 'published', secret_uid = $2, updated_at = now()
 WHERE id = $1 AND state = 'planned'
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
 `
 
 type MarkCredentialPublishedParams struct {
@@ -920,6 +944,10 @@ func (q *Queries) MarkCredentialPublished(ctx context.Context, arg MarkCredentia
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }
@@ -928,7 +956,7 @@ const markCredentialRevoked = `-- name: MarkCredentialRevoked :one
 UPDATE credentials
 SET state = 'revoked', secret_uid = coalesce(secret_uid, $2), revoked_at = now(), updated_at = now()
 WHERE id = $1 AND state IN ('planned', 'published')
-RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at
+RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at, attempts, next_attempt_at, lease_owner, lease_until
 `
 
 type MarkCredentialRevokedParams struct {
@@ -950,6 +978,10 @@ func (q *Queries) MarkCredentialRevoked(ctx context.Context, arg MarkCredentialR
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RevokedAt,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseOwner,
+		&i.LeaseUntil,
 	)
 	return i, err
 }

@@ -32,16 +32,20 @@ type AgentBinding struct {
 }
 
 type Credential struct {
-	ID         string
-	Kind       dbstate.CredentialKind
-	BindingID  string
-	TokenHash  string
-	SecretName string
-	SecretUID  *string
-	State      dbstate.CredentialState
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	RevokedAt  *time.Time
+	ID            string
+	Kind          dbstate.CredentialKind
+	BindingID     string
+	TokenHash     string
+	SecretName    string
+	SecretUID     *string
+	State         dbstate.CredentialState
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	RevokedAt     *time.Time
+	Attempts      int32
+	NextAttemptAt time.Time
+	LeaseOwner    *string
+	LeaseUntil    *time.Time
 }
 
 type Delivery struct {

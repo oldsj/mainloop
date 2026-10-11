@@ -168,6 +168,7 @@ func TestInvalidValues(t *testing.T) {
 		want string
 	}{
 		{"blank owner", base("MAINLOOP_OWNER_ID", "  "), "MAINLOOP_OWNER_ID"},
+		{"bad mcp host", base("MAINLOOP_MCP_HOSTS", "ok.example,not a host"), "MAINLOOP_MCP_HOSTS"},
 		{"bad namespace", base("MAINLOOP_NAMESPACE", "Not_A_Label"), "MAINLOOP_NAMESPACE"},
 		{"colliding namespace", base("MAINLOOP_NAMESPACE", "team-git"), "collides"},
 		{"foreign git origin", base("GIT_READ_ORIGIN", "http://evil.example"), "GIT_READ_ORIGIN"},
@@ -492,5 +493,33 @@ func TestEventsSettingsAreValidated(t *testing.T) {
 	})
 	if err != nil || cfg.Events.RetentionHours != 48 || cfg.Events.SubscriberBuffer != 128 || cfg.Events.PollInterval.Duration() != 2*time.Second {
 		t.Errorf("custom events settings: %+v, %v", cfg.Events, err)
+	}
+}
+
+func TestAllowedMCPHosts(t *testing.T) {
+	cfg, err := Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_NAMESPACE": "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.AllowedMCPHosts(); len(got) != 1 || !got["mainloop-mcp.team.svc.cluster.local"] {
+		t.Errorf("default hosts = %v", got)
+	}
+	cfg, err = Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "MAINLOOP_MCP_HOSTS": " MCP.example:8002 ,,b.example. "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.AllowedMCPHosts(); len(got) != 2 || !got["mcp.example"] || !got["b.example"] {
+		t.Errorf("configured hosts = %v", got)
+	}
+}
+
+func TestInCluster(t *testing.T) {
+	cfg, _ := Parse(map[string]string{"AGENT_TOKEN_KEY": "k"})
+	if cfg.InCluster() {
+		t.Error("InCluster without KUBERNETES_SERVICE_HOST")
+	}
+	cfg, _ = Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "KUBERNETES_SERVICE_HOST": "10.0.0.1"})
+	if !cfg.InCluster() {
+		t.Error("not InCluster with KUBERNETES_SERVICE_HOST")
 	}
 }

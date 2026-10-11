@@ -79,7 +79,7 @@ func usage(w io.Writer) {
 
 commands:
   serve-api       owner API on :8000
-  serve-mcp       MCP listener on :8002 (health only for now)
+  serve-mcp       MCP listener on :8002
   serve-git       git transport on :8003 and :8004 (health only for now)
   migrate         up | status | reset the database schema
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them)
@@ -97,7 +97,7 @@ func serve(ctx context.Context, cmd string, log *slog.Logger) error {
 	case "serve-api":
 		return serveAPI(ctx, cfg, log)
 	case "serve-mcp":
-		return httpx.Serve(ctx, log, "mcp", mcpAddr, app.StubHandler(cfg, log, cfg.AllowedMCPHosts()))
+		return serveMCP(ctx, cfg, log)
 	case "serve-git":
 		// Git clients address the read and push Services by name; neither is the owner API.
 		hosts := map[string]bool{
@@ -167,6 +167,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner := reconcile.NewRunner(pool, log, notifier)
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
+	registerCredentials(cfg, pool, runner, log)
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
 	previews.Register(runner)

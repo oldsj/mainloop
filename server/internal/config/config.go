@@ -180,6 +180,12 @@ type Server struct {
 	APIDomain string `env:"API_DOMAIN"`
 	// APIHosts are extra Host names the API answers to (comma-separated, any port).
 	APIHosts string `env:"MAINLOOP_API_HOSTS"`
+	// MCPHosts are the Host names the MCP listener answers to (comma-separated, any port). Empty
+	// means the in-cluster Service name of this instance.
+	MCPHosts string `env:"MAINLOOP_MCP_HOSTS"`
+	// KubernetesServiceHost is set by Kubernetes in every pod; it tells the process it can reach
+	// the cluster API.
+	KubernetesServiceHost string `env:"KUBERNETES_SERVICE_HOST"`
 }
 
 // Load reads and validates the process environment.
@@ -256,6 +262,11 @@ func (c *Config) validate() error {
 	}
 	if c.Server.FrontendScheme != "http" && c.Server.FrontendScheme != "https" {
 		fail("FRONTEND_SCHEME must be http or https")
+	}
+	for _, h := range splitHosts(c.Server.MCPHosts) {
+		if _, ok := Hostname(h); !ok {
+			fail("MAINLOOP_MCP_HOSTS entry %q is not a host name", h)
+		}
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		fail("PORT must be between 1 and 65535")
@@ -352,9 +363,27 @@ func (c *Config) AllowedAPIHosts() map[string]bool {
 	return hostSet(names)
 }
 
-// AllowedMCPHosts returns the lower-case host names the MCP listener serves besides loopback.
+// InCluster reports whether the process runs in a Kubernetes pod.
+func (c *Config) InCluster() bool { return c.Server.KubernetesServiceHost != "" }
+
+// AllowedMCPHosts returns the lower-case host names the MCP listener serves besides loopback:
+// MAINLOOP_MCP_HOSTS, or the instance's in-cluster Service name when it is unset.
 func (c *Config) AllowedMCPHosts() map[string]bool {
+	if names := splitHosts(c.Server.MCPHosts); len(names) > 0 {
+		return hostSet(names)
+	}
 	return hostSet([]string{"mainloop-mcp." + c.Namespace + ".svc.cluster.local"})
+}
+
+// splitHosts splits a comma-separated host list and drops blank entries.
+func splitHosts(list string) []string {
+	var out []string
+	for _, s := range strings.Split(list, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Hostname extracts the lower-case host name from a Host header value or a configured domain

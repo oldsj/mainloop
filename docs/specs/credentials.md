@@ -1,5 +1,17 @@
 # Credentials
 
+## Go server status (G7)
+
+Status: **implemented** in `server/internal/{agentauth,k8ssecrets,mcpserver,topics}`; tests use a scratch PostgreSQL and a fake Kubernetes clientset. **Not measured** against a live cluster, and the API process does not issue credentials yet (the session slices call `agentauth.Credentials.Issue`). The rest of this page describes the frozen Python backend until each slice lands.
+
+- **One credentials table** holds the MCP, git-read and git-push bearers: `planned` (the intent), `published` (the Secret exists and its UID is recorded), `revoked` (the Secret is owed a delete) and `deleted`. Only the SHA-256 of a bearer is stored. The bearer is `ml_` plus the HMAC-SHA256 of the credential id under `AGENT_TOKEN_KEY`, which is required; there is no fallback to another secret. A binding that is revoked and enrolled again gets a new credential id and so a new bearer.
+- **Publishing** writes the `planned` row in a short transaction, creates the Secret with no transaction open, then records the UID. A retry returns the published credential, or resumes a `planned` one; an existing Secret is accepted only if it is immutable with the same labels and bytes, and is never overwritten. A new credential is refused while the binding's earlier Secret is still owed a delete.
+- **Secrets** are immutable, in the kagent namespace, named `<MAINLOOP_NAMESPACE>-mcp-<binding>` (and `-git-read-`, `-git-push-`), with the single key `authorization` and the labels `mainloop.dev/actor-egress=true` and `mainloop.dev/purpose`. Mainloop needs only `get`, `create` and `delete` on Secrets.
+- **Revoking** one binding changes only that binding's rows. The `credential-cleanup` reconcile loop deletes each revoked credential's own Secret with a UID precondition, so a newer Secret under the same name survives and an already missing Secret counts as done. A Secret whose UID was never recorded is looked up by name first. A sweep revokes `planned` rows older than ten minutes and live rows whose binding is gone. Cleanup runs in the API process and only inside a cluster.
+- **Authentication** takes the bearer, finds the published MCP credential by hash, then checks the binding is fresh (the session is not archived and not completed, failed or cancelled), then checks the role and grant pair. Any failure is a 401 with no reason given.
+- **Tools** follow one per-actor table, shared by discovery and invocation and recorded in [`api/mcp-tools.json`](../../api/mcp-tools.json) (exported from the Python registry by `scripts/export-mcp-tools.py`; a Go test compares the two). `/mcp` serves every tool except `merge_pull_request_with_approval`, which is alone on `/mcp/merge-approval`; the four merge tools exist only when `MAINLOOP_MERGE_TOOLS_ENABLED` is exactly `true`. An actor with no tool on the surface gets 403. The Go server implements `whoami`, `topics`, `topic_open`, `note`, `decide`, `pending_add` and `pending_done`; the task tools and the pull request and merge tools are absent until their slices land. `task_retry` and `task_reassign` are dropped.
+- **Transport** is stateless Streamable HTTP with JSON responses on `:8002`. Only POST is served. The `Host` must be in `MAINLOOP_MCP_HOSTS` (default `mainloop-mcp.<MAINLOOP_NAMESPACE>.svc.cluster.local`); `/health` is exempt. Invalid arguments come back as an error result `[validation] invalid tool arguments`.
+
 ## Provider authentication
 
 Native agents authenticate to their provider through the kagent installation: the Agent's
