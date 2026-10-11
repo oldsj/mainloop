@@ -22,6 +22,8 @@ The environment section on a project page. The owner chooses which statically va
 - **accept as default:** the button reads "Accepting…" while busy. The warning "This changes the default for every project following this environment." sits beside it.
 - **saving:** "Saving…" and disabled. Success says "Environment selection saved for new sessions."
 - **conflict:** "<server message>. Review the refreshed saved selection before saving again." The draft is kept, and the saved selection is re-read.
+- **version list unreadable:** with no versions loaded, "Couldn't load the versions for this environment." then the reason, with "Retry loading versions". With versions already loaded, "Couldn't refresh the versions for this environment." then the reason and "Showing the last loaded versions." While a read is in flight with nothing fresh, "Loading versions…".
+- **defaults warning:** "An accepted current-policy version is required…" shows only after a fresh version read. An empty or failed list does not trigger it.
 - **registration:** "Register and validate image". The notice after a success reads "Registered <name>: <status>, <validator>. Runtime capabilities have not been tested."
 - **uncertain registration:** "Registration reply was not confirmed. Refresh the list and reconcile it before…". Registering again is blocked until the owner refreshes.
 - **saved selection unreadable:** with no saved selection loaded, "Couldn't load the environment" with "Retry loading environment". With one loaded, "Couldn't refresh the environment" sits above it and says it is showing the last saved selection.
@@ -44,6 +46,8 @@ The environment section on a project page. The owner chooses which statically va
 - Static validation is metadata evidence. The UI never says a version is ready to run.
 - An uncertain registration keeps the form locked until the owner refreshes.
 - A conflict keeps the owner's draft for review. It is not replaced silently.
+- A successful registration resets the form, so the same image cannot be submitted again by accident.
+- A failed save, accept or registration clears the success notice from earlier, so the screen never shows both.
 
 ## Do
 
