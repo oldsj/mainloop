@@ -473,6 +473,40 @@ func TestAdversarialRequests(t *testing.T) {
 	}
 }
 
+// The push gate writes upstream, so it refuses every routing or forwarding header the read
+// transport does, before any bearer lookup or upstream call.
+func TestRoutingHeadersRefusedBeforeAuthAndUpstream(t *testing.T) {
+	e := newEnv(t)
+	for _, tc := range []struct{ name, header string }{
+		{"real ip", "X-Real-Ip"}, {"via", "Via"}, {"envoy", "X-Envoy-External-Address"},
+		{"underscore forwarded", "x_forwarded_for"}, {"forwarded", "X-Forwarded-For"},
+		{"actor", "X-Actor-Id"}, {"session", "X-Session-Id"},
+	} {
+		for _, discovery := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s discovery=%t", tc.name, discovery), func(t *testing.T) {
+				method, target := http.MethodPost, "http://localhost/oldsj/alpha.git/git-receive-pack"
+				if discovery {
+					method, target = http.MethodGet, "http://localhost/oldsj/alpha.git/info/refs?service=git-receive-pack"
+				}
+				calls, pushes := e.upstream.counts()
+				r := httptest.NewRequestWithContext(context.Background(), method, target, bytes.NewReader(nil))
+				r.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+				// A bearer that cannot authenticate: reaching the lookup would answer authentication_required.
+				r.Header.Set("Authorization", "Bearer not-a-real-token")
+				r.Header[tc.header] = []string{"10.0.0.1"}
+				w := httptest.NewRecorder()
+				e.server.Handler().ServeHTTP(w, r)
+				if w.Code != http.StatusForbidden || !strings.HasPrefix(w.Body.String(), "routing_header ") {
+					t.Fatalf("got %d %q", w.Code, w.Body.String())
+				}
+				if c, p := e.upstream.counts(); c != calls || p != pushes {
+					t.Fatal("refused request reached upstream")
+				}
+			})
+		}
+	}
+}
+
 func TestAuthorizedProbeAndInvalidNeighbours(t *testing.T) {
 	for _, tc := range []struct {
 		name string

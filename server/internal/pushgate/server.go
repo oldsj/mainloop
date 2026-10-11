@@ -7,15 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gitroute"
 )
 
 type Server struct {
@@ -27,8 +26,6 @@ type Server struct {
 	SpoolRoot    string
 	Limits       Limits
 }
-
-var route = regexp.MustCompile(`^/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)\.git/(info/refs|git-receive-pack)$`)
 
 // Handler owns its correlation IDs and refusal logging. It deliberately has no access logger:
 // paths, queries, client-supplied IDs and exception messages must never enter refusal logs.
@@ -174,60 +171,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) parse(r *http.Request) (github.Repo, bool, error) {
-	host := strings.ToLower(r.Host)
-	if strings.Contains(host, ":") {
-		h, _, err := net.SplitHostPort(host)
-		if err != nil {
-			return github.Repo{}, false, denial("host_denied")
-		}
-		host = h
+	if !gitroute.HostAllowed(r.Host, s.AllowedHosts, s.Dev) {
+		return github.Repo{}, false, denial(gitroute.CodeHostDenied)
 	}
-	local := host == "localhost" || host == "127.0.0.1" || host == "::1"
-	if !s.AllowedHosts[host] && (!s.Dev || !local) {
-		return github.Repo{}, false, denial("host_denied")
+	repo, endpoint, ok := gitroute.Route(r.URL, gitroute.InfoRefs, gitroute.ReceivePack)
+	if !ok {
+		return github.Repo{}, false, denial(gitroute.CodePathInvalid)
 	}
-	m := route.FindStringSubmatch(r.URL.EscapedPath())
-	if m == nil || r.URL.RawPath != "" {
-		return github.Repo{}, false, denial("path_invalid")
-	}
-	repo, err := github.ParseRepo(m[1] + "/" + m[2])
-	if err != nil || r.URL.Path != "/"+repo.Owner+"/"+repo.Name+".git/"+m[3] {
-		return github.Repo{}, false, denial("path_invalid")
-	}
-	discovery := m[3] == "info/refs"
+	discovery := endpoint == gitroute.InfoRefs
 	if (discovery && (r.Method != http.MethodGet || r.URL.RawQuery != "service=git-receive-pack")) || (!discovery && (r.Method != http.MethodPost || r.URL.RawQuery != "")) {
 		return repo, discovery, denial("route_denied")
 	}
-	for k, vs := range r.Header {
-		if len(vs) != 1 {
-			return repo, discovery, denial("duplicate_header")
-		}
-		k = strings.ToLower(k)
-		for _, v := range vs {
-			if strings.ContainsAny(v, "\r\n\x00") {
-				return repo, discovery, denial("routing_header")
-			}
-		}
-		switch k {
-		case "forwarded", "upgrade", "proxy-authorization", "x-http-method-override", "x-original-url", "x-rewrite-url":
-			return repo, discovery, denial("routing_header")
-		}
-		if strings.HasPrefix(k, "x-forwarded-") || strings.HasPrefix(k, "x-actor") || strings.HasPrefix(k, "x-session") {
-			return repo, discovery, denial("routing_header")
-		}
+	if code := gitroute.CheckHeaders(r.Header); code != "" {
+		return repo, discovery, denial(code)
 	}
-	enc := r.Header.Get("Content-Encoding")
-	if enc != "" && enc != "identity" {
-		return repo, discovery, denial("http_compression")
+	if gzip, ok := gitroute.ContentEncoding(r.Header); gzip || !ok {
+		return repo, discovery, denial(gitroute.CodeCompression)
 	}
-	if r.Header.Get("Git-Protocol") != "" && r.Header.Get("Git-Protocol") != "version=0" {
-		return repo, discovery, denial("git_protocol")
+	if version, ok := gitroute.GitProtocol(r.Header); version != "" || !ok {
+		return repo, discovery, denial(gitroute.CodeGitProtocol)
 	}
-	if len(r.TransferEncoding) > 1 || (len(r.TransferEncoding) == 1 && r.TransferEncoding[0] != "chunked") || (len(r.TransferEncoding) > 0 && r.ContentLength >= 0) {
-		return repo, discovery, denial("http_framing")
-	}
-	if discovery && (r.ContentLength > 0 || len(r.TransferEncoding) > 0) {
-		return repo, discovery, denial("http_framing")
+	if !gitroute.Framing(r, discovery) {
+		return repo, discovery, denial(gitroute.CodeFraming)
 	}
 	if !discovery && r.Header.Get("Content-Type") != "application/x-git-receive-pack-request" {
 		return repo, discovery, denial("content_type")

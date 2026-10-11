@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/github"
+	"github.com/oldsj/mainloop/server/internal/gitroute"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 )
 
@@ -133,18 +133,6 @@ func (r *refusal) Error() string { return r.code }
 func deny(code string) *refusal        { return &refusal{code, http.StatusForbidden} }
 func unavailable(code string) *refusal { return &refusal{code, http.StatusServiceUnavailable} }
 
-var routePath = regexp.MustCompile(`^/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)\.git/(info/refs|git-upload-pack|git-receive-pack)$`)
-
-// Headers that name a route, a rewrite, an actor or a proxy hop. A client has no business sending
-// them to the transport, and one that does is trying to reach something else.
-var routingHeaders = map[string]bool{
-	"upgrade": true, "proxy-authorization": true, "x-http-method-override": true,
-	"x-original-url": true, "x-rewrite-url": true, "forwarded": true,
-	"x-real-ip": true, "via": true,
-}
-
-var routingPrefixes = []string{"x-forwarded-", "x_forwarded_", "x-envoy-", "x-actor", "x-session"}
-
 type request struct {
 	repo      github.Repo
 	discovery bool
@@ -174,24 +162,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 // parse validates the route, the method and the headers. It authenticates nothing.
 func (s *Server) parse(r *http.Request) (request, error) {
-	path := r.URL.EscapedPath()
-	m := routePath.FindStringSubmatch(path)
-	if m == nil || strings.Contains(path, "%") || r.URL.RawPath != "" {
-		return request{}, deny("path_invalid")
+	repo, endpoint, ok := gitroute.Route(r.URL, gitroute.InfoRefs, gitroute.UploadPack, gitroute.ReceivePack)
+	if !ok {
+		return request{}, deny(gitroute.CodePathInvalid)
 	}
-	repo, err := github.ParseRepo(m[1] + "/" + m[2])
-	if err != nil {
-		return request{}, deny("path_invalid")
-	}
-	// One spelling per repository: ParseRepo drops a trailing ".git" from the name, so
-	// /o/n.git.git/... would otherwise be served as "n".
-	if path != "/"+repo.Owner+"/"+repo.Name+".git/"+m[3] {
-		return request{}, deny("path_invalid")
-	}
-	if m[3] == "git-receive-pack" || (m[3] == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack") {
+	if endpoint == gitroute.ReceivePack || (endpoint == gitroute.InfoRefs && r.URL.Query().Get("service") == "git-receive-pack") {
 		return request{}, deny("push_not_served")
 	}
-	rq := request{repo: repo, discovery: m[3] == "info/refs"}
+	rq := request{repo: repo, discovery: endpoint == gitroute.InfoRefs}
 	if rq.discovery {
 		if r.Method != http.MethodGet || r.URL.RawQuery != "service=git-upload-pack" {
 			return request{}, deny("route_denied")
@@ -199,32 +177,18 @@ func (s *Server) parse(r *http.Request) (request, error) {
 	} else if r.Method != http.MethodPost || r.URL.RawQuery != "" {
 		return request{}, deny("route_denied")
 	}
-	for k, vs := range r.Header {
-		if len(vs) > 1 {
-			return request{}, deny("duplicate_header")
-		}
-		name := strings.ToLower(k)
-		if routingHeaders[name] {
-			return request{}, deny("routing_header")
-		}
-		for _, p := range routingPrefixes {
-			if strings.HasPrefix(name, p) {
-				return request{}, deny("routing_header")
-			}
-		}
+	if code := gitroute.CheckHeaders(r.Header); code != "" {
+		return request{}, deny(code)
 	}
-	switch enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); enc {
-	case "", "identity":
-	case "gzip":
-		rq.gzip = true
-	default:
-		return request{}, deny("http_compression")
+	gzip, ok := gitroute.ContentEncoding(r.Header)
+	if !ok {
+		return request{}, deny(gitroute.CodeCompression)
 	}
-	if rq.discovery {
-		if r.ContentLength > 0 || len(r.TransferEncoding) > 0 {
-			return request{}, deny("http_framing")
-		}
-	} else {
+	rq.gzip = gzip
+	if !gitroute.Framing(r, rq.discovery) {
+		return request{}, deny(gitroute.CodeFraming)
+	}
+	if !rq.discovery {
 		if r.Header.Get("Content-Type") != "application/x-git-upload-pack-request" {
 			return request{}, deny("content_type")
 		}
@@ -232,13 +196,11 @@ func (s *Server) parse(r *http.Request) (request, error) {
 			return request{}, &refusal{"body_limit", http.StatusRequestEntityTooLarge}
 		}
 	}
-	switch p := r.Header.Get("Git-Protocol"); p {
-	case "", "version=0":
-	case "version=1", "version=2":
-		rq.protocol = p
-	default:
-		return request{}, deny("git_protocol")
+	protocol, ok := gitroute.GitProtocol(r.Header)
+	if !ok {
+		return request{}, deny(gitroute.CodeGitProtocol)
 	}
+	rq.protocol = protocol
 	return rq, nil
 }
 

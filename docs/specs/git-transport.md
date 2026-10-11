@@ -68,7 +68,8 @@ code and known sentinel names or other error types (never error text). A mid-str
 is cut.
 
 Routing-header refusals include `Via`, `X-Real-IP`, `X-Envoy-*` and underscore spellings of
-`X-Forwarded-*`, compared case-insensitively. No client routing header is sent to GitHub.
+`X-Forwarded-*`, compared case-insensitively. No client routing header is sent to GitHub. The push
+gate refuses the same set; the Host, route and header policy lives in `server/internal/gitroute`.
 The 60-second idle watchdog starts before upload and resets on response reads; upload and the
 wait for the first response byte share that initial bound. There is no per-capability or listener
 concurrency cap; admission limits need a separate capacity policy.

@@ -108,7 +108,11 @@ are unsupported.
 ## Protocol and quarantine
 
 The Host is the configured push Service host (loopback is also permitted in development).
-Forwarding/rewrite/proxy/actor/session headers, duplicate headers, control characters, gzip,
+The Host, route and header policy is shared with the git read transport (`server/internal/gitroute`),
+so both refuse the same routing headers: `Forwarded`, `X-Forwarded-*` and its underscore spelling,
+`X-Real-IP`, `Via`, `X-Envoy-*`, `X-Actor*`, `X-Session*`, `Upgrade`, `Proxy-Authorization` and the
+method/URL override headers, compared case-insensitively, before any authentication or upstream call.
+Duplicate headers, control characters, gzip,
 other HTTP encodings, contradictory framing and non-v0 Git protocols refuse. Neither client
 headers nor paths are forwarded upstream. Responses return a server-generated 32-digit hex
 correlation ID in `x-mainloop-request-id`. Refusal logs contain only that ID and closed code/stage

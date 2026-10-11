@@ -25,7 +25,7 @@ func HostGuard(allowed map[string]bool, dev bool, exempt ...string) func(http.Ha
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !skip[r.URL.Path] && !hostAllowed(r.Host, allowed, dev) {
+			if !skip[r.URL.Path] && !HostAllowed(r.Host, allowed, dev) {
 				WriteError(w, http.StatusNotFound, "Not Found")
 				return
 			}
@@ -34,7 +34,8 @@ func HostGuard(allowed map[string]bool, dev bool, exempt ...string) func(http.Ha
 	}
 }
 
-func hostAllowed(hostHeader string, allowed map[string]bool, dev bool) bool {
+// HostAllowed reports whether a Host header value names an allowed host, or loopback when dev is set.
+func HostAllowed(hostHeader string, allowed map[string]bool, dev bool) bool {
 	name, ok := config.Hostname(hostHeader)
 	if !ok {
 		return false
