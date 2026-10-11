@@ -17,8 +17,26 @@ const TASK_PATH = /^\/tasks\/([^/?#]+)$/;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const isStringOrNull = (value: unknown): value is string | null =>
+  value === null || typeof value === 'string';
+
+const isStringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((option) => typeof option === 'string');
+
+/** The fields the card reads as text or lists. A row with one of them wrong is dropped, not shown. */
 function isQueueItem(value: unknown): value is QueueItem {
-  return isRecord(value) && typeof value.id === 'string' && typeof value.item_type === 'string';
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.item_type === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.content === 'string' &&
+    typeof value.status === 'string' &&
+    typeof value.created_at === 'string' &&
+    isStringOrNull(value.hitl_request_id) &&
+    isStringOrNull(value.response) &&
+    (value.options === null || isStringList(value.options))
+  );
 }
 
 function isAttentionItem(value: unknown): value is AttentionItem {
@@ -39,7 +57,10 @@ function isActivityItem(value: unknown): value is ActivityItem {
     typeof value.id === 'string' &&
     typeof value.title === 'string' &&
     typeof value.content === 'string' &&
-    typeof value.created_at === 'string'
+    typeof value.created_at === 'string' &&
+    isStringOrNull(value.href) &&
+    isStringOrNull(value.queue_item_id) &&
+    typeof value.dismissible === 'boolean'
   );
 }
 
@@ -55,20 +76,6 @@ export function unresolvedCount(snapshot: AttentionSnapshot | undefined): number
   return typeof count === 'number' && Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
-/** The snapshot without one queue item's row, with the count reduced by the rows removed. */
-export function withoutQueueItem(
-  snapshot: AttentionSnapshot,
-  queueItemId: string
-): AttentionSnapshot {
-  const kept = snapshot.items.filter((item) => item.queue_item?.id !== queueItemId);
-  const removed = snapshot.items.length - kept.length;
-  return {
-    ...snapshot,
-    items: kept,
-    count: Math.max(0, unresolvedCount(snapshot) - removed)
-  };
-}
-
 /** Badge text: nothing at zero, `99+` above that. */
 export function badgeText(count: number): string | null {
   if (count <= 0) return null;
@@ -77,6 +84,14 @@ export function badgeText(count: number): string | null {
 
 export function activityItems(list: unknown): ActivityItem[] {
   return Array.isArray(list) ? list.filter(isActivityItem) : [];
+}
+
+/**
+ * The Activity rows without the ones behind one queue item. Malformed rows are dropped, as on
+ * screen.
+ */
+export function withoutActivityItem(list: unknown, queueItemId: string): ActivityItem[] {
+  return activityItems(list).filter((item) => item.queue_item_id !== queueItemId);
 }
 
 /** The element id a Needs-you entry is linked by. It matches the id the frozen inbox used. */

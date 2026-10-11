@@ -78,6 +78,23 @@ export function activityRow(overrides: Partial<ActivityItem> = {}): ActivityItem
     content: 'All 42 checks passed on the branch.',
     href: '/tasks/task-1',
     created_at: NOW,
+    queue_item_id: null,
+    dismissible: false,
     ...overrides
   };
+}
+
+/**
+ * An Activity row for an input notice with no structured request, as the server lists it: its id
+ * is `queue:<queue item id>`, it names the queue item, and it is dismissible.
+ */
+export function noticeRow(overrides: Partial<ActivityItem> = {}): ActivityItem {
+  return activityRow({
+    id: 'queue:n-1',
+    title: 'Input notice unavailable',
+    content: 'The request no longer exists.',
+    queue_item_id: 'n-1',
+    dismissible: true,
+    ...overrides
+  });
 }

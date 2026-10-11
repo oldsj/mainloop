@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityItems,
   ageLabel,
   attentionItems,
   badgeText,
   prLink,
   taskIdOf,
   unresolvedCount,
-  withoutQueueItem
+  withoutActivityItem
 } from './model';
-import { attentionItem, attentionSnapshot, queueItem } from './test/fixtures';
+import {
+  activityRow,
+  attentionItem,
+  attentionSnapshot,
+  noticeRow,
+  queueItem
+} from './test/fixtures';
 
 describe('attention boundary', () => {
   it('drops malformed rows rather than showing them half-formed', () => {
@@ -22,20 +29,44 @@ describe('attention boundary', () => {
     expect(attentionItems(snapshot).map((item) => item.id)).toEqual([good.id]);
   });
 
+  it('drops a queue row whose fields the card cannot render', () => {
+    const good = attentionItem(queueItem({ id: 'good' }));
+    const badOptions = attentionItem(queueItem({ id: 'options', options: 'main' as never }));
+    const badTitle = attentionItem(queueItem({ id: 'title', title: 42 as never }));
+    const badOptionList = attentionItem(queueItem({ id: 'list', options: ['main', 3] as never }));
+    const snapshot = attentionSnapshot([good, badOptions, badTitle, badOptionList]);
+    expect(attentionItems(snapshot).map((item) => item.id)).toEqual([good.id]);
+  });
+
   it('treats a missing or negative count as zero and floors fractions', () => {
     expect(unresolvedCount(undefined)).toBe(0);
     expect(unresolvedCount(attentionSnapshot([], -4))).toBe(0);
     expect(unresolvedCount(attentionSnapshot([], Number.NaN))).toBe(0);
     expect(unresolvedCount(attentionSnapshot([], 3.7))).toBe(3);
   });
+});
 
-  it('removes one queue row and reduces the count without going below zero', () => {
-    const a = attentionItem(queueItem({ id: 'a' }));
-    const b = attentionItem(queueItem({ id: 'b' }));
-    const next = withoutQueueItem(attentionSnapshot([a, b], 2), 'a');
-    expect(next.items.map((item) => item.id)).toEqual([b.id]);
-    expect(next.count).toBe(1);
-    expect(withoutQueueItem(attentionSnapshot([a], 0), 'a').count).toBe(0);
+describe('activity boundary', () => {
+  it('drops rows missing a field the list renders or acts on', () => {
+    const good = activityRow();
+    const rows = activityItems([
+      good,
+      { ...good, id: 'no-flag', dismissible: undefined },
+      { ...good, id: 'bad-queue', queue_item_id: 7 },
+      { ...good, id: 'bad-title', title: null },
+      'not-a-row'
+    ]);
+    expect(rows.map((row) => row.id)).toEqual([good.id]);
+  });
+
+  it('treats a response that is not a list as no rows', () => {
+    expect(activityItems(undefined)).toEqual([]);
+    expect(activityItems({ items: [activityRow()] })).toEqual([]);
+  });
+
+  it('removes only the rows behind one queue item', () => {
+    expect(withoutActivityItem([noticeRow(), activityRow()], 'n-1')).toEqual([activityRow()]);
+    expect(withoutActivityItem([noticeRow()], 'other')).toEqual([noticeRow()]);
   });
 });
 

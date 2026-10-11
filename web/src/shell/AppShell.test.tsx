@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAppRouter } from '@/router';
@@ -42,6 +42,15 @@ describe('shell switch', () => {
     await renderAt('/');
     expect(screen.getByTestId('desktop-shell')).toBeInTheDocument();
     expect(screen.queryByTestId('mobile-tab-bar')).not.toBeInTheDocument();
+  });
+
+  it('renders each real panel inside its desktop slot', async () => {
+    setViewport(true);
+    await renderAt('/');
+    const sessions = screen.getByTestId('sessions-panel');
+    const inbox = screen.getByTestId('inbox-panel');
+    expect(await within(sessions).findByRole('heading', { name: 'Sessions' })).toBeInTheDocument();
+    expect(await within(inbox).findByRole('heading', { name: 'Inbox' })).toBeInTheDocument();
   });
 
   it('renders the compact shell on a narrow viewport', async () => {

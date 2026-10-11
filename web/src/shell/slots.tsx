@@ -4,12 +4,12 @@ import { RoutePlaceholder } from './RoutePlaceholder';
 
 /**
  * Panels the shells host. Feature slices own their bodies: sessions (F4) and inbox (F5). Projects
- * (F7) is still a placeholder. The shell only decides where they sit. The slot wrappers carry the
- * test ids, and `contents` keeps the feature's own layout as it was.
+ * (F7) is still a placeholder. The shell only decides where they sit. The slot wrappers are plain
+ * blocks, not `display: contents`, so the desktop shell's dividers draw between panels.
  */
 export function SessionsPanel() {
   return (
-    <div data-testid="sessions-panel" className="contents">
+    <div data-testid="sessions-panel">
       <SessionsFeature />
     </div>
   );
@@ -17,7 +17,7 @@ export function SessionsPanel() {
 
 export function InboxPanel() {
   return (
-    <div data-testid="inbox-panel" className="contents">
+    <div data-testid="inbox-panel">
       <InboxFeature />
     </div>
   );

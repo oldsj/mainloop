@@ -9,7 +9,7 @@ import {
   takesTextReply,
   type QueueItem
 } from './model';
-import { useDismissQueueItem, useRespondToQueueItem } from './queries';
+import { useRespondToQueueItem } from './queries';
 
 const TYPE_ICONS: Partial<Record<QueueItem['item_type'], LucideIcon>> = {
   plan_review: FileText,
@@ -18,22 +18,20 @@ const TYPE_ICONS: Partial<Record<QueueItem['item_type'], LucideIcon>> = {
 };
 
 /**
- * A queue item that is not a live HITL request: a question, a plan to review, or an unavailable
- * input notice. Answers go to `POST /queue/{id}/respond`; a notice can be dismissed.
+ * A queue item that is not a live HITL request: a question or a plan to review. Answers go to
+ * `POST /queue/{id}/respond`. Input notices are dismissed from Activity, not here.
  */
 export function QueueCard({ item }: { item: QueueItem }) {
   const [planOpen, setPlanOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [sent, setSent] = useState<string | null>(null);
   const respond = useRespondToQueueItem();
-  const dismiss = useDismissQueueItem();
 
   const Icon = TYPE_ICONS[item.item_type] ?? Bell;
   const pr = prLink(item);
   const answer = item.response ?? sent;
   const awaitingAnswer = item.status === 'pending' && !sent;
   const options = awaitingAnswer ? (item.options ?? []) : [];
-  const canDismiss = item.item_type === 'hitl_request' && !item.hitl_request_id;
 
   const send = (response: string, onSent?: () => void) =>
     respond.mutate(
@@ -147,24 +145,6 @@ export function QueueCard({ item }: { item: QueueItem }) {
         <p role="alert" className="text-destructive text-sm">
           {messageOf(respond.error)}
         </p>
-      ) : null}
-
-      {canDismiss ? (
-        <div className="gap-xs flex flex-col items-start">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={dismiss.isPending}
-            onClick={() => dismiss.mutate({ params: { path: { item_id: item.id } } })}
-          >
-            Dismiss notice
-          </Button>
-          {dismiss.isError ? (
-            <p role="alert" className="text-destructive text-sm">
-              {messageOf(dismiss.error)}
-            </p>
-          ) : null}
-        </div>
       ) : null}
     </article>
   );

@@ -1,7 +1,7 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
-import { HttpResponse } from 'msw';
+import { HttpResponse, delay } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connection, keys } from '@/api';
 import { createSseApplier } from '@/api/invalidation';
@@ -13,6 +13,7 @@ import {
   attentionItem,
   attentionSnapshot,
   hitlAttentionItem,
+  noticeRow,
   queueItem
 } from './test/fixtures';
 import {
@@ -34,6 +35,18 @@ describe('Needs you', () => {
     server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([]))));
     renderInbox();
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument();
+  });
+
+  it('shows the good rows and hides a malformed one', async () => {
+    const good = attentionItem(queueItem({ id: 'good', title: 'Which branch?' }));
+    const bad = attentionItem(
+      queueItem({ id: 'bad', title: 'Broken row', options: 'main' as never })
+    );
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([good, bad]))));
+    renderInbox();
+
+    expect(await screen.findByText('Which branch?')).toBeInTheDocument();
+    expect(screen.queryByText('Broken row')).toBeNull();
   });
 
   it('shows the checking state while the first read is pending', async () => {
@@ -202,24 +215,56 @@ describe('Needs you', () => {
   });
 });
 
-describe('dismissing an unavailable input notice', () => {
-  const notice = () =>
-    queueItem({
-      id: 'n-1',
-      item_type: 'hitl_request',
-      hitl_request_id: null,
-      title: 'Input notice unavailable',
-      content: 'The request no longer exists.'
+describe('dismissing an unavailable input notice from Activity', () => {
+  it('offers Dismiss only on a row the server marks dismissible', async () => {
+    const user = userEvent.setup();
+    const pinned = noticeRow({
+      id: 'queue:n-2',
+      queue_item_id: 'n-2',
+      dismissible: false,
+      title: 'Pinned notice'
     });
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() => HttpResponse.json([activityRow(), noticeRow(), pinned]))
+    );
+    renderInbox();
+    await screen.findByText('Nothing needs you');
+
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(await screen.findByText('Pinned notice')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Dismiss notice' })).toHaveLength(1);
+    const pinnedRow = screen.getByText('Pinned notice').closest('li') as HTMLElement;
+    expect(within(pinnedRow).queryByRole('button', { name: 'Dismiss notice' })).toBeNull();
+  });
+
+  it('shows the good rows and hides a malformed one', async () => {
+    const user = userEvent.setup();
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() =>
+        HttpResponse.json([activityRow({ title: 'Good row' }), { ...activityRow(), title: null }])
+      )
+    );
+    renderInbox();
+    await screen.findByText('Nothing needs you');
+
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(await screen.findByText('Good row')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('list', { name: 'Activity' })).getAllByRole('listitem')
+    ).toHaveLength(1);
+  });
 
   it('removes the notice at once and keeps it gone when the server accepts', async () => {
     const user = userEvent.setup();
     let open = true;
     const dismissed: string[] = [];
     server.use(
-      attentionRead(() =>
-        HttpResponse.json(attentionSnapshot(open ? [attentionItem(notice())] : []))
-      ),
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() => HttpResponse.json(open ? [noticeRow()] : [])),
       dismissPost(({ params }) => {
         dismissed.push(String(params.item_id));
         open = false;
@@ -227,20 +272,26 @@ describe('dismissing an unavailable input notice', () => {
       })
     );
     renderInbox();
+    await screen.findByText('Nothing needs you');
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
 
     await user.click(await screen.findByRole('button', { name: 'Dismiss notice' }));
 
     await waitFor(() => expect(screen.queryByText('Input notice unavailable')).toBeNull());
+    expect(await screen.findByText('No activity yet')).toBeInTheDocument();
     expect(dismissed).toEqual(['n-1']);
   });
 
   it('restores the notice and shows the server reason when the dismiss is refused', async () => {
     const user = userEvent.setup();
     server.use(
-      attentionRead(() => HttpResponse.json(attentionSnapshot([attentionItem(notice())]))),
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() => HttpResponse.json([noticeRow()])),
       dismissPost(problem(500, 'Could not dismiss the unavailable input notice'))
     );
     renderInbox();
+    await screen.findByText('Nothing needs you');
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
 
     await user.click(await screen.findByRole('button', { name: 'Dismiss notice' }));
 
@@ -250,23 +301,35 @@ describe('dismissing an unavailable input notice', () => {
     expect(screen.getByText('Input notice unavailable')).toBeInTheDocument();
   });
 
-  it('restores the notice and re-reads inbox after a 409', async () => {
+  it('keeps a refusal on screen after the row has left, then re-reads', async () => {
     const user = userEvent.setup();
-    let reads = 0;
+    let activityReads = 0;
     server.use(
-      attentionRead(() => {
-        reads++;
-        return HttpResponse.json(attentionSnapshot([attentionItem(notice())]));
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() => {
+        activityReads++;
+        return HttpResponse.json([noticeRow()]);
       }),
-      dismissPost(problem(409, 'Input notice changed; refresh the inbox'))
+      dismissPost(async () => {
+        await delay(200);
+        return HttpResponse.json(
+          { detail: 'Input notice changed; refresh the inbox' },
+          { status: 409 }
+        );
+      })
     );
     renderInbox();
+    await screen.findByText('Nothing needs you');
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
 
     await user.click(await screen.findByRole('button', { name: 'Dismiss notice' }));
 
+    // The row leaves before the server answers, so the refusal arrives with no row on screen.
+    await waitFor(() => expect(screen.queryByText('Input notice unavailable')).toBeNull());
     expect(await screen.findByText('Input notice changed; refresh the inbox')).toBeInTheDocument();
-    expect(screen.getByText('Input notice unavailable')).toBeInTheDocument();
-    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+    // The refusal restores the row, and the settled re-read keeps it in step with the server.
+    expect(await screen.findByText('Input notice unavailable')).toBeInTheDocument();
+    await waitFor(() => expect(activityReads).toBeGreaterThanOrEqual(2));
   });
 });
 

@@ -17,7 +17,7 @@ One item in the **Needs you** inbox. It says what is needed and links to the car
 - Pending approval or review cards.
 - Tasks explicitly blocked on an owner decision.
 
-Idle sessions, CI waits, publication updates and provider reports do not appear here. They belong in **Activity**.
+Idle sessions, CI waits, publication updates, provider reports and unavailable input notices do not appear here. They belong in **Activity**, where a notice can be dismissed.
 
 ## States
 
@@ -32,7 +32,7 @@ Idle sessions, CI waits, publication updates and provider reports do not appear 
 ## Keyboard and screen reader
 
 - A card with one answer has one link or button. Its name states the action, for example "Review approval for session X".
-- A decision card with options or a reply field has one control per answer. Each control's name says what it sends, and Dismiss is named for what it does.
+- A decision card with options or a reply field has one control per answer. Each control's name says what it sends.
 - The badge count is part of the Needs you tab name, so it is announced with the tab.
 - Cards are in a list with a heading for the section.
 
