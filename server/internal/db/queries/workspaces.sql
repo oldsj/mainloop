@@ -29,6 +29,13 @@ FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.request_id = $1 AND w.user_id = $2;
 
+-- name: FreezeWorkspaceGitRead :one
+-- Records the create's git-read decision once: a NULL credential freezes "no git read". It matches
+-- only a workspace not yet decided, so the first decision stands and a later caller reads it back.
+UPDATE workspaces SET git_read_decided = true, git_read_credential = $2
+WHERE id = $1 AND NOT git_read_decided
+RETURNING git_read_decided, git_read_credential;
+
 -- name: BumpWorkspace :one
 UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING *;
 

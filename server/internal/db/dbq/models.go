@@ -556,6 +556,8 @@ type Workspace struct {
 	Ports              json.RawMessage
 	IdleTimeoutMinutes int32
 	Environment        json.RawMessage
+	GitReadDecided     bool
+	GitReadCredential  json.RawMessage
 	RequestID          string
 	LastActiveAt       *time.Time
 	IdleSuspendedAt    *time.Time

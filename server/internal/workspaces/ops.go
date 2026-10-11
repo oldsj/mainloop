@@ -376,7 +376,7 @@ func (s *Service) doCreate(ctx context.Context, w wsRow) result {
 		return result{err: err}
 	}
 	req.Credentials = creds
-	ref, err := s.GitRead.forCreate(ctx, w)
+	ref, err := s.gitReadForCreate(ctx, w)
 	if err != nil {
 		return result{err: err}
 	}
@@ -521,7 +521,11 @@ func (s *Service) doDelete(ctx context.Context, w wsRow) result {
 			return result{err: &transient{err}}
 		}
 		req.Credentials = s.Credentials.ReplayCredentials(w.ID, s.Config.MCPOrigin(), b.Role, b.MCPGrantKind)
-		if ref := s.GitRead.forReplay(w); ref != nil {
+		ref, err := gitReadForReplay(w)
+		if err != nil {
+			return result{err: &transient{err}}
+		}
+		if ref != nil {
 			req.Credentials = append(req.Credentials, ref)
 		}
 		sess, err := s.Kagent.CreateSession(ctx, req)

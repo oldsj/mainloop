@@ -29,6 +29,13 @@ CREATE TABLE workspaces (
     -- The development environment resolved when the workspace was created; NULL when the project
     -- has none selected.
     environment jsonb,
+    -- The git-read credential reference the create carries, frozen before the first CreateSession
+    -- RPC like the Agent and environment above: git_read_decided says the decision was made, and a
+    -- NULL git_read_credential then means "no git read". Retries and the cleanup replay rebuild the
+    -- request's credentials from this, never from the current git transport configuration, because
+    -- kagent refuses a replayed request id whose credentials differ. A protojson SessionCredential.
+    git_read_decided boolean NOT NULL DEFAULT false,
+    git_read_credential jsonb,
     -- The CreateSession request id: stable for the life of the workspace.
     request_id text NOT NULL UNIQUE,
     -- Owner activity (resume, preview traffic). Delivery activity is read from the delivery ledger.
@@ -36,7 +43,8 @@ CREATE TABLE workspaces (
     -- When the idle sweep (or a suspend) last parked the workspace.
     idle_suspended_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (git_read_decided OR git_read_credential IS NULL)
 );
 CREATE INDEX workspaces_user ON workspaces (user_id, created_at DESC);
 

@@ -117,7 +117,11 @@ func TestAReplayOfASuccessfulCreateCarriesTheIdenticalCredentialSet(t *testing.T
 	}
 	replay := row.createRequest()
 	replay.Credentials = h.svc.Credentials.ReplayCredentials(row.ID, h.cfg.MCPOrigin(), b.Role, b.MCPGrantKind)
-	replay.Credentials = append(replay.Credentials, h.svc.GitRead.forReplay(row))
+	ref, err := gitReadForReplay(row)
+	if err != nil || ref == nil {
+		t.Fatalf("replay reference = %v, %v", ref, err)
+	}
+	replay.Credentials = append(replay.Credentials, ref)
 	orig := h.fake.CreateRequests()[0]
 	if len(replay.Credentials) != len(orig.GetCredentials()) {
 		t.Fatalf("replay credentials = %v, original %v", replay.Credentials, orig.GetCredentials())
@@ -195,7 +199,7 @@ func TestAWorkspaceOutsideGitHubGetsNoGitReadReference(t *testing.T) {
 	if len(reqs[0].GetCredentials()) != 1 || len(gitReadRefs(reqs[0].GetCredentials())) != 0 {
 		t.Errorf("credentials = %v", reqs[0].GetCredentials())
 	}
-	if h.svc.GitRead.forReplay(h.row(w.WorkspaceId)) != nil {
+	if ref, err := gitReadForReplay(h.row(w.WorkspaceId)); ref != nil || err != nil {
 		t.Error("a replay would carry a reference the original did not")
 	}
 	if _, err := h.dq.GetGitEnrollment(bg, w.WorkspaceId); err == nil {
