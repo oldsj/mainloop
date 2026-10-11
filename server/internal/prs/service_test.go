@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -355,5 +356,60 @@ func TestGetIsOwnerScoped(t *testing.T) {
 	}
 	if _, err := e.svc.Get(context.Background(), "someone", res.ID); !errors.Is(err, prs.ErrNotFound) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReviewMovedBranchMustNotCreateWrongHeadPR(t *testing.T) {
+	// The intent was recorded for one repository, base and head commit. If any changed before the
+	// POST was dispatched, the creation is refused and nothing is sent.
+	cases := map[string]struct {
+		change func(r *githubtest.Repository)
+		detail string
+	}{
+		"branch moved":   {func(r *githubtest.Repository) { r.Branches["feature"] = other }, "branch_moved"},
+		"branch deleted": {func(r *githubtest.Repository) { delete(r.Branches, "feature") }, "branch_missing"},
+		"default branch changed": {func(r *githubtest.Repository) {
+			r.Branches["trunk"] = tip
+			r.DefaultBranch = "trunk"
+		}, "default_branch_moved"},
+		"repository replaced": {func(r *githubtest.Repository) { r.ID = 8 }, "repository_mismatch"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.svc.Settle = 0
+			res, err := e.svc.Open(context.Background(), e.input("r1"))
+			if err != nil || res.State != dbstate.PRPending {
+				t.Fatalf("res = %+v, %v", res, err)
+			}
+			e.fake.Update("o", "n", tc.change)
+			e.svc.Settle = 5 * time.Second
+			e.run()
+			got, err := e.svc.Open(context.Background(), e.input("r1"))
+			if err != nil || got.State != dbstate.PRRefused || got.Detail != tc.detail || e.posts() != 0 || e.prs() != 0 {
+				t.Fatalf("got = %+v, %v, posts %d prs %d", got, err, e.posts(), e.prs())
+			}
+		})
+	}
+}
+
+func TestPreDispatchReadFailureIsRetriedNotRefused(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Settle = 0
+	res, err := e.svc.Open(context.Background(), e.input("r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.fake.Fail("GET", "/repos/o/n", http.StatusBadGateway)
+	e.run()
+	time.Sleep(300 * time.Millisecond)
+	if st := e.state(res.ID); st != dbstate.PRPending || e.posts() != 0 {
+		t.Fatalf("state = %s, posts %d after a failed read", st, e.posts())
+	}
+	e.fake.Fail("GET", "/repos/o/n", 0)
+	e.svc.Settle = 10 * time.Second
+	got, err := e.svc.Open(context.Background(), e.input("r1"))
+	if err != nil || got.State != dbstate.PRCreated || e.posts() != 1 {
+		t.Fatalf("got = %+v, %v, posts %d", got, err, e.posts())
 	}
 }

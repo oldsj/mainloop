@@ -338,6 +338,7 @@ type MergeCandidate struct {
 	Deadline            *time.Time
 	ReceiptActionID     *string
 	InvocationRequestID *string
+	ConsentPin          json.RawMessage
 	Detail              *string
 	MergeSha            *string
 	Attempts            int32

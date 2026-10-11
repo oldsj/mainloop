@@ -206,7 +206,9 @@ type Server struct {
 	// rateLimited and lost are keyed like failures; lost counts replies still to be dropped.
 	rateLimited map[string]bool
 	lost        map[string]int
-	nextPR      map[string]int
+	// before holds the functions to run, once each, before the next request for method and path.
+	before map[string][]func()
+	nextPR map[string]int
 }
 
 // New starts a fake and closes it when t finishes.
@@ -215,7 +217,7 @@ func New(t testing.TB) *Server {
 	loadKey()
 	s := &Server{
 		repos: map[string]*Repository{}, tokens: map[string]token{}, failures: map[string]int{}, redirects: map[string]string{},
-		rateLimited: map[string]bool{}, lost: map[string]int{}, nextPR: map[string]int{},
+		rateLimited: map[string]bool{}, lost: map[string]int{}, before: map[string][]func(){}, nextPR: map[string]int{},
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
 	s.URL = s.srv.URL + "/"
@@ -245,6 +247,14 @@ func (s *Server) Fail(method, path string, status int) {
 		return
 	}
 	s.failures[method+" "+path] = status
+}
+
+// Before runs fn, once, when the next request for method and path arrives and before it is answered, so
+// a test can change the world in the middle of a read. Several hooks for one request run in order.
+func (s *Server) Before(method, path string, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.before[method+" "+path] = append(s.before[method+" "+path], fn)
 }
 
 // Redirect makes GET path answer 302 to target, so a test can prove the client does not follow it.
@@ -285,10 +295,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	limited := s.rateLimited[key]
 	target := s.redirects[r.URL.Path]
 	lose := s.lost[key] > 0
+	hooks := s.before[key]
+	delete(s.before, key)
 	if lose {
 		s.lost[key]--
 	}
 	s.mu.Unlock()
+	for _, fn := range hooks {
+		fn()
+	}
 	if target != "" {
 		http.Redirect(w, r, target, http.StatusFound)
 		return

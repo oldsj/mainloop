@@ -101,27 +101,80 @@ func (s *Service) evaluate(ctx context.Context, c reconcile.Claim, work dbq.GetM
 	case verdictWait:
 		return reconcile.RetryAfter(s.poll()), nil
 	}
-	return s.merge(ctx, c, work, repo)
+	return s.merge(ctx, c, work, want, repo)
 }
 
 // merge commits the merge intent and sends the one PUT. The row is merging before the PUT runs, so
 // anything that stops this claim afterwards leaves a row that is only ever read, never resent.
-func (s *Service) merge(ctx context.Context, c reconcile.Claim, work dbq.GetMergeWorkRow, repo github.Repo) (reconcile.Outcome, error) {
+// merge commits the merge intent and sends the one PUT. The row is merging before the PUT runs, so
+// anything that stops this claim afterwards leaves a row that is only ever read, never resent.
+//
+// The evidence was read some time ago, so the decision is made again here. The remote reads (the
+// trusted template mapping, the default branch's tip) come first, with no transaction open; then one
+// short transaction takes the project, the consent response and the runtime binding in share mode
+// and commits the intent only if every pinned fact still holds. The writers of those rows (policy
+// changes, withdrawal, replacing or archiving a session) take them exclusively, so each either
+// finishes before the decision reads it or waits for the decision to commit.
+func (s *Service) merge(ctx context.Context, c reconcile.Claim, work dbq.GetMergeWorkRow, want Facts, repo github.Repo) (reconcile.Outcome, error) {
 	if err := Transition(dbstate.MergeEvaluating, dbstate.MergeMerging); err != nil {
 		return reconcile.Retry(), err
 	}
+	var pin Pin
+	if work.Route == dbstate.RouteApproval {
+		if err := json.Unmarshal(work.ConsentPin, &pin); err != nil || pin.ResponseID == "" {
+			return s.finish(ctx, c, work, dbstate.MergeBlocked, "consent_missing", "")
+		}
+		_, mapped, err := s.mappingFor(ctx, pin.KagentSessionID, pin.agent(), pin.Provider)
+		switch {
+		case errors.Is(err, errUntrusted):
+			return s.finish(ctx, c, work, dbstate.MergeBlocked, "consent_mapping_changed", "")
+		case err != nil:
+			s.log().WarnContext(ctx, "merge template mapping unavailable", "candidate", c.ID, "error", err)
+			return reconcile.RetryAfter(s.poll()), nil
+		case mapped.withResponse(pin.ResponseID) != pin:
+			return s.finish(ctx, c, work, dbstate.MergeBlocked, "consent_mapping_changed", "")
+		}
+	}
+	// A squash lands on the default branch's tip, so the tip the owner saw must still be the tip.
+	tip, err := s.GitHub.BranchTip(ctx, repo, want.Base)
+	if err != nil {
+		s.log().WarnContext(ctx, "merge default branch unavailable", "candidate", c.ID, "error", readErr("default branch", err))
+		return reconcile.RetryAfter(s.poll()), nil
+	}
+	if tip != want.BaseSHA {
+		return s.finish(ctx, c, work, dbstate.MergeBlocked, "default_branch_moved", "")
+	}
+
 	q := dbq.New(s.Pool)
 	owner := c.Owner
-	n, err := q.MarkMergeMerging(ctx, dbq.MarkMergeMergingParams{ID: c.ID, LeaseOwner: &owner, Attempts: attemptsOf(c)})
+	var refusal string
+	var final dbstate.MergeState
+	err = db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		tq := dbq.New(tx)
+		var err error
+		if refusal, final, err = s.recheck(ctx, tq, work, want, pin); err != nil || refusal != "" {
+			return err
+		}
+		n, err := tq.MarkMergeMerging(ctx, dbq.MarkMergeMergingParams{ID: c.ID, LeaseOwner: &owner, Attempts: attemptsOf(c)})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return reconcile.ErrLeaseLost
+		}
+		return nil
+	})
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "23505":
 		// Another candidate holds the merge intent for this pull request.
 		return s.finish(ctx, c, work, dbstate.MergeBlocked, "merge_in_progress", "")
+	case errors.Is(err, reconcile.ErrLeaseLost):
+		return reconcile.Recorded(), err
 	case err != nil:
 		return reconcile.Retry(), err
-	case n == 0:
-		return reconcile.Recorded(), reconcile.ErrLeaseLost
+	case refusal != "":
+		return s.finish(ctx, c, work, final, refusal, "")
 	}
 	c.State = string(dbstate.MergeMerging)
 
@@ -306,10 +359,53 @@ func (s *Service) completeOne(ctx context.Context, r dbq.ListPreparedApprovalPro
 	if err != nil {
 		return err
 	}
-	return s.begin(ctx, r.ProposalID, r.OwnerID, &consent.ResponseID, &consent.InvocationRequestID)
+	return s.begin(ctx, r.ProposalID, r.OwnerID, &consent)
 }
 
 // attemptsOf is the claim's attempt counter as the fenced queries take it.
 func attemptsOf(c reconcile.Claim) int32 {
 	return int32(c.Attempts) //nolint:gosec // a small counter
+}
+
+func (p Pin) withResponse(id string) Pin {
+	p.ResponseID = id
+	return p
+}
+
+// recheck is the DB half of the merge decision, run in the transaction that commits the intent. It
+// takes the project, the consent response and the runtime binding in share mode and reports why the
+// merge must not go ahead, with the final state to record, or "" when every pinned fact still holds.
+func (s *Service) recheck(ctx context.Context, q *dbq.Queries, work dbq.GetMergeWorkRow, want Facts, pin Pin) (string, dbstate.MergeState, error) {
+	project, err := q.LockProjectForMerge(ctx, dbq.LockProjectForMergeParams{ID: work.ProjectID, UserID: work.OwnerID})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "project_unavailable", dbstate.MergeBlocked, nil
+	case err != nil:
+		return "", "", err
+	case int(project.MergePolicyVersion) != want.PolicyVer:
+		return "policy_changed", dbstate.MergeBlocked, nil
+	}
+	if work.Route == dbstate.RouteApproval {
+		state, err := q.LockResponseForMerge(ctx, pin.ResponseID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows) || (err == nil && state == "rejected_transport"):
+			return "consent_withdrawn", dbstate.MergeBlocked, nil
+		case err != nil:
+			return "", "", err
+		}
+		b, err := q.LockBindingForMerge(ctx, work.SessionID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return "consent_runtime_changed", dbstate.MergeBlocked, nil
+		case err != nil:
+			return "", "", err
+		case b.UserID != work.OwnerID || b.ArchivedAt != nil || b.KagentDeletedAt != nil ||
+			b.KagentSessionID == nil || *b.KagentSessionID != pin.KagentSessionID || b.Kind != pin.Provider:
+			return "consent_runtime_changed", dbstate.MergeBlocked, nil
+		}
+	}
+	if work.Deadline != nil && !s.now().Before(*work.Deadline) {
+		return "deadline_passed", dbstate.MergeExpired, nil
+	}
+	return "", "", nil
 }

@@ -212,7 +212,7 @@ func (s *Server) mergeApproved(ctx context.Context, a agentauth.Actor, raw json.
 		return Result{}, err
 	}
 	v, err := s.Merge.MergeApproved(ctx, merge.ApprovedInput{
-		OwnerID: a.UserID, SessionID: a.BindingID, ProposalID: in.ProposalID, RequestID: in.RequestID,
+		OwnerID: a.UserID, SessionID: a.BindingID, ProposalID: in.ProposalID, RequestID: in.RequestID, ActorProjectID: a.ProjectID,
 	})
 	return mergeResult(v, err)
 }
@@ -222,7 +222,7 @@ func (s *Server) mergeStatus(ctx context.Context, a agentauth.Actor, raw json.Ra
 	if err != nil {
 		return Result{}, err
 	}
-	v, err := s.Merge.Status(ctx, a.UserID, in.ProposalID, in.RequestID)
+	v, err := s.Merge.Status(ctx, a.UserID, a.ProjectID, in.ProposalID, in.RequestID)
 	return mergeResult(v, err)
 }
 

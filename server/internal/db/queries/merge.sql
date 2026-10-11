@@ -60,14 +60,14 @@ LIMIT 1;
 -- name: BeginMergeEvaluation :one
 -- prepared -> evaluating, once. A repeat finds the row already evaluating and changes nothing.
 UPDATE merge_candidates
-SET state = 'evaluating', deadline = $2, receipt_action_id = $3, invocation_request_id = $4,
+SET state = 'evaluating', deadline = $2, receipt_action_id = $3, invocation_request_id = $4, consent_pin = $5,
     next_attempt_at = now(), detail = NULL, updated_at = now()
 WHERE id = $1 AND state = 'prepared'
 RETURNING id;
 
 -- name: GetMergeWork :one
 SELECT c.id AS candidate_id, c.owner_id, c.project_id, c.repository_id, c.repository, c.pr_number,
-       c.head_sha, c.route, c.state, c.deadline, c.receipt_action_id, c.detail, c.rechecks, c.updated_at,
+       c.head_sha, c.route, c.state, c.deadline, c.receipt_action_id, c.consent_pin, c.detail, c.rechecks, c.updated_at,
        p.id AS proposal_id, p.facts, p.summary_digest, p.session_id
 FROM merge_candidates c
 JOIN merge_proposals p ON p.candidate_id = c.id
@@ -102,11 +102,15 @@ WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('evaluating',
 
 
 -- name: ListLiveResponsesForSession :many
--- The session's own live decisions on tool approvals, newest first, with the request they answer.
-SELECT r.id AS response_id, r.receipt, q.id AS request_id, q.payload, q.kind, b.kind AS agent_kind
+-- The session's own live decisions on tool approvals, newest first, with the request they answer and
+-- the runtime they were recorded for beside the runtime the session is bound to now.
+SELECT r.id AS response_id, r.receipt, q.id AS request_id, q.payload, q.kind, b.kind AS agent_kind,
+       q.kagent_session_id AS request_kagent_session_id, q.agent_namespace, q.agent_name,
+       b.kagent_session_id AS bound_kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id AS session_owner
 FROM hitl_responses r
 JOIN hitl_requests q ON q.id = r.request_id
 JOIN agent_bindings b ON b.session_id = q.session_id
+JOIN sessions s ON s.id = q.session_id
 WHERE r.owner_id = $1 AND q.session_id = $2 AND q.kind = 'tool_approval'
   AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')
 ORDER BY r.created_at DESC, r.id DESC
@@ -130,3 +134,20 @@ SELECT state FROM hitl_responses WHERE id = $1;
 -- not stored on the project; callers take it from GitHub.
 SELECT id, user_id, owner, name, full_name, default_branch, merge_policy, merge_policy_version
 FROM projects WHERE id = $1 AND user_id = $2;
+
+-- name: LockProjectForMerge :one
+-- The final merge decision takes the project row in share mode: a policy write holds it exclusively,
+-- so the decision sees either the old policy or the new one, and a write waits for the decision.
+SELECT merge_policy, merge_policy_version FROM projects WHERE id = $1 AND user_id = $2 FOR SHARE;
+
+-- name: LockResponseForMerge :one
+-- A withdrawal updates the response row; sharing it orders the decision with the withdrawal.
+SELECT state FROM hitl_responses WHERE id = $1 FOR SHARE;
+
+-- name: LockBindingForMerge :one
+-- The session's live runtime, shared so that replacing or archiving it waits for the decision.
+SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+WHERE b.session_id = $1
+FOR SHARE OF b, s;

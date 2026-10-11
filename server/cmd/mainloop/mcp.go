@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -36,7 +37,11 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, log)
+	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
+	if err != nil {
+		return err
+	}
+	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
 	q := dbq.New(pool)
 	srv := &mcpserver.Server{
 		PRs:          prSvc,

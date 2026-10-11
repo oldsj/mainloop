@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -40,6 +42,7 @@ func quiet() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)
 
 type env struct {
 	t    *testing.T
+	rt   *runtimeFake
 	pool *pgxpool.Pool
 	fake *githubtest.Server
 	svc  *merge.Service
@@ -68,9 +71,9 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, pool: d.Pool, fake: fake}
+	e := &env{t: t, pool: d.Pool, fake: fake, rt: newRuntimeFake()}
 	e.svc = &merge.Service{
-		Pool: d.Pool, GitHub: app, Log: quiet(), Configs: []config.MergeConfiguration{claudeConfig},
+		Pool: d.Pool, GitHub: app, Log: quiet(), Configs: []config.MergeConfiguration{claudeConfig}, Runtime: e.rt,
 		Settle: 5 * time.Second, Deadline: 10 * time.Minute, Poll: 20 * time.Millisecond, Window: time.Minute,
 		Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond, Lease: time.Minute, SweepEvery: 20 * time.Millisecond,
 		Now: func() time.Time { return time.Now().Add(time.Duration(e.now.Load()) * time.Second) },
@@ -630,7 +633,7 @@ func (e *env) approvalProposal() merge.View {
 }
 
 func (e *env) approved(proposal, request string) (merge.View, error) {
-	return e.svc.MergeApproved(context.Background(), merge.ApprovedInput{OwnerID: owner, SessionID: "s1", ProposalID: proposal, RequestID: request})
+	return e.svc.MergeApproved(context.Background(), merge.ApprovedInput{OwnerID: owner, ActorProjectID: "p1", SessionID: "s1", ProposalID: proposal, RequestID: request})
 }
 
 func TestApprovedMergeNeedsTheOwnersExactConsent(t *testing.T) {
@@ -689,7 +692,7 @@ func TestApprovedMergeFromAnotherSessionIsRefused(t *testing.T) {
 	e := newEnv(t)
 	v := e.approvalProposal()
 	e.consent(v.ProposalID, "good", nil)
-	_, err := e.svc.MergeApproved(context.Background(), merge.ApprovedInput{OwnerID: owner, SessionID: "s2", ProposalID: v.ProposalID, RequestID: "good"})
+	_, err := e.svc.MergeApproved(context.Background(), merge.ApprovedInput{OwnerID: owner, ActorProjectID: "p1", SessionID: "s2", ProposalID: v.ProposalID, RequestID: "good"})
 	if err == nil || e.puts() != 0 {
 		t.Fatalf("err = %v, puts %d", err, e.puts())
 	}
@@ -752,14 +755,14 @@ func TestStatusReadsStoredStateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := e.svc.Status(ctx, owner, v.ProposalID, "r1")
+	got, err := e.svc.Status(ctx, owner, "p1", v.ProposalID, "r1")
 	if err != nil || got.State != dbstate.MergeMerged || got.ProposalID != v.ProposalID {
 		t.Fatalf("status = %+v, %v", got, err)
 	}
-	if _, err := e.svc.Status(ctx, owner, v.ProposalID, "unknown"); !errors.Is(err, merge.ErrNotFound) {
+	if _, err := e.svc.Status(ctx, owner, "p1", v.ProposalID, "unknown"); !errors.Is(err, merge.ErrNotFound) {
 		t.Fatalf("unknown request id = %v", err)
 	}
-	if _, err := e.svc.Status(ctx, "someone-else", v.ProposalID, "r1"); !errors.Is(err, merge.ErrNotFound) {
+	if _, err := e.svc.Status(ctx, "someone-else", "p1", v.ProposalID, "r1"); !errors.Is(err, merge.ErrNotFound) {
 		t.Fatalf("foreign owner = %v", err)
 	}
 	if e.puts() != 1 {
@@ -832,4 +835,54 @@ func TestMergeQueueRoutesToApproval(t *testing.T) {
 	if err != nil || v.Status != "approval_required" || len(v.Summary.UnavailableReasons) == 0 {
 		t.Fatalf("view = %+v, %v", v, err)
 	}
+}
+
+// runtimeFake is the trusted kagent read: which Agent each Session runs on and which named template
+// each Agent has. A missing template entry reads as an inline-template Agent.
+type runtimeFake struct {
+	mu        sync.Mutex
+	agents    map[string]kagent.AgentRef
+	templates map[kagent.AgentRef]string
+	err       error
+}
+
+func newRuntimeFake() *runtimeFake {
+	ref := kagent.AgentRef{Namespace: "ns", Name: "a"}
+	return &runtimeFake{agents: map[string]kagent.AgentRef{"k1": ref}, templates: map[kagent.AgentRef]string{ref: "t"}}
+}
+
+func (r *runtimeFake) SessionAgent(_ context.Context, id string) (kagent.AgentRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return kagent.AgentRef{}, r.err
+	}
+	ref, ok := r.agents[id]
+	if !ok {
+		return kagent.AgentRef{}, errors.New("no such session")
+	}
+	return ref, nil
+}
+
+func (r *runtimeFake) AgentTemplate(_ context.Context, ref kagent.AgentRef) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return "", r.err
+	}
+	t, ok := r.templates[ref]
+	if !ok {
+		return "", kagent.ErrNoTemplate
+	}
+	return t, nil
+}
+
+func (r *runtimeFake) template(ref kagent.AgentRef, name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if name == "" {
+		delete(r.templates, ref)
+		return
+	}
+	r.templates[ref] = name
 }

@@ -15,7 +15,8 @@ import (
 const (
 	// MaxDetailItems is the most items one page of details holds.
 	MaxDetailItems = 50
-	// descriptionChunk is how many runes of the description one page holds.
+	// descriptionChunk is the most runes of the description one page holds; a page also stops at the
+	// encoded byte budget, so a description full of characters that JSON escapes still pages.
 	descriptionChunk = 16 * 1024
 	// MaxDetailBytes caps the JSON body of one page.
 	MaxDetailBytes = 64 * 1024
@@ -73,39 +74,65 @@ func (s *Service) Details(ctx context.Context, in DetailsInput) (api.HITLMergeDe
 	case api.GetHITLMergeDetailsParamsSectionDescription:
 		runes := []rune(f.Body)
 		start := min(cursor, len(runes))
-		end := min(start+descriptionChunk, len(runes))
-		text, length, dg, trunc := string(runes[start:end]), len(runes), digest(f.Body), end < len(runes)
-		out.Description, out.DescriptionLength, out.DescriptionDigest, out.DescriptionTruncated = &text, &length, &dg, &trunc
-		if trunc {
+		length, dg := len(runes), digest(f.Body)
+		empty := ""
+		out.Description, out.DescriptionLength, out.DescriptionDigest = &empty, &length, &dg
+		out.DescriptionTruncated = ptr(false)
+		budget, err := pageBudget(out)
+		if err != nil {
+			return api.HITLMergeDetails{}, err
+		}
+		end := start
+		for used := 0; end < len(runes) && end-start < descriptionChunk; end++ {
+			cost, err := encodedLen(runes[end])
+			if err != nil {
+				return api.HITLMergeDetails{}, err
+			}
+			if used+cost > budget {
+				break
+			}
+			used += cost
+		}
+		if end == start && start < len(runes) {
+			return api.HITLMergeDetails{}, ErrTooLarge
+		}
+		text := string(runes[start:end])
+		out.Description = &text
+		if end < len(runes) {
+			out.DescriptionTruncated = ptr(true)
 			next = &end
 		}
 	case api.GetHITLMergeDetailsParamsSectionFiles:
-		items := []api.MergeDetailItem{}
 		start := min(cursor, len(f.Files))
-		end := min(start+limit, len(f.Files))
-		for _, x := range f.Files[start:end] {
+		items, end, err := fitItems(&out, start, min(limit, len(f.Files)-start), func(i int) api.MergeDetailItem {
+			x := f.Files[i]
 			item := api.MergeDetailItem{Filename: ptr(x.Filename), Status: ptr(x.Status), Additions: ptr(x.Additions), Deletions: ptr(x.Deletions)}
 			if x.PreviousFilename != "" {
 				item.PreviousFilename = ptr(x.PreviousFilename)
 			}
-			items = append(items, item)
+			return item
+		})
+		if err != nil {
+			return api.HITLMergeDetails{}, err
 		}
 		out.Items = &items
 		if end < len(f.Files) {
 			next = &end
 		}
 	case api.GetHITLMergeDetailsParamsSectionChecks:
-		items := []api.MergeDetailItem{}
 		start := min(cursor, len(f.Checks))
-		end := min(start+limit, len(f.Checks))
-		for _, x := range f.Checks[start:end] {
+		items, end, err := fitItems(&out, start, min(limit, len(f.Checks)-start), func(i int) api.MergeDetailItem {
+			x := f.Checks[i]
 			kind := api.MergeDetailItemKind(x.Kind)
 			item := api.MergeDetailItem{Kind: &kind, Context: ptr(x.Context), Status: ptr(x.Status)}
 			if x.AppID != 0 {
 				id := int(x.AppID)
 				item.AppId = &id
 			}
-			items = append(items, item)
+			return item
+		})
+		if err != nil {
+			return api.HITLMergeDetails{}, err
 		}
 		out.Items = &items
 		if end < len(f.Checks) {
@@ -126,6 +153,49 @@ func (s *Service) Details(ctx context.Context, in DetailsInput) (api.HITLMergeDe
 		return api.HITLMergeDetails{}, ErrTooLarge
 	}
 	return out, nil
+}
+
+// fitItems builds up to n items from start and drops items from the end until the page fits the byte
+// budget, so a page of long names still pages instead of failing. It returns the items and the index
+// after the last one. A single item that cannot fit is ErrTooLarge.
+func fitItems(out *api.HITLMergeDetails, start, n int, item func(i int) api.MergeDetailItem) ([]api.MergeDetailItem, int, error) {
+	items := make([]api.MergeDetailItem, 0, n)
+	for i := start; i < start+n; i++ {
+		items = append(items, item(i))
+	}
+	for {
+		out.Items = &items
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(raw) <= MaxDetailBytes {
+			return items, start + len(items), nil
+		}
+		if len(items) <= 1 {
+			return nil, 0, ErrTooLarge
+		}
+		items = items[:len(items)/2]
+	}
+}
+
+// pageBudget is how many encoded bytes of free text a page can still carry: the cap less the page as
+// it stands.
+func pageBudget(out api.HITLMergeDetails) (int, error) {
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return 0, err
+	}
+	return MaxDetailBytes - len(raw), nil
+}
+
+// encodedLen is the bytes a rune takes inside a JSON string, escapes included.
+func encodedLen(r rune) (int, error) {
+	raw, err := json.Marshal(string(r))
+	if err != nil {
+		return 0, err
+	}
+	return len(raw) - 2, nil
 }
 
 // cardNames reports whether a stored tool-approval request is about this proposal.

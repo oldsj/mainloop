@@ -48,6 +48,8 @@ type Service struct {
 	// Configs is the operator's allowlist of protected merge tool mappings; consent counts only
 	// for a tool named by one of them.
 	Configs []config.MergeConfiguration
+	// Runtime is the trusted kagent read behind the template mapping; without it no consent counts.
+	Runtime Runtime
 
 	// Settle is how long a tool call waits for the loop to settle a merge before it returns the
 	// state it has (default 20s). A zero Settle returns at once.
@@ -337,7 +339,7 @@ func (s *Service) Merge(ctx context.Context, in PrepareInput) (View, error) {
 		if len(v.Summary.UnavailableReasons) > 0 {
 			return v, refuse("evidence_unavailable", strings.Join(v.Summary.UnavailableReasons, ","))
 		}
-		if err := s.begin(ctx, v.ProposalID, in.OwnerID, nil, nil); err != nil {
+		if err := s.begin(ctx, v.ProposalID, in.OwnerID, nil); err != nil {
 			return View{}, err
 		}
 	}
@@ -345,16 +347,22 @@ func (s *Service) Merge(ctx context.Context, in PrepareInput) (View, error) {
 }
 
 // begin moves a prepared candidate to evaluating (once) and wakes the loop.
-func (s *Service) begin(ctx context.Context, proposalID, ownerID string, receipt, invocation *string) error {
+func (s *Service) begin(ctx context.Context, proposalID, ownerID string, consent *Consent) error {
 	q := dbq.New(s.Pool)
 	row, err := q.GetMergeView(ctx, dbq.GetMergeViewParams{ID: proposalID, OwnerID: ownerID})
 	if err != nil {
 		return err
 	}
 	deadline := s.now().Add(orDefault(s.Deadline, 30*time.Minute))
-	_, err = q.BeginMergeEvaluation(ctx, dbq.BeginMergeEvaluationParams{
-		ID: row.CandidateID, Deadline: &deadline, ReceiptActionID: receipt, InvocationRequestID: invocation,
-	})
+	params := dbq.BeginMergeEvaluationParams{ID: row.CandidateID, Deadline: &deadline}
+	if consent != nil {
+		pin, merr := json.Marshal(consent.Pin)
+		if merr != nil {
+			return merr
+		}
+		params.ReceiptActionID, params.InvocationRequestID, params.ConsentPin = &consent.ResponseID, &consent.InvocationRequestID, pin
+	}
+	_, err = q.BeginMergeEvaluation(ctx, params)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
@@ -367,6 +375,17 @@ func (s *Service) begin(ctx context.Context, proposalID, ownerID string, receipt
 // ApprovedInput is a merge_pull_request_with_approval call.
 type ApprovedInput struct {
 	OwnerID, SessionID, ProposalID, RequestID string
+	// ActorProjectID is the project the calling session is bound to; it must be the proposal's.
+	ActorProjectID string
+}
+
+// ownsProject refuses a caller whose session is not bound to the proposal's project. A session with
+// no project has no authority over any.
+func ownsProject(actorProjectID, projectID string) error {
+	if actorProjectID == "" || actorProjectID != projectID {
+		return refuse("forbidden", "this session has no authority over that project")
+	}
+	return nil
 }
 
 // MergeApproved is merge_pull_request_with_approval: it evaluates the exact merge the owner
@@ -376,6 +395,9 @@ func (s *Service) MergeApproved(ctx context.Context, in ApprovedInput) (View, er
 	q := dbq.New(s.Pool)
 	v, row, err := s.view(ctx, q, in.OwnerID, in.ProposalID)
 	if err != nil {
+		return View{}, err
+	}
+	if err := ownsProject(in.ActorProjectID, row.ProjectID); err != nil {
 		return View{}, err
 	}
 	if row.SessionID != in.SessionID {
@@ -415,7 +437,7 @@ func (s *Service) MergeApproved(ctx context.Context, in ApprovedInput) (View, er
 		return View{}, err
 	}
 	if v.State == dbstate.MergePrepared {
-		if err := s.begin(ctx, in.ProposalID, in.OwnerID, &consent.ResponseID, &consent.InvocationRequestID); err != nil {
+		if err := s.begin(ctx, in.ProposalID, in.OwnerID, &consent); err != nil {
 			return View{}, err
 		}
 	}
@@ -424,7 +446,7 @@ func (s *Service) MergeApproved(ctx context.Context, in ApprovedInput) (View, er
 
 // Status is get_pull_request_merge_status: it reads the stored state of a proposal that this
 // request id belongs to, and never approves or executes anything.
-func (s *Service) Status(ctx context.Context, ownerID, proposalID, requestID string) (View, error) {
+func (s *Service) Status(ctx context.Context, ownerID, actorProjectID, proposalID, requestID string) (View, error) {
 	q := dbq.New(s.Pool)
 	for _, tool := range []dbstate.MergeTool{dbstate.ToolPrepare, dbstate.ToolMerge, dbstate.ToolApprovedMerge} {
 		k, err := q.GetMergeRequestKey(ctx, dbq.GetMergeRequestKeyParams{OwnerID: ownerID, Tool: tool, RequestID: requestID})
@@ -437,8 +459,14 @@ func (s *Service) Status(ctx context.Context, ownerID, proposalID, requestID str
 		if k.ProposalID != proposalID {
 			continue
 		}
-		v, _, err := s.view(ctx, q, ownerID, proposalID)
-		return v, err
+		v, row, err := s.view(ctx, q, ownerID, proposalID)
+		if err != nil {
+			return View{}, err
+		}
+		if err := ownsProject(actorProjectID, row.ProjectID); err != nil {
+			return View{}, err
+		}
+		return v, nil
 	}
 	return View{}, ErrNotFound
 }

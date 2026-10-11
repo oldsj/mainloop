@@ -34,7 +34,7 @@ func (a *MergeAPI) GetHITLMergeDetails(ctx context.Context, req api.GetHITLMerge
 	case errors.Is(err, ErrNotFound):
 		return api.GetHITLMergeDetails404JSONResponse(api.HTTPError{Detail: "Merge proposal not found"}), nil
 	case errors.Is(err, ErrTooLarge):
-		return api.GetHITLMergeDetails409JSONResponse(api.HTTPError{Detail: "The details page is too large; request a smaller limit"}), nil
+		return api.GetHITLMergeDetails409JSONResponse(api.HTTPError{Detail: "A single entry of the details is too large to show"}), nil
 	case err != nil:
 		return nil, err
 	}

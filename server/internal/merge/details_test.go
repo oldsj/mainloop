@@ -2,6 +2,7 @@ package merge_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -126,4 +127,80 @@ func TestDetailsAPIMapsErrors(t *testing.T) {
 	if _, err := (&merge.MergeAPI{}).GetHITLMergeDetails(context.Background(), api.GetHITLMergeDetailsRequestObject{}); err == nil {
 		t.Fatal("a nil service answered")
 	}
+}
+
+func TestReviewDescriptionPageRetryCanShrink(t *testing.T) {
+	// A description of characters that JSON escapes to six bytes each used to fill a page past the
+	// cap at any limit. A page now stops at the encoded budget, and paging reads the whole text.
+	for _, limit := range []int{50, 1} {
+		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
+			e := newEnv(t)
+			body := strings.Repeat("<", 16*1024)
+			e.fake.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = body })
+			e.policy("approval")
+			ctx := context.Background()
+			v, err := e.svc.Merge(ctx, e.input("prep"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.consent(v.ProposalID, "call", nil)
+			card := fmt.Sprintf("req-%s-%s", v.ProposalID[:6], "call")
+			var got strings.Builder
+			cursor := 0
+			for pages := 0; pages < 20; pages++ {
+				page, err := e.svc.Details(ctx, merge.DetailsInput{OwnerID: owner, HITLRequestID: card, ProposalID: v.ProposalID,
+					Section: api.GetHITLMergeDetailsParamsSectionDescription, Cursor: cursor, Limit: limit})
+				if err != nil {
+					t.Fatalf("page %d: %v", pages, err)
+				}
+				raw, _ := json.Marshal(page)
+				if len(raw) > merge.MaxDetailBytes {
+					t.Fatalf("page %d is %d bytes", pages, len(raw))
+				}
+				got.WriteString(*page.Description)
+				if page.NextCursor == nil {
+					if got.String() != body {
+						t.Fatalf("read %d of %d characters", got.Len(), len(body))
+					}
+					return
+				}
+				cursor, _ = strconv.Atoi(*page.NextCursor)
+			}
+			t.Fatal("paging did not finish")
+		})
+	}
+}
+
+func TestDetailsItemPagesShrinkToTheByteBudget(t *testing.T) {
+	e := newEnv(t)
+	var files []githubtest.File
+	for i := range 50 {
+		files = append(files, githubtest.File{Filename: fmt.Sprintf("%02d-", i) + strings.Repeat("a", 3000), Additions: 1})
+	}
+	e.fake.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Files = files })
+	e.policy("approval")
+	ctx := context.Background()
+	v, err := e.svc.Merge(ctx, e.input("prep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.consent(v.ProposalID, "call", nil)
+	card := fmt.Sprintf("req-%s-%s", v.ProposalID[:6], "call")
+	seen, cursor := 0, 0
+	for range 60 {
+		page, err := e.svc.Details(ctx, merge.DetailsInput{OwnerID: owner, HITLRequestID: card, ProposalID: v.ProposalID,
+			Section: api.GetHITLMergeDetailsParamsSectionFiles, Cursor: cursor, Limit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen += len(*page.Items)
+		if page.NextCursor == nil {
+			if seen != 50 {
+				t.Fatalf("saw %d files", seen)
+			}
+			return
+		}
+		cursor, _ = strconv.Atoi(*page.NextCursor)
+	}
+	t.Fatal("paging did not finish")
 }

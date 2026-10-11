@@ -28,9 +28,16 @@ checked the branch and found no PR, and is about to POST) → `created` or `refu
 - The row is keyed `pr:<owner>:<request id>`; the same id with other arguments is a conflict. One
   intent may be in flight per owner, repository and head/base at a time; a second request for
   the same head finds the first.
-- Before the one POST the loop re-reads the repository, checks that the branch exists at
-  `expected_sha`, and lists the PRs for the head (open and closed). One match is adopted
-  (`created`) and no PR is created in that case. A head or base that does not match is refused.
+- Before the one POST the loop lists the PRs for the head (open and closed); one match is adopted
+  (`created`) and no PR is created in that case. Otherwise, immediately before it marks the row
+  `dispatching`, it re-reads the repository identity, the default branch (the recorded base) and the
+  head branch tip. A definite mismatch is refused with no POST: `repository_mismatch`,
+  `default_branch_moved`, `branch_moved` (the tip is not `expected_sha`) or `branch_missing`. A read
+  that fails is retried; nothing was sent. The POST names only the branch, and GitHub offers no
+  expected-head guard on it, so a branch that moves between this read and the POST can still open a
+  PR on a newer head. That window is the length of one request; the merge path pins the head SHA
+  again, so such a PR cannot be merged without a new preparation. After the POST may have run, the
+  loop only looks.
 - A POST whose outcome is not known (transport failure, 5xx, a body that is not the PR asked for)
   leaves the row `uncertain`. An uncertain row is only ever re-checked by listing the head; it is
   never POSTed again, even when the list is empty, because absence does not prove the earlier
@@ -74,7 +81,21 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
   tool call never arrived or was lost: the approval is recorded, so completing it does not need
   the agent.
 - `get_pull_request_merge_status` reads the stored state for a proposal id and one of its request
-  ids. It never approves or executes.
+  ids. It never approves or executes. Like the approved-merge tool, it loads the proposal's project
+  and needs the actor's session project to be non-empty and equal to it (`forbidden` otherwise); the
+  approved-merge tool also keeps the proposal's session and receipt gates.
+- The decision to start the PUT is made in one short transaction after all GitHub reads, with no
+  transaction held across GitHub. It takes share locks on the owned project, the consent's
+  response and the binding, so it orders with a policy write or a withdrawal (which take the row
+  exclusively). It blocks the candidate unless, at that moment: the project is still the owner's
+  and its policy version is the one the evaluation began under (`policy_changed`); the consent's
+  response is still accepted (`consent_withdrawn`); the consent's runtime is still the session's
+  bound, live runtime (`consent_runtime_changed`); the deadline has not passed (`expired`, `deadline_passed`); and
+  the facts pinned in the proposal still hold (below). The reads before it are advisory.
+- Pinned facts: repository id and name, default branch and PR base, title, body and the file
+  inventory are compared with the proposal and any difference blocks (`facts_changed`). The default
+  branch tip is read again after the evidence and must be the one the evidence was judged against
+  (`default_branch_moved`). The PUT keeps the head SHA, so GitHub itself refuses a moved head.
 - The intent is committed (`merging`, fenced by the lease) before the PUT. A unique index allows one
   candidate per PR to hold the merge intent (`merging`, `uncertain`, `merged`); a second candidate
   that reaches the PUT is blocked `merge_in_progress`.
@@ -89,7 +110,10 @@ keys and its result are an append-only ledger (a trigger refuses updates and del
   applied and the agent prepares again.
 - Merge detail paging (`GET /hitl/{request_id}/merge/{proposal_id}/details`) reads the frozen
   facts for the owner: a section (`description`, `files` or `checks`), an offset cursor and a limit
-  of at most 50. A description page is at most 16 KiB of text; a page over 64 KiB is refused with 409. The request must be an approval request of the owner that names the proposal; otherwise 404.
+  of at most 50. A description page holds at most 16 K characters and stops earlier to keep the
+  encoded page under 64 KiB, so text that JSON escapes still pages; a files or checks page drops
+  items from its end until it fits. A single entry that cannot fit is refused with 409. The request
+  must be an approval request of the owner that names the proposal; otherwise 404.
 
 ### Consent
 
@@ -98,8 +122,19 @@ a tool-approval response for that session, approved, whose `tool_name` is the pu
 operator-configured merge tool for the session's provider, with `args` exactly
 `{proposal_id, request_id}` and an `arguments_hash` equal to the SHA-256 of those canonical
 arguments. A response that was rejected in transport withdraws the consent (`consent_withdrawn`).
-The configured merge-tool mapping (`MAINLOOP_MERGE_CONFIGURATIONS`) is the allowlist; the
-template name in a mapping is not checked in Go.
+
+The decision must have been recorded for the session's current runtime: the session is not archived,
+its runtime is not deleted, and the kagent Session the request was recorded for is the one the
+binding holds now. The tool name is then checked against a trusted mapping read from kagent: the
+Session must run on the Agent the request recorded, and that Agent's named `templateRef` and the
+session's provider must select exactly one entry of `MAINLOOP_MERGE_CONFIGURATIONS`. An inline
+template, an unknown or duplicate template/provider pair, a Session that is not on the recorded
+Agent, a public-name mismatch and a failed read give no authority. The mapping (provider, template
+name, configuration digest, runtime and Agent) is stored with the candidate when the evaluation
+begins, and the final decision reads it again and blocks on any difference
+(`consent_mapping_changed`, `consent_runtime_changed`). A re-recorded consent for a replacement
+runtime counts as a new consent. The template's contents are not pinned, so a reviewed template
+edit can still redirect the alias; GitOps review and the consent gate remain.
 
 **Nested agents.** A merge approval raised by a delegated agent reaches the owner only through its
 parent. Nested approvals are not answerable (HITL refuses to answer a nested request), and the

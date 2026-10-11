@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
+	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/merge"
 	"github.com/oldsj/mainloop/server/internal/prs"
@@ -65,7 +66,7 @@ func newPRHarness(t *testing.T) *prHarness {
 		h.pool = pool
 		srv.PRs = &prs.Service{Pool: pool, GitHub: app, Log: log, Settle: 5 * time.Second, Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond}
 		srv.Merge = &merge.Service{
-			Pool: pool, GitHub: app, Log: log, Configs: cfgs, Settle: 5 * time.Second, Poll: 20 * time.Millisecond,
+			Pool: pool, GitHub: app, Log: log, Configs: cfgs, Runtime: staticRuntime{}, Settle: 5 * time.Second, Poll: 20 * time.Millisecond,
 			Recheck: 10 * time.Millisecond, Ceiling: 20 * time.Millisecond,
 		}
 		r := reconcile.NewRunner(pool, log, nil)
@@ -80,6 +81,19 @@ func newPRHarness(t *testing.T) *prHarness {
 	})
 	return h
 }
+
+// staticRuntime is the kagent read of the one Session the tests record consent for: k1 runs on
+// the Agent ns/a, which was created from the template "t".
+type staticRuntime struct{}
+
+func (staticRuntime) SessionAgent(_ context.Context, id string) (kagent.AgentRef, error) {
+	if id != "k1" {
+		return kagent.AgentRef{}, fmt.Errorf("unknown session %q", id)
+	}
+	return kagent.AgentRef{Namespace: "ns", Name: "a"}, nil
+}
+
+func (staticRuntime) AgentTemplate(context.Context, kagent.AgentRef) (string, error) { return "t", nil }
 
 // seedProject makes the project and puts an agent in it.
 func (h *prHarness) seedAgent(t *testing.T, mut func(*authtest.Agent)) authtest.Seeded {
@@ -278,5 +292,79 @@ func TestApprovedMergeOnTheApprovalSurface(t *testing.T) {
 	_, st := h.call(mcpserver.PathOrdinary, a.Token, "get_pull_request_merge_status", map[string]any{"proposal_id": proposal, "request_id": "a1"})
 	if st.Result.IsError || st.Result.StructuredContent["status"] != "merged" {
 		t.Errorf("status = %v %q", st.Result.StructuredContent, st.text())
+	}
+}
+
+// otherProjectAgent seeds an agent of the same owner that is bound to a different project, or to none.
+func (h *prHarness) otherProjectAgent(t *testing.T, project string) authtest.Seeded {
+	t.Helper()
+	if _, err := h.pool.Exec(context.Background(), `INSERT INTO projects (id, user_id, owner, name, full_name, html_url, default_branch)
+		VALUES ('p2', 'owner', 'o', 'other', 'o/other', 'https://x', 'main') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	s := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
+	if project != "" {
+		if _, err := h.pool.Exec(context.Background(), `UPDATE sessions SET project_id = $2 WHERE id = $1`, s.SessionID, project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+func TestReviewStatusMustBeProjectScoped(t *testing.T) {
+	h := newPRHarness(t)
+	a := h.seedAgent(t, nil)
+	_, prep := h.call(mcpserver.PathOrdinary, a.Token, "prepare_pull_request_merge",
+		map[string]any{"project_id": "p1", "pr_number": 1, "expected_sha": prTip, "request_id": "m1"})
+	proposal, _ := prep.Result.StructuredContent["proposal_id"].(string)
+	if proposal == "" {
+		t.Fatalf("no proposal: %q", prep.text())
+	}
+	status := map[string]any{"proposal_id": proposal, "request_id": "m1"}
+	for name, project := range map[string]string{"another project": "p2", "no project": ""} {
+		o := h.otherProjectAgent(t, project)
+		if _, r := h.call(mcpserver.PathOrdinary, o.Token, "get_pull_request_merge_status", status); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
+			t.Errorf("status from %s = %v %q", name, r.Result.StructuredContent, r.text())
+		}
+	}
+	if _, r := h.call(mcpserver.PathOrdinary, a.Token, "get_pull_request_merge_status", status); r.Result.IsError {
+		t.Errorf("status from the proposal's project = %q", r.text())
+	}
+}
+
+func TestReviewApprovalMustBeProjectScoped(t *testing.T) {
+	h := newPRHarness(t)
+	a := h.seedAgent(t, nil)
+	if _, err := h.pool.Exec(context.Background(), `UPDATE projects SET merge_policy = 'approval' WHERE id = 'p1'`); err != nil {
+		t.Fatal(err)
+	}
+	_, v := h.call(mcpserver.PathOrdinary, a.Token, "merge_pull_request",
+		map[string]any{"project_id": "p1", "pr_number": 1, "expected_sha": prTip, "request_id": "m1"})
+	proposal, _ := v.Result.StructuredContent["proposal_id"].(string)
+	if _, err := h.pool.Exec(context.Background(), `UPDATE agent_bindings SET kagent_session_id = 'k1' WHERE session_id = $1`, a.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	h.consent(t, a.SessionID, proposal, "a1")
+	call := map[string]any{"proposal_id": proposal, "request_id": "a1"}
+	for name, project := range map[string]string{"another project": "p2", "no project": ""} {
+		// The same session binding, now with the wrong project: the proposal's session and receipt are
+		// right, and only the project differs.
+		o := h.otherProjectAgent(t, project)
+		if _, r := h.call(mcpserver.PathApproval, o.Token, "merge_pull_request_with_approval", call); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
+			t.Errorf("approval from %s = %v %q", name, r.Result.StructuredContent, r.text())
+		}
+	}
+	if n := h.fake.Count("PUT", mergeIt); n != 0 {
+		t.Fatalf("PUTs = %d", n)
+	}
+	if _, err := h.pool.Exec(context.Background(), `UPDATE sessions SET project_id = 'p2' WHERE id = $1`, a.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	// The proposal's own session moved to another project loses authority as well.
+	if _, r := h.call(mcpserver.PathApproval, a.Token, "merge_pull_request_with_approval", call); !r.Result.IsError || r.text()[:11] != "[forbidden]" {
+		t.Errorf("approval after the session left the project = %q", r.text())
+	}
+	if n := h.fake.Count("PUT", mergeIt); n != 0 {
+		t.Fatalf("PUTs = %d", n)
 	}
 }

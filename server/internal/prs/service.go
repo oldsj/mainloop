@@ -314,6 +314,12 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	if found != nil {
 		return s.created(ctx, c, *found)
 	}
+	// Nothing has been sent yet, so a read that fails is retried and a mismatch is a refusal.
+	if why, err := s.stillTrue(ctx, repo, row); err != nil {
+		return reconcile.Retry(), err
+	} else if why != "" {
+		return s.refuse(ctx, c, why)
+	}
 	if err := Transition(dbstate.PRPending, dbstate.PRDispatching); err != nil {
 		return reconcile.Retry(), err
 	}
@@ -342,6 +348,35 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 	default:
 		return s.uncertain(ctx, c, "the POST's outcome is not known")
 	}
+}
+
+// stillTrue re-reads what Open recorded just before the POST: the repository's identity, its default
+// branch (the base) and the exact head commit. It returns the refusal code for a definite mismatch,
+// empty when all still hold. The POST names only the branch, so a branch that moves after this read
+// can still open a pull request on a newer head; that window is narrow and cannot be closed from
+// here, and the merge path pins the head commit again before it merges.
+func (s *Service) stillTrue(ctx context.Context, repo github.Repo, row dbq.PrCreation) (string, error) {
+	detail, err := s.GitHub.RepoDetail(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("read repository: %w", err)
+	}
+	if detail.ID != row.RepoID || !strings.EqualFold(detail.FullName, row.RepoFullName) {
+		return "repository_mismatch", nil
+	}
+	if detail.DefaultBranch != row.Base {
+		return "default_branch_moved", nil
+	}
+	tip, err := s.GitHub.BranchTip(ctx, repo, row.Head)
+	switch {
+	case errors.Is(err, github.ErrNotFound), errors.Is(err, github.ErrBranchName):
+		return "branch_missing", nil
+	case err != nil:
+		return "", fmt.Errorf("read branch: %w", err)
+	}
+	if tip != row.ExpectedSha {
+		return "branch_moved", nil
+	}
+	return "", nil
 }
 
 func ptr[T any](v T) *T { return &v }

@@ -89,6 +89,10 @@ CREATE TABLE merge_candidates (
     -- The consent that authorised the merge (a hitl_responses id) and the tool call it covers.
     receipt_action_id text,
     invocation_request_id text,
+    -- What the consent was pinned to when evaluation began: the response, the kagent Session and Agent it
+    -- was recorded for, and the trusted template mapping that gave the tool its authority (JSON). The
+    -- final decision re-checks all of it. NULL on the automatic route.
+    consent_pin jsonb,
     detail text,
     merge_sha text CHECK (merge_sha IS NULL OR merge_sha ~ '^[0-9a-f]{40}$'),
     attempts integer NOT NULL DEFAULT 0,

@@ -15,7 +15,7 @@ import (
 
 const beginMergeEvaluation = `-- name: BeginMergeEvaluation :one
 UPDATE merge_candidates
-SET state = 'evaluating', deadline = $2, receipt_action_id = $3, invocation_request_id = $4,
+SET state = 'evaluating', deadline = $2, receipt_action_id = $3, invocation_request_id = $4, consent_pin = $5,
     next_attempt_at = now(), detail = NULL, updated_at = now()
 WHERE id = $1 AND state = 'prepared'
 RETURNING id
@@ -26,6 +26,7 @@ type BeginMergeEvaluationParams struct {
 	Deadline            *time.Time
 	ReceiptActionID     *string
 	InvocationRequestID *string
+	ConsentPin          json.RawMessage
 }
 
 // prepared -> evaluating, once. A repeat finds the row already evaluating and changes nothing.
@@ -35,6 +36,7 @@ func (q *Queries) BeginMergeEvaluation(ctx context.Context, arg BeginMergeEvalua
 		arg.Deadline,
 		arg.ReceiptActionID,
 		arg.InvocationRequestID,
+		arg.ConsentPin,
 	)
 	var id string
 	err := row.Scan(&id)
@@ -194,7 +196,7 @@ func (q *Queries) GetMergeView(ctx context.Context, arg GetMergeViewParams) (Get
 
 const getMergeWork = `-- name: GetMergeWork :one
 SELECT c.id AS candidate_id, c.owner_id, c.project_id, c.repository_id, c.repository, c.pr_number,
-       c.head_sha, c.route, c.state, c.deadline, c.receipt_action_id, c.detail, c.rechecks, c.updated_at,
+       c.head_sha, c.route, c.state, c.deadline, c.receipt_action_id, c.consent_pin, c.detail, c.rechecks, c.updated_at,
        p.id AS proposal_id, p.facts, p.summary_digest, p.session_id
 FROM merge_candidates c
 JOIN merge_proposals p ON p.candidate_id = c.id
@@ -213,6 +215,7 @@ type GetMergeWorkRow struct {
 	State           dbstate.MergeState
 	Deadline        *time.Time
 	ReceiptActionID *string
+	ConsentPin      json.RawMessage
 	Detail          *string
 	Rechecks        int32
 	UpdatedAt       time.Time
@@ -237,6 +240,7 @@ func (q *Queries) GetMergeWork(ctx context.Context, id string) (GetMergeWorkRow,
 		&i.State,
 		&i.Deadline,
 		&i.ReceiptActionID,
+		&i.ConsentPin,
 		&i.Detail,
 		&i.Rechecks,
 		&i.UpdatedAt,
@@ -401,10 +405,13 @@ func (q *Queries) InsertMergeResult(ctx context.Context, arg InsertMergeResultPa
 }
 
 const listLiveResponsesForSession = `-- name: ListLiveResponsesForSession :many
-SELECT r.id AS response_id, r.receipt, q.id AS request_id, q.payload, q.kind, b.kind AS agent_kind
+SELECT r.id AS response_id, r.receipt, q.id AS request_id, q.payload, q.kind, b.kind AS agent_kind,
+       q.kagent_session_id AS request_kagent_session_id, q.agent_namespace, q.agent_name,
+       b.kagent_session_id AS bound_kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id AS session_owner
 FROM hitl_responses r
 JOIN hitl_requests q ON q.id = r.request_id
 JOIN agent_bindings b ON b.session_id = q.session_id
+JOIN sessions s ON s.id = q.session_id
 WHERE r.owner_id = $1 AND q.session_id = $2 AND q.kind = 'tool_approval'
   AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')
 ORDER BY r.created_at DESC, r.id DESC
@@ -417,15 +424,23 @@ type ListLiveResponsesForSessionParams struct {
 }
 
 type ListLiveResponsesForSessionRow struct {
-	ResponseID string
-	Receipt    json.RawMessage
-	RequestID  string
-	Payload    json.RawMessage
-	Kind       dbstate.HITLKind
-	AgentKind  string
+	ResponseID             string
+	Receipt                json.RawMessage
+	RequestID              string
+	Payload                json.RawMessage
+	Kind                   dbstate.HITLKind
+	AgentKind              string
+	RequestKagentSessionID string
+	AgentNamespace         string
+	AgentName              string
+	BoundKagentSessionID   *string
+	KagentDeletedAt        *time.Time
+	ArchivedAt             *time.Time
+	SessionOwner           string
 }
 
-// The session's own live decisions on tool approvals, newest first, with the request they answer.
+// The session's own live decisions on tool approvals, newest first, with the request they answer and
+// the runtime they were recorded for beside the runtime the session is bound to now.
 func (q *Queries) ListLiveResponsesForSession(ctx context.Context, arg ListLiveResponsesForSessionParams) ([]ListLiveResponsesForSessionRow, error) {
 	rows, err := q.db.Query(ctx, listLiveResponsesForSession, arg.OwnerID, arg.SessionID)
 	if err != nil {
@@ -442,6 +457,13 @@ func (q *Queries) ListLiveResponsesForSession(ctx context.Context, arg ListLiveR
 			&i.Payload,
 			&i.Kind,
 			&i.AgentKind,
+			&i.RequestKagentSessionID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.BoundKagentSessionID,
+			&i.KagentDeletedAt,
+			&i.ArchivedAt,
+			&i.SessionOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -495,6 +517,36 @@ func (q *Queries) ListPreparedApprovalProposals(ctx context.Context, limit int32
 	return items, nil
 }
 
+const lockBindingForMerge = `-- name: LockBindingForMerge :one
+SELECT b.kind, b.kagent_session_id, b.kagent_deleted_at, s.archived_at, s.user_id
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+WHERE b.session_id = $1
+FOR SHARE OF b, s
+`
+
+type LockBindingForMergeRow struct {
+	Kind            string
+	KagentSessionID *string
+	KagentDeletedAt *time.Time
+	ArchivedAt      *time.Time
+	UserID          string
+}
+
+// The session's live runtime, shared so that replacing or archiving it waits for the decision.
+func (q *Queries) LockBindingForMerge(ctx context.Context, sessionID string) (LockBindingForMergeRow, error) {
+	row := q.db.QueryRow(ctx, lockBindingForMerge, sessionID)
+	var i LockBindingForMergeRow
+	err := row.Scan(
+		&i.Kind,
+		&i.KagentSessionID,
+		&i.KagentDeletedAt,
+		&i.ArchivedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
 const lockMergeScope = `-- name: LockMergeScope :exec
 
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
@@ -508,6 +560,41 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 func (q *Queries) LockMergeScope(ctx context.Context, scope string) error {
 	_, err := q.db.Exec(ctx, lockMergeScope, scope)
 	return err
+}
+
+const lockProjectForMerge = `-- name: LockProjectForMerge :one
+SELECT merge_policy, merge_policy_version FROM projects WHERE id = $1 AND user_id = $2 FOR SHARE
+`
+
+type LockProjectForMergeParams struct {
+	ID     string
+	UserID string
+}
+
+type LockProjectForMergeRow struct {
+	MergePolicy        dbstate.MergePolicy
+	MergePolicyVersion int64
+}
+
+// The final merge decision takes the project row in share mode: a policy write holds it exclusively,
+// so the decision sees either the old policy or the new one, and a write waits for the decision.
+func (q *Queries) LockProjectForMerge(ctx context.Context, arg LockProjectForMergeParams) (LockProjectForMergeRow, error) {
+	row := q.db.QueryRow(ctx, lockProjectForMerge, arg.ID, arg.UserID)
+	var i LockProjectForMergeRow
+	err := row.Scan(&i.MergePolicy, &i.MergePolicyVersion)
+	return i, err
+}
+
+const lockResponseForMerge = `-- name: LockResponseForMerge :one
+SELECT state FROM hitl_responses WHERE id = $1 FOR SHARE
+`
+
+// A withdrawal updates the response row; sharing it orders the decision with the withdrawal.
+func (q *Queries) LockResponseForMerge(ctx context.Context, id string) (dbstate.HITLResponseState, error) {
+	row := q.db.QueryRow(ctx, lockResponseForMerge, id)
+	var state dbstate.HITLResponseState
+	err := row.Scan(&state)
+	return state, err
 }
 
 const markMergeEvaluating = `-- name: MarkMergeEvaluating :execrows

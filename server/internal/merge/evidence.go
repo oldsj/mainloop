@@ -535,7 +535,10 @@ func judge(ev *Evidence, want Facts, headSHA string) (verdict, string) {
 	case ev.PR.Mergeable == nil:
 		// The squash's inventory is not read until GitHub has answered.
 		return verdictWait, "waiting for mergeability"
-	case f.PathsDigest != want.PathsDigest || f.MergeFilesDigest != want.MergeFilesDigest || !slices.Equal(f.Protected, want.Protected):
+	case f.BaseSHA != want.BaseSHA:
+		// The squash would land on a default branch the owner never saw.
+		return verdictBlocked, "default_branch_moved"
+	case !samePinned(f, want):
 		return verdictBlocked, "facts_changed"
 	}
 	c := countChecks(f.Checks)
@@ -555,4 +558,30 @@ func readErr(what string, err error) error {
 		return errors.New(what + ": " + err.Error())
 	}
 	return fmt.Errorf("%s: %w", what, err)
+}
+
+// samePinned reports whether the facts a proposal froze for the owner still hold: the repository
+// (id and name), the pull request's refs, title and body, the full file facts of both inventories,
+// and the protected matches. The head and base SHAs are judged separately.
+func samePinned(f, want Facts) bool {
+	return f.RepositoryID == want.RepositoryID && strings.EqualFold(f.Repository, want.Repository) &&
+		f.PRNumber == want.PRNumber && f.Head == want.Head && f.Base == want.Base &&
+		f.Title == want.Title && f.Body == want.Body && f.MergeBaseSHA == want.MergeBaseSHA &&
+		sameFiles(f.Files, want.Files) && sameFiles(f.MergeFiles, want.MergeFiles) &&
+		f.PathsDigest == want.PathsDigest && f.MergeFilesDigest == want.MergeFilesDigest &&
+		f.Additions == want.Additions && f.Deletions == want.Deletions &&
+		slices.Equal(f.Protected, want.Protected)
+}
+
+func sameFiles(a, b []FileFact) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	byName := func(x, y FileFact) int {
+		return strings.Compare(x.Filename+"\x00"+x.PreviousFilename, y.Filename+"\x00"+y.PreviousFilename)
+	}
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.SortFunc(a, byName)
+	slices.SortFunc(b, byName)
+	return slices.Equal(a, b)
 }
