@@ -4,7 +4,7 @@ import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
 import { server } from '@/test/msw/server';
-import { project, type ProjectFixture } from './test/fixtures';
+import { project, workspace, type ProjectFixture } from './test/fixtures';
 import {
   createWorkspaceWrite,
   projectsRead,
@@ -337,6 +337,59 @@ describe('new workspace from a repository', () => {
     // A list that failed to re-read cannot confirm anything, so there is no way on yet.
     expect(within(check).getByRole('button', { name: "I've checked the list" })).toBeDisabled();
     expect(within(check).getByRole('button', { name: 'Retry loading workspaces' })).toBeEnabled();
+  });
+
+  it('lists the requested branch of the typed repository first, and only that repository', async () => {
+    const asked = workspace({
+      workspace_id: 'ws-asked',
+      manifest: { ...workspace().manifest, branch: 'feature/asked' }
+    });
+    const other = workspace({
+      workspace_id: 'ws-other',
+      manifest: { ...workspace().manifest, branch: 'main' }
+    });
+    const elsewhere = workspace({
+      workspace_id: 'ws-elsewhere',
+      manifest: {
+        ...workspace().manifest,
+        repo_url: 'https://github.com/acme/other',
+        branch: 'feature/asked'
+      }
+    });
+    server.use(
+      projectsRead([project()]),
+      // The server sends newest first; the requested branch still goes ahead of it.
+      workspacesRead([other, elsewhere, asked]),
+      createWorkspaceWrite(() => HttpResponse.error())
+    );
+    const user = userEvent.setup();
+    renderProjects('/');
+    const form = await openForm(user);
+    // A GitHub URL is the same repository as `owner/name`, so it matches the manifest's repo_url.
+    await user.type(
+      within(form).getByRole('textbox', { name: 'Repository' }),
+      'https://github.com/ACME/widgets.git'
+    );
+    await user.type(
+      within(form).getByRole('textbox', { name: 'Branch (optional)' }),
+      'feature/asked'
+    );
+    await user.click(within(form).getByRole('button', { name: 'Create workspace' }));
+
+    const check = await screen.findByTestId('create-check');
+    await within(check).findByRole('link', { name: /feature\/asked/ });
+    expect(
+      within(check)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href'))
+    ).toEqual(['/workspaces/ws-asked', '/workspaces/ws-other']);
+    expect(
+      within(check).getByText(/A workspace that is still starting may not be listed yet\./)
+    ).toBeInTheDocument();
+    // Only the title is the alert, so the list and the status are not announced as one block.
+    expect(within(check).getByRole('alert')).toHaveTextContent(
+      /^The workspace may have been created\.$/
+    );
   });
 
   it('is disabled while the backend is unreachable', async () => {

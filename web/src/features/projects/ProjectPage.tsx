@@ -208,7 +208,8 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         />
         {uncertain ? (
           <CreateCheck
-            repoUrl={project.html_url}
+            repo={project.html_url}
+            branch={create.variables?.body.branch}
             reading={create.isPending}
             onAcknowledge={acknowledge}
           />

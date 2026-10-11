@@ -150,6 +150,8 @@ Implemented in the React client:
 - A failed refresh keeps the cached data on screen, with an inline error and a retry.
 - A later read that cannot be parsed keeps the last good workspace on screen, with a notice that it
   could not be read. A failed action's notice and its failed detail both show.
+- An action the server accepted, whose result cannot be read, says the action may have gone through.
+  The page then re-reads the workspace, which settles the state.
 - Delete names what is removed: the branch, or the read-only publication. A delete whose reply is
   lost is checked by a re-read; if that finds the workspace gone, the page says so and drops the
   cached copy.

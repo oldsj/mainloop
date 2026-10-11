@@ -6,6 +6,7 @@ import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attentionRead } from '@/features/inbox/test/handlers';
 import { attentionSnapshot } from '@/features/inbox/test/fixtures';
+import { serveProjectPage } from '@/features/projects/test/handlers';
 import { tasksList } from '@/features/tasks/test/handlers';
 import { server } from '@/test/msw/server';
 import { view } from '@/test/fixtures/tasks';
@@ -65,6 +66,14 @@ describe('shell switch', () => {
     expect(await within(inbox).findByRole('heading', { name: 'Inbox' })).toBeInTheDocument();
   });
 
+  it('renders the projects panel in the desktop aside', async () => {
+    setViewport(true);
+    await renderAt('/');
+    const aside = screen.getByRole('complementary', { name: 'Sessions, inbox and projects' });
+    const projects = within(aside).getByTestId('projects-panel');
+    expect(await within(projects).findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+  });
+
   it('renders the compact shell on a narrow viewport', async () => {
     setViewport(false);
     await renderAt('/');
@@ -111,6 +120,42 @@ describe('routes', () => {
     setViewport(true);
     await renderAt('/nope');
     expect(screen.getByTestId('error-page')).toHaveTextContent('404');
+  });
+});
+
+describe('header health link', () => {
+  it.each([
+    ['desktop', true],
+    ['compact', false]
+  ])('opens orchestration health from the %s header', async (_shell, wide) => {
+    setViewport(wide);
+    const user = userEvent.setup();
+    const router = await renderAt('/');
+    await user.click(screen.getByTestId('header-health'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/health'));
+  });
+});
+
+describe('project route', () => {
+  it('fills the task slot with the tasks of that project', async () => {
+    setViewport(true);
+    const asked: (string | null)[] = [];
+    server.use(
+      ...serveProjectPage(),
+      tasksList(({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('project_id'));
+        return HttpResponse.json([
+          view({ id: 'task-p', title: 'Project work', project_id: 'project-a' })
+        ]);
+      })
+    );
+    await renderAt('/projects/project-a');
+    const slot = await screen.findByTestId('project-tasks');
+    expect(await within(slot).findByRole('link', { name: /Project work/ })).toHaveAttribute(
+      'href',
+      '/tasks/task-p'
+    );
+    expect(asked).toContain('project-a');
   });
 });
 

@@ -17,9 +17,16 @@ import {
   nativeFixture
 } from './fixtures';
 import { createChatBackend, type ChatBackendState } from './handlers';
+import type { NativeDeliveryInfo } from './types';
 import { LOST_REPLY_RECORDED, POLL_MS, POLL_WINDOW_MS } from './useThread';
 
 // The card has its own tests in features/hitl; these only check where the page renders it.
+// The chat's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
+vi.mock('@/api/middleware', async (importOriginal) => {
+  const { withFastReads } = await import('@/features/tasks/test/fastReads');
+  return withFastReads(await importOriginal());
+});
+
 vi.mock('@/features/hitl', () => ({
   HITLCard: ({ requestId }: { requestId: string }) => (
     <div data-testid="hitl-card">{requestId}</div>
@@ -69,6 +76,15 @@ function existing(overrides: Partial<ChatBackendState> = {}): Partial<ChatBacken
 }
 
 const input = () => screen.getByTestId('command-input') as HTMLTextAreaElement;
+
+/** Adds a delivery to the main thread the backend serves, as the ledger does when it records one. */
+function recordDelivery(state: ChatBackendState, delivery: NativeDeliveryInfo) {
+  const native = state.mainThread.native ?? nativeFixture();
+  state.mainThread = {
+    ...state.mainThread,
+    native: { ...native, deliveries: [...native.deliveries, delivery] }
+  };
+}
 
 describe('loading', () => {
   it('shows connecting, then the empty thread', async () => {
@@ -193,6 +209,56 @@ describe('sending', () => {
     expect(loadDraft(CONVERSATION_ID)).toBe('lost');
   });
 
+  it('does not count a report that lands in a lost reply window as this message', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    server.use(
+      http.post(`${API_URL}/chat`, () => {
+        // A report is recorded while the reply is lost; the owner's message never reached the ledger.
+        recordDelivery(state, deliveryFixture({ message_id: 'report-1', source: 'report' }));
+        return HttpResponse.error();
+      })
+    );
+    await userEvent.type(input(), 'lost{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box."
+    );
+    expect(screen.queryByText(LOST_REPLY_RECORDED)).toBeNull();
+    expect(input().value).toBe('lost');
+    expect(loadDraft(CONVERSATION_ID)).toBe('lost');
+  });
+
+  it('takes the baseline from the ledger just before the send, not from the last render', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    // Recorded after the screen last read the thread, and before this send: it is not this send's.
+    recordDelivery(state, deliveryFixture({ message_id: 'early-1' }));
+    state.lostSend = 'unrecorded';
+    await userEvent.type(input(), 'lost{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box."
+    );
+    expect(screen.queryByText(LOST_REPLY_RECORDED)).toBeNull();
+    expect(input().value).toBe('lost');
+  });
+
+  it('does not send when the thread cannot be read first', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    server.use(
+      http.get(`${API_URL}/main-thread`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    await userEvent.type(input(), 'held{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      'Could not check the conversation before sending. Your message is back in the box.'
+    );
+    expect(state.chatPosts).toHaveLength(0);
+    expect(input().value).toBe('held');
+    expect(loadDraft(CONVERSATION_ID)).toBe('held');
+  });
+
   it('locks the composer while a turn is in flight', async () => {
     setup(
       existing({
@@ -254,12 +320,15 @@ describe('the native /chat answer', () => {
   it('keeps the accepted message on screen when the refresh fails', async () => {
     const { state } = setup(existing());
     await screen.findByText('build it');
+    // The read before the send succeeds; only a refresh after the send is recorded fails.
     server.use(
       http.get(`${API_URL}/conversations/:id`, () =>
         HttpResponse.json({ detail: 'down' }, { status: 500 })
       ),
       http.get(`${API_URL}/main-thread`, () =>
-        HttpResponse.json({ detail: 'down' }, { status: 500 })
+        state.chatPosts.length === 0
+          ? HttpResponse.json(state.mainThread)
+          : HttpResponse.json({ detail: 'down' }, { status: 500 })
       )
     );
     await userEvent.type(input(), 'accepted{Enter}');

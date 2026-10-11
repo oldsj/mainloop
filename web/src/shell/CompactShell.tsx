@@ -105,11 +105,11 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
               tab === id ? 'bg-accent text-primary' : 'text-muted-foreground'
             )}
           >
-            {/* The badges sit in the row with the icon, so none can spill into the next tab's label. */}
-            <span className="gap-xs flex items-center">
-              <Icon className="size-4" aria-hidden="true" />
+            {/* The icon takes the middle column, so the badges beside it do not pull it off centre. */}
+            <span className="gap-xs grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center">
+              <Icon className="col-start-2 size-4" aria-hidden="true" />
               {id === 'inbox' && (
-                <span className="flex items-center gap-0.5">
+                <span className="col-start-3 flex items-center gap-0.5 justify-self-start">
                   <InboxBadge />
                   <TasksBadge compact />
                 </span>

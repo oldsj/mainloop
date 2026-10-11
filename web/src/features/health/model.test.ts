@@ -83,13 +83,14 @@ describe('parseRows', () => {
     expect(dropped).toBe(1);
   });
 
-  it('drops a repeated row id and counts it, keeping the first row', () => {
-    const { rows, dropped } = parseRows([
+  it('drops a repeated row id and counts it apart from unreadable rows, keeping the first row', () => {
+    const { rows, dropped, repeated } = parseRows([
       healthRow({ id: 'same', title: 'First' }),
       healthRow({ id: 'same', title: 'Second' })
     ]);
 
-    expect(dropped).toBe(1);
+    expect(repeated).toBe(1);
+    expect(dropped).toBe(0);
     expect(rows.map((item) => item.title)).toEqual(['First']);
   });
 });

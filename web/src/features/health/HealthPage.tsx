@@ -14,6 +14,7 @@ import {
   filtersFrom,
   healthFailureText,
   MALFORMED_VIEW,
+  repeatedRowsText,
   PARTIAL_NOTICE,
   projectChoices,
   readView,
@@ -164,6 +165,11 @@ export function HealthPage({ search }: { search: HealthSearch }) {
           {view.dropped > 0 ? (
             <p role="status" className="text-term-yellow">
               {droppedRowsText(view.dropped)}
+            </p>
+          ) : null}
+          {view.repeated > 0 ? (
+            <p role="status" className="text-term-yellow">
+              {repeatedRowsText(view.repeated)}
             </p>
           ) : null}
           {view.rows.length === 0 && view.dropped === 0 ? (

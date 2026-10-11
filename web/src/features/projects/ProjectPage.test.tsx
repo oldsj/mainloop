@@ -364,6 +364,49 @@ describe('project page', () => {
     }
   );
 
+  it('lists the requested branch first, then the other workspaces of this repository', async () => {
+    const asked = workspace({
+      workspace_id: 'ws-asked',
+      manifest: { ...workspace().manifest, branch: 'feature/asked' }
+    });
+    const other = workspace({
+      workspace_id: 'ws-other',
+      manifest: { ...workspace().manifest, branch: 'main' }
+    });
+    const elsewhere = workspace({
+      workspace_id: 'ws-elsewhere',
+      manifest: {
+        ...workspace().manifest,
+        repo_url: 'https://github.com/acme/other',
+        branch: 'feature/asked'
+      }
+    });
+    server.use(
+      createWorkspaceWrite(() => HttpResponse.error()),
+      // The server sends newest first; the requested branch still goes ahead of it.
+      ...serveProjectPage({ workspaces: [other, elsewhere, asked] })
+    );
+    const user = userEvent.setup();
+    renderProjects(PAGE);
+    const form = await screen.findByTestId('project-workspace-form');
+
+    const branch = within(form).getByRole('textbox', { name: 'Workspace branch' });
+    await user.clear(branch);
+    await user.type(branch, 'feature/asked');
+    await user.click(within(form).getByRole('button', { name: 'New workspace' }));
+
+    const check = await screen.findByTestId('create-check');
+    await within(check).findByRole('link', { name: /feature\/asked/ });
+    const links = within(check).getAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/workspaces/ws-asked',
+      '/workspaces/ws-other'
+    ]);
+    expect(
+      within(check).getByText(/A workspace that is still starting may not be listed yet\./)
+    ).toBeInTheDocument();
+  });
+
   it('links to orchestration health for this project', async () => {
     server.use(...serveProjectPage());
     renderProjects(PAGE);

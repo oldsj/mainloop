@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { $api, fetchClient, keys, SendError } from '@/api';
-import type { Message } from '@/lib/contract';
+import type { Message, NativeDelivery } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
 import { createSendGuard, retryMessage } from '@/lib/messageSend';
 import { clearDraft, NEW_CONVERSATION, sessionDraftKey } from './drafts';
@@ -179,34 +179,37 @@ export function useThread(source: ThreadSource) {
     [isMain, mainChat, sessionChat, sessionId]
   );
 
-  /** The delivery ids the thread holds, read fresh. Throws when the thread cannot be read. */
-  const readDeliveryIds = useCallback(async (): Promise<string[]> => {
+  /** The deliveries the thread holds, read fresh. Throws when the thread cannot be read. */
+  const readDeliveries = useCallback(async (): Promise<NativeDelivery[]> => {
     if (isMain) {
       const { data } = await fetchClient.GET('/main-thread');
       if (!data) throw new Error('The main thread could not be read.');
-      return (data.native?.deliveries ?? []).map((delivery) => delivery.message_id);
+      return data.native?.deliveries ?? [];
     }
     const { data } = await fetchClient.GET('/sessions/{session_id}/native', {
       params: { path: { session_id: sessionId } }
     });
     if (!data) throw new Error('The session could not be read.');
-    return data.deliveries.map((delivery) => delivery.message_id);
+    return data.deliveries;
   }, [isMain, sessionId]);
 
   /**
-   * Whether a send that lost its reply was recorded: the thread now holds a delivery it did not
-   * hold before the send. Null when the thread cannot be re-read, so nothing is known.
+   * Whether a send that lost its reply was recorded: the thread now holds a user delivery it did not
+   * hold before the send. Other deliveries (reports, for one) are not the owner's message, so they
+   * do not count. Null when the thread cannot be re-read, so nothing is known.
    */
   const recordedSince = useCallback(
     async (known: ReadonlySet<string>): Promise<boolean | null> => {
       try {
-        const ids = await readDeliveryIds();
-        return ids.some((id) => !known.has(id));
+        const deliveries = await readDeliveries();
+        return deliveries.some(
+          (delivery) => (delivery.source ?? 'user') === 'user' && !known.has(delivery.message_id)
+        );
       } catch {
         return null;
       }
     },
-    [readDeliveryIds]
+    [readDeliveries]
   );
 
   /** Posts one message and shows it at once; the caller holds the send guard. */
@@ -226,10 +229,21 @@ export function useThread(source: ThreadSource) {
           created_at: new Date().toISOString()
         }
       };
-      // The deliveries before this send. A reply lost in transit is checked against them.
-      const known = new Set((native?.deliveries ?? []).map((delivery) => delivery.message_id));
       setSendError(null);
       setOptimistic((list) => [...list, entry]);
+      // The deliveries just before this send, read now rather than taken from the last render: a
+      // delivery recorded since that render is not this send's. Without this baseline a lost reply
+      // cannot be checked, so the send does not go.
+      let known: ReadonlySet<string>;
+      try {
+        known = new Set((await readDeliveries()).map((delivery) => delivery.message_id));
+      } catch {
+        setOptimistic((list) => list.filter((item) => item !== entry));
+        setSendError(
+          `Could not check the conversation before sending.${composer ? BACK_IN_BOX : ''}`
+        );
+        return false;
+      }
       try {
         const acceptedId = await post(text, targetConversation);
         accepted = true;
@@ -261,7 +275,7 @@ export function useThread(source: ThreadSource) {
       }
       return accepted;
     },
-    [draftKey, native?.deliveries, post, recordedSince, refresh]
+    [draftKey, post, readDeliveries, recordedSince, refresh]
   );
 
   /**

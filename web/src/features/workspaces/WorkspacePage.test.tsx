@@ -7,7 +7,7 @@ import { createSseApplier } from '@/api/invalidation';
 import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
-import { UNCONFIRMED, UNREADABLE } from './model';
+import { UNCONFIRMED, UNREADABLE, UNREADABLE_ACTION } from './model';
 import {
   portsRead,
   problem,
@@ -599,7 +599,9 @@ describe('workspace page', () => {
     renderWorkspace('/workspaces/w1');
     await heading();
     await user.click(button('Suspend workspace'));
-    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(UNREADABLE);
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
+      UNREADABLE_ACTION
+    );
     expect(screen.getByTestId('workspace-lifecycle-badge')).toHaveTextContent(/WS RUNNING/i);
     expect(
       screen.queryByRole('heading', { level: 1, name: 'Workspace could not be loaded' })

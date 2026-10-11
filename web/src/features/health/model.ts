@@ -121,6 +121,8 @@ export interface HealthView {
   rows: HealthRow[];
   /** Rows that failed their shape. They are not listed, and the page says so. */
   dropped: number;
+  /** Rows whose id repeats an earlier row. The first is listed; these are not, and the page says so. */
+  repeated: number;
   partial: boolean;
   retention: { events_days: number; summaries_days: number };
 }
@@ -137,15 +139,24 @@ function readClaims<T>(list: unknown[], shape: z.ZodType<T>): { items: T[]; unre
   return { items, unreadable };
 }
 
-export function parseRows(list: unknown[]): { rows: HealthRow[]; dropped: number } {
+export function parseRows(list: unknown[]): {
+  rows: HealthRow[];
+  dropped: number;
+  repeated: number;
+} {
   const rows: HealthRow[] = [];
   const ids = new Set<string>();
   let dropped = 0;
+  let repeated = 0;
   for (const item of list) {
     const parsed = RowShape.safeParse(item);
-    // Rows are keyed by id. A repeated id is dropped rather than shown twice.
-    if (!parsed.success || ids.has(parsed.data.id)) {
+    if (!parsed.success) {
       dropped += 1;
+      continue;
+    }
+    // Rows are keyed by id. A repeated id is not shown twice; it is counted apart from unreadable rows.
+    if (ids.has(parsed.data.id)) {
+      repeated += 1;
       continue;
     }
     ids.add(parsed.data.id);
@@ -158,15 +169,21 @@ export function parseRows(list: unknown[]): { rows: HealthRow[]; dropped: number
       unreadableClaims: reports.unreadable + approvals.unreadable
     });
   }
-  return { rows, dropped };
+  return { rows, dropped, repeated };
 }
 
 /** The whole view, or null when the envelope itself is not readable. */
 export function readView(value: unknown): HealthView | null {
   const parsed = ViewShape.safeParse(value);
   if (!parsed.success) return null;
-  const { rows, dropped } = parseRows(parsed.data.rows);
-  return { rows, dropped, partial: parsed.data.partial, retention: parsed.data.retention };
+  const { rows, dropped, repeated } = parseRows(parsed.data.rows);
+  return {
+    rows,
+    dropped,
+    repeated,
+    partial: parsed.data.partial,
+    retention: parsed.data.retention
+  };
 }
 
 /** Most failures first. Unknown counts sort last, and the order is stable for ties. */
@@ -222,6 +239,12 @@ export function droppedRowsText(count: number): string {
   return count === 1
     ? 'One health row could not be read and is not listed.'
     : `${count} health rows could not be read and are not listed.`;
+}
+
+export function repeatedRowsText(count: number): string {
+  return count === 1
+    ? 'One health row repeats the id of a row above and is not listed again.'
+    : `${count} health rows repeat the id of a row above and are not listed again.`;
 }
 
 export function unreadableClaimsText(count: number): string {

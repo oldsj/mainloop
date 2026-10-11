@@ -113,6 +113,19 @@ export function keepValid<T>(rows: unknown, schema: z.ZodType): T[] {
   return rows.filter((row) => schema.safeParse(row).success) as T[];
 }
 
+/**
+ * A repository in one comparable form, so `owner/name`, a GitHub URL and a `.git` URL match the
+ * manifest's `repo_url`.
+ */
+export function repoKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^(https:\/\/)?(www\.)?github\.com\//, '')
+    .replace(/\.git$/, '')
+    .replace(/\/+$/, '');
+}
+
 /** The agent kind a workspace manifest names, or null when it names none this UI knows. */
 export function agentKindOf(value: string): AgentKind | null {
   return value === 'claude' || value === 'codex' ? value : null;

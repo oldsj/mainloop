@@ -9,15 +9,23 @@ import { useConnection } from '@/shell/ConnectionBanner';
 const PANEL_SHARE = 0.7;
 
 /**
+ * The visible viewport's height at scale 1. Pinch-zoom shrinks the visual viewport, so it is scaled
+ * back up: zooming in does not shrink the panel.
+ */
+function visibleHeight(viewport: VisualViewport | null): number | null {
+  return viewport ? viewport.height * viewport.scale : null;
+}
+
+/**
  * The height of the visible viewport, which the soft keyboard shrinks on iOS (`dvh` does not). Null
  * where the browser has no visual viewport, and the panel then uses `70dvh`.
  */
 function useVisibleHeight(): number | null {
-  const [height, setHeight] = useState<number | null>(() => window.visualViewport?.height ?? null);
+  const [height, setHeight] = useState<number | null>(() => visibleHeight(window.visualViewport));
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const update = () => setHeight(viewport.height);
+    const update = () => setHeight(visibleHeight(viewport));
     update();
     viewport.addEventListener('resize', update);
     return () => viewport.removeEventListener('resize', update);

@@ -19,6 +19,10 @@ export const UNCONFIRMED =
 export const UNREADABLE =
   'Mainloop sent a workspace this page cannot read. The last good state is still shown.';
 
+/** Shown when an action was accepted but its result cannot be read. The action may have taken effect; the re-read settles it. */
+export const UNREADABLE_ACTION =
+  'Mainloop accepted the action but sent a result this page cannot read. The action may have gone through. The page is re-reading the workspace.';
+
 const PublicationReason = z.enum([
   'default_branch',
   'protected_branch',

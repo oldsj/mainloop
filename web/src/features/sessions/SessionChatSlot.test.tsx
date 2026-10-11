@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { loadDraft } from '@/features/chat/drafts';
@@ -153,8 +154,15 @@ describe('session chat', () => {
     testChat.state.lostSend = 'unrecorded';
     const slot = await openSession();
     await waitFor(() => expect(composerOf(slot)).toBeEnabled());
-    // The thread cannot be re-read after the lost reply, so nothing is known about the send.
-    server.use(nativeReadWith(problem(500, 'boom')));
+    // The thread cannot be re-read after the lost reply, so nothing is known about the send. The read
+    // before the send is not under test, so it succeeds; only a read after the send is recorded fails.
+    server.use(
+      nativeReadWith(() =>
+        testChat.state.sessionPosts.s1?.length
+          ? HttpResponse.json({ detail: 'boom' }, { status: 500 })
+          : HttpResponse.json(native())
+      )
+    );
 
     await user.type(composerOf(slot), 'Check the logs');
     await user.click(within(slot).getByRole('button', { name: 'Send message' }));
@@ -198,7 +206,7 @@ describe('session chat', () => {
   });
 
   it('sizes the panel to the visible viewport, so it follows the soft keyboard', async () => {
-    const viewport = Object.assign(new EventTarget(), { height: 400 });
+    const viewport = Object.assign(new EventTarget(), { height: 400, scale: 1 });
     Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
     try {
       const slot = await openSession();
@@ -211,6 +219,26 @@ describe('session chat', () => {
         viewport.dispatchEvent(new Event('resize'));
       });
       expect(panel.style.height).toBe('140px');
+    } finally {
+      Reflect.deleteProperty(window, 'visualViewport');
+    }
+  });
+
+  it('keeps the panel size when the owner pinch-zooms in', async () => {
+    // Zoomed to 2x, the visual viewport is half as tall in CSS pixels; the layout is not.
+    const viewport = Object.assign(new EventTarget(), { height: 400, scale: 1 });
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+    try {
+      const slot = await openSession();
+      const panel = within(slot).getByTestId('session-chat-panel');
+      expect(panel.style.height).toBe('280px');
+
+      act(() => {
+        viewport.height = 200;
+        viewport.scale = 2;
+        viewport.dispatchEvent(new Event('resize'));
+      });
+      expect(panel.style.height).toBe('280px');
     } finally {
       Reflect.deleteProperty(window, 'visualViewport');
     }

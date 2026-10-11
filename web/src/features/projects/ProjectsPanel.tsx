@@ -67,7 +67,12 @@ export function ProjectsPanel() {
       ) : null}
 
       {uncertain ? (
-        <CreateCheck reading={create.isPending} onAcknowledge={acknowledge} />
+        <CreateCheck
+          repo={create.variables?.body.repo}
+          branch={create.variables?.body.branch}
+          reading={create.isPending}
+          onAcknowledge={acknowledge}
+        />
       ) : create.error ? (
         <div role="alert" className="text-destructive text-sm">
           {failureText(create.error)}

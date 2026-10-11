@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { $api, keys } from '@/api';
 import { actionFailure, type Notice } from '@/features/sessions/model';
-import { isWorkspace, lifecycleNotice, UNREADABLE, type WorkspaceAction } from './model';
+import { isWorkspace, lifecycleNotice, UNREADABLE_ACTION, type WorkspaceAction } from './model';
 
 export function useWorkspace(workspaceId: string) {
   return $api.useQuery('get', '/workspaces/{workspace_id}', {
@@ -49,7 +49,7 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
     onSuccess: (result: unknown) => {
       // An unreadable result is not written. The held copy stays, and the re-read in onSettled repairs it.
       if (!isWorkspace(result)) {
-        notify({ tone: 'warn', text: UNREADABLE });
+        notify({ tone: 'warn', text: UNREADABLE_ACTION });
         return;
       }
       queryClient.setQueryData(keys.workspace(workspaceId), result);

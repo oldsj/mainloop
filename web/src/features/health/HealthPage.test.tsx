@@ -13,6 +13,7 @@ import {
   droppedRowsText,
   EMPTY_NOTICE,
   gapText,
+  repeatedRowsText,
   MALFORMED_OBSERVATIONS,
   MALFORMED_VIEW,
   OBSERVATIONS_EMPTY,
@@ -303,7 +304,8 @@ describe('health page: rows', () => {
       );
     renderHealth('/health');
 
-    expect(await screen.findByText(droppedRowsText(1))).toBeInTheDocument();
+    expect(await screen.findByText(repeatedRowsText(1))).toBeInTheDocument();
+    expect(screen.queryByText(droppedRowsText(1))).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Add retry button/ })).toHaveLength(1);
     expect(screen.queryByText(/Second row/)).not.toBeInTheDocument();
   });

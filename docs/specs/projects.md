@@ -24,8 +24,13 @@ task tree. The desktop shell mounts the Projects panel. The compact shell has no
 each workspace was last active.
 
 A create that gets no reply, or a 5xx, may still have made a workspace. The form then locks, the
-raw error is hidden, and the owner sees recent workspaces to check against. The form unlocks when
-the owner acknowledges that check. A 4xx shows the server's message as before.
+raw error is hidden, and the owner sees recent workspaces to check against. The check lists the
+typed repository's workspaces only, matched by `owner/name`, a GitHub URL or a `.git` URL, without
+regard to case. The requested branch comes first; the repository's other workspaces follow. With no
+repository typed, the check lists every repository's workspaces, still branch-first. The copy says
+that a workspace still starting may not be listed yet. The server lists newest first, and the page
+keeps that order inside each group rather than re-sorting. The form unlocks when the owner
+acknowledges that check. A 4xx shows the server's message as before.
 
 Proven by offline component tests against MSW handlers; not proven against a live server. The
 narrow-phone layout is not proven in a browser (deferred to F9).

@@ -1,10 +1,35 @@
 import { Link } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { agentLabel } from '@/lib/agentLabel';
-import { agentKindOf, keepValid, workspaceRowSchema, type WorkspaceLifecycle } from './model';
+import {
+  agentKindOf,
+  keepValid,
+  repoKey,
+  workspaceRowSchema,
+  type WorkspaceLifecycle
+} from './model';
 import { useWorkspaces } from './queries';
 
 const RECENT = 5;
+
+/**
+ * The repository's workspaces, with the requested branch first. Other branches of the repository
+ * stay in the list, so a workspace that is still starting does not leave the owner with nothing to
+ * check. The server sends newest first, and each group keeps that order.
+ */
+function recentFor(
+  rows: WorkspaceLifecycle[],
+  repo: string | null | undefined,
+  branch: string | undefined
+): WorkspaceLifecycle[] {
+  const wanted = repo ? repoKey(repo) : null;
+  const inRepo = rows.filter(
+    (workspace) => wanted === null || repoKey(workspace.manifest.repo_url) === wanted
+  );
+  const onBranch = (workspace: WorkspaceLifecycle) =>
+    Boolean(branch) && workspace.manifest.branch === branch;
+  return [...inRepo.filter(onBranch), ...inRepo.filter((workspace) => !onBranch(workspace))];
+}
 
 /**
  * Shown after a create whose reply was lost or failed with a 5xx. Mainloop may have started the
@@ -12,32 +37,39 @@ const RECENT = 5;
  * they have looked. `reading` covers the create and the list re-read that follows it.
  */
 export function CreateCheck({
-  repoUrl,
+  repo,
+  branch,
   reading,
   onAcknowledge
 }: {
-  /** List only workspaces of this repository. Without it, the list covers every repository. */
-  repoUrl?: string;
+  /** The repository the owner asked for. Without it, the list covers every repository. */
+  repo?: string | null;
+  /** The branch the owner asked for. Its workspaces are listed first. */
+  branch?: string;
   reading: boolean;
   onAcknowledge: () => void;
 }) {
   const list = useWorkspaces();
-  const rows = keepValid<WorkspaceLifecycle>(list.data, workspaceRowSchema)
-    .filter((workspace) => !repoUrl || workspace.manifest.repo_url === repoUrl)
-    .slice(0, RECENT);
+  const rows = recentFor(
+    keepValid<WorkspaceLifecycle>(list.data, workspaceRowSchema),
+    repo,
+    branch
+  ).slice(0, RECENT);
   // A list that failed to re-read cannot confirm anything, so the owner gets a retry, not a way on.
   const settled = !reading && list.isSuccess && !list.isFetching;
 
   return (
     <div
-      role="alert"
       data-testid="create-check"
       className="gap-sm p-md border-destructive text-foreground grid border text-sm"
     >
-      <p className="text-destructive font-medium">The workspace may have been created.</p>
+      <p role="alert" className="text-destructive font-medium">
+        The workspace may have been created.
+      </p>
       <p className="text-muted-foreground break-words">
         Mainloop did not confirm the new workspace, so one may already exist. Check the recent
-        workspaces before creating another.
+        workspaces before creating another. A workspace that is still starting may not be listed
+        yet.
       </p>
 
       {list.isError ? (
