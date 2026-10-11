@@ -101,6 +101,6 @@ MSW fixtures typed from `api/openapi.yaml`.
 - While a turn is in flight the thread is re-read every two seconds, for six minutes from when
   the turn was first seen in flight, as a fallback to the `session:message` event. The
   conversation is read once more when the turn ends. Reads pause while the tab is hidden.
-- Pending requests of the main session and `?hitl=<id>` render through `features/hitl`; the
-  card itself arrives with the HITL slice.
+- Pending requests of the main session and `?hitl=<id>` render through the `features/hitl`
+  approval card, inside an error boundary so a failing card cannot take the thread down.
 - The native identity strip in the header details is supplied by the sessions slice.

@@ -19,7 +19,7 @@ import {
 import { createChatBackend, type ChatBackendState } from './handlers';
 import { POLL_MS, POLL_WINDOW_MS } from './useMainThread';
 
-// The approval card is built in F3 and throws until then; these tests only check where it renders.
+// The card has its own tests in features/hitl; these only check where the page renders it.
 vi.mock('@/features/hitl', () => ({
   HITLCard: ({ requestId }: { requestId: string }) => (
     <div data-testid="hitl-card">{requestId}</div>
@@ -99,6 +99,9 @@ describe('loading', () => {
     );
     expect(await screen.findByText('Could not load the main thread')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    // Locked, but not stuck on "Loading…" next to the error.
+    expect(input()).toBeDisabled();
+    expect(input()).toHaveAttribute('placeholder', 'Thread did not load…');
   });
 });
 
@@ -240,6 +243,83 @@ describe('the native /chat answer', () => {
     await waitFor(() => expect(input().value).toBe(''));
     expect(screen.getByText('accepted')).toBeInTheDocument();
     expect(screen.queryByTestId('send-error')).toBeNull();
+    // The cached thread is still known: the composer is not left on "Loading…".
+    expect(input()).not.toHaveAttribute('placeholder', 'Loading…');
+    expect(screen.queryByText('Could not load the main thread')).toBeNull();
+  });
+
+  it('keeps the composer usable when a background read fails and the thread is cached', async () => {
+    const { queryClient } = setup(existing());
+    await screen.findByText('build it');
+    server.use(
+      http.get(`${API_URL}/main-thread`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      ),
+      http.get(`${API_URL}/conversations/:id`, () =>
+        HttpResponse.json({ detail: 'down' }, { status: 500 })
+      )
+    );
+    await queryClient.invalidateQueries();
+    expect(
+      await screen.findByText('Could not refresh the conversation. Showing the last messages.')
+    ).toBeInTheDocument();
+    expect(input()).toBeEnabled();
+    expect(input()).toHaveAttribute('placeholder', 'Enter command...');
+    expect(screen.getByText('build it')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load the conversation')).toBeNull();
+  });
+
+  it('starts a new window when another turn begins after the old one expired', async () => {
+    const { state, queryClient } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({
+            turn_in_flight: true,
+            deliveries: [deliveryFixture({ message_id: 'm1', state: 'recorded' })]
+          })
+        })
+      })
+    );
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + POLL_WINDOW_MS + 1);
+    try {
+      await delay(POLL_MS * 2 + 500);
+      const settled = state.mainThreadReads;
+      await delay(POLL_MS + 500);
+      expect(state.mainThreadReads).toBe(settled);
+      // A new turn (another message id) arrives and one read sees it: polling is back.
+      state.mainThread = mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        native: nativeFixture({
+          turn_in_flight: true,
+          deliveries: [deliveryFixture({ message_id: 'm9', state: 'recorded' })]
+        })
+      });
+      await queryClient.invalidateQueries();
+      const resumed = state.mainThreadReads;
+      await delay(POLL_MS * 2 + 500);
+      expect(state.mainThreadReads).toBeGreaterThan(resumed);
+    } finally {
+      now.mockRestore();
+    }
+  }, 20000);
+
+  it('does not bring a sent message back when the conversation changes', async () => {
+    const { state, queryClient, endTurn } = setup(existing());
+    await screen.findByText('build it');
+    await userEvent.type(input(), 'only once{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    endTurn();
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.getAllByText('only once')).toHaveLength(1));
+    // The main thread moves to a new conversation that does not list the message.
+    state.messages = [];
+    state.mainThread = mainThreadFixture({ conversation_id: 'conv-2' });
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('only once')).toBeNull());
+    expect(screen.queryByText('build it')).toBeNull();
   });
 
   it('stops polling six minutes after the turn was first seen in flight', async () => {

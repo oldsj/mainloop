@@ -37,8 +37,9 @@ interface Optimistic {
 export function useMainThread() {
   const queryClient = useQueryClient();
   const polling = useRef(false);
-  // When polling for the current turn stops; null while no turn is in flight.
-  const pollDeadline = useRef<number | null>(null);
+  // When polling for the current turn stops, keyed to the delivery that started it; null while no
+  // turn is in flight. A new turn starts a new window even if no read saw the idle state between.
+  const pollDeadline = useRef<{ delivery: string; at: number } | null>(null);
 
   const mainThread = $api.useQuery('get', '/main-thread', undefined, {
     refetchInterval: (query) => {
@@ -49,8 +50,10 @@ export function useMainThread() {
         return false;
       }
       // The deadline is taken once per turn; the callback also runs on renders, so it cannot count.
-      pollDeadline.current ??= Date.now() + POLL_WINDOW_MS;
-      polling.current = Date.now() < pollDeadline.current;
+      const delivery = query.state.data?.native?.deliveries.at(-1)?.message_id ?? '';
+      if (pollDeadline.current?.delivery !== delivery)
+        pollDeadline.current = { delivery, at: Date.now() + POLL_WINDOW_MS };
+      polling.current = Date.now() < pollDeadline.current.at;
       return polling.current ? POLL_MS : false;
     }
   });
@@ -81,6 +84,10 @@ export function useMainThread() {
     return optimistic.filter((entry) => !(entry.acceptedId && seen.has(entry.acceptedId)));
   }, [optimistic, serverMessages]);
 
+  // Forget a bubble once the conversation lists its message, so a changed or paged conversation
+  // cannot bring it back. Adjusted while rendering, as an effect may not set state.
+  if (visibleOptimistic.length !== optimistic.length) setOptimistic(visibleOptimistic);
+
   const refresh = useCallback(
     () =>
       Promise.all([
@@ -90,11 +97,6 @@ export function useMainThread() {
     [queryClient]
   );
 
-  /**
-   * Sends one message. A message the backend refused is taken back: the bubble goes away and,
-   * for the composer, the text returns to the box. Once accepted, a later failure to refresh does
-   * not undo it. Resolves true when the backend recorded the message.
-   */
   /** Posts one message and shows it at once; the caller holds the send guard. */
   const submit = useCallback(
     async (
@@ -215,9 +217,9 @@ export function useMainThread() {
   return {
     info,
     /** The thread is read: the main thread, and its conversation when there is one. */
-    loaded: mainThread.isSuccess && (conversationId === null || conversation.data !== undefined),
+    loaded: info !== undefined && (conversationId === null || conversation.data !== undefined),
     /** The thread itself is read, so the draft key is known. */
-    threadKnown: mainThread.isSuccess,
+    threadKnown: info !== undefined,
     loadFailed: mainThread.isError && !info,
     reload: () => void mainThread.refetch(),
     conversationId,

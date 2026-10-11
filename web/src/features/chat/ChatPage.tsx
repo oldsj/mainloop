@@ -95,7 +95,8 @@ export function ChatPage({ hitlId, renderIdentity }: ChatPageProps) {
       <Composer
         draftKey={chat.conversationId ?? NEW_CONVERSATION}
         busy={chat.busy || chat.sendPending}
-        loading={!chat.threadKnown}
+        loading={!chat.threadKnown && !chat.loadFailed}
+        unavailable={chat.loadFailed}
         offline={offline}
         onSend={(text) => chat.send(text, chat.conversationId)}
       />

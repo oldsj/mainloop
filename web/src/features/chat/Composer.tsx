@@ -11,6 +11,8 @@ export interface ComposerProps {
   busy: boolean;
   /** The thread has not been read yet, so the draft's conversation is not known. */
   loading?: boolean;
+  /** The first read of the thread failed, so there is nothing to send to. */
+  unavailable?: boolean;
   /** The backend is unreachable. The draft is kept and sending is off. */
   offline: boolean;
   /**
@@ -20,15 +22,23 @@ export interface ComposerProps {
   onSend: (text: string) => Promise<boolean>;
 }
 
-function placeholder(offline: boolean, busy: boolean, loading: boolean) {
+function placeholder(offline: boolean, busy: boolean, loading: boolean, unavailable: boolean) {
   if (offline) return 'Backend unreachable…';
+  if (unavailable) return 'Thread did not load…';
   if (loading) return 'Loading…';
   if (busy) return 'Working…';
   return 'Enter command...';
 }
 
 /** The text box and EXEC button. Enter sends, Shift+Enter adds a line, IME composition never sends. */
-export function Composer({ draftKey, busy, loading = false, offline, onSend }: ComposerProps) {
+export function Composer({
+  draftKey,
+  busy,
+  loading = false,
+  unavailable = false,
+  offline,
+  onSend
+}: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
   const [shownKey, setShownKey] = useState(draftKey);
   const [sending, setSending] = useState(false);
@@ -41,7 +51,7 @@ export function Composer({ draftKey, busy, loading = false, offline, onSend }: C
     setText(loadDraft(draftKey));
   }
 
-  const disabled = busy || loading || offline || sending;
+  const disabled = busy || loading || unavailable || offline || sending;
 
   // Grow with the text up to a few lines, then scroll.
   useLayoutEffect(() => {
@@ -100,7 +110,7 @@ export function Composer({ draftKey, busy, loading = false, offline, onSend }: C
         rows={1}
         value={text}
         disabled={disabled}
-        placeholder={placeholder(offline, busy, loading)}
+        placeholder={placeholder(offline, busy, loading, unavailable)}
         aria-label="Message"
         onChange={(event) => change(event.target.value)}
         onKeyDown={keyDown}
