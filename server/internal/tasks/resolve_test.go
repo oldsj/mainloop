@@ -2,6 +2,7 @@ package tasks_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -262,7 +263,9 @@ func TestAbortRacingCancelEndsTheTaskCancelled(t *testing.T) {
 	}
 }
 
-func TestStoppedParentTurnDoesNotBlockTheChild(t *testing.T) {
+// The owner presses stop on the parent's turn: the ledger row ends cancelled. That is an owner act,
+// so the report is not sent over it, and the child is not blocked for it.
+func TestStoppedParentTurnEndsTheDeliveryWithoutBlockingTheChild(t *testing.T) {
 	r := newRig(t)
 	_, supSession, child, kid := r.reportingChild()
 	if _, err := r.svc.Report(context.Background(), kid, report(kid, "r1", dbstate.OutcomeProgress)); err != nil {
@@ -271,12 +274,120 @@ func TestStoppedParentTurnDoesNotBlockTheChild(t *testing.T) {
 	r.eventually("first send", func() bool {
 		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession) == 1
 	})
-	// The owner presses stop on the parent's turn: the ledger row ends cancelled.
-	r.exec(`UPDATE deliveries SET state = 'cancelled' WHERE state = 'recorded' AND id IN (SELECT delivery_id FROM task_event_deliveries)`)
-	r.eventually("sent again", func() bool {
-		return r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession) == 2
+	r.exec(`UPDATE deliveries SET state = 'cancelled', detail = 'stopped by user' WHERE state = 'recorded' AND id IN (SELECT delivery_id FROM task_event_deliveries)`)
+	r.eventually("delivery cancelled", func() bool {
+		return r.count(`SELECT count(*) FROM task_event_deliveries WHERE recipient_key LIKE 'parent-task:%' AND state = 'cancelled'`) == 1
 	})
-	if got := r.taskStatus(child); got == "blocked" {
-		t.Fatal("the child was blocked though its parent is alive")
+	time.Sleep(100 * time.Millisecond)
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND content LIKE '[report from%'`, supSession); n != 1 {
+		t.Fatalf("report messages = %d: the report was sent over the owner's stop", n)
+	}
+	if got := r.taskStatus(child); got != "running" {
+		t.Fatalf("child = %s, want running", got)
+	}
+	// The report stays on the child.
+	if n := r.count(`SELECT count(*) FROM task_reports WHERE task_id = $1`, child); n != 1 {
+		t.Fatalf("reports = %d", n)
+	}
+}
+
+// The owner presses stop on the child's first turn and steers it: the brief is not sent again.
+func TestOwnerStopOfTheBriefTurnLeavesTheAttempt(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	child := r.codeChild(sup, "feat")
+	r.eventually("child", func() bool { return r.opState(child) == "completed" })
+	attempt, session := r.attemptOf(child)
+	r.exec(`UPDATE deliveries SET state = 'cancelled', detail = 'stopped by user' WHERE id = (SELECT brief_delivery_id FROM task_attempts WHERE id = $1)`, attempt)
+	r.exec(`UPDATE agent_bindings SET queue_held = true WHERE session_id = $1`, session)
+	for range 3 {
+		r.sweep(r.svc.BriefSweep())
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND role = 'user'`, session); n != 1 {
+		t.Fatalf("brief messages = %d, want the one the owner stopped", n)
+	}
+	if n := r.count(`SELECT count(*) FROM deliveries WHERE session_id = $1 AND state IN ('recorded','sending','delivered')`, session); n != 0 {
+		t.Fatalf("open deliveries = %d", n)
+	}
+	if got := r.str(`SELECT queue_held::text FROM agent_bindings WHERE session_id = $1`, session); got != "true" {
+		t.Fatalf("queue_held = %s: the hold was cleared", got)
+	}
+	if got := r.taskStatus(child); got != "running" || r.attemptState(child) != "active" {
+		t.Fatalf("task = %s attempt = %s", got, r.attemptState(child))
+	}
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'brief-delivery-failed' = ANY (evidence_refs)`, attempt); n != 0 {
+		t.Fatal("brief-delivery-failed evidence for a brief the owner stopped")
+	}
+}
+
+// A failed brief to a session that has ended gives up with evidence and a block; a busy or not yet
+// ready session is tried again.
+func TestBriefToAnEndedSessionGivesUp(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	child := r.codeChild(sup, "feat")
+	r.eventually("child", func() bool { return r.opState(child) == "completed" })
+	attempt, session := r.attemptOf(child)
+	r.briefRow(attempt, `state = 'failed', detail = 'kagent refused'`)
+	if _, err := r.ses.Service.Cancel(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	r.sweep(r.svc.BriefSweep())
+	if got := r.taskStatus(child); got != "blocked" {
+		t.Fatalf("task = %s, want blocked", got)
+	}
+	if got := r.str(`SELECT reason FROM tasks WHERE id = $1`, child); got != "reconciliation" {
+		t.Fatalf("reason = %s", got)
+	}
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'brief-delivery-failed' = ANY (evidence_refs)`, attempt); n != 1 {
+		t.Fatal("no brief-delivery-failed evidence")
+	}
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND role = 'user'`, session); n != 1 {
+		t.Fatalf("brief messages = %d: a message was recorded to an ended session", n)
+	}
+}
+
+func TestBriefToANotReadySessionIsTriedAgain(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	child := r.codeChild(sup, "feat")
+	r.eventually("child", func() bool { return r.opState(child) == "completed" })
+	attempt, session := r.attemptOf(child)
+	r.briefRow(attempt, `state = 'failed', detail = 'kagent refused'`)
+	r.exec(`UPDATE agent_bindings SET kagent_session_id = NULL WHERE session_id = $1`, session)
+	for range 3 {
+		r.sweep(r.svc.BriefSweep())
+	}
+	if got := r.taskStatus(child); got != "running" {
+		t.Fatalf("task = %s: a session that is not ready yet was given up on", got)
+	}
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE id = $1 AND 'brief-delivery-failed' = ANY (evidence_refs)`, attempt); n != 0 {
+		t.Fatal("brief-delivery-failed evidence for a session that is only not ready")
+	}
+	r.exec(`UPDATE agent_bindings SET kagent_session_id = 'ks-' || session_id WHERE session_id = $1`, session)
+	r.sweep(r.svc.BriefSweep())
+	if n := r.count(`SELECT count(*) FROM session_messages WHERE session_id = $1 AND role = 'user'`, session); n != 2 {
+		t.Fatalf("brief messages = %d, want the resend", n)
+	}
+}
+
+// A create that fails in a way with no type (a database or transport error) is tried again only
+// within the provisioning window.
+func TestUntypedCreateErrorsAbortAfterTheWindow(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	_, sup := r.supervisor()
+	r.svc.Limits.ProvisionWindow = 200 * time.Millisecond
+	r.ws.fail = errors.New("connection reset by peer")
+	child := r.codeChild(sup, "feat")
+	r.eventually("failed", func() bool { return r.taskStatus(child) == "failed" && r.attemptState(child) == "failed" })
+	if n := r.count(`SELECT count(*) FROM task_attempts WHERE task_id = $1 AND capacity_held`, child); n != 0 {
+		t.Fatalf("capacity held = %d", n)
+	}
+	if n := r.count(`SELECT count(*) FROM workspace_writer_claims WHERE held`); n != 0 {
+		t.Fatalf("held claims = %d", n)
 	}
 }

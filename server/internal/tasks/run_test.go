@@ -226,6 +226,9 @@ func (r *rig) run() (stop func()) {
 	rn := reconcile.NewRunner(r.pool, slog.Default(), nil)
 	for _, l := range []reconcile.Loop{r.svc.OpLoop(), r.svc.DeliveryLoop()} {
 		l.Interval = 10 * time.Millisecond
+		// A short lease, so a runner stopped between claim and handler does not leave a row leased
+		// past the wait of the test that restarts it.
+		l.Lease = time.Second
 		l.Backoff = reconcile.Backoff{Base: 10 * time.Millisecond, Max: 50 * time.Millisecond}
 		rn.Add(l)
 	}

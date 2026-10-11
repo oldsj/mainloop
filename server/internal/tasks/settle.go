@@ -57,6 +57,14 @@ func (s *Service) drain(ctx context.Context, attemptID, evidence string, extra f
 		if err != nil {
 			return nil, err
 		}
+		// A supervisor that stops takes its open children with it now, not when its own stop is
+		// confirmed: they must not keep working while that stays unresolved.
+		var drafts []events.Draft
+		if a.Role == dbstate.AttemptSupervisor {
+			if drafts, err = s.cancelOpenChildren(ctx, q, t); err != nil {
+				return nil, err
+			}
+		}
 		if out, err = q.GetTaskAttempt(ctx, attemptID); err != nil {
 			return nil, err
 		}
@@ -72,11 +80,35 @@ func (s *Service) drain(ctx context.Context, attemptID, evidence string, extra f
 			}
 		}
 		if extra != nil {
-			return nil, extra(q, t)
+			return drafts, extra(q, t)
 		}
-		return nil, nil
+		return drafts, nil
 	})
 	return out, err
+}
+
+// cancelOpenChildren cancels the child tasks of a supervisor's task that have not ended, in id order,
+// under the parent's lock. Their attempts are stopped by the settle sweep.
+func (s *Service) cancelOpenChildren(ctx context.Context, q *dbq.Queries, t dbq.Task) ([]events.Draft, error) {
+	children, err := q.ListChildTasksForUpdate(ctx, &t.ID)
+	if err != nil {
+		return nil, err
+	}
+	var drafts []events.Draft
+	for _, c := range children {
+		if TaskFinal(c.Status) {
+			continue
+		}
+		after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: c.ID, Version: c.Version, Status: dbstate.TaskCancelled})
+		if err != nil {
+			return nil, err
+		}
+		if err := q.BlockRequestedCreateOps(ctx, &c.ID); err != nil {
+			return nil, err
+		}
+		drafts = append(drafts, s.updated(after))
+	}
+	return drafts, nil
 }
 
 // stop stops what runs for a draining attempt: its session, and its workspace too when the agent
@@ -204,22 +236,9 @@ func (s *Service) finish(ctx context.Context, attemptID string, taskIfOpen dbsta
 		}
 		var drafts []events.Draft
 		if a.Role == dbstate.AttemptSupervisor {
-			children, err := q.ListChildTasksForUpdate(ctx, &t.ID)
-			if err != nil {
+			// Normally done by drain already; this covers a task that ended some other way.
+			if drafts, err = s.cancelOpenChildren(ctx, q, t); err != nil {
 				return nil, err
-			}
-			for _, c := range children {
-				if TaskFinal(c.Status) {
-					continue
-				}
-				after, err := q.UpdateTaskState(ctx, dbq.UpdateTaskStateParams{ID: c.ID, Version: c.Version, Status: dbstate.TaskCancelled})
-				if err != nil {
-					return nil, err
-				}
-				if err := q.BlockRequestedCreateOps(ctx, &c.ID); err != nil {
-					return nil, err
-				}
-				drafts = append(drafts, s.updated(after))
 			}
 		}
 		if a, err = q.GetTaskAttempt(ctx, attemptID); err != nil {

@@ -1307,14 +1307,14 @@ SELECT a.id, a.task_id, a.number, a.profile_id, a.native_provider, a.configurati
 JOIN tasks t ON t.id = a.task_id
 JOIN deliveries d ON d.id = a.brief_delivery_id
 WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled')
-  AND d.state IN ('failed', 'cancelled')
+  AND d.state = 'failed'
   AND NOT ('brief-delivery-failed' = ANY (a.evidence_refs))
 ORDER BY a.updated_at, a.id
 LIMIT $1
 `
 
-// Active attempts whose latest brief the sessions ledger ended failed or cancelled, and that have
-// not been given up on yet: the brief watcher sends them again.
+// Active attempts whose latest brief the sessions ledger ended failed (a cancelled one is the owner
+// steering the child), and that have not been given up on yet: the brief watcher sends them again.
 func (q *Queries) ListFailedBriefAttempts(ctx context.Context, limit int32) ([]TaskAttempt, error) {
 	rows, err := q.db.Query(ctx, listFailedBriefAttempts, limit)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/jackc/pgx/v5"
@@ -30,20 +31,40 @@ type kagentTasks interface {
 }
 
 // KagentStops observes the session ledger and kagent. It looks at the most recent deliveries of the
-// session: every task kagent started for one is read, and one that is not in a final state is
-// cancelled again.
+// session and decides for each one whether its turn may still run: every task kagent started for
+// one is read, and one that is not in a final state is cancelled again.
 type KagentStops struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
 	// Sessions resolves the Agent that runs a session.
 	Sessions *sessions.Service
 	Kagent   kagentTasks
+	// UncertainHold is how long a message that was sent, and that no task carries yet, may still
+	// land. It is the sessions ledger's hold; zero takes that service's setting, then 30 minutes.
+	UncertainHold time.Duration
 }
 
 // recentDeliveries is how many deliveries of a session the observer reads.
 const recentDeliveries = 20
 
-// Stopped implements [StopObserver].
+// defaultUncertainHold is the sessions ledger's default hold.
+const defaultUncertainHold = 30 * time.Minute
+
+func (k *KagentStops) hold() time.Duration {
+	switch {
+	case k.UncertainHold > 0:
+		return k.UncertainHold
+	case k.Sessions != nil && k.Sessions.Opts.UncertainHold > 0:
+		return k.Sessions.Opts.UncertainHold
+	}
+	return defaultUncertainHold
+}
+
+// Stopped implements [StopObserver]. It decides per delivery. One that was never sent cannot be
+// running. One that was sent and that no task carries yet may still land, so it counts as running
+// until the hold has passed since the row last changed: for a row a cancel closed that is the cancel
+// time, and a message in flight then can only land after it. This is the delivery loop's own rule
+// for a message it cannot find.
 func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, error) {
 	q := dbq.New(k.Pool)
 	b, err := q.GetOwnedSessionBinding(ctx, dbq.GetOwnedSessionBindingParams{ID: sessionID, UserID: k.OwnerID})
@@ -53,32 +74,46 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if b.KagentSessionID == nil || *b.KagentSessionID == "" {
-		return true, nil // kagent never got a session for it
-	}
-	agent, err := k.Sessions.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
-	if err != nil {
-		return false, err
-	}
 	rows, err := q.ListSessionDeliveries(ctx, dbq.ListSessionDeliveriesParams{SessionID: sessionID, Limit: recentDeliveries})
 	if err != nil {
 		return false, err
 	}
+	var agent *kagent.AgentRef
 	stopped := true
 	for _, d := range rows {
-		ksid := *b.KagentSessionID
-		if d.KagentSessionID != nil && *d.KagentSessionID != "" {
+		hasTask := d.TaskID != nil && *d.TaskID != ""
+		sent := d.KagentSessionID != nil && *d.KagentSessionID != ""
+		if !hasTask && !sent {
+			continue // never sent: it cannot be running
+		}
+		if agent == nil {
+			a, err := k.Sessions.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
+			if err != nil {
+				return false, err
+			}
+			agent = &a
+		}
+		ksid := ""
+		if sent {
 			ksid = *d.KagentSessionID
 		}
-		task, err := k.taskOf(ctx, agent, ksid, d)
+		task, err := k.taskOf(ctx, *agent, ksid, d)
 		if err != nil {
 			return false, err
 		}
-		if task == nil || task.Status.State.Terminal() {
+		if task == nil {
+			// A task kagent no longer has is gone. A sent message that no task carries may still land
+			// until the hold has passed.
+			if !hasTask && time.Since(d.UpdatedAt) <= k.hold() {
+				stopped = false
+			}
+			continue
+		}
+		if task.Status.State.Terminal() {
 			continue
 		}
 		stopped = false
-		if _, err := k.Kagent.CancelTask(ctx, agent, string(task.ID)); err != nil {
+		if _, err := k.Kagent.CancelTask(ctx, *agent, string(task.ID)); err != nil {
 			var gone *kagent.TaskNotFound
 			if !errors.As(err, &gone) {
 				return false, fmt.Errorf("cancel task: %w", err)
@@ -89,7 +124,7 @@ func (k *KagentStops) Stopped(ctx context.Context, sessionID string) (bool, erro
 }
 
 // taskOf is the kagent task of a delivery: the one it recorded, else the one that carries its
-// message. A task kagent no longer has, or a message it never saw, gives nil.
+// message. A task kagent no longer has, or a message no task carries (yet), gives nil.
 func (k *KagentStops) taskOf(ctx context.Context, agent kagent.AgentRef, ksid string, d dbq.Delivery) (*a2a.Task, error) {
 	if d.TaskID != nil && *d.TaskID != "" {
 		task, err := k.Kagent.GetTask(ctx, agent, *d.TaskID)

@@ -404,13 +404,13 @@ WHERE id = sqlc.arg(id)
 RETURNING resolve_attempts;
 
 -- name: ListFailedBriefAttempts :many
--- Active attempts whose latest brief the sessions ledger ended failed or cancelled, and that have
--- not been given up on yet: the brief watcher sends them again.
+-- Active attempts whose latest brief the sessions ledger ended failed (a cancelled one is the owner
+-- steering the child), and that have not been given up on yet: the brief watcher sends them again.
 SELECT a.* FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 JOIN deliveries d ON d.id = a.brief_delivery_id
 WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled')
-  AND d.state IN ('failed', 'cancelled')
+  AND d.state = 'failed'
   AND NOT ('brief-delivery-failed' = ANY (a.evidence_refs))
 ORDER BY a.updated_at, a.id
 LIMIT $1;

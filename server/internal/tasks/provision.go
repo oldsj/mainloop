@@ -449,6 +449,12 @@ func (s *Service) makeWorkspace(ctx context.Context, c reconcile.Claim, op dbq.T
 		}
 		var unc *workspaces.UnconfirmedError
 		if cerr != nil && !errors.As(cerr, &unc) {
+			// Any other failure (database, transport) is tried again with backoff, but only within
+			// the provisioning window: after it the attempt is aborted rather than holding its slot.
+			if s.now().Sub(a.CreatedAt) > s.Limits.ProvisionWindow {
+				out, err = s.abort(ctx, c, op, a, "workspace could not be created in time: "+cerr.Error())
+				return out, false, err
+			}
 			return reconcile.Outcome{}, false, cerr
 		}
 		if lc.WorkspaceId == "" {

@@ -226,10 +226,12 @@ func (s *Service) followReport(ctx context.Context, c reconcile.Claim, d dbq.Tas
 		return s.setDelivery(ctx, c, dbstate.TaskDeliveryDelivered)
 	case dbstate.DeliveryRecorded, dbstate.DeliverySending:
 		return reconcile.RetryAfter(2 * time.Second), nil
-	case dbstate.DeliveryFailed, dbstate.DeliveryCancelled:
-		// A cancelled row is the owner stopping the parent's turn, or the parent's session ending. A
-		// resend tells which: to a live parent it is delivered again, and to one that has ended
-		// sendReport cancels the delivery, so the child is blocked only when the sends run out.
+	case dbstate.DeliveryCancelled:
+		// The owner stopped the parent's turn, or the parent's session ended: that is an owner act, so
+		// the report is not sent again over it. The delivery ends cancelled and the child is not
+		// blocked; the report stays on the child, readable through the task tools.
+		return s.setDelivery(ctx, c, dbstate.TaskDeliveryCancelled)
+	case dbstate.DeliveryFailed:
 		if d.Sends < maxSends {
 			next := messageID(d.ID, d.Sends+1)
 			_, err := q.ResendTaskEventDelivery(ctx, dbq.ResendTaskEventDeliveryParams{
