@@ -1,0 +1,39 @@
+name: Contract
+
+on:
+  pull_request:
+    branches: [main, go-react]
+    paths:
+      - api/**
+      - redocly.yaml
+      - .github/workflows/contract.yml
+  push:
+    branches: [main, go-react]
+    paths:
+      - api/**
+      - redocly.yaml
+      - .github/workflows/contract.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint API contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - name: Lint api/openapi.yaml
+        # The package has two binaries, so dlx needs the bin named explicitly.
+        run: pnpm --package=@redocly/cli@2.54.3 dlx redocly lint api/openapi.yaml
