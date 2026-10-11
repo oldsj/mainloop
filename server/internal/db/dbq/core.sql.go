@@ -926,7 +926,7 @@ func (q *Queries) MarkCredentialPublished(ctx context.Context, arg MarkCredentia
 
 const markCredentialRevoked = `-- name: MarkCredentialRevoked :one
 UPDATE credentials
-SET state = 'revoked', secret_uid = coalesce($2, secret_uid), revoked_at = now(), updated_at = now()
+SET state = 'revoked', secret_uid = coalesce(secret_uid, $2), revoked_at = now(), updated_at = now()
 WHERE id = $1 AND state IN ('planned', 'published')
 RETURNING id, kind, binding_id, token_hash, secret_name, secret_uid, state, created_at, updated_at, revoked_at
 `

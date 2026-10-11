@@ -113,3 +113,55 @@ func TestInTxRollsBackOnError(t *testing.T) {
 		t.Fatalf("topics = %d, err = %v", n, err)
 	}
 }
+
+func TestUnlockTwiceIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	l, ok, err := db.TryLock(ctx, d.Pool, "sweep:twice")
+	if err != nil || !ok {
+		t.Fatalf("TryLock = %v, %v", ok, err)
+	}
+	if err := l.Unlock(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Unlock(ctx); err != nil {
+		t.Fatalf("second Unlock: %v", err)
+	}
+	// The pool connection was released once, not twice: the pool still works.
+	if _, err := d.Pool.Exec(ctx, "SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithTryLock(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+
+	var inside bool
+	ran, err := db.WithTryLock(ctx, d.Pool, "sweep:with", func(ctx context.Context) error {
+		inside = true
+		// The lock is held while fn runs: a second attempt loses.
+		ran, err := db.WithTryLock(ctx, d.Pool, "sweep:with", func(context.Context) error {
+			t.Error("nested fn ran while the lock was held")
+			return nil
+		})
+		if err != nil || ran {
+			t.Errorf("nested WithTryLock = %v, %v", ran, err)
+		}
+		return nil
+	})
+	if err != nil || !ran || !inside {
+		t.Fatalf("WithTryLock = %v, %v (inside %v)", ran, err, inside)
+	}
+
+	// fn's error comes back, and the lock is released anyway.
+	boom := errors.New("boom")
+	ran, err = db.WithTryLock(ctx, d.Pool, "sweep:with", func(context.Context) error { return boom })
+	if !ran || !errors.Is(err, boom) {
+		t.Fatalf("WithTryLock = %v, %v; want ran with boom", ran, err)
+	}
+	ran, err = db.WithTryLock(ctx, d.Pool, "sweep:with", func(context.Context) error { return nil })
+	if err != nil || !ran {
+		t.Fatalf("lock not released after fn error: %v, %v", ran, err)
+	}
+}

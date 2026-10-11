@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/oldsj/mainloop/server/internal/db"
@@ -93,28 +94,67 @@ func TestMigrateResetRebuildsSchema(t *testing.T) {
 	}
 }
 
+// Migrators that start together on an empty database must all succeed: creating the schema is
+// serialised. Several rounds of several migrators make a lucky pass very unlikely.
 func TestMigrateConcurrentUp(t *testing.T) {
+	const rounds, migrators = 4, 4
 	ctx := context.Background()
-	d := testdb.NewEmpty(t)
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() {
-			m, err := db.NewMigrator(ctx, d.URL)
-			if err != nil {
-				errs <- err
-				return
+	for round := range rounds {
+		t.Run(strconv.Itoa(round), func(t *testing.T) {
+			t.Parallel()
+			d := testdb.NewEmpty(t)
+			start := make(chan struct{})
+			errs := make(chan error, migrators)
+			for range migrators {
+				go func() {
+					<-start
+					m, err := db.NewMigrator(ctx, d.URL)
+					if err != nil {
+						errs <- err
+						return
+					}
+					defer func() { _ = m.Close() }()
+					_, err = m.Up(ctx)
+					errs <- err
+				}()
 			}
-			defer func() { _ = m.Close() }()
-			_, err = m.Up(ctx)
-			errs <- err
-		}()
+			close(start)
+			for range migrators {
+				if err := <-errs; err != nil {
+					t.Fatalf("round %d: %v", round, err)
+				}
+			}
+			if got := countTables(t, d); got != 6 {
+				t.Fatalf("round %d: tables = %d, want 6", round, got)
+			}
+		})
 	}
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
+}
+
+// Reset must not depend on the Down sections or the embedded files matching what was applied.
+func TestMigrateResetWithUnknownAppliedVersion(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (99999, true)`); err != nil {
+		t.Fatal(err)
+	}
+	// A table no migration knows about, with a foreign key into one that does.
+	if _, err := d.Pool.Exec(ctx, `CREATE TABLE stray (id text PRIMARY KEY, session_id text REFERENCES sessions (id))`); err != nil {
+		t.Fatal(err)
+	}
+	m := newMigrator(t, d.URL)
+	if err := m.Reset(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if got := countTables(t, d); got != 6 {
-		t.Errorf("tables = %d, want 6", got)
+		t.Errorf("tables after reset = %d, want 6 (stray table should be gone)", got)
+	}
+	var stray int
+	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 99999`).Scan(&stray); err != nil || stray != 0 {
+		t.Errorf("unknown version survived reset: %d, %v", stray, err)
+	}
+	rows, err := m.Status(ctx)
+	if err != nil || len(rows) == 0 || !rows[len(rows)-1].Applied {
+		t.Errorf("status after reset = %+v, %v", rows, err)
 	}
 }

@@ -377,3 +377,16 @@ func TestDisplayNameCountsRunes(t *testing.T) {
 		t.Fatal("201 runes accepted")
 	}
 }
+
+func TestMigrateAllowResetIsExactlyOne(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "1": true, "0": false, "true": false, "t": false, "T": false, "yes": false} {
+		t.Setenv("MAINLOOP_ALLOW_RESET", value)
+		m, err := LoadMigrate()
+		if err != nil {
+			t.Fatalf("%q: %v", value, err)
+		}
+		if m.AllowReset != want {
+			t.Errorf("MAINLOOP_ALLOW_RESET=%q: AllowReset = %v, want %v", value, m.AllowReset, want)
+		}
+	}
+}

@@ -135,7 +135,7 @@ RETURNING *;
 
 -- name: MarkCredentialRevoked :one
 UPDATE credentials
-SET state = 'revoked', secret_uid = coalesce($2, secret_uid), revoked_at = now(), updated_at = now()
+SET state = 'revoked', secret_uid = coalesce(secret_uid, $2), revoked_at = now(), updated_at = now()
 WHERE id = $1 AND state IN ('planned', 'published')
 RETURNING *;
 

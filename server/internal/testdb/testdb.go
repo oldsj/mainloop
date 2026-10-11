@@ -12,6 +12,8 @@
 //	func TestMain(m *testing.M) { os.Exit(testdb.Main(m)) }
 //
 // Databases left behind by a killed run are dropped by the next run once they are an hour old.
+// The same sweep would drop the template of a test binary that has itself run for over an hour,
+// so keep test runs shorter than that (go test's default timeout is ten minutes).
 package testdb
 
 import (
@@ -123,7 +125,8 @@ func create(t testing.TB, migrated bool) *DB {
 // Main runs the package's tests and then drops the template database. Use it from TestMain.
 func Main(m *testing.M) int {
 	code := m.Run()
-	if tplName != "" && tplErr == nil {
+	// A template whose migration failed is dropped too: it would otherwise linger until the sweep.
+	if tplName != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 		defer cancel()
 		_ = adminExec(ctx, config.TestDatabaseURL(), "DROP DATABASE IF EXISTS %s WITH (FORCE)", ident(tplName))

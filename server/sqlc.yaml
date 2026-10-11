@@ -44,7 +44,10 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: TopicRecordStatus
               }
-          - column: sessions.result
+          - db_type: jsonb
+            go_type: { import: encoding/json, type: RawMessage }
+          - db_type: jsonb
+            nullable: true
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: timestamptz
             go_type: { import: time, type: Time }

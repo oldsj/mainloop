@@ -242,7 +242,8 @@ func TestCredentialsLifecycle(t *testing.T) {
 		t.Fatalf("by hash = %+v, %v", got, err)
 	}
 
-	c, err = q.MarkCredentialRevoked(ctx, dbq.MarkCredentialRevokedParams{ID: "c1"})
+	// Revoking keeps the UID recorded at publish; the delete precondition needs that one.
+	c, err = q.MarkCredentialRevoked(ctx, dbq.MarkCredentialRevokedParams{ID: "c1", SecretUID: ptr("other-uid")})
 	if err != nil || c.State != dbstate.CredentialRevoked || c.RevokedAt == nil || *c.SecretUID != "uid-1" {
 		t.Fatalf("revoked = %+v, %v", c, err)
 	}
@@ -422,4 +423,19 @@ func TestStateChecks(t *testing.T) {
 			t.Errorf("bad status accepted: %v", err)
 		}
 	})
+}
+
+// Revoking a credential that never published may fill in the UID a resolver found by name.
+func TestRevokePlannedCredentialRecordsObservedUID(t *testing.T) {
+	ctx := context.Background()
+	q := dbq.New(testdb.New(t).Pool)
+	if _, err := q.CreateCredential(ctx, dbq.CreateCredentialParams{
+		ID: "c1", Kind: dbstate.CredentialGitPush, BindingID: "s1", TokenHash: strings.Repeat("ab", 32), SecretName: "n1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := q.MarkCredentialRevoked(ctx, dbq.MarkCredentialRevokedParams{ID: "c1", SecretUID: ptr("observed")})
+	if err != nil || c.SecretUID == nil || *c.SecretUID != "observed" {
+		t.Fatalf("revoked planned = %+v, %v", c, err)
+	}
 }

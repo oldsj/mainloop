@@ -3,8 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"time"
@@ -17,6 +17,13 @@ import (
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
+
+// goose polls for its lock; its default is every 5s for 5 minutes. Poll every second instead, so
+// migrators that queue behind a running one start within a second of it finishing.
+const (
+	lockPollSeconds = 1
+	lockWaitSeconds = 300
+)
 
 // MigrationStatus is one migration file and whether it has been applied.
 type MigrationStatus struct {
@@ -42,16 +49,16 @@ func NewMigrator(ctx context.Context, url string) (*Migrator, error) {
 	}
 	cc.RuntimeParams["search_path"] = Schema
 	sqlDB := stdlib.OpenDB(*cc)
-	if _, err := sqlDB.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+Schema); err != nil {
+	if err := withSchemaLock(ctx, sqlDB, func(c *sql.Conn) error { return createSchema(ctx, c) }); err != nil {
 		_ = sqlDB.Close()
-		return nil, fmt.Errorf("db: create schema: %w", err)
+		return nil, err
 	}
 	files, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: embedded migrations: %w", err)
 	}
-	locker, err := lock.NewPostgresSessionLocker()
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(lockPollSeconds, lockWaitSeconds))
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migration lock: %w", err)
@@ -95,14 +102,54 @@ func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 	return out, nil
 }
 
-// Reset reverts every migration, then applies them again. It destroys all data. The caller
-// decides whether that is allowed (see config.Migrate.AllowReset).
+// Reset drops the whole schema, recreates it and applies every migration. It destroys all data.
+// It does not read any Down section, so it works however the migration files changed since the
+// database was last migrated (an edited file, a deleted one). The caller decides whether it is
+// allowed (see config.Migrate.AllowReset).
 func (m *Migrator) Reset(ctx context.Context) error {
-	if _, err := m.provider.DownTo(ctx, 0); err != nil && !errors.Is(err, goose.ErrNoNextVersion) {
-		return fmt.Errorf("db: migrate reset: %w", err)
-	}
-	if _, err := m.Up(ctx); err != nil {
+	err := withSchemaLock(ctx, m.sqlDB, func(c *sql.Conn) error {
+		if _, err := c.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+Schema+" CASCADE"); err != nil {
+			return fmt.Errorf("db: reset: drop schema: %w", err)
+		}
+		return createSchema(ctx, c)
+	})
+	if err != nil {
 		return err
 	}
+	_, err = m.Up(ctx)
+	return err
+}
+
+// schemaLockName keys the advisory lock that serialises creating and dropping the schema. goose's
+// own lock cannot cover this: its version table lives inside the schema.
+const schemaLockName = "mainloop:migrate-schema"
+
+func createSchema(ctx context.Context, c *sql.Conn) error {
+	if _, err := c.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+Schema); err != nil {
+		return fmt.Errorf("db: create schema: %w", err)
+	}
 	return nil
+}
+
+// withSchemaLock runs fn on a dedicated connection that holds the schema lock. CREATE SCHEMA IF
+// NOT EXISTS is not safe to run concurrently (two sessions can both pass the existence check and
+// one then fails on the catalog's unique index), so migrators take turns.
+func withSchemaLock(ctx context.Context, sqlDB *sql.DB, fn func(c *sql.Conn) error) error {
+	c, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("db: schema lock: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+	if _, err := c.ExecContext(ctx, "SELECT pg_advisory_lock("+lockKey+")", schemaLockName); err != nil {
+		return fmt.Errorf("db: schema lock: %w", err)
+	}
+	fnErr := fn(c)
+	// Closing the connection would release the lock too, but pooled connections are reused, so
+	// release it explicitly and, if that fails, discard the connection.
+	unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+	defer cancel()
+	if _, err := c.ExecContext(unlockCtx, "SELECT pg_advisory_unlock("+lockKey+")", schemaLockName); err != nil {
+		_ = c.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	return fnErr
 }

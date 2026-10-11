@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,7 +21,8 @@ const unlockTimeout = 5 * time.Second
 // on a connection, not in a transaction, so the connection must stay out of the pool until
 // [Lock.Unlock].
 type Lock struct {
-	conn *pgxpool.Conn
+	mu   sync.Mutex
+	conn *pgxpool.Conn // nil once unlocked
 	name string
 }
 
@@ -42,23 +45,30 @@ func TryLock(ctx context.Context, pool *pgxpool.Pool, name string) (*Lock, bool,
 	return &Lock{conn: conn, name: name}, true, nil
 }
 
-// Unlock releases the lock and returns the connection to the pool. It works even when the
-// caller's context is already cancelled. If the lock cannot be released cleanly the connection is
-// closed instead, which drops every lock it held.
+// Unlock releases the lock and returns the connection to the pool. A second call is a no-op. It
+// works even when the caller's context is already cancelled. If the lock cannot be released
+// cleanly the connection is closed instead, which drops every lock it held.
 func (l *Lock) Unlock(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.conn == nil {
+		return nil
+	}
+	conn := l.conn
+	l.conn = nil
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
 	defer cancel()
 	var released bool
-	err := l.conn.QueryRow(ctx, "SELECT pg_advisory_unlock("+lockKey+")", l.name).Scan(&released)
+	err := conn.QueryRow(ctx, "SELECT pg_advisory_unlock("+lockKey+")", l.name).Scan(&released)
 	if err != nil || !released {
-		_ = l.conn.Conn().Close(ctx)
-		l.conn.Release()
+		_ = conn.Conn().Close(ctx)
+		conn.Release()
 		if err != nil {
 			return fmt.Errorf("db: unlock %q: %w", l.name, err)
 		}
 		return fmt.Errorf("db: unlock %q: lock was not held", l.name)
 	}
-	l.conn.Release()
+	conn.Release()
 	return nil
 }
 
@@ -69,4 +79,17 @@ func XactLock(ctx context.Context, tx pgx.Tx, name string) error {
 		return fmt.Errorf("db: xact lock %q: %w", name, err)
 	}
 	return nil
+}
+
+// WithTryLock runs fn while holding the named session lock, and releases it afterwards. When
+// another session holds the lock it returns (false, nil) without running fn. Prefer it to
+// [TryLock]: the lock cannot be forgotten, and a forgotten lock pins a pool connection for the
+// life of the process.
+func WithTryLock(ctx context.Context, pool *pgxpool.Pool, name string, fn func(ctx context.Context) error) (ran bool, err error) {
+	l, ok, err := TryLock(ctx, pool, name)
+	if err != nil || !ok {
+		return false, err
+	}
+	defer func() { err = errors.Join(err, l.Unlock(ctx)) }()
+	return true, fn(ctx)
 }
