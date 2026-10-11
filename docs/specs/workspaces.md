@@ -103,7 +103,9 @@ built; nothing here has been measured against a live kagent.
   the configuration stops naming it. `mainloop sweep-orphans` prints the Agent set it covers
   (`agent   <namespace>/<name>`) before the orphans, and `--forget-agent <namespace>/<name>`
   deletes one from that set and exits. It refuses an Agent the current configuration names, one
-  that is not in the set, and a combination with `--delete`.
+  that a workspace or an unsettled create still names (forgetting it would stop the sweep reclaiming
+  a Session that landed there), one that is not in the set, an empty value, and a combination with
+  `--delete`; the flag checks run before the command reads configuration or the database.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
   event carries the workspace lifecycle; it is not a removal notice.
 - `Wake(workspaceID)` is what a message to a workspace session calls before it is sent. It waits

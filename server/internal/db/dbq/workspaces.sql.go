@@ -13,6 +13,29 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
+const agentInUse = `-- name: AgentInUse :one
+SELECT (EXISTS (SELECT 1 FROM workspaces WHERE agent_namespace = $1 AND agent_name = $2)
+    OR EXISTS (
+        SELECT 1 FROM agent_bindings
+        WHERE kagent_create_agent_namespace = $1 AND kagent_create_agent_name = $2
+          AND kagent_session_id IS NULL))::bool AS in_use
+`
+
+type AgentInUseParams struct {
+	AgentNamespace string
+	AgentName      string
+}
+
+// Whether this deployment still has a workspace on the Agent, or a create sent to it that has not
+// been settled (no Session id recorded). Forgetting such an Agent would stop the orphan sweep from
+// reclaiming a Session that landed on it.
+func (q *Queries) AgentInUse(ctx context.Context, arg AgentInUseParams) (bool, error) {
+	row := q.db.QueryRow(ctx, agentInUse, arg.AgentNamespace, arg.AgentName)
+	var in_use bool
+	err := row.Scan(&in_use)
+	return in_use, err
+}
+
 const bindWorkspaceSession = `-- name: BindWorkspaceSession :execrows
 UPDATE agent_bindings
 SET kagent_session_id = $2, updated_at = now()

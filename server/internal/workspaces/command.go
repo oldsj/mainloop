@@ -2,6 +2,7 @@ package workspaces
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,6 +48,10 @@ func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Write
 	if err := fs.Parse(args); err != nil {
 		return exitFailure
 	}
+	if err := checkSweepFlags(fs, *del, *forget); err != nil {
+		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
+		return exitFailure
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
@@ -66,14 +71,24 @@ func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Write
 		return exitFailure
 	}
 	if *forget != "" {
-		if *del {
-			_, _ = fmt.Fprintln(stderr, "sweep-orphans: --forget-agent cannot be combined with --delete")
-			return exitFailure
-		}
 		return forgetAgent(ctx, svc, *forget, stdout, stderr)
 	}
 	rep, err := svc.SweepOrphans(ctx, OrphanOptions{Delete: *del})
 	return printOrphans(rep, err, *del, stdout, stderr)
+}
+
+// checkSweepFlags rejects a bad flag combination before the command touches the configuration or
+// the database.
+func checkSweepFlags(fs *flag.FlagSet, del bool, forget string) error {
+	given := false
+	fs.Visit(func(f *flag.Flag) { given = given || f.Name == "forget-agent" })
+	switch {
+	case given && forget == "":
+		return errors.New("--forget-agent needs a namespace/name")
+	case forget != "" && del:
+		return errors.New("--forget-agent cannot be combined with --delete")
+	}
+	return nil
 }
 
 func forgetAgent(ctx context.Context, svc *Service, key string, stdout, stderr io.Writer) int {

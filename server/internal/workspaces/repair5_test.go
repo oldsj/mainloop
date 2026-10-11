@@ -83,3 +83,61 @@ func TestForgetAgentRemovesItFromTheSweptSet(t *testing.T) {
 		t.Fatalf("the forgotten Agent's Session was touched: %v %v", ok, s)
 	}
 }
+
+// review-6 P3-1: forgetting an Agent a workspace or an unsettled create still names would stop the
+// sweep reclaiming a Session that landed there, so --forget-agent refuses it until that is gone.
+func TestForgetAgentRefusesAnAgentStillInUse(t *testing.T) {
+	h := newHarness(t, nil)
+	w := h.running()
+	// The configuration moved on: the workspace's Agent is no longer one it names.
+	h.exec(`UPDATE workspaces SET agent_namespace = 'renamed', agent_name = 'old-agent' WHERE id = $1`, w.WorkspaceId)
+	forget := func(key string) (int, string) {
+		var out, errb bytes.Buffer
+		return forgetAgent(bg, h.svc, key, &out, &errb), errb.String()
+	}
+	if code, msg := forget("renamed/old-agent"); code != 1 || !strings.Contains(msg, "still has a workspace") {
+		t.Fatalf("workspace: code %d %q", code, msg)
+	}
+	if !slices.Contains(h.knownAgents(), "renamed/old-agent") {
+		t.Fatal("a refused forget removed the Agent")
+	}
+
+	// With the workspace gone, only an unsettled create keeps it.
+	h.exec(`DELETE FROM workspaces WHERE id = $1`, w.WorkspaceId)
+	h.exec(`UPDATE agent_bindings SET kagent_session_id = NULL, kagent_create_request_id = 'r1',
+	        kagent_create_agent_namespace = 'renamed', kagent_create_agent_name = 'old-agent' WHERE session_id = $1`, w.WorkspaceId)
+	var n int
+	if err := h.svc.Pool.QueryRow(bg, `SELECT count(*) FROM agent_bindings WHERE session_id = $1`, w.WorkspaceId).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected the workspace's binding to remain, got %d", n)
+	}
+	if code, msg := forget("renamed/old-agent"); code != 1 || !strings.Contains(msg, "unsettled create") {
+		t.Fatalf("create: code %d %q", code, msg)
+	}
+	h.exec(`UPDATE agent_bindings SET kagent_create_request_id = NULL, kagent_create_agent_namespace = NULL,
+		        kagent_create_agent_name = NULL WHERE session_id = $1`, w.WorkspaceId)
+	if code, msg := forget("renamed/old-agent"); code != 0 {
+		t.Fatalf("settled: code %d %q", code, msg)
+	}
+}
+
+// review-6 P3-3: a bad flag combination is reported before the command reads configuration or
+// opens the database, and an empty --forget-agent is refused rather than falling back to a listing.
+func TestSweepOrphansRejectsBadFlagsBeforeAnythingElse(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--forget-agent", "a/b", "--delete"}, "cannot be combined with --delete"},
+		{[]string{"--delete", "--forget-agent=a/b"}, "cannot be combined with --delete"},
+		{[]string{"--forget-agent="}, "needs a namespace/name"},
+	} {
+		var out, errb bytes.Buffer
+		if code := RunSweepOrphans(bg, tc.args, &out, &errb); code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), tc.want) {
+			t.Errorf("%v: code %d out %q err %q", tc.args, code, out.String(), errb.String())
+		}
+	}
+}

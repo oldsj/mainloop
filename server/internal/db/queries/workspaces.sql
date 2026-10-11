@@ -203,3 +203,13 @@ LIMIT $1;
 -- Removes an Agent from the orphan sweep's set (the operator's remedy for an Agent that was
 -- configured by mistake).
 DELETE FROM kagent_agents WHERE namespace = $1 AND name = $2;
+
+-- name: AgentInUse :one
+-- Whether this deployment still has a workspace on the Agent, or a create sent to it that has not
+-- been settled (no Session id recorded). Forgetting such an Agent would stop the orphan sweep from
+-- reclaiming a Session that landed on it.
+SELECT (EXISTS (SELECT 1 FROM workspaces WHERE agent_namespace = $1 AND agent_name = $2)
+    OR EXISTS (
+        SELECT 1 FROM agent_bindings
+        WHERE kagent_create_agent_namespace = $1 AND kagent_create_agent_name = $2
+          AND kagent_session_id IS NULL))::bool AS in_use;

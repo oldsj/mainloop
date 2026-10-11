@@ -219,15 +219,6 @@ func (s *Service) SweepOrphans(ctx context.Context, opt OrphanOptions) (OrphanRe
 
 func agentKey(r *kagentapi.ResourceReference) string { return r.GetNamespace() + "/" + r.GetName() }
 
-// ownAgents is every Agent this deployment's Sessions can be on: the configured provider Agents
-// and every Agent a create was ever sent to (kagent_agents, written for workspaces and for session
-// bindings). The latter keeps a Session reachable after a config change, or after the row that
-// named its Agent was settled or purged.
-//
-// The creator does not tell Mainloop instances apart: kagent records every Session made with the
-// control token as created by the same constant user. Only distinct Agent names keep one
-// instance's sweep away from another's Sessions, so instances sharing a kagent must not share
-// Agents.
 // configAgents is the Agents the current configuration names.
 func (s *Service) configAgents() map[string]bool {
 	out := map[string]bool{}
@@ -239,6 +230,15 @@ func (s *Service) configAgents() map[string]bool {
 	return out
 }
 
+// ownAgents is every Agent this deployment's Sessions can be on: the configured provider Agents
+// and every Agent a create was ever sent to (kagent_agents, written for workspaces and for session
+// bindings). The latter keeps a Session reachable after a config change, or after the row that
+// named its Agent was settled or purged.
+//
+// The creator does not tell Mainloop instances apart: kagent records every Session made with the
+// control token as created by the same constant user. Only distinct Agent names keep one
+// instance's sweep away from another's Sessions, so instances sharing a kagent must not share
+// Agents.
 func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 	out := s.configAgents()
 	known, err := dbq.New(s.Pool).ListKnownAgents(ctx)
@@ -253,7 +253,7 @@ func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 
 // ForgetAgent removes an Agent ("namespace/name") from the set the orphan sweep covers, for an
 // Agent that was configured by mistake and would otherwise stay in the set for good. It refuses an
-// Agent the current configuration names. The Sessions already on it are then left alone.
+// Agent the current configuration names and one a workspace or an unsettled create still names. The Sessions already on it are then left alone.
 func (s *Service) ForgetAgent(ctx context.Context, key string) error {
 	ns, name, ok := strings.Cut(key, "/")
 	if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
@@ -261,6 +261,13 @@ func (s *Service) ForgetAgent(ctx context.Context, key string) error {
 	}
 	if s.configAgents()[key] {
 		return fmt.Errorf("agent %s is named by the current configuration; change the configuration first", key)
+	}
+	inUse, err := dbq.New(s.Pool).AgentInUse(ctx, dbq.AgentInUseParams{AgentNamespace: ns, AgentName: name})
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return fmt.Errorf("agent %s still has a workspace or an unsettled create on it; forgetting it would stop the sweep reclaiming a Session that landed there", key)
 	}
 	n, err := dbq.New(s.Pool).ForgetKnownAgent(ctx, dbq.ForgetKnownAgentParams{Namespace: ns, Name: name})
 	if err != nil {
