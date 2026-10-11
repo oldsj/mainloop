@@ -17,6 +17,8 @@ from mainloop.runtime.kagent_client import (
 )
 from tests.runtime.kagent_fake import FakeKagent
 
+from models.provider import ProviderProfile
+
 BOUND = "00000000-0000-4000-8000-0000000000b1"
 ORPHAN_A = "00000000-0000-4000-8000-0000000000a1"
 ORPHAN_B = "00000000-0000-4000-8000-0000000000a2"
@@ -151,6 +153,29 @@ class SweepTests(unittest.IsolatedAsyncioTestCase):
                 ("kagent", "claude-workspace-dev"), orphan_sessions.instance_agents()
             )
         self.assertNotIn(("kagent", "claude-workspace-dev"), agents)
+
+    async def test_an_agent_name_in_another_namespace_is_not_ours(self):
+        self.fake.sessions[FOREIGN] = READY
+        self.fake.session_agents[FOREIGN] = AgentRef(
+            "other", settings.kagent_workspace_claude_agent
+        ).encode()
+        orphans, _ = await orphan_sessions.find_orphans()
+        self.assertEqual({s.id for s in orphans}, {ORPHAN_A, ORPHAN_B})
+
+    def test_provider_profile_agents_are_ours(self):
+        profile = ProviderProfile.model_validate(
+            {
+                "id": "codex-review",
+                "display_name": "Codex review",
+                "native_provider": "codex",
+                "configuration_revision": "fixture-v1",
+                "agents": {"agent": {"namespace": "team", "name": "review"}},
+                "capabilities": [],
+            }
+        )
+        with patch.object(settings, "provider_profiles", [profile]):
+            self.assertIn(("team", "review"), orphan_sessions.instance_agents())
+        self.assertNotIn(("team", "review"), orphan_sessions.instance_agents())
 
     async def test_a_failed_delete_is_reported_and_the_exit_status_is_nonzero(self):
         with patch.object(

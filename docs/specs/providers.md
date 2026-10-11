@@ -44,6 +44,11 @@ Task selection precedence is explicit choice, project default (`GET/PUT
 are inherited by supervisors. A task attempt pins its profile ID, native provider, revision and
 immutable role AgentRef, so later registry changes cannot reroute its persisted identity.
 Disabled profiles block new selection and do not prevent reading/reconciling a pinned attempt.
+Verified native HITL requests on a live local binding remain readable and answerable after
+its pinned Agent leaves current configuration. Discovery checks the local binding and the
+attempt's pinned AgentRef before applying the current Agent allowlist to unbound Sessions.
+Creator, owner, archive/deletion, replacement and stored endpoint/identity checks still apply;
+an unbound Session on an unconfigured Agent remains unavailable.
 Existing session/workspace routing remains in its runtime adapter until S1 integrates attempt routing.
 
 Task qualification requires proved live evidence for native create/identity, delivery

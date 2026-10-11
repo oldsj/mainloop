@@ -12,7 +12,7 @@ from mainloop.config import settings
 from mainloop.runtime import native_sessions
 from mainloop.runtime.hitl_observer import HITLObserver
 from mainloop.runtime.kagent_client import Unreachable
-from tests.runtime.test_hitl_observer import Gateway, approval, pending
+from tests.runtime.test_hitl_observer import FIXTURE_AGENTS, Gateway, approval, pending
 from tests.runtime.test_postgres_ledger import PostgresTestCase
 
 
@@ -27,6 +27,7 @@ class HITLUITests(PostgresTestCase):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
 
         async def cycle():

@@ -18,8 +18,10 @@ data:
   # Derives the MCP and Git origins (*.mainloop-dev.svc.cluster.local) and the
   # mainloop-dev- prefix of this instance's credential Secrets in the kagent namespace.
   MAINLOOP_NAMESPACE: mainloop-dev
-  # Off until a testrepo-only path is decided: the shared GitHub App can reach
-  # every repository it is installed on (see docs/dev-environment.md#live-dev-instance).
+  # Off: kagent's service policy accepts only production's Git origins, so dev Git
+  # needs a kagent change; a testrepo-only path is also undecided, since the shared
+  # GitHub App can reach every repository it is installed on
+  # (see docs/dev-environment.md#live-dev-instance).
   GIT_TRANSPORT_ENABLED: 'false'
   PUSH_GATE_ENABLED: 'false'
   MAINLOOP_MERGE_TOOLS_ENABLED: 'false'

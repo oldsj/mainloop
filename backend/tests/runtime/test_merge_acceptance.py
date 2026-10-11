@@ -21,7 +21,7 @@ from mainloop.runtime.kagent_client import RuntimeState, Task
 from mainloop.services import merge
 from mainloop.services.github_repo import parse_github_repo
 from tests.runtime import test_merge as support
-from tests.runtime.test_hitl_observer import Gateway
+from tests.runtime.test_hitl_observer import FIXTURE_AGENTS, Gateway
 
 from models.hitl import (
     HITL_EXTENSION,
@@ -55,6 +55,7 @@ class MergeAcceptanceTests(support.MergeFixture):
             gateway=f"https://gateway/{self.user}",
             owner=self.user,
             creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
         )
 
     async def inventory(self, proposal, provider="claude", *, duplicate_proposal=False):

@@ -44,10 +44,10 @@ class Settings(BaseSettings):
     def _namespace_label(cls, value: str) -> str:
         if not _DNS_LABEL.fullmatch(value):
             raise ValueError("MAINLOOP_NAMESPACE must be a DNS label")
-        # Another instance's Secret prefix must never match production's names
-        # (``mainloop-mcp-*``, ``mainloop-git-read-*``, ``mainloop-git-push-*``).
-        if value != "mainloop" and value.startswith(("mainloop-mcp", "mainloop-git")):
-            raise ValueError("MAINLOOP_NAMESPACE collides with production names")
+        # Secret names are ``<ns>-mcp-*`` and ``<ns>-git-{read,push}-*``. A namespace containing
+        # ``-mcp`` or ``-git`` could put its names inside another instance's patterns.
+        if "-mcp" in value or "-git" in value:
+            raise ValueError("MAINLOOP_NAMESPACE collides with credential Secret names")
         return value
 
     def service_origin(self, service: str) -> str:
