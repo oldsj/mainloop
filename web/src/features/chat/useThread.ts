@@ -16,6 +16,11 @@ export const POLL_MS = 2000;
 export const POLL_WINDOW_MS = 6 * 60 * 1000;
 
 const BACK_IN_BOX = ' Your message is back in the box.';
+/** A send whose reply was lost, after the thread shows the message was recorded. */
+export const LOST_REPLY_RECORDED =
+  'Mainloop did not reply, but it recorded your message. Check the conversation before you send it again.';
+const LOST_REPLY_UNCONFIRMED =
+  ' Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.';
 
 /** The words for a send the backend did not accept. */
 export function sendErrorText(error: unknown, restored: boolean): string {
@@ -23,6 +28,11 @@ export function sendErrorText(error: unknown, restored: boolean): string {
   if (error instanceof SendError && (error.status === 409 || error.status === 0))
     return `${error.message}${suffix}`;
   return `Could not send the message.${suffix}`;
+}
+
+/** A send that got no reply at all: the backend may still have recorded it. */
+function isLostReply(error: unknown): boolean {
+  return error instanceof SendError && error.status === 0;
 }
 
 /** Which thread a hook reads and sends to: the main session's, or one session's conversation. */
@@ -169,6 +179,36 @@ export function useThread(source: ThreadSource) {
     [isMain, mainChat, sessionChat, sessionId]
   );
 
+  /** The delivery ids the thread holds, read fresh. Throws when the thread cannot be read. */
+  const readDeliveryIds = useCallback(async (): Promise<string[]> => {
+    if (isMain) {
+      const { data } = await fetchClient.GET('/main-thread');
+      if (!data) throw new Error('The main thread could not be read.');
+      return (data.native?.deliveries ?? []).map((delivery) => delivery.message_id);
+    }
+    const { data } = await fetchClient.GET('/sessions/{session_id}/native', {
+      params: { path: { session_id: sessionId } }
+    });
+    if (!data) throw new Error('The session could not be read.');
+    return data.deliveries.map((delivery) => delivery.message_id);
+  }, [isMain, sessionId]);
+
+  /**
+   * Whether a send that lost its reply was recorded: the thread now holds a delivery it did not
+   * hold before the send. Null when the thread cannot be re-read, so nothing is known.
+   */
+  const recordedSince = useCallback(
+    async (known: ReadonlySet<string>): Promise<boolean | null> => {
+      try {
+        const ids = await readDeliveryIds();
+        return ids.some((id) => !known.has(id));
+      } catch {
+        return null;
+      }
+    },
+    [readDeliveryIds]
+  );
+
   /** Posts one message and shows it at once; the caller holds the send guard. */
   const submit = useCallback(
     async (
@@ -186,6 +226,8 @@ export function useThread(source: ThreadSource) {
           created_at: new Date().toISOString()
         }
       };
+      // The deliveries before this send. A reply lost in transit is checked against them.
+      const known = new Set((native?.deliveries ?? []).map((delivery) => delivery.message_id));
       setSendError(null);
       setOptimistic((list) => [...list, entry]);
       try {
@@ -202,12 +244,24 @@ export function useThread(source: ThreadSource) {
       } catch (error) {
         if (!accepted) {
           setOptimistic((list) => list.filter((item) => item !== entry));
-          setSendError(sendErrorText(error, composer));
+          // No reply does not mean no record. Re-read before the text goes back to the box, so it
+          // is not sent a second time.
+          const lost = isLostReply(error);
+          const recorded = lost ? await recordedSince(known) : false;
+          if (recorded) {
+            accepted = true;
+            if (composer) clearDraft(draftKey);
+            setSendError(LOST_REPLY_RECORDED);
+            await refresh().catch(() => undefined);
+          } else {
+            const unconfirmed = lost && recorded === null ? LOST_REPLY_UNCONFIRMED : '';
+            setSendError(sendErrorText(error, composer) + unconfirmed);
+          }
         }
       }
       return accepted;
     },
-    [draftKey, post, refresh]
+    [draftKey, native?.deliveries, post, recordedSince, refresh]
   );
 
   /**

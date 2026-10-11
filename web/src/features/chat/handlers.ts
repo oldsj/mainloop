@@ -20,6 +20,13 @@ export interface SessionThreadState {
   messages: ChatMessage[];
 }
 
+/**
+ * A send whose reply never reaches the client, so the client sees a network error. `recorded` lands
+ * the message first, as the backend does before it answers. `unrecorded` fails before anything is
+ * stored.
+ */
+export type LostSend = 'recorded' | 'unrecorded';
+
 export interface ChatBackendState {
   mainThread: MainThreadInfo;
   messages: ChatMessage[];
@@ -35,6 +42,8 @@ export interface ChatBackendState {
   mainThreadReads: number;
   /** The next `POST /chat` is refused with this status and detail, then the field clears. */
   rejectNextChat: { status: number; detail: string } | null;
+  /** The next send, to either route, loses its reply. The flag clears after one send. */
+  lostSend: LostSend | null;
   /** Sessions other than the main one, created on first use: their native state and messages. */
   sessionThreads: Record<string, SessionThreadState>;
 }
@@ -85,6 +94,7 @@ export function createChatBackend(
     stopped: [],
     mainThreadReads: 0,
     rejectNextChat: null,
+    lostSend: null,
     sessionThreads: {},
     ...initial
   });
@@ -101,6 +111,13 @@ export function createChatBackend(
     pendingTurns.clear();
     Object.assign(state, freshState());
     counter = state.messages.length;
+  }
+
+  /** Takes the lost-send flag, so only the send that is starting now loses its reply. */
+  function takeLostSend(): LostSend | null {
+    const lost = state.lostSend;
+    state.lostSend = null;
+    return lost;
   }
 
   /** Runs a turn's end later, when the backend was asked to auto-end turns. */
@@ -201,6 +218,8 @@ export function createChatBackend(
       }
       if (state.mainThread.native?.turn_in_flight)
         return HttpResponse.json({ detail: 'A turn is already running.' }, { status: 409 });
+      const lost = takeLostSend();
+      if (lost === 'unrecorded') return HttpResponse.error();
       const conversationId = state.mainThread.conversation_id ?? CONVERSATION_ID;
       const message = messageFixture({
         id: `sent-${++counter}`,
@@ -216,6 +235,7 @@ export function createChatBackend(
         native: startTurn(state.mainThread.native ?? nativeFixture(), message.id)
       };
       scheduleTurnEnd(() => endTurn(`Echo: ${body.message}`));
+      if (lost === 'recorded') return HttpResponse.error();
       const response: Schemas['ChatResponse'] = {
         conversation_id: conversationId,
         message: null,
@@ -246,6 +266,8 @@ export function createChatBackend(
       const thread = sessionThread(sessionId);
       if (thread.native.turn_in_flight)
         return HttpResponse.json({ detail: 'A turn is already running.' }, { status: 409 });
+      const lost = takeLostSend();
+      if (lost === 'unrecorded') return HttpResponse.error();
       const message = messageFixture({
         id: `sent-${++counter}`,
         conversation_id: sessionConversationId(sessionId),
@@ -257,6 +279,7 @@ export function createChatBackend(
         messages: [...thread.messages, message]
       });
       scheduleTurnEnd(() => endSessionTurn(sessionId, `Echo: ${body.message}`));
+      if (lost === 'recorded') return HttpResponse.error();
       const response: Schemas['SessionMessageResponse'] = {
         status: 'ok',
         message_id: message.id

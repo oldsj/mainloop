@@ -107,6 +107,12 @@ MSW fixtures typed from `api/openapi.yaml`.
   text returns to the box; once it is recorded, a later failure to refresh does not undo it. The
   bubble stays until the conversation lists the recorded message, matched on the response's
   `delivery_message_id` (the native backend returns no message body), or its `message.id`.
+- A send that gets no reply (no response) is checked before its text goes back. The conversation is
+  re-read and compared with the deliveries known before the send. A new delivery means the message
+  was recorded: the bubble stays, the box clears, and the notice says so. Otherwise the text returns
+  to the box. If the re-read fails too, the text returns and the notice says Mainloop could not
+  confirm whether the message was recorded. The check cannot tell this message from one another
+  client sends in the same moment, so that case can read as recorded.
 - The box is locked until the thread has loaded, so early typing cannot land in the wrong draft.
 - Drafts are kept per conversation in `sessionStorage`. Only a recorded composer send clears
   its draft; Retry leaves whatever is in the box alone.

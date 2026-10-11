@@ -17,7 +17,7 @@ import {
   nativeFixture
 } from './fixtures';
 import { createChatBackend, type ChatBackendState } from './handlers';
-import { POLL_MS, POLL_WINDOW_MS } from './useThread';
+import { LOST_REPLY_RECORDED, POLL_MS, POLL_WINDOW_MS } from './useThread';
 
 // The card has its own tests in features/hitl; these only check where the page renders it.
 vi.mock('@/features/hitl', () => ({
@@ -167,6 +167,30 @@ describe('sending', () => {
     expect(await screen.findByText('accepted')).toBeInTheDocument();
     expect(screen.queryByTestId('send-error')).toBeNull();
     expect(input().value).toBe('');
+  });
+
+  it('shows a message recorded before its reply was lost, and clears the draft', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.lostSend = 'recorded';
+    await userEvent.type(input(), 'kept{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(LOST_REPLY_RECORDED);
+    expect(await screen.findByText('kept')).toBeInTheDocument();
+    expect(input().value).toBe('');
+    expect(loadDraft(CONVERSATION_ID)).toBe('');
+    expect(state.chatPosts).toHaveLength(1);
+  });
+
+  it('gives the text back when a lost reply shows nothing was recorded', async () => {
+    const { state } = setup(existing());
+    await screen.findByText('build it');
+    state.lostSend = 'unrecorded';
+    await userEvent.type(input(), 'lost{Enter}');
+    expect(await screen.findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box."
+    );
+    expect(input().value).toBe('lost');
+    expect(loadDraft(CONVERSATION_ID)).toBe('lost');
   });
 
   it('locks the composer while a turn is in flight', async () => {

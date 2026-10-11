@@ -9,10 +9,12 @@ export interface ThreadBodyProps {
   offline: boolean;
   /** Names the thread in the load error, as in "Could not load the main thread". */
   label: string;
+  /** Why the thread takes no more messages. Set, the box is locked and this line says why. */
+  closedReason?: string | null;
 }
 
 /** The conversation timeline, the send and stop errors, and the composer, for any thread. */
-export function ThreadBody({ thread, offline, label }: ThreadBodyProps) {
+export function ThreadBody({ thread, offline, label, closedReason = null }: ThreadBodyProps) {
   return (
     <>
       {thread.loadFailed && !offline ? (
@@ -63,12 +65,18 @@ export function ThreadBody({ thread, offline, label }: ThreadBodyProps) {
         </p>
       ) : null}
 
+      {closedReason ? (
+        <p className="text-muted-foreground px-md py-xs shrink-0 text-sm" role="status">
+          {closedReason}
+        </p>
+      ) : null}
       <Composer
         draftKey={thread.draftKey}
         busy={thread.busy || thread.sendPending}
         loading={!thread.threadKnown && !thread.loadFailed}
         unavailable={thread.loadFailed}
         offline={offline}
+        closed={closedReason !== null}
         onSend={(text) => thread.send(text, thread.conversationId)}
       />
     </>

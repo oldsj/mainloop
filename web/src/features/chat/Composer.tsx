@@ -15,6 +15,8 @@ export interface ComposerProps {
   unavailable?: boolean;
   /** The backend is unreachable. The draft is kept and sending is off. */
   offline: boolean;
+  /** The thread takes no more messages, so the box is locked. The thread says why. */
+  closed?: boolean;
   /**
    * Sends the text. Resolves true once the backend recorded the message; false puts the text
    * back in the box. The caller clears the stored draft on success.
@@ -22,9 +24,16 @@ export interface ComposerProps {
   onSend: (text: string) => Promise<boolean>;
 }
 
-function placeholder(offline: boolean, busy: boolean, loading: boolean, unavailable: boolean) {
+function placeholder(
+  offline: boolean,
+  busy: boolean,
+  loading: boolean,
+  unavailable: boolean,
+  closed: boolean
+) {
   if (offline) return 'Backend unreachable…';
   if (unavailable) return 'Thread did not load…';
+  if (closed) return 'Closed to new messages';
   if (loading) return 'Loading…';
   if (busy) return 'Working…';
   return 'Enter command...';
@@ -37,6 +46,7 @@ export function Composer({
   loading = false,
   unavailable = false,
   offline,
+  closed = false,
   onSend
 }: ComposerProps) {
   const [text, setText] = useState(() => loadDraft(draftKey));
@@ -51,7 +61,7 @@ export function Composer({
     setText(loadDraft(draftKey));
   }
 
-  const disabled = busy || loading || unavailable || offline || sending;
+  const disabled = busy || loading || unavailable || offline || closed || sending;
 
   // Grow with the text up to a few lines, then scroll.
   useLayoutEffect(() => {
@@ -110,7 +120,7 @@ export function Composer({
         rows={1}
         value={text}
         disabled={disabled}
-        placeholder={placeholder(offline, busy, loading, unavailable)}
+        placeholder={placeholder(offline, busy, loading, unavailable, closed)}
         aria-label="Message"
         onChange={(event) => change(event.target.value)}
         onKeyDown={keyDown}
