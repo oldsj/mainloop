@@ -142,8 +142,9 @@ the whole deployment: the contract gives schedules no project scope.
   its state and any failure reason, and links "Open session" once the run has a session. Otherwise
   it says "No session yet." Older runs load with "Load older executions".
 
-Not done yet: schedules do not refresh live. The `schedule:updated` event maps to no query
-invalidation, so the pages refresh on reload or after a reconnect.
+Live updates: a `schedule:updated` event refreshes the schedule list, the open schedule and its
+executions. The event names only the change, so each page re-reads the server. A reconnect also
+refreshes every query. A real server event has not been observed; the tests send a fake one.
 
 Evidence: vitest with MSW covers each behaviour above. The MSW handlers are hand-written and no test
 checks them against `api/openapi.yaml`, so the contract match rests on review. No run has been made
