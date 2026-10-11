@@ -55,6 +55,12 @@ type Credentials struct {
 	Log    *slog.Logger
 }
 
+// NewCredentials builds the credential service over the database and a Secret store. The key signs
+// the bearers; prefix starts every Secret name.
+func NewCredentials(pool *pgxpool.Pool, secrets SecretStore, key []byte, prefix string, log *slog.Logger) *Credentials {
+	return &Credentials{Pool: pool, Secrets: secrets, Key: key, Prefix: prefix, Log: log}
+}
+
 // Issued is a published credential.
 type Issued struct {
 	CredentialID string

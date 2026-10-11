@@ -670,7 +670,7 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			return plan{}, ErrProjectNotFound
 		}
 	} else {
-		project, err = s.projectImporter().Import(ctx, *body.Repo)
+		project, err = s.Projects.Import(ctx, *body.Repo)
 		if errors.Is(err, projects.ErrInvalidRepo) {
 			return plan{}, &InvalidError{"repo must be a GitHub repository (owner/name or its https URL)"}
 		}
@@ -711,14 +711,6 @@ func (s *Service) plan(ctx context.Context, body api.CreateWorkspaceRequest) (pl
 			IdleTimeoutMinutes: int32(idle), Environment: env, RequestID: uuid.NewString(),
 		},
 	}, nil
-}
-
-// projectImporter is the importer a workspace request creates its project through.
-func (s *Service) projectImporter() ProjectImporter {
-	if s.Projects != nil {
-		return s.Projects
-	}
-	return &projects.Service{Pool: s.Pool, OwnerID: s.OwnerID, Log: s.Log}
 }
 
 // environment resolves the project's selected development environment to the exact image the

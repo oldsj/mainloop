@@ -14,6 +14,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/httpx/httpxtest"
 )
 
 var ok = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -330,5 +331,17 @@ func TestMaxBody(t *testing.T) {
 	// Chunked or lying clients are caught while reading.
 	if got := post(io.MultiReader(strings.NewReader("123456789")), -1); got != 413 {
 		t.Errorf("undeclared length over the cap: %d", got)
+	}
+}
+
+func TestStandardChainStampsTheIDBeforeTheAccessLine(t *testing.T) {
+	var logs bytes.Buffer
+	h := httpx.Chain(ok, httpx.Standard(slog.New(slog.NewJSONHandler(&logs, nil)), map[string]bool{"api.test": true}, false, "/health"))
+	// An allowed host, an exempt probe and a refused host all log a request id.
+	do(h, "GET", "/x", map[string]string{"Host": "api.test"})
+	do(h, "GET", "/health", map[string]string{"Host": "10.1.2.3:8000"})
+	do(h, "GET", "/x", map[string]string{"Host": "evil.example"})
+	if ids := httpxtest.RequireRequestID(t, logs.String()); len(ids) != 3 {
+		t.Fatalf("access lines = %d, want 3: %s", len(ids), logs.String())
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/health"
@@ -74,7 +75,9 @@ func healthServer(t *testing.T) http.Handler {
 			t.Fatal(err)
 		}
 	}
-	h, err := app.New(app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: up(), Pool: pool}).Handler()
+	deps := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	deps.DB = up()
+	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}

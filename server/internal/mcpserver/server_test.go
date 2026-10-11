@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/httpx/httpxtest"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -59,7 +60,8 @@ func buildHarness(t *testing.T, mergeTools, realDepth bool, mod func(*mcpserver.
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := &tasks.Service{Pool: d.Pool, Providers: reg, DefaultProfile: "claude", MergeTools: mergeTools}
+	taskSvc := tasks.NewService(cfg, d.Pool, reg, slog.Default())
+	taskSvc.DefaultProfile, taskSvc.MergeTools = "claude", mergeTools
 	q := dbq.New(d.Pool)
 	auth := &agentauth.Authenticator{Q: q, Depth: func(_ context.Context, row dbq.GetMCPActorRow) (int, bool, error) {
 		switch row.Role {
@@ -436,5 +438,20 @@ func TestWhoamiOfAWorkspaceAgentReportsItsScope(t *testing.T) {
 	if sc["scope_status"] != "available" || sc["grant_status"] != "active" || sc["repository"] != "oldsj/mainloop" ||
 		sc["branch"] != "feature-x" || sc["project_id"] != "p1" || sc["workspace_id"] != s.SessionID {
 		t.Errorf("scoped workspace agent: %v", sc)
+	}
+}
+
+// Every access line carries a request id, whether the request is served, unauthenticated or sent to
+// a foreign host.
+func TestAccessLinesCarryARequestID(t *testing.T) {
+	var logs bytes.Buffer
+	h := buildHarness(t, false, false, func(s *mcpserver.Server, _ *pgxpool.Pool) {
+		s.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	})
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+	h.post(mcpserver.PathOrdinary, host, "", body)
+	h.post(mcpserver.PathOrdinary, "evil.example", "", body)
+	if ids := httpxtest.RequireRequestID(t, logs.String()); len(ids) != 2 {
+		t.Fatalf("access lines = %d, want 2: %s", len(ids), logs.String())
 	}
 }

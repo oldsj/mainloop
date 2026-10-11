@@ -110,7 +110,7 @@ waitForDiscovery:
 	if err := e.pool.QueryRow(ctx, `SELECT state, health_tracked FROM deliveries WHERE id = 'msg-1'`).Scan(&final, &tracked); err != nil || final != "completed" || !tracked {
 		t.Fatalf("terminal state %s, tracked %t: %v", final, tracked, err)
 	}
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if events, receipts := e.count(t, "health_events"), e.count(t, "health_collection"); events != 12 || receipts != 2 {

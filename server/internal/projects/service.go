@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
@@ -448,4 +449,15 @@ func (s *Service) SetMergePolicy(ctx context.Context, id string, policy dbstate.
 		return MergePolicy{}, fmt.Errorf("set merge policy: %w", err)
 	}
 	return out, nil
+}
+
+// NewService builds the service. remote is nil when no GitHub App is configured. policy advances the
+// push policy when GitHub's default branch changes. needsOwner reports whether a session is waiting
+// on the owner (the attention projection owns that answer). Nil for a test that needs none.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, remote Remote, policy PolicyAdvancer,
+	needsOwner func(ctx context.Context, sessionID string) bool, log *slog.Logger) *Service {
+	return &Service{
+		Pool: pool, Remote: remote, OwnerID: cfg.Identity.OwnerID,
+		PolicyWrites: bool(cfg.OwnerPolicyWritesEnabled), Policy: policy, NeedsOwner: needsOwner, Log: log,
+	}
 }

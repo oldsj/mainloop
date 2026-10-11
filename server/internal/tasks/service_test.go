@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -40,8 +41,9 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, pool: d.Pool, own: tasks.OwnerPrincipal(owner),
-		svc: &tasks.Service{Pool: d.Pool, Providers: reg, DefaultProfile: "claude", MergeTools: true}}
+	svc := tasks.NewService(cfg, d.Pool, reg, slog.Default())
+	svc.DefaultProfile, svc.MergeTools = "claude", true
+	e := &env{t: t, pool: d.Pool, own: tasks.OwnerPrincipal(owner), svc: svc}
 	for _, id := range []string{"p1", "p2"} {
 		e.exec(`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ($1, $2, 'o', $1, 'o/'||$1, 'https://example.test/'||$1)`, id, owner)
 	}

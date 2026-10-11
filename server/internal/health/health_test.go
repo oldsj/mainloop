@@ -284,7 +284,7 @@ func TestRecoveryRebuildsAfterLostCollection(t *testing.T) {
 	e.exec(t, `TRUNCATE health_events, health_turns, health_collection`)
 	// The flag on a delivery says its receipt exists; a wiped collection leaves nothing to say it for.
 	e.exec(t, `UPDATE deliveries SET health_tracked = false`)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.dump(t); got != direct {
@@ -297,7 +297,7 @@ func TestRecoveryRebuildsAfterLostCollection(t *testing.T) {
 		t.Fatalf("kagent reads = %d, want one per task", e.kc.callCount())
 	}
 	// Collected receipts are final: another pass reads nothing.
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if e.kc.callCount() != 2 {
@@ -322,7 +322,7 @@ func TestRecoveryBacksOffAndGivesUp(t *testing.T) {
 	e.svc.MaxAttempts = 2
 	e.kc.fail[task1] = errors.New("kagent is down")
 
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	var state string
@@ -346,7 +346,7 @@ func TestRecoveryBacksOffAndGivesUp(t *testing.T) {
 		t.Fatalf("turns = %d", e.count(t, "health_turns"))
 	}
 	calls := e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil || e.kc.callCount() != calls {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil || e.kc.callCount() != calls {
 		t.Fatalf("read again inside its backoff: %d -> %d %v", calls, e.kc.callCount(), err)
 	}
 	// The page says what it could not see.
@@ -355,7 +355,7 @@ func TestRecoveryBacksOffAndGivesUp(t *testing.T) {
 	}
 	// The delay passes; the second failure is the last.
 	e.exec(t, `UPDATE health_collection SET next_attempt_at = now() WHERE a2a_task_id = $1`, task1)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	read()
@@ -366,7 +366,7 @@ func TestRecoveryBacksOffAndGivesUp(t *testing.T) {
 	delete(e.kc.fail, task1)
 	e.exec(t, `UPDATE health_collection SET next_attempt_at = now()`)
 	calls = e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil || e.kc.callCount() != calls {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil || e.kc.callCount() != calls {
 		t.Fatalf("an unavailable receipt was read: %v", err)
 	}
 }
@@ -375,13 +375,13 @@ func TestRecoveryBacksOffAndGivesUp(t *testing.T) {
 func TestRecoveryAbandonsDeletedSession(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	if err := e.svc.Recover(ctx); err != nil { // discovers and collects both
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil { // discovers and collects both
 		t.Fatal(err)
 	}
 	e.exec(t, `UPDATE health_collection SET state = 'pending'`)
 	e.exec(t, `DELETE FROM sessions WHERE id = 'session-1'`)
 	calls := e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	var unavailable int
@@ -399,7 +399,7 @@ func TestSweepsAreSingleRunner(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	runner := reconcile.NewRunner(e.pool, e.svc.Log, nil)
-	for _, sweep := range []reconcile.Sweep{e.svc.RecoverSweep(), e.svc.RetainSweep()} {
+	for _, sweep := range []reconcile.Sweep{e.svc.RecoverSweep(fakeAgents{}), e.svc.RetainSweep()} {
 		if _, err := e.pool.Exec(ctx, `INSERT INTO sweep_leases (name, holder, until) VALUES ($1, 'other-process', now() + interval '60 seconds')`, sweep.Name); err != nil {
 			t.Fatalf("%s: take the lease: %v", sweep.Name, err)
 		}
@@ -422,7 +422,7 @@ func TestSweepsAreSingleRunner(t *testing.T) {
 	if e.count(t, "health_turns") != 2 {
 		t.Fatalf("the recovery sweep collected %d turns", e.count(t, "health_turns"))
 	}
-	if sw := e.svc.RecoverSweep(); sw.Every <= 0 || e.svc.RetainSweep().Every <= 0 {
+	if sw := e.svc.RecoverSweep(fakeAgents{}); sw.Every <= 0 || e.svc.RetainSweep().Every <= 0 {
 		t.Fatalf("a sweep has no period: %+v", sw)
 	}
 }
@@ -522,7 +522,7 @@ func TestOldReceiptGapsStayOutOfTheWindow(t *testing.T) {
 	e := newEnv(t)
 	e.kc.fail[task1] = errors.New("down")
 	e.svc.Now = nil
-	if err := e.svc.Recover(context.Background()); err != nil {
+	if err := e.svc.Recover(context.Background(), fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if gaps := e.view(t, health.Filter{Hours: 24}).Rows[0].Gaps; len(gaps) != 1 {
@@ -569,7 +569,7 @@ func TestEventsRoute(t *testing.T) {
 func TestReadsNeverWrite(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	e.kc.fail[task1] = errors.New("down") // a read that tried to recover would call kagent

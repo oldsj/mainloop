@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oldsj/mainloop/server/internal/app"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/github/githubtest"
 )
@@ -27,12 +27,10 @@ func TestProductionObserverWiringProjectsAndPublishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := app.Deps{Config: mustConfig(t), Log: slog.Default(), Pool: r.pool, GitHub: gh}
-	if disconnected := app.New(d).TasksAPI.Svc.Observer; disconnected != nil {
+	if disconnected := apptest.Deps(t, mustConfig(t), slog.Default(), r.pool).Tasks.Observer; disconnected != nil {
 		t.Fatal("missing observer was wired as a typed nil")
 	}
-	d.TaskObserver = &github.TaskObserver{App: gh}
-	r.svc = app.New(d).TasksAPI.Svc
+	r.svc = apptest.Deps(t, mustConfig(t), slog.Default(), r.pool, apptest.WithTaskObserver(&github.TaskObserver{App: gh})).Tasks
 	if r.svc.Observer == nil {
 		t.Fatal("configured observer is missing")
 	}
@@ -72,9 +70,7 @@ func TestReviewCollectionTimeSurvivesPersistenceDelay(t *testing.T) {
 				t.Fatal(err)
 			}
 			observer := &github.TaskObserver{App: gh}
-			r.svc = app.New(app.Deps{
-				Config: mustConfig(t), Log: slog.Default(), Pool: r.pool, TaskObserver: observer,
-			}).TasksAPI.Svc
+			r.svc = apptest.Deps(t, mustConfig(t), slog.Default(), r.pool, apptest.WithTaskObserver(observer)).Tasks
 			if path == "unchanged" {
 				r.project()
 				if got := r.view(r.own, id).Projection; string(got.CiState) != "success" {

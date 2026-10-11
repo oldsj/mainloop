@@ -113,7 +113,7 @@ func newEnv(t *testing.T) *env {
 	e.svc = &health.Service{
 		Pool: pool, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), OwnerID: owner, Gateway: gateway,
 		EventRetention: 7 * 24 * time.Hour, SummaryRetention: 90 * 24 * time.Hour,
-		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, Kagent: kc, Agents: fakeAgents{},
+		MaxChildrenPerParent: 3, MaxChildrenGlobal: 6, Kagent: kc,
 	}
 	e.exec(t, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('project-1', $1, 'o', 'r', 'o/r', 'https://x.example/o/r')`, owner)
 	e.session(t, "session-1", "project-1", runtimeSession)

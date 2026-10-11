@@ -2,21 +2,18 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/attention"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
-	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
@@ -60,8 +57,6 @@ type Server struct {
 	fallback
 
 	deps Deps
-	// initErr is a domain that failed to build from configuration; Handler reports it.
-	initErr error
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -77,32 +72,31 @@ type Deps struct {
 	Hub  *events.Hub
 	// Registry reads image metadata for environments. Nil means the anonymous OCI client.
 	Registry environments.RegistryClient
-	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
-	GitHub projects.Remote
-	// TaskObserver reads PR and CI facts. Nil leaves task projection disconnected.
-	TaskObserver *github.TaskObserver
+
+	// Everything below is built by the caller with the services' own constructors, once per process.
+	// Providers, Projects, Sessions, HITL, Attention, Health and Schedules are required; New does not
+	// build a stand-in for a missing one.
+
+	// Providers is the provider registry behind the provider routes and task profiles.
+	Providers *providers.Registry
+	// Projects imports and serves projects.
+	Projects *projects.Service
+	// Tasks serves tasks. Nil answers the task routes with 503 (a process without a database).
+	Tasks *tasks.Service
 	// Workspaces runs the workspace lifecycle. Nil answers the workspace routes with 503.
 	Workspaces *workspaces.Service
-	// Sessions is the main thread service, shared with the delivery loop. Nil builds one with no
-	// kagent client, which records sends but does not deliver them.
+	// Sessions is the main thread service, shared with the delivery loop.
 	Sessions *sessions.Service
-	// Credentials issues and revokes agent bearers; there is one per process. The sessions and
-	// workspaces services receive it from serve-api. Nil in tests that issue no credentials.
-	Credentials *agentauth.Credentials
 	// Preview routes preview hosts to workspace dev servers. Nil serves no previews, and a
 	// preview host is then refused by the Host guard like any unknown host.
 	Preview *preview.Proxy
-	// HITL observes kagent for tasks that wait for the owner and carries the answers back. Nil builds
-	// one with no kagent client: it serves what is recorded but observes and sends nothing.
+	// HITL observes kagent for tasks that wait for the owner and carries the answers back.
 	HITL *hitl.Service
-	// Attention is the owner's inbox. Nil builds one over Pool; the task-decision sweep runs only
-	// where the caller registers it.
+	// Attention is the owner's inbox.
 	Attention *attention.Service
-	// Health serves orchestration health and the smoke ledger. Nil builds one over Pool with no
-	// kagent client: it serves what is stored and collects nothing.
+	// Health serves orchestration health and the smoke ledger.
 	Health *health.Service
-	// Schedules serves scheduled runs. Nil builds one over Pool with no kagent client: the routes
-	// answer 503 and nothing is adopted.
+	// Schedules serves scheduled runs; its routes answer 503 when it has no kagent client.
 	Schedules *schedules.Service
 	// Merge serves the owner's read of a merge proposal's details. Nil answers that route with 503.
 	Merge *merge.Service
@@ -112,83 +106,30 @@ type Deps struct {
 // so the cap has to sit in this chain.
 const maxBodyBytes = 4 << 20
 
-// New builds the Server.
+// New builds the Server from services the caller has already built.
 func New(d Deps) *Server {
-	prov, err := providers.NewAPI(d.Config, d.Pool)
-	var taskSvc *tasks.Service
-	if d.Pool != nil && prov != nil {
-		taskSvc = &tasks.Service{
-			Pool: d.Pool, Providers: prov.Registry, DefaultProfile: d.Config.Tasks.DefaultProviderProfileID,
-			MergeTools: bool(d.Config.MergeToolsEnabled),
-			Limits: tasks.Limits{
-				MaxChildrenPerParent: d.Config.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: d.Config.Tasks.MaxChildrenGlobal,
-				ProvisionWindow: d.Config.Tasks.ProvisionWindow.Duration(), Interval: d.Config.Tasks.ReconcileInterval.Duration(),
-				ProjectionEvery: d.Config.Tasks.ProjectionEvery.Duration(),
-			},
-			Log: d.Log,
-		}
-		if d.TaskObserver != nil {
-			taskSvc.Observer = taskObserver{remote: d.TaskObserver}
-		}
-		// An interface holding a nil pointer is not nil: set the runtimes only when they exist.
-		if d.Workspaces != nil {
-			taskSvc.Workspaces = d.Workspaces
-		}
-		if d.Sessions != nil {
-			taskSvc.Sessions = d.Sessions
-			// A nil kagent client means nothing can run, so a requested stop has nothing to observe.
-			if d.Sessions.Kagent != nil {
-				kt, ok := d.Sessions.Kagent.(tasks.KagentTasks)
-				if !ok {
-					// A client that cannot list tasks cannot prove a stop: no stop is ever confirmed.
-					kt = nil
-				}
-				taskSvc.StopObserver = &tasks.KagentStops{
-					Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Sessions: d.Sessions, Kagent: kt,
-				}
-			}
-		}
-	}
-	att := attentionService(d)
 	return &Server{
-		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
-		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
-			Pool: d.Pool, Remote: d.GitHub, OwnerID: d.Config.Identity.OwnerID,
-			PolicyWrites: bool(d.Config.OwnerPolicyWritesEnabled), Log: d.Log, NeedsOwner: att.NeedsOwner,
-		}},
-		ProvidersAPI:    prov,
+		HealthAPI:       &HealthAPI{DB: d.DB, Log: d.Log},
+		ProjectsAPI:     &projects.ProjectsAPI{Svc: d.Projects},
+		ProvidersAPI:    providers.NewAPI(d.Config, d.Pool, d.Providers),
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
 		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
 		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
-		SessionsAPI:     sessions.NewAPI(d.Sessions, d.Config, d.Pool, d.Log),
-		TasksAPI:        &tasks.TasksAPI{Svc: taskSvc, OwnerID: d.Config.Identity.OwnerID},
-		API:             hitl.NewAPI(hitlService(d)),
-		AttentionAPI:    attention.NewAPI(att),
-		DataAPI:         health.NewAPI(healthService(d)),
-		SchedulesAPI:    schedules.NewAPI(schedulesService(d)),
+		SessionsAPI:     sessions.NewAPI(d.Sessions),
+		TasksAPI:        &tasks.TasksAPI{Svc: d.Tasks, OwnerID: d.Config.Identity.OwnerID},
+		API:             hitl.NewAPI(d.HITL),
+		AttentionAPI:    attention.NewAPI(d.Attention),
+		DataAPI:         health.NewAPI(d.Health),
+		SchedulesAPI:    schedules.NewAPI(d.Schedules),
 		MergeAPI:        &merge.MergeAPI{Svc: d.Merge, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
-		initErr:         err,
 	}
-}
-
-// taskObserver bridges the GitHub facts without making github depend on its consumers.
-type taskObserver struct{ remote *github.TaskObserver }
-
-var _ tasks.Observer = taskObserver{}
-
-func (o taskObserver) Observe(ctx context.Context, repo, branch string, expectedPR int) (tasks.Observation, error) {
-	obs, err := o.remote.Observe(ctx, repo, branch, expectedPR)
-	return tasks.Observation(obs), err
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap, then the
 // Host guard, Origin guard and CORS, with preview hosts routed ahead of them, all inside panic
 // recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
-	if s.initErr != nil {
-		return nil, s.initErr
-	}
 	d := s.deps
 	spec, err := api.GetSpec()
 	if err != nil {
@@ -223,11 +164,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	if d.Preview != nil {
 		routed = d.Preview.Route(ownerAPI)
 	}
-	return httpx.Chain(routed,
-		httpx.AccessLog(d.Log),
-		httpx.RequestIDMiddleware,
-		httpx.Recover(d.Log),
-	), nil
+	return httpx.Chain(routed, httpx.Observed(d.Log)), nil
 }
 
 // requestDecodeError is the strict handler's body-decode failure callback: a body past the cap
@@ -241,32 +178,4 @@ func requestDecodeError(log *slog.Logger) func(http.ResponseWriter, *http.Reques
 		httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		log.Debug("request decode failed", "error", err)
 	}
-}
-
-func hitlService(d Deps) *hitl.Service {
-	if d.HITL != nil {
-		return d.HITL
-	}
-	return hitl.NewService(d.Config, d.Pool, nil, d.Log)
-}
-
-func schedulesService(d Deps) *schedules.Service {
-	if d.Schedules != nil {
-		return d.Schedules
-	}
-	return &schedules.Service{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Log: d.Log}
-}
-
-func attentionService(d Deps) *attention.Service {
-	if d.Attention != nil {
-		return d.Attention
-	}
-	return &attention.Service{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Log: d.Log}
-}
-
-func healthService(d Deps) *health.Service {
-	if d.Health != nil {
-		return d.Health
-	}
-	return health.NewService(d.Config, d.Pool, d.Log)
 }

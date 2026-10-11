@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
+	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
@@ -29,10 +30,11 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	taskSvc, err := tasks.NewService(cfg, pool)
+	reg, err := providers.NewRegistry(cfg.Kagent)
 	if err != nil {
 		return err
 	}
+	taskSvc := tasks.NewService(cfg, pool, reg, log)
 	gh, err := newGitHubApp(cfg)
 	if err != nil {
 		return err
@@ -80,10 +82,7 @@ func newCredentialsWith(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger
 	} else {
 		log.Warn("credential cleanup is off and credentials cannot be issued: not running in a cluster")
 	}
-	return &agentauth.Credentials{
-		Pool: pool, Secrets: store, Key: []byte(cfg.Identity.AgentTokenKey.Reveal()),
-		Prefix: cfg.CredentialSecretPrefix(), Log: log,
-	}, nil
+	return agentauth.NewCredentials(pool, store, []byte(cfg.Identity.AgentTokenKey.Reveal()), cfg.CredentialSecretPrefix(), log), nil
 }
 
 // registerCredentials adds the cleanup loop to the runner when the credentials can reach

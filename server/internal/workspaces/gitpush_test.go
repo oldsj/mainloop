@@ -81,7 +81,7 @@ func queuedPushWorkspaceWithDefault(t *testing.T, h *harness, branch string, tas
 	t.Helper()
 	a := h.withGitRead()
 	u := &localPushUpstream{}
-	h.svc.GitPush = &GitPush{Upstream: u, Origin: h.cfg.Git.PushOrigin}
+	h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, u, a.Creds), Origin: h.cfg.Git.PushOrigin}
 	h.cfg.Workspaces.OperationWait = 10e6
 	w, err := h.create(api.CreateWorkspaceRequest{Branch: &branch})
 	if err != nil {
@@ -290,7 +290,7 @@ func TestWorkspacePushReadOnlyAndExistingSessionGetNone(t *testing.T) {
 				h.svc.GitPush = nil
 				createPushSession(t, h)
 				h.exec(`UPDATE workspaces SET git_push_decided=false,git_push_credential=NULL WHERE id=$1`, w.ID)
-				h.svc.GitPush = &GitPush{Upstream: &localPushUpstream{}, Origin: h.cfg.Git.PushOrigin}
+				h.svc.GitPush = &GitPush{Gate: pushgate.NewService(h.svc.Pool, h.svc.Kagent, &localPushUpstream{}, h.svc.Credentials), Origin: h.cfg.Git.PushOrigin}
 				ref, err := h.svc.gitPushForCreate(bg, h.row(w.ID))
 				if err != nil || ref != nil {
 					t.Fatal("existing Session was retrofitted")
@@ -368,7 +368,7 @@ func (f *pushFixture) pushThroughGate(h *harness, a *authtest.Env, w wsRow, u *l
 		t.Fatal(err)
 	}
 	credential := secret.Data[ref.GetSecretRef().GetKey()]
-	gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.client, Upstream: u}
+	gate := pushgate.NewService(h.svc.Pool, h.client, u, nil)
 	server := &pushgate.Server{Service: gate, Enabled: true, Dev: true, SpoolRoot: filepath.Join(f.root, "spool"), Limits: pushgate.Limits{BodyBytes: 1 << 20, DiskBytes: 8 << 20}}
 	proxy := httptest.NewServer(server.Handler())
 	t.Cleanup(proxy.Close)

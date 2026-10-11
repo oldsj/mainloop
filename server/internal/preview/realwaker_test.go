@@ -12,6 +12,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
+	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
@@ -52,10 +53,9 @@ func realWorkspace(t *testing.T, e *env) (svc *workspaces.Service, fake *kagentt
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc = &workspaces.Service{
-		Pool: e.pool, Kagent: client, Providers: reg, Config: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		OwnerID: owner, Deliveries: noDeliveries{}, PollEvery: 5 * time.Millisecond,
-	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc = workspaces.New(cfg, e.pool, client, reg, nil, noDeliveries{}, projects.NewService(cfg, e.pool, nil, nil, nil, log), log)
+	svc.PollEvery = 5 * time.Millisecond
 	e.proxy.Waker = svc
 
 	r := reconcile.NewRunner(e.pool, svc.Log, nil)

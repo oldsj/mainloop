@@ -177,11 +177,14 @@ type Service struct {
 	MergeRuntime MergeRuntime
 }
 
-// NewService builds the service from the configuration.
-func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
+// NewService builds the service from the configuration. agents resolves the Agent that runs each
+// session and ready makes a session ready before an answer is sent; both are the session service in
+// the server, and nil in a test that has no sessions (every session is then taken to run on the main
+// Agent and the answer is sent as it is).
+func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, agents AgentResolver, ready SessionReadier, log *slog.Logger) *Service {
 	runtime, _ := k.(MergeRuntime)
 	return &Service{
-		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
+		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log, Agents: agents, Ready: ready,
 		Agent:         kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		WritesEnabled: bool(cfg.OwnerHITLWritesEnabled),
 		MergeConfigs:  cfg.MergeConfigurations, MergeRuntime: runtime,

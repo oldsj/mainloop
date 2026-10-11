@@ -73,12 +73,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle(PathOrdinary, s.endpoint(SurfaceOrdinary, tools))
 	mux.Handle(PathApproval, s.endpoint(agentauth.SurfaceApproval, tools))
-	return httpx.Chain(mux,
-		httpx.AccessLog(s.Log),
-		httpx.RequestIDMiddleware,
-		httpx.Recover(s.Log),
-		httpx.HostGuard(s.AllowedHosts, s.Dev, "/health"),
-	)
+	return httpx.Chain(mux, httpx.Standard(s.Log, s.AllowedHosts, s.Dev, "/health"))
 }
 
 // SurfaceOrdinary is the surface of /mcp.

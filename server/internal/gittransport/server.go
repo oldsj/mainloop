@@ -99,12 +99,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = io.WriteString(w, `{"status":"ready"}`)
 	})
 	mux.HandleFunc("/", s.serve)
-	return httpx.Chain(mux,
-		httpx.RequestIDMiddleware,
-		httpx.AccessLog(s.log()),
-		httpx.Recover(s.log()),
-		httpx.HostGuard(s.AllowedHosts, s.Dev, "/health", "/ready"),
-	)
+	return httpx.Chain(mux, httpx.Standard(s.log(), s.AllowedHosts, s.Dev, "/health", "/ready"))
 }
 
 func (s *Server) log() *slog.Logger {

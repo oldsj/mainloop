@@ -17,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
+	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -128,11 +129,9 @@ func newHarness(t *testing.T, extra map[string]string) *harness {
 	h.client = client
 	pool := testdb.New(t).Pool
 	h.dq = dbq.New(pool)
-	h.svc = &Service{
-		Pool: pool, Kagent: client, Providers: mustRegistry(t, cfg), Config: cfg,
-		Log: slog.New(slog.NewTextHandler(&h.logs, nil)), OwnerID: owner, Deliveries: h.dl,
-		PollEvery: 5 * time.Millisecond,
-	}
+	h.svc = New(cfg, pool, client, mustRegistry(t, cfg), nil, h.dl, &projects.Service{Pool: pool, OwnerID: owner, Log: slog.New(slog.NewTextHandler(&h.logs, nil))},
+		slog.New(slog.NewTextHandler(&h.logs, nil)))
+	h.svc.PollEvery = 5 * time.Millisecond
 	return h
 }
 

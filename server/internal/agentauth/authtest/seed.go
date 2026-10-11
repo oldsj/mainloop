@@ -34,9 +34,7 @@ func NewEnv(pool *pgxpool.Pool) *Env {
 	cl := secretstest.New()
 	return &Env{
 		Pool: pool, Cluster: cl,
-		Creds: &agentauth.Credentials{
-			Pool: pool, Secrets: k8ssecrets.New(cl, Namespace), Key: Key, Prefix: "mainloop",
-		},
+		Creds: agentauth.NewCredentials(pool, k8ssecrets.New(cl, Namespace), Key, "mainloop", nil),
 	}
 }
 

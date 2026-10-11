@@ -38,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -591,4 +592,10 @@ func (s *Service) whyNotDismissed(ctx context.Context, q *dbq.Queries, itemID st
 		}
 	}
 	return ErrNotFound
+}
+
+// NewService builds the service over the database. Its task-decision sweep runs only where the
+// caller registers it.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Service {
+	return &Service{Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log}
 }

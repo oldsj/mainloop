@@ -48,7 +48,8 @@ type Deliveries interface {
 	LastActivity(ctx context.Context, sessionID string) (time.Time, error)
 }
 
-// Service is the workspace lifecycle. Build it with all fields set (Deliveries and Now optional).
+// Service is the workspace lifecycle. Build it with [New]; the fields stay exported for tests that
+// vary one collaborator.
 type Service struct {
 	Pool       *pgxpool.Pool
 	Kagent     Kagent
@@ -58,7 +59,7 @@ type Service struct {
 	OwnerID    string
 	Deliveries Deliveries
 	// Credentials publishes a workspace agent's MCP credential before its Session is created and
-	// revokes it with the workspace. Nil creates Sessions without MCP tools.
+	// revokes it with the workspace.
 	Credentials *agentauth.Credentials
 	// GitRead enrolls workspaces for git read and adds the capability to their Sessions. Nil
 	// creates Sessions without it.
@@ -66,9 +67,7 @@ type Service struct {
 	// GitPush reserves creation-time references for writable task attempts. Enrollment waits for
 	// the task's active writer and a freshly confirmed native runtime.
 	GitPush *GitPush
-	// Projects creates the project of a workspace requested by repository. Nil imports through a
-	// [projects.Service] without GitHub access, which records the project and leaves its metadata
-	// to the project-metadata sweep.
+	// Projects creates the project of a workspace requested by repository.
 	Projects ProjectImporter
 	// Now is the clock for retry-window decisions; nil means time.Now.
 	Now func() time.Time
@@ -123,3 +122,14 @@ func pgxTx(ctx context.Context, s *Service, fn func(q *dbq.Queries) error) error
 }
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// Option sets a genuinely optional collaborator of [New].
+type Option func(*Service)
+
+// WithGitRead enrolls workspaces for git read and adds the capability to their Sessions. Without it
+// Sessions are created without that capability.
+func WithGitRead(g *GitRead) Option { return func(s *Service) { s.GitRead = g } }
+
+// WithGitPush reserves creation-time push references for writable task attempts and enrolls them
+// through the push gate. Without it no workspace can push.
+func WithGitPush(g *GitPush) Option { return func(s *Service) { s.GitPush = g } }

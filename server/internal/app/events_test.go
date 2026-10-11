@@ -18,6 +18,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/events"
@@ -54,7 +55,9 @@ func newSSEWithoutSource(t *testing.T, buffer int, heartbeat time.Duration) *sse
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := events.NewHub(log, buffer)
-	srv := app.New(app.Deps{Config: cfg, Log: log, DB: d.Pool, Pool: d.Pool, Hub: hub})
+	deps := apptest.Deps(t, cfg, log, d.Pool)
+	deps.DB, deps.Hub = d.Pool, hub
+	srv := app.New(deps)
 	srv.SetHeartbeat(heartbeat)
 	h, err := srv.Handler()
 	if err != nil {

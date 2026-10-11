@@ -499,3 +499,8 @@ func (s *Service) refuse(ctx context.Context, c reconcile.Claim, why string) (re
 func attemptsOf(c reconcile.Claim) int32 {
 	return int32(c.Attempts) //nolint:gosec // a small counter
 }
+
+// NewService builds the service over the GitHub App.
+func NewService(pool *pgxpool.Pool, gh GitHub, log *slog.Logger) *Service {
+	return &Service{Pool: pool, GitHub: gh, Log: log}
+}

@@ -22,7 +22,7 @@ func TestDiscoveryReachesPastTheBatch(t *testing.T) {
 		FROM generate_series(1, 500) AS n`, runtimeSession)
 
 	for range 3 {
-		if err := e.svc.Recover(ctx); err != nil {
+		if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -70,7 +70,7 @@ func TestRunningTurnIsCollectedWhileItRuns(t *testing.T) {
 		return n
 	}
 
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	state, attempts, wait := receipt()
@@ -87,14 +87,14 @@ func TestRunningTurnIsCollectedWhileItRuns(t *testing.T) {
 
 	// Inside the delay it is not read again.
 	calls := e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil || e.kc.callCount() != calls {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil || e.kc.callCount() != calls {
 		t.Fatalf("read again inside its delay: %d -> %d %v", calls, e.kc.callCount(), err)
 	}
 
 	// Due again, more has happened, still running: the new observations are added once.
 	e.kc.tasks[task2] = partial(whole, 2)
 	e.exec(t, `UPDATE health_collection SET next_attempt_at = now() WHERE a2a_task_id = $1`, task2)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if state, _, _ := receipt(); state != string(dbstate.HealthPending) || events() <= midEvents {
@@ -105,20 +105,20 @@ func TestRunningTurnIsCollectedWhileItRuns(t *testing.T) {
 	e.kc.tasks[task2] = whole
 	e.exec(t, `UPDATE deliveries SET state = 'completed' WHERE id = 'msg-2'`)
 	e.exec(t, `UPDATE health_collection SET next_attempt_at = now() WHERE a2a_task_id = $1`, task2)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if state, _, _ := receipt(); state != string(dbstate.HealthCollected) {
 		t.Fatalf("after the turn ended: %s", state)
 	}
 	calls = e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil || e.kc.callCount() != calls {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil || e.kc.callCount() != calls {
 		t.Fatalf("a closed receipt was read: %v", err)
 	}
 
 	// The result is exactly what reading the finished turn once would have stored.
 	once := newEnv(t)
-	if err := once.svc.Recover(ctx); err != nil {
+	if err := once.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := e.dump(t), once.dump(t); got != want {
@@ -142,12 +142,12 @@ func TestStalePendingReceiptIsClosed(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.kc.fail[task1] = context.DeadlineExceeded
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	e.exec(t, `UPDATE health_collection SET receipt_at = now() - interval '30 days', next_attempt_at = now() WHERE a2a_task_id = $1`, task1)
 	calls := e.kc.callCount()
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	var state string
@@ -165,7 +165,7 @@ func TestUnassignedSessionTitleAndExpectedReceipts(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.exec(t, `INSERT INTO deliveries (id, idempotency_key, session_id, state, task_id) VALUES ('msg-3', 'key-3', 'session-1', 'completed', 'no-session-task')`)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	v := e.view(t, health.Filter{})
@@ -187,7 +187,7 @@ func TestOpenReceiptKeepsCoveragePartial(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.exec(t, `UPDATE deliveries SET state = 'delivered' WHERE id = 'msg-2'`)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	row := e.view(t, health.Filter{}).Rows[0]
@@ -206,7 +206,7 @@ func TestExpectedReceiptsIncludeRunning(t *testing.T) {
 	whole := e.tasks[task2] // e.tasks is the fake's map: capture the whole task before it is replaced
 	e.exec(t, `UPDATE deliveries SET state = 'delivered' WHERE id = 'msg-2'`)
 	e.kc.tasks[task2] = partial(whole, 0)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.count(t, "health_collection"); n != 2 {
@@ -225,13 +225,13 @@ func TestExpectedReceiptsIncludeRunning(t *testing.T) {
 	e.kc.tasks[task2] = whole
 	e.exec(t, `UPDATE deliveries SET state = 'completed' WHERE id = 'msg-2'`)
 	e.exec(t, `UPDATE health_collection SET next_attempt_at = now() WHERE a2a_task_id = $1`, task2)
-	if err := e.svc.Recover(ctx); err != nil {
+	if err := e.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	row = e.view(t, health.Filter{}).Rows[0]
 
 	once := newEnv(t)
-	if err := once.svc.Recover(ctx); err != nil {
+	if err := once.svc.Recover(ctx, fakeAgents{}); err != nil {
 		t.Fatal(err)
 	}
 	want := once.view(t, health.Filter{}).Rows[0]

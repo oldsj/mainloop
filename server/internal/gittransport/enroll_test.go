@@ -135,9 +135,7 @@ func TestEnrollRefusals(t *testing.T) {
 func TestEnrollOutsideAClusterWritesNoCredential(t *testing.T) {
 	e := newGitEnv(t)
 	ws := e.workspace(repoA)
-	off := &gittransport.Enroller{Pool: e.auth.Pool, Creds: &agentauth.Credentials{
-		Pool: e.auth.Pool, Secrets: agentauth.Unconfigured{}, Key: authtest.Key, Prefix: "mainloop",
-	}}
+	off := &gittransport.Enroller{Pool: e.auth.Pool, Creds: agentauth.NewCredentials(e.auth.Pool, agentauth.Unconfigured{}, authtest.Key, "mainloop", nil)}
 	if _, err := off.Enroll(context.Background(), ws); !errors.Is(err, agentauth.ErrNotConfigured) {
 		t.Fatalf("enroll = %v", err)
 	}

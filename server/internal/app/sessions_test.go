@@ -10,6 +10,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
@@ -23,9 +24,9 @@ func sessionsServer(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := app.New(app.Deps{
-		Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: up(), Pool: testdb.New(t).Pool,
-	}).Handler()
+	d := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), testdb.New(t).Pool)
+	d.DB = up()
+	h, err := app.New(d).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,9 +115,9 @@ func providerServer(t *testing.T, withKagent bool) http.Handler {
 	}
 	pool := testdb.New(t).Pool
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	h, err := app.New(app.Deps{
-		Config: cfg, Log: log, DB: up(), Pool: pool, Sessions: sessions.NewService(cfg, pool, k, log),
-	}).Handler()
+	d := apptest.Deps(t, cfg, log, pool, apptest.WithKagent(k))
+	d.DB = up()
+	h, err := app.New(d).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}

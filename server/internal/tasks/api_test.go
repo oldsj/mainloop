@@ -12,6 +12,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -28,7 +29,7 @@ func newRest(t *testing.T) *rest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := app.New(app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), Pool: d.Pool}).Handler()
+	h, err := app.New(apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), d.Pool)).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}

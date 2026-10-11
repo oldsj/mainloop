@@ -4,18 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/apierr"
-	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
@@ -31,14 +28,8 @@ type SessionsAPI struct {
 	Svc *Service
 }
 
-// NewAPI builds the API. svc may be nil: the API then reads and records through a service with
-// no kagent client, and sends stay recorded until a process with one picks them up.
-func NewAPI(svc *Service, cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *SessionsAPI {
-	if svc == nil {
-		svc = NewService(cfg, pool, nil, log)
-	}
-	return &SessionsAPI{Svc: svc}
-}
+// NewAPI builds the API over the process's one session service.
+func NewAPI(svc *Service) *SessionsAPI { return &SessionsAPI{Svc: svc} }
 
 // SendMessage implements api.StrictServerInterface. The request has no message id, so each call
 // is a new message; callers that need idempotency use Service.Send with their own id.

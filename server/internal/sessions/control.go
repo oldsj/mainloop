@@ -770,24 +770,11 @@ func (s *Service) Create(ctx context.Context, n NewSession) (string, error) {
 // that is recorded, sending or delivered, or an uncertain one still inside its hold (a task may be
 // running). It implements workspaces.Deliveries.
 func (s *Service) HasOpen(ctx context.Context, sessionID string) (bool, error) {
-	_, err := dbq.New(s.Pool).GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
-		SessionID: sessionID, HoldSeconds: s.opts().UncertainHold.Seconds(),
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
+	return (&Ledger{Pool: s.Pool, Opts: s.Opts}).HasOpen(ctx, sessionID)
 }
 
 // LastActivity is the newest update of any delivery of the session, or the zero time when it has
 // none. It implements workspaces.Deliveries.
 func (s *Service) LastActivity(ctx context.Context, sessionID string) (time.Time, error) {
-	at, err := dbq.New(s.Pool).GetDeliveryActivity(ctx, sessionID)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if at.Unix() <= 0 {
-		return time.Time{}, nil
-	}
-	return at, nil
+	return (&Ledger{Pool: s.Pool, Opts: s.Opts}).LastActivity(ctx, sessionID)
 }

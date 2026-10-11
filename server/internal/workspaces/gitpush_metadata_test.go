@@ -36,7 +36,7 @@ func (githubStub) RecentCommits(context.Context, github.Repo, string, int) ([]gi
 func metadataSweepFor(h *harness, branch string) func(context.Context) error {
 	svc := &projects.Service{
 		Pool: h.svc.Pool, Remote: githubStub{branch}, OwnerID: owner,
-		Policy: &pushgate.Service{Pool: h.svc.Pool}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Policy: pushgate.NewService(h.svc.Pool, nil, nil, nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	return svc.MetadataSweep().Run
 }

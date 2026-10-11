@@ -17,6 +17,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
+	"github.com/oldsj/mainloop/server/internal/httpx/httpxtest"
 )
 
 type fixedAuth struct{ capability gittransport.Capability }
@@ -265,5 +266,24 @@ func TestUpstreamFailuresAreLoggedByClassNotText(t *testing.T) {
 				t.Fatalf("error text was logged:\n%s", out)
 			}
 		})
+	}
+}
+
+// Every access line carries a request id: a served probe, an unauthenticated request and one for a
+// foreign host.
+func TestAccessLinesCarryARequestID(t *testing.T) {
+	var logs bytes.Buffer
+	srv := &gittransport.Server{
+		Auth:     fixedAuth{gittransport.Capability{WorkspaceID: "w", CredentialID: "c", Repository: "oldsj/alpha"}},
+		Upstream: &stubUpstream{}, Log: slog.New(slog.NewJSONHandler(&logs, nil)), AllowedHosts: map[string]bool{"git.test": true},
+	}
+	h := srv.Handler()
+	for _, c := range []struct{ path, host string }{{"/health", "10.1.2.3:8003"}, {"/oldsj/alpha.git/git-upload-pack", "git.test"}, {"/x", "evil.example"}} {
+		r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, c.path, http.NoBody)
+		r.Host = c.host
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if ids := httpxtest.RequireRequestID(t, logs.String()); len(ids) != 3 {
+		t.Fatalf("access lines = %d, want 3: %s", len(ids), logs.String())
 	}
 }

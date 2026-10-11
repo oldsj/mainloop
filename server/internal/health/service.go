@@ -55,9 +55,9 @@ type Service struct {
 	MaxChildrenPerParent int
 	MaxChildrenGlobal    int
 
-	// Kagent and Agents are only needed by the recovery sweep; the routes never call kagent.
+	// Kagent is only needed by the recovery sweep; the routes never call kagent. Nil in a process
+	// that does not reach it.
 	Kagent Kagent
-	Agents AgentResolver
 
 	// RecoverEvery and RetainEvery are the sweep periods. Zero takes the defaults.
 	RecoverEvery time.Duration
@@ -101,12 +101,14 @@ func orDefault[T comparable](v, d T) T {
 // ErrNotFound is returned when a record is missing or is not the owner's.
 var ErrNotFound = errors.New("not found")
 
-// NewService builds a Service from configuration. Set Kagent and Agents to enable the recovery
-// sweep; the routes and the retention sweep work without them.
-func NewService(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Service {
+// NewService builds a Service from configuration. k feeds the recovery sweep and may be nil in a
+// process that does not reach kagent; the routes and the retention sweep work without it. The agent
+// resolver the recovery sweep needs is passed to RecoverSweep, so the session service (which
+// resolves agents) and this one never need each other at construction.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
 	const day = 24 * time.Hour
 	return &Service{
-		Pool: pool, Log: log, OwnerID: cfg.Identity.OwnerID, Gateway: cfg.Kagent.GatewayURL,
+		Pool: pool, Kagent: k, Log: log, OwnerID: cfg.Identity.OwnerID, Gateway: cfg.Kagent.GatewayURL,
 		EventRetention:       time.Duration(cfg.Health.EventRetentionDays) * day,
 		SummaryRetention:     time.Duration(cfg.Health.SummaryRetentionDays) * day,
 		MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,

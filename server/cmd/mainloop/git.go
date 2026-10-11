@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/app"
@@ -16,27 +15,13 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
-	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
-// serveGit runs the two git listeners. The read listener proxies upload-pack for enrolled
-// workspaces when the transport is enabled and the GitHub App is configured; otherwise it answers
-// only its probes. The push listener is the push gate's and answers only its probes for now.
-func serveGit(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		handler, closeFn, err := gitReadHandler(gctx, cfg, log)
-		if err != nil {
-			return err
-		}
-		defer closeFn()
-		return httpx.Serve(gctx, log, "git-read", gitReadAddr, handler)
-	})
-	g.Go(func() error {
-		return httpx.Serve(gctx, log, "git-push", gitPushAddr, app.StubHandler(cfg, log, cfg.GitPushHosts()))
-	})
-	return g.Wait()
+// pushGateEnabled reports whether the push gate takes pushes: it needs the transport, the gate switch
+// and a GitHub App for the upstream.
+func pushGateEnabled(cfg *config.Config) bool {
+	return cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != ""
 }
 
 func gitReadHandler(ctx context.Context, cfg *config.Config, log *slog.Logger) (handler http.Handler, closeFn func(), err error) {

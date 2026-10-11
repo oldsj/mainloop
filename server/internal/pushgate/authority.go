@@ -153,12 +153,29 @@ func (p Policy) update(branch string, u Update) error {
 type Native interface {
 	GetSession(context.Context, string) (*ka.Session, error)
 }
+
+// Service is the push gate's authority: it admits and publishes pushes, resolves them, and enrolls
+// a workspace's push credential. A process builds exactly one, with [NewService].
 type Service struct {
 	Pool        *pgxpool.Pool
 	Native      Native
 	Upstream    Upstream
 	Credentials *agentauth.Credentials
 }
+
+// ErrEnrollUnavailable means this process cannot enroll: it has no credential service or no upstream.
+var ErrEnrollUnavailable = errors.New("pushgate: this process cannot enroll a push credential")
+
+// NewService builds the gate over the database, the native runtime and the upstream.
+//
+// A nil upstream is a gate that is switched off: the process still advances push policy, and
+// nothing else works. serve-git passes no credentials because it never enrolls (the API process owns
+// the credential Secrets and runs Enroll); [Service.Enroll] then returns [ErrEnrollUnavailable]
+// instead of reaching a nil credential service.
+func NewService(pool *pgxpool.Pool, native Native, upstream Upstream, creds *agentauth.Credentials) *Service {
+	return &Service{Pool: pool, Native: native, Upstream: upstream, Credentials: creds}
+}
+
 type capability struct {
 	WorkspaceID  string
 	CredentialID string
@@ -338,6 +355,9 @@ func sameAuthority(a, b authority) bool {
 // Secret through the existing credential service. Nothing on the authentication path calls it.
 // Native creation callers must reserve Reference before creation and call Enroll after readiness.
 func (s *Service) Enroll(ctx context.Context, id string) (agentauth.Issued, error) {
+	if s.Credentials == nil || s.Upstream == nil {
+		return agentauth.Issued{}, ErrEnrollUnavailable
+	}
 	q := dbq.New(s.Pool)
 	w, err := q.GetPushWorkspace(ctx, id)
 	if err != nil {

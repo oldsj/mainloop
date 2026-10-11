@@ -20,8 +20,7 @@ func newPullRequestServices(cfg *config.Config, pool *pgxpool.Pool, gh *github.A
 	if gh == nil {
 		return nil, nil
 	}
-	return &prs.Service{Pool: pool, GitHub: gh, Log: log},
-		&merge.Service{Pool: pool, GitHub: gh, Log: log, Configs: cfg.MergeConfigurations, Runtime: rt}
+	return prs.NewService(pool, gh, log), merge.NewService(cfg, pool, gh, rt, log)
 }
 
 // newGitHubApp builds the GitHub App client, or nil when no App is configured.

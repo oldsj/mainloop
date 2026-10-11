@@ -11,12 +11,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
-	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/providers"
-	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
@@ -25,27 +24,20 @@ const (
 	orphanTimeout = 5 * time.Minute
 )
 
-// New builds the workspace service over the database and kagent.
-func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) (*Service, error) {
-	client, err := kagent.New(kagent.FromSettings(cfg.Kagent))
-	if err != nil {
-		return nil, err
-	}
-	reg, err := providers.NewRegistry(cfg.Kagent)
-	if err != nil {
-		return nil, err
-	}
+// New builds the workspace service. Every collaborator is an argument: kagent and the provider
+// registry run the lifecycle, creds publishes each agent's MCP credential, deliveries tells idle
+// suspend whether a turn is open, and importer creates the project of a workspace requested by
+// repository.
+func New(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers.Registry, creds *agentauth.Credentials,
+	deliveries Deliveries, importer ProjectImporter, log *slog.Logger, opts ...Option) *Service {
 	s := &Service{
-		Pool: pool, Kagent: client, Providers: reg, Config: cfg, Log: log, OwnerID: cfg.Identity.OwnerID,
+		Pool: pool, Kagent: k, Providers: reg, Config: cfg, Log: log, OwnerID: cfg.Identity.OwnerID,
+		Credentials: creds, Deliveries: deliveries, Projects: importer,
 	}
-	if cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "" {
-		upstream, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
-		if err != nil {
-			return nil, err
-		}
-		s.GitPush = &GitPush{Upstream: upstream, Origin: cfg.Git.PushOrigin}
+	for _, o := range opts {
+		o(s)
 	}
-	return s, nil
+	return s
 }
 
 // RunSweepOrphans lists the kagent Sessions Mainloop created and no longer references. It deletes
@@ -76,11 +68,19 @@ func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Write
 		return exitFailure
 	}
 	defer pool.Close()
-	svc, err := New(cfg, pool, slog.New(slog.NewTextHandler(stderr, nil)))
+	client, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
 		return exitFailure
 	}
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "sweep-orphans: %v\n", err)
+		return exitFailure
+	}
+	// The orphan sweep lists and deletes Sessions: it publishes no credential, reads no delivery
+	// ledger and imports no project, so those collaborators are absent.
+	svc := New(cfg, pool, client, reg, nil, nil, nil, slog.New(slog.NewTextHandler(stderr, nil)))
 	if *forget != "" {
 		return forgetAgent(ctx, svc, *forget, stdout, stderr)
 	}

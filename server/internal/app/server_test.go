@@ -18,9 +18,11 @@ import (
 	"github.com/oldsj/mainloop/server/internal/apierr"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/httpx/httpxtest"
 )
 
 type pinger func(context.Context) error
@@ -43,7 +45,8 @@ func newConfig(t *testing.T, vars map[string]string) *config.Config {
 func newHandler(t *testing.T, vars map[string]string, ping app.Pinger) http.Handler {
 	t.Helper()
 	cfg := newConfig(t, vars)
-	deps := app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), DB: ping}
+	deps := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), nil)
+	deps.DB = ping
 	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -320,8 +323,8 @@ func TestHealthLogsPingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(&logs, nil)),
-		DB: pinger(func(context.Context) error { return errors.New("connection refused") })}
+	deps := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+	deps.DB = pinger(func(context.Context) error { return errors.New("connection refused") })
 	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
@@ -333,4 +336,27 @@ func TestHealthLogsPingFailure(t *testing.T) {
 	if !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), "connection refused") {
 		t.Errorf("log = %s", logs.String())
 	}
+}
+
+// Every access line carries a request id, on the API and on the stub listener.
+func TestAccessLinesCarryARequestID(t *testing.T) {
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var apiLogs, stubLogs bytes.Buffer
+	deps := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(&apiLogs, nil)), nil)
+	deps.DB = up()
+	api, err := app.New(deps).Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(api, "GET", "/health", "", nil)
+	send(api, "GET", "/health", "", map[string]string{"Host": "evil.example"})
+	httpxtest.RequireRequestID(t, apiLogs.String())
+
+	stub := app.StubHandler(cfg, slog.New(slog.NewJSONHandler(&stubLogs, nil)), cfg.AllowedMCPHosts())
+	send(stub, "GET", "/health", "", map[string]string{"Host": "mainloop-mcp.mainloop.svc.cluster.local:8002"})
+	send(stub, "POST", "/mcp/anything", "", map[string]string{"Host": "mainloop-mcp.mainloop.svc.cluster.local:8002"})
+	httpxtest.RequireRequestID(t, stubLogs.String())
 }

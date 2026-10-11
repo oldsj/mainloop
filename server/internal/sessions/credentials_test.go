@@ -97,7 +97,7 @@ func TestANativeSessionCarriesNoMCPCredential(t *testing.T) {
 // Outside a cluster there is no Secret store: sessions still work, without an MCP credential.
 func TestWithoutAKubernetesStoreTheMainThreadStillWorks(t *testing.T) {
 	e := newEnv(t)
-	e.svc.Credentials = &agentauth.Credentials{Pool: e.pool, Secrets: agentauth.Unconfigured{}, Key: authtest.Key, Prefix: "mainloop"}
+	e.svc.Credentials = agentauth.NewCredentials(e.pool, agentauth.Unconfigured{}, authtest.Key, "mainloop", nil)
 	e.svc.MCPOrigin = mcpOrigin
 	e.run()
 	e.waitState(e.send("hello"), dbstate.DeliveryCompleted)

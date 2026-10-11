@@ -20,8 +20,10 @@ import (
 // kagent and stored; a running turn is read again until it ends. The receipt rows are the durable queue: a restart, a crash or a lost read leaves the row
 // pending, and the next pass picks it up. Only one process runs a pass at a time (the runner holds
 // the sweep's lease).
-func (s *Service) RecoverSweep() reconcile.Sweep {
-	return reconcile.Sweep{Name: "health-recovery", Every: orDefault(s.RecoverEvery, defaultRecoverEvery), Run: s.Recover}
+func (s *Service) RecoverSweep(agents AgentResolver) reconcile.Sweep {
+	return reconcile.Sweep{Name: "health-recovery", Every: orDefault(s.RecoverEvery, defaultRecoverEvery), Run: func(ctx context.Context) error {
+		return s.Recover(ctx, agents)
+	}}
 }
 
 // RetainSweep is the retention pass as a reconcile sweep.
@@ -35,8 +37,8 @@ func (s *Service) RetainSweep() reconcile.Sweep {
 // Recover runs one collection pass: it starts tracking new receipts, gives up on receipts whose
 // session is gone, and reads the receipts that are due. No transaction is open while kagent is
 // read; each task is stored in its own short transaction afterwards.
-func (s *Service) Recover(ctx context.Context) error {
-	if s.Kagent == nil || s.Agents == nil {
+func (s *Service) Recover(ctx context.Context, agents AgentResolver) error {
+	if s.Kagent == nil || agents == nil {
 		return errors.New("health: recovery needs kagent and an agent resolver")
 	}
 	q := dbq.New(s.Pool)
@@ -64,7 +66,7 @@ func (s *Service) Recover(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := s.collect(ctx, r); err != nil {
+		if err := s.collect(ctx, agents, r); err != nil {
 			s.log().Warn("health receipt not collected", "session", r.SessionID, "task", r.A2aTaskID, "attempt", r.Attempts+1, "error", err)
 			s.fail(ctx, r)
 		}
@@ -73,8 +75,8 @@ func (s *Service) Recover(ctx context.Context) error {
 }
 
 // collect reads one receipt's task and stores it. An error leaves the receipt for fail to record.
-func (s *Service) collect(ctx context.Context, r dbq.ListDueHealthReceiptsRow) error {
-	agent, err := s.Agents.ResolveAgent(r.WorkspaceAgentNamespace, r.WorkspaceAgentName, &r.Kind, r.Role)
+func (s *Service) collect(ctx context.Context, agents AgentResolver, r dbq.ListDueHealthReceiptsRow) error {
+	agent, err := agents.ResolveAgent(r.WorkspaceAgentNamespace, r.WorkspaceAgentName, &r.Kind, r.Role)
 	if err != nil {
 		return fmt.Errorf("resolve agent: %w", err)
 	}

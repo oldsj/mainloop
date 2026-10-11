@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
@@ -222,4 +223,15 @@ func (s *Service) createdPR(ctx context.Context, t dbq.Task) (int, error) {
 		return 0, nil
 	}
 	return int(*n), nil
+}
+
+// GitHubObserver adapts the GitHub reader of a task's pull request and CI to [Observer], without
+// making the github package depend on its consumers.
+func GitHubObserver(remote *github.TaskObserver) Observer { return githubObserver{remote: remote} }
+
+type githubObserver struct{ remote *github.TaskObserver }
+
+func (o githubObserver) Observe(ctx context.Context, repo, branch string, expectedPR int) (Observation, error) {
+	obs, err := o.remote.Observe(ctx, repo, branch, expectedPR)
+	return Observation(obs), err
 }

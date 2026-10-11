@@ -161,11 +161,7 @@ func toAPI(p config.ProviderProfile) api.ProviderProfile {
 	}
 }
 
-// NewAPI builds the registry from configuration. A malformed profile fails here, at startup.
-func NewAPI(cfg *config.Config, pool *pgxpool.Pool) (*ProvidersAPI, error) {
-	reg, err := NewRegistry(cfg.Kagent)
-	if err != nil {
-		return nil, err
-	}
-	return &ProvidersAPI{Registry: reg, Pool: pool, OwnerID: cfg.Identity.OwnerID}, nil
+// NewAPI builds the API over the process's one registry (see [NewRegistry]).
+func NewAPI(cfg *config.Config, pool *pgxpool.Pool, reg *Registry) *ProvidersAPI {
+	return &ProvidersAPI{Registry: reg, Pool: pool, OwnerID: cfg.Identity.OwnerID}
 }

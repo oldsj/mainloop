@@ -16,6 +16,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/environments/fakeregistry"
@@ -40,7 +41,9 @@ func newFixture(t *testing.T) *fixture {
 	}
 	d := testdb.New(t)
 	reg := fakeregistry.New()
-	h, err := app.New(app.Deps{Config: cfg, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), Pool: d.Pool, Registry: reg}).Handler()
+	deps := apptest.Deps(t, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), d.Pool)
+	deps.Registry = reg
+	h, err := app.New(deps).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}

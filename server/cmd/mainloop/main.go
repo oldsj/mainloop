@@ -26,10 +26,13 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/preview"
+	"github.com/oldsj/mainloop/server/internal/projects"
+	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
+	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -118,67 +121,73 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	// Every service is built here, once, with its collaborators as constructor arguments; nothing is
+	// assigned to a service afterwards. Two links would otherwise be circular, and each is broken at
+	// its narrow end: the workspace service reads the delivery ledger (sessions.Ledger) instead of the
+	// session service, and the health recovery sweep receives the session service's agent resolver
+	// when it is registered instead of when the health service is built.
 	hub := events.NewHub(log, cfg.Events.SubscriberBuffer)
-	deps := app.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub}
 	gh, err := newGitHubApp(cfg)
 	if err != nil {
 		return err
-	}
-	if gh != nil {
-		deps.GitHub = gh
-		deps.TaskObserver = &github.TaskObserver{App: gh}
 	}
 	kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
 	if err != nil {
 		return err
 	}
-	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
-	deps.Merge = mergeSvc
-	// The one credential service of this process is built first: the workspace and session services
-	// publish an agent's MCP credential before creating its kagent Session and revoke it when the
-	// agent ends.
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		return err
+	}
 	creds, err := newCredentials(cfg, pool, log)
 	if err != nil {
 		return err
 	}
-	deps.Credentials = creds
-	wsSvc, err := workspaces.New(cfg, pool, log)
-	if err != nil {
-		return err
+	attn := attention.NewService(cfg, pool, log)
+
+	// The one push gate of this process. A renamed default branch advances the push policy whether or
+	// not the gate is on: the policy is database state that outlives a gate-off period, and advancing
+	// it needs no upstream. With the gate off the upstream is nil and only that policy path works.
+	gateOn := pushGateEnabled(cfg)
+	var upstream pushgate.Upstream
+	if gateOn {
+		upstream, err = pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
+		if err != nil {
+			return err
+		}
 	}
-	wsSvc.Credentials = creds
-	wsSvc.GitRead = gitReadFor(cfg, pool, creds, log)
-	deps.Workspaces = wsSvc
-	svc := sessions.NewService(cfg, pool, kc, log)
-	svc.Credentials = creds
-	deps.Sessions = svc
-	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), log)
-	hitlSvc.Agents = svc // one rule for which Agent runs a session
-	hitlSvc.Ready = svc  // wake and resume the Session before an answer is sent
-	deps.HITL = hitlSvc
-	attn := &attention.Service{Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log}
-	deps.Attention = attn
-	healthSvc := health.NewService(cfg, pool, log)
-	healthSvc.Kagent = kc
-	healthSvc.Agents = svc
-	svc.Health = healthSvc // a finished turn stores its health observations in the transaction that ends it
-	deps.Health = healthSvc
-	schedSvc := &schedules.Service{Pool: pool, Kagent: kc, OwnerID: cfg.Identity.OwnerID, Log: log}
-	deps.Schedules = schedSvc
+	gate := pushgate.NewService(pool, kc, upstream, creds)
+
+	var remote projects.Remote // nil when no GitHub App is configured
+	if gh != nil {
+		remote = gh
+	}
+	projectSvc := projects.NewService(cfg, pool, remote, gate, attn.NeedsOwner, log)
+	wsSvc := workspaces.New(cfg, pool, kc, reg, creds, sessions.NewLedger(cfg, pool), projectSvc, log,
+		workspaces.WithGitRead(gitReadFor(cfg, pool, creds, log)))
+	healthSvc := health.NewService(cfg, pool, kc, log)
+	svc := sessions.NewService(cfg, pool, kc, reg, creds, healthSvc, wsSvc, log)
+	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), svc, svc, log)
+	schedSvc := schedules.NewService(cfg, pool, kc, reg, log)
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {
 		return err
 	}
-	deps.Preview = previews
-	// Sends wake a suspended workspace through the workspace service, and idle suspend reads the
-	// delivery ledger: no turn is interrupted, and a delivery counts as activity.
-	svc.Providers, svc.Waker = wsSvc.Providers, wsSvc
-	schedSvc.Providers = wsSvc.Providers
-	wsSvc.Deliveries = svc
-	apiServer := app.New(deps)
-	projectSvc := apiServer.ProjectsAPI.Svc
-	wsSvc.Projects = projectSvc // one way to create a project
-	handler, err := apiServer.Handler()
+	taskOpts := []tasks.Option{
+		tasks.WithRuntimes(wsSvc, svc),
+		tasks.WithStopObserver(&tasks.KagentStops{Pool: pool, OwnerID: cfg.Identity.OwnerID, Sessions: svc, Kagent: kc}),
+	}
+	if gh != nil {
+		taskOpts = append(taskOpts, tasks.WithObserver(tasks.GitHubObserver(&github.TaskObserver{App: gh})))
+	}
+	taskSvc := tasks.NewService(cfg, pool, reg, log, taskOpts...)
+	prSvc, mergeSvc := newPullRequestServices(cfg, pool, gh, kc, log)
+
+	handler, err := app.New(app.Deps{
+		Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub,
+		Providers: reg, Projects: projectSvc, Tasks: taskSvc, Workspaces: wsSvc, Sessions: svc, Preview: previews,
+		HITL: hitlSvc, Attention: attn, Health: healthSvc, Schedules: schedSvc, Merge: mergeSvc,
+	}).Handler()
 	if err != nil {
 		return err
 	}
@@ -195,17 +204,9 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Wake: notifier.Subscribe(events.Channel), Poll: cfg.Events.PollInterval.Duration(),
 	}
 	runner := reconcile.NewRunner(pool, log, notifier)
-	if cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "" {
-		upstream, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
-		if err != nil {
-			return err
-		}
-		gate := &pushgate.Service{Pool: pool, Native: kc, Upstream: upstream, Credentials: creds}
+	if gateOn {
 		gate.Register(runner)
 	}
-	// A renamed default branch advances the push policy whether or not the gate is on: the policy
-	// is database state that outlives a gate-off period, and advancing it needs no gate.
-	projectSvc.Policy = &pushgate.Service{Pool: pool}
 	runner.AddSweep(projectSvc.MetadataSweep())
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
@@ -220,13 +221,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.Add(hitlSvc.ResponseLoop())
 	runner.AddSweep(hitlSvc.ObserverSweep())
 	runner.AddSweep(attn.Sweep())
-	runner.AddSweep(healthSvc.RecoverSweep())
+	runner.AddSweep(healthSvc.RecoverSweep(svc))
 	runner.AddSweep(healthSvc.RetainSweep())
 	runner.AddSweep(schedSvc.Sweep())
 	previews.Register(runner)
-	if ts := apiServer.TasksAPI.Svc; ts != nil {
-		ts.Register(runner)
-	}
+	taskSvc.Register(runner)
 	if prSvc != nil {
 		runner.Add(prSvc.Loop())
 		// Merges run only where the merge tools are on: nothing else creates a candidate.
@@ -257,7 +256,7 @@ func serveGitWithPush(ctx context.Context, cfg *config.Config, log *slog.Logger)
 	})
 	g.Go(func() error {
 		srv := &pushgate.Server{Log: log, AllowedHosts: cfg.GitPushHosts(), Dev: cfg.IsDev(),
-			Enabled: cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "",
+			Enabled: pushGateEnabled(cfg),
 			Limits:  pushgate.Limits{BodyBytes: cfg.Git.PushGateMaxBodyBytes, CommandBytes: cfg.Git.PushGateMaxCommandBytes}}
 		if srv.Enabled {
 			pool, err := db.NewPool(gctx, cfg)
@@ -273,7 +272,10 @@ func serveGitWithPush(ctx context.Context, cfg *config.Config, log *slog.Logger)
 			if err != nil {
 				return err
 			}
-			srv.Service = &pushgate.Service{Pool: pool, Native: kc, Upstream: upstream}
+			// No credential service: serve-git never enrolls a workspace (the API process owns the
+			// credential Secrets and runs Enroll), so the gate here only serves pushes and Enroll on
+			// it answers pushgate.ErrEnrollUnavailable.
+			srv.Service = pushgate.NewService(pool, kc, upstream, nil)
 		}
 		return httpx.Serve(gctx, log, "git-push", gitPushAddr, srv.Handler())
 	})

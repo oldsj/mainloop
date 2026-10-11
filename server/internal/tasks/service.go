@@ -936,22 +936,40 @@ func (s *Service) Operation(ctx context.Context, p Principal, id string) (api.Ta
 // of a profile's Agents; this one is not exported there.
 const roleChild = "child"
 
-// NewService builds the task service from configuration. A malformed provider profile fails
-// here, at startup.
-func NewService(cfg *config.Config, pool *pgxpool.Pool) (*Service, error) {
-	reg, err := providers.NewRegistry(cfg.Kagent)
-	if err != nil {
-		return nil, err
-	}
-	return &Service{
-		Pool: pool, Providers: reg, DefaultProfile: cfg.Tasks.DefaultProviderProfileID,
+// Option sets a collaborator only some processes have.
+type Option func(*Service)
+
+// WithRuntimes sets the workspace and session runtimes the reconcile loops drive. Without them the
+// loops are not built, and rows written here wait (the MCP process only writes rows). Pass the
+// concrete services, never a nil pointer in an interface.
+func WithRuntimes(ws WorkspaceRuntime, sess SessionRuntime) Option {
+	return func(s *Service) { s.Workspaces, s.Sessions = ws, sess }
+}
+
+// WithObserver sets the reader of a task's pull request and CI. Without one nothing is projected.
+func WithObserver(o Observer) Option { return func(s *Service) { s.Observer = o } }
+
+// WithStopObserver sets the confirmation of a stop kagent did not confirm. Without one the service has
+// no kagent client, and an unconfirmed stop is taken as stopped.
+func WithStopObserver(o StopObserver) Option { return func(s *Service) { s.StopObserver = o } }
+
+// NewService builds the task service from configuration. reg resolves provider profiles; build it
+// once with [providers.NewRegistry] so a malformed profile fails at startup. The options carry what
+// only some processes have.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, reg Resolver, log *slog.Logger, opts ...Option) *Service {
+	s := &Service{
+		Pool: pool, Providers: reg, Log: log, DefaultProfile: cfg.Tasks.DefaultProviderProfileID,
 		MergeTools: bool(cfg.MergeToolsEnabled),
 		Limits: Limits{
 			MaxChildrenPerParent: cfg.Tasks.MaxChildrenPerParent, MaxChildrenGlobal: cfg.Tasks.MaxChildrenGlobal,
 			ProvisionWindow: cfg.Tasks.ProvisionWindow.Duration(), Interval: cfg.Tasks.ReconcileInterval.Duration(),
 			ProjectionEvery: cfg.Tasks.ProjectionEvery.Duration(),
 		},
-	}, nil
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // AuthDepth is the [agentauth.DepthFunc] of the MCP listener: a supervisor or child binding gets

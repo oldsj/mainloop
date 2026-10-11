@@ -497,11 +497,15 @@ func (s *Service) SendTo(ctx context.Context, sessionID, messageID, text string)
 	return Sent{ConversationID: sessionID, MessageID: messageID}, nil
 }
 
-// NewService builds the service from settings. k may be nil in a process that does not talk to
-// kagent.
-func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
+// NewService builds the service from settings. k may be nil in a test that talks to no kagent. reg
+// resolves providers; creds publishes the MCP credential of a binding before its Session is created;
+// health stores a finished turn's observations in the transaction that ends it; waker readies a
+// workspace session's runtime before each send. A test with none of these passes nil.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers.Registry, creds *agentauth.Credentials,
+	health HealthSink, waker Waker, log *slog.Logger) *Service {
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
+		Providers: reg, Credentials: creds, Health: health, Waker: waker,
 		Agent:          kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		MainProvider:   cfg.Main.Provider,
 		MainCodexAgent: kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainCodexAgent},

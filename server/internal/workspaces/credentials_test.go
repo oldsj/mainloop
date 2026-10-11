@@ -59,7 +59,7 @@ func TestAWorkspaceSessionIsCreatedWithItsMCPCredential(t *testing.T) {
 
 func TestAWorkspaceStillCreatesWithoutAKubernetesStore(t *testing.T) {
 	h := newHarness(t, nil)
-	h.svc.Credentials = &agentauth.Credentials{Pool: h.svc.Pool, Secrets: agentauth.Unconfigured{}, Key: authtest.Key, Prefix: "mainloop"}
+	h.svc.Credentials = agentauth.NewCredentials(h.svc.Pool, agentauth.Unconfigured{}, authtest.Key, "mainloop", nil)
 	w := h.running()
 	if reqs := h.fake.CreateRequests(); len(reqs) != 1 || len(reqs[0].GetCredentials()) != 0 {
 		t.Fatalf("create requests = %v", reqs)

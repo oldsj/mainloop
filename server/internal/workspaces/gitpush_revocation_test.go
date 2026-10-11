@@ -80,7 +80,7 @@ func TestReviewPublishedAuthorityRevocation(t *testing.T) {
 				t.Fatal(err)
 			}
 			auth, name := reviewCredential(t, h, a, w.ID)
-			gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.svc.Kagent, Upstream: u, Credentials: a.Creds}
+			gate := pushgate.NewService(h.svc.Pool, h.svc.Kagent, u, a.Creds)
 			if res := reviewProbe(gate, auth, "oldsj/mainloop"); res.Code != http.StatusOK {
 				t.Fatal("fixture never acquired push authority")
 			}
@@ -307,7 +307,7 @@ func pushAfterDeletionIntent(t *testing.T, nativeDeleteFails bool) {
 		t.Fatal(err)
 	}
 	credential := secret.Data[ref.GetSecretRef().GetKey()]
-	gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.client, Upstream: u}
+	gate := pushgate.NewService(h.svc.Pool, h.client, u, nil)
 	server := &pushgate.Server{Service: gate, Enabled: true, Dev: true, SpoolRoot: filepath.Join(root, "spool"), Limits: pushgate.Limits{BodyBytes: 1 << 20, DiskBytes: 8 << 20}}
 	proxy := httptest.NewServer(server.Handler())
 	t.Cleanup(proxy.Close)
@@ -348,7 +348,7 @@ func TestReviewLatePlanAfterDeleteIntent(t *testing.T) {
 	w, a, u := queuedPushWorkspace(t, h, "feature/test", true)
 	createPushSession(t, h)
 	activatePushAttempt(h, w.ID)
-	gate := &pushgate.Service{Pool: h.svc.Pool, Native: h.svc.Kagent, Upstream: u, Credentials: a.Creds}
+	gate := pushgate.NewService(h.svc.Pool, h.svc.Kagent, u, a.Creds)
 	// An uncommitted grant row holds Enroll's plan insert until the delete has committed.
 	tx, err := h.svc.Pool.Begin(bg)
 	if err != nil {

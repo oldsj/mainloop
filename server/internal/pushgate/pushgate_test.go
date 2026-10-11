@@ -229,7 +229,7 @@ func newEnvForRole(t *testing.T, role dbstate.BindingRole) *env {
 		}
 	}
 	cluster := secretstest.New()
-	e.creds = &agentauth.Credentials{Pool: e.pool, Secrets: k8ssecrets.New(cluster, "kagent"), Key: []byte("fixture-hmac-key-only"), Prefix: "mainloop"}
+	e.creds = agentauth.NewCredentials(e.pool, k8ssecrets.New(cluster, "kagent"), []byte("fixture-hmac-key-only"), "mainloop", nil)
 	if _, err = (&gittransport.Enroller{Pool: e.pool, Creds: e.creds}).Enroll(context.Background(), "ws"); err != nil {
 		t.Fatal(err)
 	}

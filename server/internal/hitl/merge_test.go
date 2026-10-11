@@ -366,7 +366,7 @@ func TestMergeProposalAttentionLifecycle(t *testing.T) {
 
 func TestNewServiceBindsMergeConfiguration(t *testing.T) {
 	cfg := &config.Config{MergeConfigurations: config.MergeConfigurations{mergeConfig}}
-	svc := hitl.NewService(cfg, nil, nil, nil)
+	svc := hitl.NewService(cfg, nil, nil, nil, nil, nil)
 	if len(svc.MergeConfigs) != 1 || svc.MergeConfigs[0].TemplateName != mergeConfig.TemplateName {
 		t.Fatal("configuration was not wired")
 	}

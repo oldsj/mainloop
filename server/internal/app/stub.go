@@ -21,10 +21,5 @@ func StubHandler(cfg *config.Config, log *slog.Logger, allowedHosts map[string]b
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		apierr.Write(w, apierr.NotImplemented)
 	})
-	return httpx.Chain(mux,
-		httpx.AccessLog(log),
-		httpx.RequestIDMiddleware,
-		httpx.Recover(log),
-		httpx.HostGuard(allowedHosts, cfg.IsDev(), "/health"),
-	)
+	return httpx.Chain(mux, httpx.Standard(log, allowedHosts, cfg.IsDev(), "/health"))
 }

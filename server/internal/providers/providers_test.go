@@ -14,6 +14,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/testdb"
@@ -138,10 +139,6 @@ func TestBadConfigurationFailsClearly(t *testing.T) {
 		t.Errorf("NewRegistry with a bad built-in agent: %v", err)
 	}
 
-	// Startup reports it: the handler cannot be built.
-	if _, err := app.New(app.Deps{Config: cfg, Log: discard()}).Handler(); err == nil || !strings.Contains(err.Error(), "AgentRef") {
-		t.Errorf("Handler error = %v", err)
-	}
 }
 
 func mergeEnv(extra map[string]string) map[string]string {
@@ -163,7 +160,7 @@ type harness struct {
 func newHarness(t *testing.T, extra map[string]string) *harness {
 	t.Helper()
 	d := testdb.New(t)
-	h, err := app.New(app.Deps{Config: parse(t, extra), Log: discard(), Pool: d.Pool}).Handler()
+	h, err := app.New(apptest.Deps(t, parse(t, extra), discard(), d.Pool)).Handler()
 	if err != nil {
 		t.Fatal(err)
 	}

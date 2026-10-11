@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/providers"
@@ -251,4 +252,11 @@ func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
 		out[agentKey(r.Namespace, r.Name)] = true
 	}
 	return out, nil
+}
+
+// NewService builds the service. k is nil in a process that does not reach kagent: the routes then
+// answer 503 and the sweep does nothing. reg picks the binding of an adopted session from the
+// schedule's Agent.
+func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, reg *providers.Registry, log *slog.Logger) *Service {
+	return &Service{Pool: pool, Kagent: k, Providers: reg, OwnerID: cfg.Identity.OwnerID, Log: log}
 }

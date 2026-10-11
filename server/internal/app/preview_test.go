@@ -10,6 +10,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/app/apicheck"
+	"github.com/oldsj/mainloop/server/internal/app/apptest"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/preview"
 )
@@ -29,7 +30,8 @@ func previewHandler(t *testing.T, withPreview bool) http.Handler {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	deps := app.Deps{Config: cfg, Log: log, DB: up()}
+	deps := apptest.Deps(t, cfg, log, nil)
+	deps.DB = up()
 	if withPreview {
 		// No pool: these requests are all decided before the database is read.
 		deps.Preview, err = preview.New(cfg, nil, noWake{}, log)

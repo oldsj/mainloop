@@ -21,8 +21,9 @@ import (
 // GitPush supplies metadata and enrollment after a creation-time reference is reserved. The
 // reference carries no bearer; a standalone workspace cannot become a writer by being refreshed.
 type GitPush struct {
-	Upstream pushgate.Upstream
-	Origin   string
+	// Gate is the process's one push gate; enrollment runs through it.
+	Gate   *pushgate.Service
+	Origin string
 }
 
 func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCredential, error) {
@@ -41,7 +42,7 @@ func (s *Service) gitPushForCreate(ctx context.Context, w wsRow) (*ka.SessionCre
 			return nil
 		}
 		var attempt string
-		if cur.KagentSessionID == nil && s.GitPush != nil && s.GitPush.Upstream != nil && s.Credentials != nil &&
+		if cur.KagentSessionID == nil && s.GitPush != nil && s.Credentials != nil &&
 			s.GitRead.applies(wsRow(cur)) && len(cur.GitReadCredential) > 0 {
 			_, off := s.Credentials.Secrets.(agentauth.Unconfigured)
 			if !off {
@@ -173,8 +174,7 @@ func (s *Service) enrollPush(ctx context.Context, c reconcile.Claim) (reconcile.
 	if attached != 1 {
 		return reconcile.Recorded(), s.releasePush(ctx, w.ID)
 	}
-	gate := &pushgate.Service{Pool: s.Pool, Native: s.Kagent, Upstream: s.GitPush.Upstream, Credentials: s.Credentials}
-	if _, err = gate.Enroll(ctx, w.ID); err != nil {
+	if _, err = s.GitPush.Gate.Enroll(ctx, w.ID); err != nil {
 		return reconcile.Retry(), err
 	}
 	// A task may have ended while native/metadata/Secret I/O was in flight. Fence the outcome and
