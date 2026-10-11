@@ -1,18 +1,46 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { statusWords } from '@/features/chat/MainThreadHeader';
 import { ThreadBody } from '@/features/chat/ThreadBody';
 import { useThread, type ThreadSource } from '@/features/chat/useThread';
 import { threadStatus } from '@/lib/delivery';
 import { useConnection } from '@/shell/ConnectionBanner';
 
+/** The panel's share of the visible viewport. */
+const PANEL_SHARE = 0.7;
+
+/**
+ * The height of the visible viewport, which the soft keyboard shrinks on iOS (`dvh` does not). Null
+ * where the browser has no visual viewport, and the panel then uses `70dvh`.
+ */
+function useVisibleHeight(): number | null {
+  const [height, setHeight] = useState<number | null>(() => window.visualViewport?.height ?? null);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => setHeight(viewport.height);
+    update();
+    viewport.addEventListener('resize', update);
+    return () => viewport.removeEventListener('resize', update);
+  }, []);
+  return height;
+}
+
 /**
  * The session's conversation: the same timeline and composer as the main thread, reading and
- * sending to this session. The header shows the turn's state and the stop control.
+ * sending to this session. The header shows the turn's state and the stop control. A closed
+ * session (`closedReason` set) locks the composer, says why, and hides stop.
  */
-export function SessionChatSlot({ sessionId }: { sessionId: string }) {
+export function SessionChatSlot({
+  sessionId,
+  closedReason = null
+}: {
+  sessionId: string;
+  closedReason?: string | null;
+}) {
   const source = useMemo<ThreadSource>(() => ({ kind: 'session', sessionId }), [sessionId]);
   const thread = useThread(source);
   const offline = useConnection().status === 'offline';
+  const visibleHeight = useVisibleHeight();
   const { native } = thread;
   const status = threadStatus({
     offline,
@@ -31,7 +59,7 @@ export function SessionChatSlot({ sessionId }: { sessionId: string }) {
         <span className="text-foreground" data-testid="session-chat-state" role="status">
           {statusWords(status)}
         </span>
-        {thread.busy ? (
+        {thread.busy && closedReason === null ? (
           <button
             type="button"
             className="border-border text-foreground hover:text-term-red px-md min-h-11 border disabled:opacity-50"
@@ -43,9 +71,25 @@ export function SessionChatSlot({ sessionId }: { sessionId: string }) {
           </button>
         ) : null}
       </div>
-      {/* A fixed height lets the message list scroll inside the page instead of growing it. */}
-      <div className="flex h-[70dvh] min-h-64 flex-col">
-        <ThreadBody thread={thread} offline={offline} label="session conversation" />
+      {/*
+        A fixed height lets the message list scroll inside the page instead of growing it. It follows
+        the visible viewport, so the composer stays above a soft keyboard that `dvh` ignores.
+      */}
+      <div
+        className={`flex min-h-64 flex-col ${visibleHeight === null ? 'h-[70dvh]' : ''}`}
+        style={
+          visibleHeight === null
+            ? undefined
+            : { height: `${Math.round(visibleHeight * PANEL_SHARE)}px` }
+        }
+        data-testid="session-chat-panel"
+      >
+        <ThreadBody
+          thread={thread}
+          offline={offline}
+          label="session conversation"
+          closedReason={closedReason}
+        />
       </div>
     </section>
   );

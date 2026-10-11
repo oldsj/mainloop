@@ -16,6 +16,7 @@ import { IdentityStrip } from './IdentityStrip';
 import {
   actionFailure,
   cancelNotice,
+  chatClosedReason,
   loadFailure,
   sessionTone,
   stopNotice,
@@ -249,7 +250,7 @@ export function SessionPage({ id }: { id: string }) {
       ) : null}
 
       <div className="p-md">
-        <SessionChatSlot sessionId={session.id} />
+        <SessionChatSlot sessionId={session.id} closedReason={chatClosedReason(session)} />
       </div>
 
       <footer className="px-md pb-md">

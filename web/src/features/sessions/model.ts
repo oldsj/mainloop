@@ -128,6 +128,19 @@ export function stopNotice(result: StopTurnResult): Notice {
 }
 
 /**
+ * Why the session takes no more messages, or null when it does. The backend refuses sends to an
+ * archived session and to a failed or cancelled one (docs/specs/sessions.md). A completed session
+ * still takes messages.
+ */
+export function chatClosedReason(session: Pick<Session, 'status' | 'archived_at'>): string | null {
+  if (session.archived_at) return 'This session is archived, so it takes no new messages.';
+  if (session.status === 'failed') return 'This session failed, so it takes no new messages.';
+  if (session.status === 'cancelled')
+    return 'This session was cancelled, so it takes no new messages.';
+  return null;
+}
+
+/**
  * The one-word state in the identity strip, worded as the frozen app words it. Offline shows
  * `unreachable`. A failed or unconfirmed last delivery is never shown as live, whatever the agent
  * session reports. Otherwise the agent's own state shows: `live` for ready, and the raw state for

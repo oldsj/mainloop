@@ -58,6 +58,14 @@ export function serveList(sessions: SessionFixture[]) {
 }
 
 /**
+ * Handlers for one session's page with its native reads left to the chat backend. A test can then
+ * change the backend's state (a turn in flight, a lost reply) after the page has loaded.
+ */
+export function serveSessionChat(item: SessionFixture) {
+  return [...serveList([item]), sessionRead(() => HttpResponse.json(item))];
+}
+
+/**
  * Handlers for one session's page: the session is both in attention and a direct read, and its
  * native state is `info`. Like `serveList`, a test's own overrides go first.
  */

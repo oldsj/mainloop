@@ -1,13 +1,14 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
 import { loadDraft } from '@/features/chat/drafts';
 import { messageFixture } from '@/features/chat/fixtures';
+import { LOST_REPLY_RECORDED } from '@/features/chat/useThread';
 import { server } from '@/test/msw/server';
 import { testChat } from '@/test/msw/handlers';
 import { native, session } from './test/fixtures';
-import { serveSession } from './test/handlers';
+import { nativeReadWith, problem, serveSessionChat, sessionAction } from './test/handlers';
 import { renderSessions } from './test/render';
 
 // The chat's reads would otherwise queue behind the app's read limiter. See fastReads.ts.
@@ -18,15 +19,22 @@ vi.mock('@/api/middleware', async (importOriginal) => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  // Drafts persist per session, so one test's unsent text would otherwise reach the next.
+  sessionStorage.clear();
   await connection.check();
 });
 
 /**
- * Opens session `s1` with its native state and conversation. The chat's conversation read comes
- * from the chat backend's state, which the test shares with the default MSW handlers.
+ * Opens session `s1` with its native state and conversation. The native and conversation reads
+ * come from the chat backend's state, which the test shares with the default MSW handlers, so a
+ * test can change that state after the page has loaded.
  */
 async function openSession(
-  options: { turnInFlight?: boolean; messages?: Parameters<typeof messageFixture>[0][] } = {}
+  options: {
+    turnInFlight?: boolean;
+    messages?: Parameters<typeof messageFixture>[0][];
+    session?: Parameters<typeof session>[0];
+  } = {}
 ) {
   const info = native({ session_id: 's1', turn_in_flight: options.turnInFlight ?? false });
   testChat.state.sessionThreads = {
@@ -37,7 +45,7 @@ async function openSession(
       )
     }
   };
-  server.use(...serveSession(session({ id: 's1' }), info));
+  server.use(...serveSessionChat(session({ id: 's1', ...options.session })));
   renderSessions('/sessions/s1');
   await screen.findByRole('heading', { level: 1, name: 'Fix login redirect' });
   return screen.getByTestId('session-chat-slot');
@@ -86,5 +94,125 @@ describe('session chat', () => {
     await user.click(await within(slot).findByTestId('session-chat-stop'));
 
     await waitFor(() => expect(testChat.state.stopped).toEqual(['s1']));
+  });
+
+  it('gives the text back when the backend refuses the send because a turn is running', async () => {
+    const user = userEvent.setup();
+    const slot = await openSession();
+    await waitFor(() => expect(composerOf(slot)).toBeEnabled());
+    // A turn starts that the page has not read, so the send is refused.
+    testChat.state.sessionThreads.s1!.native.turn_in_flight = true;
+
+    await user.type(composerOf(slot), 'too soon');
+    await user.click(within(slot).getByRole('button', { name: 'Send message' }));
+
+    expect(await within(slot).findByTestId('send-error')).toHaveTextContent(
+      'A turn is already running. Your message is back in the box.'
+    );
+    expect(composerOf(slot)).toHaveValue('too soon');
+    expect(loadDraft('session:s1')).toBe('too soon');
+    // The bubble is a paragraph; the textarea also holds the text, so the selector matters.
+    expect(within(slot).queryByText('too soon', { selector: 'p' })).toBeNull();
+  });
+
+  it('gives the text back when the send never reaches the backend', async () => {
+    const user = userEvent.setup();
+    testChat.state.lostSend = 'unrecorded';
+    const slot = await openSession();
+    await waitFor(() => expect(composerOf(slot)).toBeEnabled());
+
+    await user.type(composerOf(slot), 'Check the logs');
+    await user.click(within(slot).getByRole('button', { name: 'Send message' }));
+
+    expect(await within(slot).findByTestId('send-error')).toHaveTextContent(
+      "Can't reach the Mainloop backend. Your message is back in the box."
+    );
+    expect(composerOf(slot)).toHaveValue('Check the logs');
+    expect(loadDraft('session:s1')).toBe('Check the logs');
+    expect(within(slot).queryByText('Check the logs', { selector: 'p' })).toBeNull();
+  });
+
+  it('shows a message the backend recorded when its reply was lost, and does not send it twice', async () => {
+    const user = userEvent.setup();
+    testChat.state.lostSend = 'recorded';
+    const slot = await openSession();
+    await waitFor(() => expect(composerOf(slot)).toBeEnabled());
+
+    await user.type(composerOf(slot), 'Check the logs');
+    await user.click(within(slot).getByRole('button', { name: 'Send message' }));
+
+    expect(await within(slot).findByTestId('send-error')).toHaveTextContent(LOST_REPLY_RECORDED);
+    expect(await within(slot).findByText('Check the logs')).toBeInTheDocument();
+    expect(composerOf(slot)).toHaveValue('');
+    expect(loadDraft('session:s1')).toBe('');
+    expect(testChat.state.sessionPosts.s1).toHaveLength(1);
+  });
+
+  it('says so when a lost reply cannot be checked, and gives the text back', async () => {
+    const user = userEvent.setup();
+    testChat.state.lostSend = 'unrecorded';
+    const slot = await openSession();
+    await waitFor(() => expect(composerOf(slot)).toBeEnabled());
+    // The thread cannot be re-read after the lost reply, so nothing is known about the send.
+    server.use(nativeReadWith(problem(500, 'boom')));
+
+    await user.type(composerOf(slot), 'Check the logs');
+    await user.click(within(slot).getByRole('button', { name: 'Send message' }));
+
+    expect(await within(slot).findByTestId('send-error')).toHaveTextContent(
+      'Mainloop could not confirm whether it was recorded. Check the conversation before you send it again.'
+    );
+    expect(composerOf(slot)).toHaveValue('Check the logs');
+  });
+
+  it('says so when the stop fails, and keeps the stop control', async () => {
+    const user = userEvent.setup();
+    server.use(sessionAction('stop-turn', problem(500, 'boom')));
+    const slot = await openSession({ turnInFlight: true });
+
+    await user.click(await within(slot).findByTestId('session-chat-stop'));
+
+    expect(await within(slot).findByRole('alert')).toHaveTextContent(
+      'Could not stop the turn. Try again.'
+    );
+    expect(within(slot).getByTestId('session-chat-stop')).toHaveTextContent('stop');
+  });
+
+  it('locks an archived session and says why it takes no messages', async () => {
+    const slot = await openSession({ session: { archived_at: '2026-10-01T10:00:00Z' } });
+
+    expect(
+      await within(slot).findByText('This session is archived, so it takes no new messages.')
+    ).toBeInTheDocument();
+    expect(composerOf(slot)).toBeDisabled();
+  });
+
+  it('hides stop for a failed session, even while its last turn is marked in flight', async () => {
+    const slot = await openSession({ turnInFlight: true, session: { status: 'failed' } });
+
+    expect(
+      await within(slot).findByText('This session failed, so it takes no new messages.')
+    ).toBeInTheDocument();
+    expect(composerOf(slot)).toBeDisabled();
+    expect(within(slot).queryByTestId('session-chat-stop')).toBeNull();
+  });
+
+  it('sizes the panel to the visible viewport, so it follows the soft keyboard', async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 400 });
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+    try {
+      const slot = await openSession();
+      const panel = within(slot).getByTestId('session-chat-panel');
+      expect(panel.style.height).toBe('280px');
+
+      // The keyboard opens: the visible viewport shrinks, and the panel shrinks with it.
+      act(() => {
+        viewport.height = 200;
+        viewport.dispatchEvent(new Event('resize'));
+      });
+      expect(panel.style.height).toBe('140px');
+    } finally {
+      Reflect.deleteProperty(window, 'visualViewport');
+    }
   });
 });

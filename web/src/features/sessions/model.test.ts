@@ -6,6 +6,7 @@ import { delivery, native, session } from './test/fixtures';
 import {
   actionFailure,
   cancelNotice,
+  chatClosedReason,
   liveWord,
   loadFailure,
   NATIVE_POLL_MS,
@@ -158,6 +159,25 @@ describe('action notices', () => {
     expect(actionFailure(new TypeError('Failed to fetch')).text).toBe(
       "Couldn't reach Mainloop. Try again when it's back."
     );
+  });
+});
+
+describe('chatClosedReason', () => {
+  it('says why an archived, failed or cancelled session takes no messages', () => {
+    expect(chatClosedReason(session({ archived_at: '2026-10-01T10:00:00Z' }))).toBe(
+      'This session is archived, so it takes no new messages.'
+    );
+    expect(chatClosedReason(session({ status: 'failed' }))).toBe(
+      'This session failed, so it takes no new messages.'
+    );
+    expect(chatClosedReason(session({ status: 'cancelled' }))).toBe(
+      'This session was cancelled, so it takes no new messages.'
+    );
+  });
+
+  it('leaves the chat open for a live or completed session', () => {
+    expect(chatClosedReason(session({ status: 'active', archived_at: null }))).toBeNull();
+    expect(chatClosedReason(session({ status: 'completed', archived_at: null }))).toBeNull();
   });
 });
 
