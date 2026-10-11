@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutePlaceholder } from '@/shell/RoutePlaceholder';
+import { SessionPage } from '@/features/sessions';
 
 export const Route = createFileRoute('/sessions/$id')({
   component: Session
@@ -7,5 +7,5 @@ export const Route = createFileRoute('/sessions/$id')({
 
 function Session() {
   const { id } = Route.useParams();
-  return <RoutePlaceholder title="Session" slice="F4" detail={`${id}: not built yet (F4).`} />;
+  return <SessionPage id={id} />;
 }

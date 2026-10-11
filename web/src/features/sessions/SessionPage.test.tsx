@@ -1,0 +1,341 @@
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { HttpResponse } from 'msw';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { connection } from '@/api';
+import { server } from '@/test/msw/server';
+import { workspaceFixture } from '@/test/fixtures';
+import { attempt, view } from '@/test/fixtures/tasks';
+import { delivery, native, session } from './test/fixtures';
+import {
+  otherListReads,
+  problem,
+  sessionAction,
+  sessionRead,
+  serveSession,
+  tasksRead,
+  workspacesRead
+} from './test/handlers';
+import { renderSessions } from './test/render';
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await connection.check();
+});
+
+const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
+
+/**
+ * An action's result shows only after the session, native state and attention are re-read, so
+ * the wait covers that chain of requests rather than the single POST.
+ */
+const SETTLED = { timeout: 5000 };
+
+describe('session page', () => {
+  it('shows the title, description, status and back link', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', title: 'Fix login redirect', description: 'Investigate the loop.' })
+      )
+    );
+    renderSessions('/sessions/s1');
+    expect(await heading('Fix login redirect')).toBeInTheDocument();
+    expect(screen.getByText('Investigate the loop.')).toBeInTheDocument();
+    expect(screen.getByTestId('session-status')).toHaveTextContent('[ACTIVE]');
+    expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/');
+  });
+
+  it('offers cancel and stop turn for an active session', async () => {
+    server.use(...serveSession(session({ id: 's1', status: 'active' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.getByTestId('session-cancel')).toBeInTheDocument();
+    expect(screen.getByTestId('session-stop-turn')).toBeInTheDocument();
+  });
+
+  it('hides cancel for a completed session, and offers Clear', async () => {
+    server.use(...serveSession(session({ id: 's1', status: 'completed', summary: 'Fixed it.' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archive-session')).toHaveTextContent('Clear');
+  });
+
+  it('shows the summary of a completed session', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1', status: 'completed', summary: 'Found and fixed the loop.' })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.getByRole('heading', { level: 3, name: 'Summary' })).toBeInTheDocument();
+    expect(screen.getByText('Found and fixed the loop.')).toBeInTheDocument();
+  });
+
+  it('shows the error of a failed session, with Stop turn but no Cancel', async () => {
+    server.use(...serveSession(session({ id: 's1', status: 'failed', error: 'boom' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.getByRole('heading', { level: 3, name: 'Error' })).toBeInTheDocument();
+    expect(screen.getByText('boom')).toBeInTheDocument();
+    expect(screen.getByTestId('session-stop-turn')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-cancel')).not.toBeInTheDocument();
+  });
+
+  it('shows the chat slot as a placeholder until F2 fills it', async () => {
+    server.use(...serveSession(session({ id: 's1' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    const slot = screen.getByTestId('session-chat-slot');
+    expect(slot).toHaveAttribute('data-session-id', 's1');
+    expect(within(slot).getByText("Session chat isn't available yet.")).toBeInTheDocument();
+  });
+
+  it('shows the not-found state for a session that does not exist', async () => {
+    server.use(sessionRead(problem(404, 'Session not found')), ...otherListReads());
+    renderSessions('/sessions/missing');
+    const notFound = await screen.findByTestId('session-not-found');
+    expect(
+      within(notFound).getByRole('heading', { name: 'Session not found' })
+    ).toBeInTheDocument();
+    expect(within(notFound).getByRole('link', { name: 'Back to home' })).toHaveAttribute(
+      'href',
+      '/'
+    );
+  });
+
+  it('shows a server error with a reload instruction and no retry', async () => {
+    server.use(sessionRead(problem(500, 'boom')), ...otherListReads());
+    renderSessions('/sessions/s1');
+    expect(await screen.findByText('Server error')).toBeInTheDocument();
+    expect(
+      screen.getByText('Mainloop returned a server error. Reload to try again.')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the unreachable state, and a retry that loads the session', async () => {
+    const item = session({ id: 's1', title: 'Back after retry' });
+    let calls = 0;
+    server.use(
+      sessionRead(() => {
+        calls += 1;
+        return calls === 1 ? HttpResponse.error() : HttpResponse.json(item);
+      }),
+      ...otherListReads()
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    expect(await screen.findByText("Can't reach the Mainloop backend.")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+    expect(await heading('Back after retry')).toBeInTheDocument();
+  });
+});
+
+describe('cancel', () => {
+  it('asks in the app before it posts, and never uses window.confirm', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    let posts = 0;
+    server.use(
+      sessionAction('cancel', () => {
+        posts += 1;
+        return HttpResponse.json({ status: 'cancelled', agent: 'stopped' });
+      }),
+      ...serveSession(session({ id: 's1', status: 'active' }))
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    await user.click(screen.getByTestId('session-cancel'));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Cancel this session?')).toBeInTheDocument();
+    expect(posts).toBe(0);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Keep it running' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(posts).toBe(0);
+
+    await user.click(screen.getByTestId('session-cancel'));
+    await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
+    expect(await screen.findByText('Session cancelled.', {}, SETTLED)).toBeInTheDocument();
+    expect(posts).toBe(1);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns when the agent state after a cancel is unconfirmed', async () => {
+    server.use(
+      sessionAction('cancel', () => HttpResponse.json({ status: 'cancelled', agent: 'unknown' })),
+      ...serveSession(session({ id: 's1', status: 'active' }))
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    await user.click(screen.getByTestId('session-cancel'));
+    await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
+    const notice = await screen.findByTestId('session-action-notice', {}, SETTLED);
+    expect(notice).toHaveTextContent("couldn't confirm the agent stopped");
+    expect(notice).toHaveClass('text-term-yellow');
+  });
+
+  it('re-reads the session after a 409 and shows the owner the reason', async () => {
+    let reads = 0;
+    server.use(
+      sessionAction('cancel', problem(409, 'A task is still running.')),
+      sessionRead(() => {
+        reads += 1;
+        return HttpResponse.json(session({ id: 's1', status: 'active' }));
+      }),
+      ...serveSession(session({ id: 's1', status: 'active' }))
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    const readsBefore = reads;
+
+    await user.click(screen.getByTestId('session-cancel'));
+    await user.click(await screen.findByRole('button', { name: 'Yes, cancel' }));
+
+    expect(await screen.findByText('A task is still running.', {}, SETTLED)).toBeInTheDocument();
+    expect(reads).toBeGreaterThan(readsBefore);
+  });
+
+  it('is disabled while the backend is unreachable', async () => {
+    connection.reportFailure();
+    server.use(...serveSession(session({ id: 's1', status: 'active' })));
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(screen.getByTestId('session-cancel')).toBeDisabled();
+    expect(screen.getByTestId('session-stop-turn')).toBeDisabled();
+  });
+});
+
+describe('stop turn and clear', () => {
+  it('stops the turn and keeps the session open', async () => {
+    let posts = 0;
+    server.use(
+      sessionAction('stop-turn', () => {
+        posts += 1;
+        return HttpResponse.json({ status: 'stopped' });
+      }),
+      ...serveSession(session({ id: 's1', status: 'active' }))
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    await user.click(screen.getByTestId('session-stop-turn'));
+    expect(
+      await screen.findByText('Turn stopped. The session is still open.', {}, SETTLED)
+    ).toBeInTheDocument();
+    expect(posts).toBe(1);
+  });
+
+  it('clears a finished session and returns to the list', async () => {
+    let archived = 0;
+    server.use(
+      sessionAction('archive', () => {
+        archived += 1;
+        return HttpResponse.json({ status: 'archived' });
+      }),
+      ...serveSession(session({ id: 's1', status: 'completed', summary: 'Done.' }))
+    );
+    const user = userEvent.setup();
+    const { router } = renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    await user.click(screen.getByTestId('archive-session'));
+
+    expect(await screen.findByRole('heading', { name: 'Sessions' }, SETTLED)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/');
+    expect(archived).toBe(1);
+  });
+});
+
+describe('identity strip', () => {
+  it('is collapsed by default and shows the agent details on toggle', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1' }),
+        native({
+          session_id: 's1',
+          kind: 'claude',
+          agent_name: 'claude-child',
+          kagent_session_id: 'kagent-session-123',
+          turns: 4,
+          model: 'claude-sonnet-5-5'
+        })
+      )
+    );
+    const user = userEvent.setup();
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    const toggle = await screen.findByTestId('identity-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('id-kind')).not.toBeInTheDocument();
+    expect(screen.getByTestId('identity-strip')).toHaveTextContent('sonnet-5-5');
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('id-kind')).toHaveTextContent('claude');
+    expect(screen.getByTestId('id-agent')).toHaveTextContent('claude-child');
+    expect(screen.getByTestId('id-session')).toHaveTextContent('kagent-s');
+    expect(screen.getByTestId('id-turns')).toHaveTextContent('4');
+  });
+
+  it('shows a failed last delivery as a problem, never as ready', async () => {
+    server.use(
+      ...serveSession(
+        session({ id: 's1' }),
+        native({
+          session_id: 's1',
+          session_state: 'ready',
+          deliveries: [delivery({ message_id: 'm1', state: 'failed', detail: 'refused' })]
+        })
+      )
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+
+    const strip = await screen.findByTestId('identity-strip');
+    expect(within(strip).getByText('last message failed')).toBeInTheDocument();
+    expect(strip).not.toHaveTextContent(/\bready\b/);
+    expect(screen.getByTestId('id-delivery-problem')).toHaveTextContent('Failed: refused');
+  });
+});
+
+describe('task and workspace', () => {
+  it('links to the task that owns this session', async () => {
+    server.use(
+      tasksRead([
+        view(
+          { id: 'task-1', title: 'Add retry button' },
+          { attempts: [attempt({ task_id: 'task-1', session_id: 's1' })] }
+        )
+      ]),
+      ...serveSession(session({ id: 's1' }))
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    const link = await screen.findByTestId('session-task-link');
+    expect(link).toHaveTextContent('Add retry button');
+    expect(link).toHaveAttribute('href', '/tasks/task-1');
+  });
+
+  it('shows the workspace state and links to manage it', async () => {
+    server.use(
+      workspacesRead([workspaceFixture({ session_id: 's1', observed_state: 'running' })]),
+      ...serveSession(session({ id: 's1' }))
+    );
+    renderSessions('/sessions/s1');
+    await heading('Fix login redirect');
+    expect(await screen.findByTestId('workspace-lifecycle-badge')).toHaveTextContent('WS RUNNING');
+    expect(screen.getByTestId('workspace-publication-badge')).toHaveTextContent(
+      'Read only · disabled'
+    );
+    expect(screen.getByRole('link', { name: 'Manage workspace' })).toHaveAttribute(
+      'href',
+      '/workspaces/w1'
+    );
+  });
+});

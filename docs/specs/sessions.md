@@ -126,3 +126,14 @@ attempts cannot take this immediate-delete clearing path.
 Fresh cutover deletes old sessions; there is no old-shape migration, legacy workspace enrollment,
 or transcript conversion. The task-session checks have fake runtime and PostgreSQL evidence only;
 there is no live native-agent, Kubernetes or retained-source handoff qualification in this slice.
+
+## React status (F4)
+
+Labels: **implemented** means built in `web/` and covered by component or route tests against a fake backend. Nothing here is live-proven.
+
+- **Implemented:** the session list, built from attention, with the finished and idle filters and their counts; session rows; the `/agents` form (Claude Code or Codex, Ctrl/Cmd+Enter submits, blocked while offline); and the session page. The page offers **Stop turn** on every session, **Cancel session** through an in-app confirmation (never `window.confirm`), and **Clear** for finished sessions, which returns to the list. It also shows the task link, workspace badges, summary or error, the identity strip, and the not-found, server error and unreachable states.
+- **Implemented:** after any session action, the page re-reads the session, its native state and attention before it shows the result. A `409` therefore shows the current state.
+- **Wording:** the identity strip's live word is `ready`, `working`, `idle`, `busy`, `unknown` or `unreachable`. A failed or unconfirmed last delivery shows as `last message failed` or `last message unconfirmed`, never `ready`. These words differ from the frozen app's, so a wording decision is needed before cutover.
+- **Unreachable:** the state offers a manual retry. It does not retry on its own. The spec's "the page retries" holds only through that action, unless the shared connection module refetches on reconnect, which is not verified.
+- **Not built here:** the chat panel (F2 fills `session-chat-slot`); attention polling and the notification toast (F5); and wiring the list into the shell's Sessions slot, which is a supervisor item in `web/src/shell/slots.tsx`.
+- **Not proven:** the 3-second native poll while a turn is in flight (not cheap to test with MSW), and any run against a live backend.

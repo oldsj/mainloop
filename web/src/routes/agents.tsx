@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutePlaceholder } from '@/shell/RoutePlaceholder';
+import { NewAgentPage } from '@/features/sessions';
 
 export const Route = createFileRoute('/agents')({
-  component: () => <RoutePlaceholder title="New agent session" slice="F4" />
+  component: NewAgentPage
 });
