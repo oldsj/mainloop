@@ -25,6 +25,7 @@ type Config struct {
 	Git        Git
 	Preview    Preview
 	Health     Health
+	Events     Events
 	Server     Server
 
 	// EnvironmentRegistryAllowlist limits OCI registries for development environments.
@@ -146,6 +147,17 @@ type Health struct {
 	SummaryRetentionDays int `env:"HEALTH_SUMMARY_RETENTION_DAYS" envDefault:"365"`
 }
 
+// Events tunes the event outbox and the SSE stream.
+type Events struct {
+	// RetentionHours is how long stored events stay replayable through Last-Event-ID.
+	RetentionHours int `env:"MAINLOOP_EVENTS_RETENTION_HOURS" envDefault:"24"`
+	// SubscriberBuffer is how many events one SSE client may lag behind before it is dropped and
+	// must resume from its last event id.
+	SubscriberBuffer int `env:"MAINLOOP_EVENTS_SUBSCRIBER_BUFFER" envDefault:"64"`
+	// PollInterval is the outbox poll that backs up LISTEN/NOTIFY.
+	PollInterval Seconds `env:"MAINLOOP_EVENTS_POLL_SECONDS" envDefault:"5"`
+}
+
 // Server is the owner-facing HTTP listener and its origin rules.
 type Server struct {
 	Host           string `env:"HOST" envDefault:"0.0.0.0"`
@@ -259,6 +271,12 @@ func (c *Config) validate() error {
 	}
 	if c.Health.SummaryRetentionDays < c.Health.EventRetentionDays {
 		fail("health summary retention must cover event retention")
+	}
+	if c.Events.RetentionHours < 1 || c.Events.RetentionHours > 720 {
+		fail("MAINLOOP_EVENTS_RETENTION_HOURS must be between 1 and 720")
+	}
+	if c.Events.SubscriberBuffer < 8 || c.Events.SubscriberBuffer > 4096 {
+		fail("MAINLOOP_EVENTS_SUBSCRIBER_BUFFER must be between 8 and 4096")
 	}
 	if c.WorkspaceDevelopmentPlatform != "linux/arm64" && c.WorkspaceDevelopmentPlatform != "linux/amd64" {
 		fail("WORKSPACE_DEVELOPMENT_PLATFORM must be linux/arm64 or linux/amd64")

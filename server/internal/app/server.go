@@ -11,6 +11,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
+	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
@@ -33,6 +34,7 @@ type Server struct {
 	*projects.ProjectsAPI
 	*providers.ProvidersAPI
 	*environments.EnvironmentsAPI
+	*events.EventsAPI
 
 	fallback
 
@@ -48,8 +50,10 @@ type Deps struct {
 	Config *config.Config
 	Log    *slog.Logger
 	DB     Pinger
-	// Pool is the database pool the domains query. Nil only in tests that exercise no stored state.
+	// Pool and Hub are nil in processes and tests that do not serve events; GET /events then
+	// answers 503.
 	Pool *pgxpool.Pool
+	Hub  *events.Hub
 	// Registry reads image metadata for environments. Nil means the anonymous OCI client.
 	Registry environments.RegistryClient
 	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
@@ -71,6 +75,7 @@ func New(d Deps) *Server {
 		}},
 		ProvidersAPI:    prov,
 		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
+		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
 		deps:            d,
 		initErr:         err,
 	}
@@ -88,7 +93,7 @@ func (s *Server) Handler() (http.Handler, error) {
 		return nil, err
 	}
 	cfg := d.Config
-	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
+	strict := api.NewStrictHandlerWithOptions(s, []api.StrictMiddlewareFunc{events.CaptureLastEventID}, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
 			// Request bodies are validated before this runs, so this is a decode failure.
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")

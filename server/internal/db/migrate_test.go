@@ -101,6 +101,39 @@ func TestMigrateResetRebuildsSchema(t *testing.T) {
 	}
 }
 
+// A Migrator that already ran Up or Status holds a goose provider that remembers the version
+// table; Reset drops that table, so it must build a fresh provider.
+func TestMigrateResetAfterUp(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.NewEmpty(t)
+	m := newMigrator(t, d.URL)
+	if _, err := m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Status(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO topics (id, user_id, name) VALUES ('t', 'u', 'n')`); err != nil {
+		t.Fatal(err)
+	}
+	for round := range 2 {
+		if err := m.Reset(ctx); err != nil {
+			t.Fatalf("reset %d: %v", round, err)
+		}
+		var n int
+		if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM topics`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("round %d: topics = %d, err = %v", round, n, err)
+		}
+		if got := countTables(t, d); got != wantTables(t) {
+			t.Errorf("round %d: tables = %d, want %d", round, got, wantTables(t))
+		}
+		rows, err := m.Status(ctx)
+		if err != nil || len(rows) == 0 || !rows[len(rows)-1].Applied {
+			t.Errorf("round %d: status = %+v, %v", round, rows, err)
+		}
+	}
+}
+
 // Migrators that start together on an empty database must all succeed: creating the schema is
 // serialised. Several rounds of several migrators make a lucky pass very unlikely.
 func TestMigrateConcurrentUp(t *testing.T) {

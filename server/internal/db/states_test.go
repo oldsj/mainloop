@@ -48,6 +48,36 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.SourcePrebuiltImage), string(dbstate.SourceDefinitionRepo), string(dbstate.SourceOperatorDefault))},
 		{"environment_grants", "permission", strs(string(dbstate.PermissionUse), string(dbstate.PermissionDerive))},
 	}
+	// Every enumerated CHECK in the schema needs a case above, so a new state column cannot be
+	// added without constants that are held to it.
+	t.Run("all enumerated checks covered", func(t *testing.T) {
+		covered := map[string]bool{}
+		for _, c := range cases {
+			covered[c.table+"_"+c.column+"_check"] = true
+		}
+		rows, err := d.Pool.Query(ctx,
+			`SELECT c.conrelid::regclass::text, c.conname FROM pg_constraint c
+			 JOIN pg_namespace n ON n.oid = c.connamespace
+			 WHERE n.nspname = 'mainloop' AND c.contype = 'c'
+			   AND pg_get_constraintdef(c.oid) LIKE '%= ANY (ARRAY[%'
+			 ORDER BY 1, 2`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var table, name string
+			if err := rows.Scan(&table, &name); err != nil {
+				t.Fatal(err)
+			}
+			if !covered[name] {
+				t.Errorf("CHECK %s on %s has no case in TestStateConstantsMatchChecks", name, table)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	for _, c := range cases {
 		t.Run(c.table+"."+c.column, func(t *testing.T) {
 			var def string

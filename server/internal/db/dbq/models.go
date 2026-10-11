@@ -85,6 +85,19 @@ type EnvironmentVersion struct {
 	CreatedAt              time.Time
 }
 
+type Event struct {
+	ID        int64
+	UserID    string
+	Type      string
+	Payload   json.RawMessage
+	CreatedAt time.Time
+}
+
+type EventFloor struct {
+	Singleton     bool
+	PrunedThrough int64
+}
+
 type Project struct {
 	ID                 string
 	UserID             string

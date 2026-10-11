@@ -10,14 +10,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/oldsj/mainloop/server/internal/app"
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
 const (
@@ -114,7 +117,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	deps := app.Deps{Config: cfg, Log: log, DB: pool, Pool: pool}
+	hub := events.NewHub(log, cfg.Events.SubscriberBuffer)
+	deps := app.Deps{Config: cfg, Log: log, DB: pool, Pool: pool, Hub: hub}
 	if cfg.GitHub.AppID != "" {
 		gh, err := github.NewApp(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
 		if err != nil {
@@ -126,5 +130,24 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	return httpx.Serve(ctx, log, "api", cfg.ListenAddr(), handler)
+
+	g, gctx := errgroup.WithContext(ctx)
+	// Long-lived SSE streams never finish on their own, so the HTTP server's graceful shutdown
+	// would wait out its full timeout for them. Ending them first lets it drain at once.
+	stopStreams := context.AfterFunc(gctx, hub.Close)
+	defer stopStreams()
+
+	notifier := reconcile.NewNotifier(pool, log)
+	source := &events.Source{
+		Pool: pool, Hub: hub, Log: log,
+		Wake: notifier.Subscribe(events.Channel), Poll: cfg.Events.PollInterval.Duration(),
+	}
+	runner := reconcile.NewRunner(pool, log, notifier)
+	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
+
+	g.Go(func() error { return notifier.Run(gctx) })
+	g.Go(func() error { return source.Run(gctx) })
+	g.Go(func() error { return runner.Run(gctx) })
+	g.Go(func() error { return httpx.Serve(gctx, log, "api", cfg.ListenAddr(), handler) })
+	return g.Wait()
 }

@@ -113,6 +113,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Tasks.ReconcileInterval.Duration() != 5*time.Second || cfg.WorkspaceDevelopmentPlatform != "linux/arm64" {
 		t.Errorf("tasks/platform defaults: %+v", cfg.Tasks)
 	}
+	if cfg.Events.RetentionHours != 24 || cfg.Events.SubscriberBuffer != 64 || cfg.Events.PollInterval.Duration() != 5*time.Second {
+		t.Errorf("events defaults: %+v", cfg.Events)
+	}
 	if cfg.MergeToolsEnabled || cfg.MergeConfigurations != nil || cfg.Kagent.ProviderProfiles != nil {
 		t.Error("merge and provider defaults must be empty")
 	}
@@ -466,5 +469,28 @@ func TestGatesAreOnlyForTheExactValueTrue(t *testing.T) {
 		if err != nil || on(cfg) {
 			t.Errorf("%s unset: enabled = %v, err %v", name, on(cfg), err)
 		}
+	}
+}
+
+func TestEventsSettingsAreValidated(t *testing.T) {
+	for name, vars := range map[string]map[string]string{
+		"retention zero":     {"MAINLOOP_EVENTS_RETENTION_HOURS": "0"},
+		"retention too long": {"MAINLOOP_EVENTS_RETENTION_HOURS": "721"},
+		"buffer too small":   {"MAINLOOP_EVENTS_SUBSCRIBER_BUFFER": "1"},
+		"buffer too large":   {"MAINLOOP_EVENTS_SUBSCRIBER_BUFFER": "100000"},
+		"not a number":       {"MAINLOOP_EVENTS_RETENTION_HOURS": "a day"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vars["AGENT_TOKEN_KEY"] = "k"
+			if _, err := Parse(vars); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+	cfg, err := Parse(map[string]string{
+		"AGENT_TOKEN_KEY": "k", "MAINLOOP_EVENTS_RETENTION_HOURS": "48", "MAINLOOP_EVENTS_SUBSCRIBER_BUFFER": "128", "MAINLOOP_EVENTS_POLL_SECONDS": "2",
+	})
+	if err != nil || cfg.Events.RetentionHours != 48 || cfg.Events.SubscriberBuffer != 128 || cfg.Events.PollInterval.Duration() != 2*time.Second {
+		t.Errorf("custom events settings: %+v, %v", cfg.Events, err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,7 +38,12 @@ type MigrationStatus struct {
 // session advisory lock, so concurrent migrate commands (two replicas starting at once) take
 // turns.
 type Migrator struct {
-	sqlDB    *sql.DB
+	sqlDB *sql.DB
+	files fs.FS
+
+	// provider caches what goose learned about the version table (created, or not), so Reset
+	// replaces it after dropping the schema.
+	mu       sync.Mutex
 	provider *goose.Provider
 }
 
@@ -58,18 +64,35 @@ func NewMigrator(ctx context.Context, url string) (*Migrator, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: embedded migrations: %w", err)
 	}
+	m := &Migrator{sqlDB: sqlDB, files: files}
+	if _, err := m.newProvider(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return m, nil
+}
+
+// newProvider builds a goose provider with a fresh view of the database and makes it current.
+func (m *Migrator) newProvider() (*goose.Provider, error) {
 	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(lockPollSeconds, lockWaitSeconds))
 	if err != nil {
-		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migration lock: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, files,
+	provider, err := goose.NewProvider(goose.DialectPostgres, m.sqlDB, m.files,
 		goose.WithSessionLocker(locker))
 	if err != nil {
-		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migrations: %w", err)
 	}
-	return &Migrator{sqlDB: sqlDB, provider: provider}, nil
+	m.mu.Lock()
+	m.provider = provider
+	m.mu.Unlock()
+	return provider, nil
+}
+
+func (m *Migrator) current() *goose.Provider {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.provider
 }
 
 // Close releases the connections.
@@ -77,7 +100,7 @@ func (m *Migrator) Close() error { return m.sqlDB.Close() }
 
 // Up applies every pending migration and returns how many ran.
 func (m *Migrator) Up(ctx context.Context) (int, error) {
-	results, err := m.provider.Up(ctx)
+	results, err := m.current().Up(ctx)
 	if err != nil {
 		return len(results), fmt.Errorf("db: migrate up: %w", err)
 	}
@@ -86,7 +109,7 @@ func (m *Migrator) Up(ctx context.Context) (int, error) {
 
 // Status lists every migration file in version order.
 func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
-	rows, err := m.provider.Status(ctx)
+	rows, err := m.current().Status(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("db: migration status: %w", err)
 	}
@@ -116,6 +139,10 @@ func (m *Migrator) Reset(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The old provider may remember a version table that is now gone.
+	if _, err := m.newProvider(); err != nil {
+		return err
+	}
 	_, err = m.Up(ctx)
 	return err
 }
@@ -143,13 +170,15 @@ func withSchemaLock(ctx context.Context, sqlDB *sql.DB, fn func(c *sql.Conn) err
 	if _, err := c.ExecContext(ctx, "SELECT pg_advisory_lock("+lockKey+")", schemaLockName); err != nil {
 		return fmt.Errorf("db: schema lock: %w", err)
 	}
-	fnErr := fn(c)
 	// Closing the connection would release the lock too, but pooled connections are reused, so
-	// release it explicitly and, if that fails, discard the connection.
-	unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
-	defer cancel()
-	if _, err := c.ExecContext(unlockCtx, "SELECT pg_advisory_unlock("+lockKey+")", schemaLockName); err != nil {
-		_ = c.Raw(func(any) error { return driver.ErrBadConn })
-	}
-	return fnErr
+	// release it explicitly and, if that fails, discard the connection. A deferred unlock also
+	// runs when fn panics.
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+		defer cancel()
+		if _, err := c.ExecContext(unlockCtx, "SELECT pg_advisory_unlock("+lockKey+")", schemaLockName); err != nil {
+			_ = c.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+	return fn(c)
 }
