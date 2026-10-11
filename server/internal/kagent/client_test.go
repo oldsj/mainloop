@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -694,6 +695,38 @@ func TestStreamingHappyPath(t *testing.T) {
 	req := srv.Requests()[0]
 	if req.AgentPath != kagenttest.AgentPath("kagent", "mainloop-main") || req.MessageID != "msg-1" {
 		t.Fatalf("request %+v", req)
+	}
+}
+
+func TestSendCarriesMetadataAndExtensionsAndTheHITLHeader(t *testing.T) {
+	c, srv, _ := setup(t)
+	meta := map[string]any{kagent.HITLExtension: map[string]any{"type": "ask_user_response", "id": "q1"}}
+	for _, err := range c.SendMessage(ctx, agent, kagent.SendParams{
+		Text: "HITL response", MessageID: "msg-h", ContextID: "ctx-1", TaskID: "t1",
+		Metadata: meta, Extensions: []string{kagent.HITLExtension},
+	}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := srv.Requests()[0]
+	if req.MessageID != "msg-h" || !slices.Equal(req.Extensions, []string{kagent.HITLExtension}) {
+		t.Fatalf("request %+v", req)
+	}
+	got, ok := req.Metadata[kagent.HITLExtension].(map[string]any)
+	if !ok || got["type"] != "ask_user_response" || got["id"] != "q1" {
+		t.Fatalf("metadata %v", req.Metadata)
+	}
+	if h := req.Header.Get("A2A-Extensions"); h != kagent.HITLExtension {
+		t.Fatalf("A2A-Extensions %q", h)
+	}
+	// A plain message carries neither.
+	if _, err := send(c, "msg-plain"); err != nil {
+		t.Fatal(err)
+	}
+	plain := srv.Requests()[1]
+	if len(plain.Metadata) != 0 || len(plain.Extensions) != 0 {
+		t.Fatalf("plain request %+v", plain)
 	}
 }
 

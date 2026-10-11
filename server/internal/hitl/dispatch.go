@@ -118,7 +118,7 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 	case dbstate.HITLUnavailable, dbstate.HITLAnswered:
 		return d.finish(ctx, dbstate.HITLRejectedTransport, "the request changed before the answer was sent")
 	case dbstate.HITLStale:
-		return reconcile.RetryAfter(o.UnsupportedRetry), nil // wait for kagent to confirm the ask
+		return reconcile.RetryAfter(o.StaleRetry), nil // wait for kagent to confirm the ask
 	}
 	rctx, cancel := context.WithTimeout(ctx, o.ReadTimeout)
 	task, err := d.s.Kagent.GetTask(rctx, d.agent, d.w.TaskID)
@@ -152,8 +152,6 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 	switch {
 	case err == nil:
 		return d.confirmSent(ctx)
-	case errors.Is(err, ErrSendUnsupported):
-		return d.notSent(ctx, err, o.UnsupportedRetry)
 	case kagent.NotSent(err):
 		return d.notSent(ctx, err, 0)
 	}
@@ -179,10 +177,7 @@ func (d *dispatch) notSent(ctx context.Context, cause error, after time.Duration
 // confirmSent follows a send that returned cleanly: the message must show up in the task before
 // the response counts as accepted.
 func (d *dispatch) confirmSent(ctx context.Context) (reconcile.Outcome, error) {
-	o := d.s.opts()
-	rctx, cancel := context.WithTimeout(ctx, o.ReadTimeout)
-	defer cancel()
-	task, found, err := d.s.Kagent.FindTaskForMessage(rctx, d.agent, d.w.ContextID, d.w.OutboundMessageID)
+	task, found, err := d.lookup(ctx)
 	if found && (err != nil || hasMessage(task, d.w.OutboundMessageID)) {
 		return d.finish(ctx, dbstate.HITLAccepted, "")
 	}
@@ -207,9 +202,7 @@ func (d *dispatch) markUncertain(ctx context.Context, detail string) (reconcile.
 // the task still waits for the ask, which proves kagent did not act on the answer.
 func (d *dispatch) settle(ctx context.Context) (reconcile.Outcome, error) {
 	o := d.s.opts()
-	rctx, cancel := context.WithTimeout(ctx, o.ReadTimeout)
-	task, found, err := d.s.Kagent.FindTaskForMessage(rctx, d.agent, d.w.ContextID, d.w.OutboundMessageID)
-	cancel()
+	task, found, err := d.lookup(ctx)
 	if found && (err != nil || hasMessage(task, d.w.OutboundMessageID)) {
 		return d.finish(ctx, dbstate.HITLAccepted, "")
 	}
@@ -243,4 +236,23 @@ func (d *dispatch) uncertainSince(ctx context.Context) time.Time {
 		return time.Now()
 	}
 	return r.UpdatedAt
+}
+
+// lookup finds the task that shows this response's message. The usual place is the task the
+// response was sent to, so that is one cheap GetTask. Only when that task no longer waits for the
+// ask (kagent may have taken the message into another task) does it list the whole conversation.
+func (d *dispatch) lookup(ctx context.Context) (task *a2a.Task, found bool, err error) {
+	rctx, cancel := context.WithTimeout(ctx, d.s.opts().ReadTimeout)
+	defer cancel()
+	t, err := d.s.Kagent.GetTask(rctx, d.agent, d.w.TaskID)
+	var gone *kagent.TaskNotFound
+	switch {
+	case err == nil && hasMessage(t, d.w.OutboundMessageID):
+		return t, true, nil
+	case err == nil && d.stillAsks(t):
+		return nil, false, nil // still waiting for the answer: it has not arrived
+	case err != nil && !errors.As(err, &gone):
+		return nil, false, err
+	}
+	return d.s.Kagent.FindTaskForMessage(rctx, d.agent, d.w.ContextID, d.w.OutboundMessageID)
 }

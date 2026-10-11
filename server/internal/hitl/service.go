@@ -41,10 +41,6 @@ var (
 	ErrDisabled = errors.New("owner HITL writes are disabled")
 )
 
-// ErrSendUnsupported is returned by a Kagent that cannot send a HITL response. The response stays
-// recorded and is tried again later; nothing was sent.
-var ErrSendUnsupported = errors.New("hitl: this kagent client cannot send HITL responses")
-
 // Send is one native response to a waiting task.
 type Send struct {
 	// MessageID is the A2A message id. It is stable across retries and is the only handle for
@@ -57,26 +53,15 @@ type Send struct {
 }
 
 // Kagent is the part of kagent this package uses. The reads are the sessions package's own; the
-// send exists only here, because the shared client sends text only.
+// send carries the HITL extension metadata.
 type Kagent interface {
 	ListTasksPage(ctx context.Context, agent kagent.AgentRef, contextID, token string, limit int) ([]*a2a.Task, string, error)
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
 	// SendHITL sends the response once. It returns when the stream ends, fails or ctx ends; the
 	// caller reads the task to learn whether kagent took it. An error for which kagent.NotSent is
-	// true, or ErrSendUnsupported, proves nothing was sent.
+	// true proves nothing was sent.
 	SendHITL(ctx context.Context, agent kagent.AgentRef, s Send) error
-}
-
-// FromClient adapts the shared kagent client. Its SendHITL reports ErrSendUnsupported until
-// kagent.SendParams can carry the extension metadata (see the G9a result note), so responses wait
-// recorded in production until then; every read works.
-func FromClient(c *kagent.Client) Kagent { return clientAdapter{c} }
-
-type clientAdapter struct{ *kagent.Client }
-
-func (clientAdapter) SendHITL(context.Context, kagent.AgentRef, Send) error {
-	return ErrSendUnsupported
 }
 
 // Options tunes the observer and the dispatcher. Zero values take the defaults.
@@ -102,8 +87,8 @@ type Options struct {
 	UncertainHold time.Duration
 	// UncertainRecheck is the delay between lookups of an unresolved response.
 	UncertainRecheck time.Duration
-	// UnsupportedRetry is the delay before a response that could not be sent is tried again.
-	UnsupportedRetry time.Duration
+	// StaleRetry is the delay before a response is tried again after it provably was not sent, or while its request is stale.
+	StaleRetry time.Duration
 	// DiagnosticRepeat suppresses a repeated diagnostic for this long.
 	DiagnosticRepeat time.Duration
 	Concurrency      int
@@ -133,7 +118,7 @@ func (o Options) withDefaults() Options {
 	def(&o.SendTimeout, 10*time.Second)
 	def(&o.UncertainHold, 10*time.Minute)
 	def(&o.UncertainRecheck, 15*time.Second)
-	def(&o.UnsupportedRetry, time.Minute)
+	def(&o.StaleRetry, time.Minute)
 	def(&o.DiagnosticRepeat, 5*time.Minute)
 	defInt(&o.Concurrency, 4)
 	def(&o.Lease, 30*time.Second)
@@ -216,8 +201,6 @@ func errDetail(err error) string {
 		return "kagent has no such task"
 	case errors.As(err, &a2aErr):
 		return "kagent refused the request"
-	case errors.Is(err, ErrSendUnsupported):
-		return "this build cannot send HITL responses yet"
 	}
 	return "the request failed"
 }

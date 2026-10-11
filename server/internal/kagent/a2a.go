@@ -38,6 +38,11 @@ type SendParams struct {
 	MessageID string
 	ContextID string
 	TaskID    string // empty starts a new task
+
+	// Metadata and Extensions go on the a2a.Message as given; the HITL response is the one user of
+	// them. Extensions name the A2A extensions the message uses.
+	Metadata   map[string]any
+	Extensions []string
 }
 
 type rpcRequest struct {
@@ -233,6 +238,7 @@ func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) 
 		}
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(p.Text))
 		msg.ID, msg.ContextID, msg.TaskID = p.MessageID, p.ContextID, a2a.TaskID(p.TaskID)
+		msg.Metadata, msg.Extensions = p.Metadata, p.Extensions
 		params := a2a.SendMessageRequest{Message: msg}
 
 		deadline := c.now().Add(c.budget)

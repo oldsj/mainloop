@@ -151,9 +151,9 @@ Built:
 
 Not built:
 
-- Sending to a real kagent. The kagent client cannot yet attach the HITL extension metadata to a
-  message, so the production sender reports "unsupported" and responses stay `recorded` until it
-  can.
+- Proof against a real kagent. The production sender (the shared client, with the answer in the
+  HITL extension metadata and the `A2A-Extensions` header) is tested only against the in-process
+  fake.
 - Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do nested delegated requests and
   task-tree attention links.
 - An uncertain response whose task has moved on without ever showing the message is rechecked

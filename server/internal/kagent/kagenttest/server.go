@@ -31,6 +31,9 @@ type Request struct {
 	AgentPath string // A2A only
 	Header    http.Header
 	MessageID string // A2A SendStreamingMessage only
+	// Metadata and Extensions are those of the sent message (A2A SendStreamingMessage only).
+	Metadata   map[string]any
+	Extensions []string
 }
 
 // Fault makes the next call with a given key fail. Fields are applied in this order: Delay,
@@ -471,6 +474,7 @@ func (s *Server) a2a(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rec.MessageID = send.Message.ID
+		rec.Metadata, rec.Extensions = send.Message.Metadata, send.Message.Extensions
 	}
 	s.record(rec)
 

@@ -50,6 +50,7 @@ type fakeKagent struct {
 	// input-required and adds the message to its history, like a kagent that accepts.
 	onSend func(f *fakeKagent, s hitl.Send) error
 	sends  []hitl.Send
+	finds  int // FindTaskForMessage calls
 }
 
 func newFake() *fakeKagent { return &fakeKagent{tasks: map[string]*a2a.Task{}} }
@@ -87,7 +88,7 @@ func (f *fakeKagent) ListTasksPage(_ context.Context, _ kagent.AgentRef, context
 	var all []*a2a.Task
 	for _, t := range f.tasks {
 		if t.ContextID == contextID {
-			all = append(all, t)
+			all = append(all, clone(t))
 		}
 	}
 	slices.SortFunc(all, func(a, b *a2a.Task) int {
@@ -125,12 +126,13 @@ func (f *fakeKagent) GetTask(_ context.Context, _ kagent.AgentRef, taskID string
 	if !ok {
 		return nil, &kagent.TaskNotFound{}
 	}
-	return t, nil
+	return clone(t), nil
 }
 
 func (f *fakeKagent) FindTaskForMessage(_ context.Context, _ kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.finds++
 	if f.findErr != nil {
 		return nil, false, f.findErr
 	}
@@ -140,7 +142,7 @@ func (f *fakeKagent) FindTaskForMessage(_ context.Context, _ kagent.AgentRef, co
 		}
 		for _, m := range t.History {
 			if m.ID == messageID {
-				return t, true, nil
+				return clone(t), true, nil
 			}
 		}
 	}
@@ -232,7 +234,7 @@ func newEnv(t *testing.T, mutate ...func(*hitl.Service)) *env {
 		Pool: pool, Kagent: k, OwnerID: owner, Agent: agent, WritesEnabled: true, Log: quiet(),
 		Opts: hitl.Options{
 			RefreshEvery: time.Millisecond, ScanEvery: time.Millisecond, StaleAfter: time.Hour,
-			UncertainRecheck: 20 * time.Millisecond, UncertainHold: time.Hour, UnsupportedRetry: 20 * time.Millisecond,
+			UncertainRecheck: 20 * time.Millisecond, UncertainHold: time.Hour, StaleRetry: 20 * time.Millisecond,
 			Lease: 600 * time.Millisecond, Concurrency: 4,
 		},
 	}
@@ -643,7 +645,7 @@ func TestUncertainHoldFailsOnlyWhileTheAskStillWaits(t *testing.T) {
 	}
 }
 
-func TestNotSentIsRetriedAndUnsupportedStaysRecorded(t *testing.T) {
+func TestNotSentStaysRecordedAndIsRetried(t *testing.T) {
 	e := newEnv(t)
 	e.k.sendErr = &kagent.Unreachable{Err: errors.New("dial")}
 	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
@@ -653,11 +655,6 @@ func TestNotSentIsRetriedAndUnsupportedStaysRecorded(t *testing.T) {
 	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond)
-	if got := e.response("act-1").State; got != dbstate.HITLRecorded {
-		t.Fatalf("state = %s, want recorded", got)
-	}
-	e.k.set(func() { e.k.sendErr = hitl.ErrSendUnsupported })
 	time.Sleep(150 * time.Millisecond)
 	if got := e.response("act-1").State; got != dbstate.HITLRecorded {
 		t.Fatalf("state = %s, want recorded", got)
@@ -934,4 +931,48 @@ func TestMalformedAskIsADiagnosticOnly(t *testing.T) {
 	if err != nil || len(st.Diagnostics) != 1 {
 		t.Fatalf("status = %+v, %v", st, err)
 	}
+}
+
+func TestSettleFindsTheMessageInAnotherTaskOnlyWhenTheAskMovedOn(t *testing.T) {
+	e := newEnv(t)
+	e.k.onSend = func(*fakeKagent, hitl.Send) error { return context.DeadlineExceeded }
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLUncertain)
+	// While the ask still waits, a recheck reads only that task; it never lists the conversation.
+	e.k.set(func() { e.k.finds = 0 })
+	time.Sleep(100 * time.Millisecond)
+	if n := e.k.findCount(); n != 0 {
+		t.Fatalf("lookup listed the conversation %d times while the ask waited", n)
+	}
+	// kagent took the message into a new task and the old one moved on.
+	e.k.set(func() {
+		e.k.tasks["task-a"].Status = a2a.TaskStatus{State: a2a.TaskStateCanceled}
+		e.k.tasks["task-z"] = &a2a.Task{
+			ID: "task-z", ContextID: ksid, Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
+			History: []*a2a.Message{{ID: e.k.sends[0].MessageID}},
+		}
+	})
+	e.waitResponse("act-1", dbstate.HITLAccepted)
+	if n := e.k.sendCount(); n != 1 {
+		t.Fatalf("sends = %d, want 1", n)
+	}
+}
+
+func (f *fakeKagent) findCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.finds
+}
+
+// clone copies a task so a reader never shares memory with the test's later edits.
+func clone(t *a2a.Task) *a2a.Task {
+	c := *t
+	c.History = slices.Clone(t.History)
+	return &c
 }
