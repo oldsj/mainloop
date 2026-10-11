@@ -47,7 +47,14 @@ class ProviderTests(unittest.TestCase):
         with patch.object(settings, "kagent_namespace", "team"):
             for kind in ("claude", "codex"):
                 for role, expected in (
-                    ("main", settings.kagent_main_agent),
+                    (
+                        "main",
+                        (
+                            settings.kagent_main_agent
+                            if kind == "claude"
+                            else settings.kagent_main_codex_agent
+                        ),
+                    ),
                     (
                         "supervisor",
                         getattr(settings, f"kagent_supervisor_{kind}_agent"),
