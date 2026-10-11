@@ -63,11 +63,17 @@ UPDATE task_attempts SET result_ref = $2, updated_at = now() WHERE id = $1;
 SELECT a.id AS attempt_id, a.task_id, a.state AS attempt_state, a.role AS attempt_role, a.depth AS attempt_depth,
        t.owner_id, t.status AS task_status, t.mode AS task_mode, t.project_id, t.root_task_id, t.parent_task_id,
        (coalesce(t.current_attempt_id = a.id, false))::boolean AS is_current,
+       -- The attempt's runtime identity is one id (session = binding, and the workspace of a code attempt), and the
+       -- session it names belongs to the task's project.
+       (a.session_id IS NOT DISTINCT FROM a.binding_id
+        AND a.workspace_id IS NOT DISTINCT FROM (CASE WHEN t.mode = 'code' THEN a.binding_id END)
+        AND (s.id IS NULL OR s.project_id IS NOT DISTINCT FROM t.project_id))::boolean AS scope_consistent,
        coalesce(pt.status, '')::text AS parent_task_status, coalesce(pa.state, '')::text AS parent_attempt_state
 FROM task_attempts a
 JOIN tasks t ON t.id = a.task_id
 LEFT JOIN tasks pt ON pt.id = t.parent_task_id
 LEFT JOIN task_attempts pa ON pa.id = pt.current_attempt_id
+LEFT JOIN sessions s ON s.id = a.binding_id
 WHERE a.binding_id = $1;
 
 -- Locks an attempt against being moved while the caller's write commits, and reads its state.

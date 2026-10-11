@@ -81,8 +81,9 @@ var ErrInactive = errors.New("tasks: binding is not a live current task attempt"
 
 // principalOf loads the attempt behind a supervisor or child binding and checks it: the attempt
 // must be the task's current one and active, and a child's parent must still be running its own
-// active attempt. A completed task's attempt, still active and current until it settles, is let
-// in for merge status only.
+// active attempt. Its session, binding and (for code) workspace must be the one id, and the
+// session must belong to the task's project. A completed task's attempt, still active and current
+// until it settles, is let in for merge status only.
 func principalOf(ctx context.Context, q *dbq.Queries, role dbstate.BindingRole, binding string) (dbq.GetAttemptPrincipalRow, bool, error) {
 	row, err := q.GetAttemptPrincipal(ctx, &binding)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -99,6 +100,9 @@ func principalOf(ctx context.Context, q *dbq.Queries, role dbstate.BindingRole, 
 		return row, false, ErrInactive
 	}
 	if row.AttemptState != dbstate.AttemptActive {
+		return row, false, ErrInactive
+	}
+	if !row.ScopeConsistent {
 		return row, false, ErrInactive
 	}
 	if row.ParentTaskID != nil {
@@ -123,6 +127,14 @@ func (s *Service) Auth(ctx context.Context, role dbstate.BindingRole, grant dbst
 	row, final, err := principalOf(ctx, dbq.New(s.Pool), role, binding)
 	if err != nil {
 		return AuthState{}, err
+	}
+	// The grant must be the one the task's mode issues: a workspace grant for code, a coordination grant otherwise.
+	want := dbstate.GrantCoordination
+	if row.TaskMode == dbstate.TaskModeCode {
+		want = dbstate.GrantWorkspace
+	}
+	if grant != want {
+		return AuthState{}, ErrInactive
 	}
 	if final && (!s.MergeTools || grant != dbstate.GrantWorkspace) {
 		return AuthState{}, ErrInactive

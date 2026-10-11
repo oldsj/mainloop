@@ -28,15 +28,33 @@ func (h *harness) seedTask(t *testing.T, parent *string, role dbstate.AttemptRol
 		}
 		depth = 2
 	}
-	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO tasks (id, owner_id, root_task_id, parent_task_id, mode, title, brief, status, reason, assigned_profile_id, selection_source)
-	        VALUES ($1, 'owner', $2, $3, 'coordination', 'Seeded', 'Brief', 'running', NULL, 'claude', 'explicit')`, taskID, root, parent); err != nil {
+	// The task's mode follows the grant its agent was issued: a workspace grant is a code task.
+	var grant dbstate.MCPGrantKind
+	if err := h.env.Pool.QueryRow(ctx, `SELECT mcp_grant_kind FROM agent_bindings WHERE session_id = $1`, agent.SessionID).Scan(&grant); err != nil {
+		t.Fatal(err)
+	}
+	code := grant == dbstate.GrantWorkspace
+	// A code task needs a project and a checkout; its session and its ancestors share the project.
+	p := "seeded-project"
+	project := &p
+	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO projects (id, user_id, owner, name, full_name, html_url)
+		        VALUES ($1, 'owner', 'o', 'r', 'o/r', 'https://x.example/o/r') ON CONFLICT DO NOTHING`, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.env.Pool.Exec(ctx, `UPDATE sessions SET project_id = $2 WHERE id = $1`, agent.SessionID, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO tasks (id, owner_id, root_task_id, parent_task_id, mode, project_id, title, brief, status, reason, assigned_profile_id, selection_source,
+	        checkout_branch, checkout_ref, checkout_depth)
+	        VALUES ($1, 'owner', $2, $3, CASE WHEN $4 THEN 'code' ELSE 'coordination' END, $5, 'Seeded', 'Brief', 'running', NULL, 'claude', 'explicit',
+	                CASE WHEN $4 THEN 'seeded' END, CASE WHEN $4 THEN '' END, CASE WHEN $4 THEN 0 END)`, taskID, root, parent, code, project); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.env.Pool.Exec(ctx, `INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
-	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, capacity_held, stop_state)
-	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, $6, $6, $7,
+	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, workspace_id, capacity_held, stop_state)
+	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, $6, $6, CASE WHEN $8 THEN $6 END, $7,
 	                CASE $5::text WHEN 'draining' THEN 'requested' WHEN 'fenced' THEN 'confirmed' ELSE 'none' END)`,
-		attemptID, taskID, role, depth, state, agent.SessionID, state == dbstate.AttemptActive || state == dbstate.AttemptCreating || state == dbstate.AttemptDraining); err != nil {
+		attemptID, taskID, role, depth, state, agent.SessionID, state == dbstate.AttemptActive || state == dbstate.AttemptCreating || state == dbstate.AttemptDraining, code); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.env.Pool.Exec(ctx, `UPDATE tasks SET current_attempt_id = $1 WHERE id = $2`, attemptID, taskID); err != nil {

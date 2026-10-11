@@ -132,8 +132,9 @@ func (e *env) attempt(taskID string, role dbstate.AttemptRole, state dbstate.Att
 		depth = 2
 	}
 	e.exec(`INSERT INTO task_attempts (id, task_id, number, profile_id, native_provider, configuration_revision,
-	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, capacity_held)
-	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, NULLIF($6, ''), NULLIF($6, ''), $7)`,
+	        agent_namespace, agent_name, role, depth, state, binding_id, session_id, workspace_id, capacity_held)
+	        VALUES ($1, $2, 1, 'claude', 'claude', 'native-v1', 'kagent', 'agent', $3, $4, $5, NULLIF($6, ''), NULLIF($6, ''),
+	        CASE WHEN (SELECT mode FROM tasks WHERE id = $2) = 'code' THEN NULLIF($6, '') END, $7)`,
 		id, taskID, role, depth, state, binding, state == dbstate.AttemptCreating || state == dbstate.AttemptActive || state == dbstate.AttemptDraining)
 	e.exec(`UPDATE tasks SET current_attempt_id = $1 WHERE id = $2`, id, taskID)
 	return id
@@ -967,4 +968,58 @@ func TestCancelRacesReport(t *testing.T) {
 	if v.Task.Version != want || len(v.Reports) != 1 {
 		t.Fatalf("version = %d (cancel err %v), reports = %d", v.Task.Version, cerr, len(v.Reports))
 	}
+}
+
+// A binding is let in only for the attempt it belongs to: the grant its task's mode issues, one
+// runtime id, and a session in the task's project.
+func TestAuthChecksTheAttemptScope(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	refused := func(name string, role dbstate.BindingRole, grant dbstate.MCPGrantKind, binding string) {
+		t.Helper()
+		if _, err := e.svc.Auth(ctx, role, grant, binding); !errors.Is(err, tasks.ErrInactive) {
+			t.Fatalf("%s = %v", name, err)
+		}
+	}
+	root := e.mustCreate(e.own, tasks.CreateInput{ProjectID: "p1"})
+	e.attempt(root, dbstate.AttemptSupervisor, dbstate.AttemptActive, "sup-1")
+	sup := e.agent(dbstate.RoleSupervisor, "sup-1")
+	code := e.mustCreate(sup, tasks.CreateInput{Mode: dbstate.TaskModeCode, Checkout: &tasks.Checkout{Branch: "b"}})
+	e.attempt(code, dbstate.AttemptChild, dbstate.AttemptActive, "kid-1")
+
+	if _, err := e.svc.Auth(ctx, dbstate.RoleSupervisor, dbstate.GrantCoordination, "sup-1"); err != nil {
+		t.Fatalf("coordination attempt = %v", err)
+	}
+	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); err != nil {
+		t.Fatalf("code attempt = %v", err)
+	}
+	// A grant of the other mode is refused for both modes.
+	refused("workspace grant on a coordination task", dbstate.RoleSupervisor, dbstate.GrantWorkspace, "sup-1")
+	refused("coordination grant on a code task", dbstate.RoleChild, dbstate.GrantCoordination, "kid-1")
+	refused("no grant", dbstate.RoleChild, dbstate.GrantNone, "kid-1")
+
+	// The attempt's session, binding and workspace must be the one id.
+	e.exec(`UPDATE task_attempts SET workspace_id = 'elsewhere' WHERE binding_id = 'kid-1'`)
+	refused("workspace of another id", dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1")
+	e.exec(`UPDATE task_attempts SET workspace_id = NULL WHERE binding_id = 'kid-1'`)
+	refused("code attempt with no workspace", dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1")
+	e.exec(`UPDATE task_attempts SET workspace_id = binding_id WHERE binding_id = 'kid-1'`)
+	e.exec(`UPDATE task_attempts SET session_id = 'other' WHERE binding_id = 'kid-1'`)
+	refused("session of another id", dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1")
+	e.exec(`UPDATE task_attempts SET session_id = binding_id WHERE binding_id = 'kid-1'`)
+	e.exec(`UPDATE task_attempts SET workspace_id = 'sup-1' WHERE binding_id = 'sup-1'`)
+	refused("coordination attempt with a workspace", dbstate.RoleSupervisor, dbstate.GrantCoordination, "sup-1")
+	e.exec(`UPDATE task_attempts SET workspace_id = NULL WHERE binding_id = 'sup-1'`)
+
+	// A session row, once there is one, must be in the task's project.
+	e.exec(`INSERT INTO sessions (id, user_id, project_id, title, description, prompt) VALUES ('kid-1', $1, 'p1', 't', '', '')`, owner)
+	if _, err := e.svc.Auth(ctx, dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1"); err != nil {
+		t.Fatalf("session in the project = %v", err)
+	}
+	e.exec(`UPDATE sessions SET project_id = NULL WHERE id = 'kid-1'`)
+	refused("session outside the project", dbstate.RoleChild, dbstate.GrantWorkspace, "kid-1")
+	wantRefusal(t, func() error {
+		_, err := e.svc.Resolve(ctx, tasks.Principal{OwnerID: owner, Role: dbstate.RoleChild, BindingID: "kid-1"})
+		return err
+	}(), 403, tasks.ReasonInactivePrincipal)
 }
