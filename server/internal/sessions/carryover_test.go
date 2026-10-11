@@ -522,7 +522,8 @@ func TestTheSendDecisionLocksTheDeliveryBeforeTheBinding(t *testing.T) {
 	for {
 		var waiting int
 		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE agent_bindings SET standing_hash%'`).Scan(&waiting); err != nil {
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			AND query LIKE '%UPDATE agent_bindings SET standing_hash%'`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {
