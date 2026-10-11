@@ -2,11 +2,26 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '@/api';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { Skeleton } from '@/components/shared/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
 import { SessionRow } from './SessionRow';
 import { sessionCounts, visibleSessions, workspaceFor } from './model';
 import { useAttention, useProviders, useWorkspaces } from './queries';
+
+/** Three placeholder rows with a session row's padding, minimum height and line heights. */
+function SessionRowsSkeleton() {
+  return (
+    <ul aria-hidden="true" data-testid="session-rows-skeleton" className="gap-xs flex flex-col">
+      {[0, 1, 2].map((row) => (
+        <li key={row} className="gap-xs border-border p-md flex min-h-11 flex-col border">
+          <Skeleton className="h-5 w-3/5" />
+          <Skeleton className="h-4 w-2/5" />
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** The sessions list. Rows come from attention, so a status change there reaches the list too. */
 export function SessionsPanel() {
@@ -99,9 +114,12 @@ export function SessionsPanel() {
           />
         </div>
       ) : attention.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
-          Loading sessions…
-        </p>
+        <div className="gap-xs flex flex-col">
+          <p role="status" className="text-muted-foreground text-sm">
+            Loading sessions…
+          </p>
+          <SessionRowsSkeleton />
+        </div>
       ) : rows.length === 0 ? (
         <div className="text-sm">
           <p className="font-medium">No active sessions</p>

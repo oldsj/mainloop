@@ -8,6 +8,9 @@ const PREFIX = 'mainloop:draft:';
 /** The key before the first message exists: there is no conversation id yet. */
 export const NEW_CONVERSATION = 'new';
 
+/** A session's conversation has no conversation id of its own, so its draft is keyed by session. */
+export const sessionDraftKey = (sessionId: string) => `session:${sessionId}`;
+
 export function loadDraft(key: string): string {
   try {
     return sessionStorage.getItem(PREFIX + key) ?? '';

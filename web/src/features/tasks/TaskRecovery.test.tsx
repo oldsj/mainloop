@@ -87,9 +87,12 @@ describe('frozen recovery: lost reply stays resendable', () => {
     await user.click(await screen.findByTestId('task-action-reassign'));
 
     const resend = await screen.findByTestId('task-resend');
-    // The lost reply marked the connection offline, which disables resend. A successful probe
-    // clears it, as the live probe loop does in the app, before the owner can resend.
+    // The lost reply marked the connection offline, which disables resend, and the resend says why.
+    expect(within(resend).getByText('Mainloop is offline.')).toBeInTheDocument();
+    expect(within(resend).getByRole('button', { name: 'Resend original request' })).toBeDisabled();
+    // A successful probe clears it, as the live probe loop does in the app, before the owner can resend.
     await act(() => connection.check());
+    expect(within(resend).queryByText('Mainloop is offline.')).not.toBeInTheDocument();
     expect(
       within(resend).getByText(
         'Original reassign: version 3, attempt attempt-1, target codex-default.'

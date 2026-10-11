@@ -43,5 +43,6 @@ server reports; it never decides a task's state locally.
 ## React status (F5)
 
 - **Implemented:** the desktop inbox panel is always mounted, so its **Needs you** tab carries the count and polls while the page is visible. The compact Inbox tab shows the same panel. Inbox buttons, links and the reply field are at least 44 px tall.
-- **Not built:** a badge on the compact tab bar, and any header badge on desktop. The shells have no slot for one, and `InboxBadge` is not mounted. Until it is, compact polling stops when the Inbox tab is not open. Details: [inbox.md](inbox.md#react-status-f5).
+- **Implemented:** on the compact tab bar the Inbox tab carries two badges: the attention count (`InboxBadge`) and the owner-task count (`TasksBadge`). The tab's accessible name includes both counts. Attention keeps polling while another compact tab is open. Details: [inbox.md](inbox.md#react-status-f5).
+- **Not built:** a header badge on desktop. The design notes do not ask for one; the desktop count sits on the **Needs you** tab.
 - **Not proven:** layout at phone width in a browser. Playwright journeys are deferred to F9.

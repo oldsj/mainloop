@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HITLMergeDetails } from '@/lib/contract';
 import { mergeContext } from '@/test/fixtures/hitl';
 import {
+  compareLinkFor,
   isReviewable,
   prLinkFor,
   safeExternalHref,
   safeGithubHref,
-  unavailableNotes
+  unavailableNotes,
+  viewProblem
 } from './evidence';
 import { VerifiedMerge, type LoadMergeDetails } from './merge-review';
 import { hitlView } from '@/test/fixtures/hitl';
@@ -203,6 +205,30 @@ describe('links and evidence helpers', () => {
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
+  it('shows the diff link only when it is under the summary repository', () => {
+    const { unmount } = draw(vi.fn(), {
+      compare_url: 'https://github.com/owner/repo/compare/main...feat'
+    });
+    expect(screen.getByRole('link', { name: 'Compare diff' })).toHaveAttribute(
+      'href',
+      'https://github.com/owner/repo/compare/main...feat'
+    );
+    unmount();
+    draw(vi.fn(), { compare_url: 'https://github.com/other/repo/compare/a...b' });
+    expect(screen.queryByRole('link', { name: 'Compare diff' })).not.toBeInTheDocument();
+  });
+
+  it('lists every unavailable reason when the evidence is not withheld', () => {
+    const summary = {
+      ...ready.summary,
+      unavailable_reasons: ['Checks are missing.', 'Paths are missing.']
+    };
+    draw(vi.fn(), { summary });
+    expect(screen.queryByText(/Approve is disabled/)).not.toBeInTheDocument();
+    expect(screen.getByText('Checks are missing.')).toBeInTheDocument();
+    expect(screen.getByText('Paths are missing.')).toBeInTheDocument();
+  });
+
   it('only ready, current evidence with a digest can back an approval', () => {
     expect(isReviewable(null)).toBe(false);
     expect(isReviewable(mergeContext())).toBe(true);
@@ -221,6 +247,44 @@ describe('links and evidence helpers', () => {
     expect(prLinkFor(url, 'other/repo', 7)).toBeNull();
     expect(prLinkFor(url, null, 7)).toBeNull();
     expect(prLinkFor('https://github.com/owner/repo/pull/7/files', 'owner/repo', 7)).toBeNull();
+  });
+
+  it('a PR link keeps no query, fragment or userinfo from the server', () => {
+    expect(
+      prLinkFor('https://user:secret@github.com/owner/repo/pull/7?tab=files#diff', 'owner/repo', 7)
+    ).toBe('https://github.com/owner/repo/pull/7');
+    expect(prLinkFor('http://github.com/owner/repo/pull/7', 'owner/repo', 7)).toBeNull();
+  });
+
+  it('a compare link must sit under the summary repository', () => {
+    expect(compareLinkFor('https://github.com/owner/repo/compare/main...feat', 'owner/repo')).toBe(
+      'https://github.com/owner/repo/compare/main...feat'
+    );
+    expect(
+      compareLinkFor('https://github.com/owner/repo/compare/main...feat?w=1#x', 'owner/repo')
+    ).toBe('https://github.com/owner/repo/compare/main...feat');
+    expect(compareLinkFor('https://github.com/other/repo/compare/a...b', 'owner/repo')).toBeNull();
+    expect(compareLinkFor('https://github.com/owner/repo/pull/7', 'owner/repo')).toBeNull();
+    expect(compareLinkFor('https://github.com/owner/repo/compare/', 'owner/repo')).toBeNull();
+    expect(compareLinkFor('http://github.com/owner/repo/compare/a...b', 'owner/repo')).toBeNull();
+    expect(compareLinkFor('https://github.com/owner/repo/compare/a...b', null)).toBeNull();
+  });
+
+  it('a malformed receipt is a view problem, not a render crash', () => {
+    const base = hitlView();
+    const receipt = (response: unknown) => ({ ...base, response: { response } as never });
+    expect(viewProblem(receipt({ type: 'tool_approval_response', approvals: [] }))).toBeNull();
+    expect(
+      viewProblem(receipt({ type: 'ask_user_response', answers: [{ answer: ['x'] }] }))
+    ).toBeNull();
+    expect(viewProblem(receipt({ type: 'tool_approval_response', approvals: 'no' }))).toMatch(
+      /approvals are malformed/
+    );
+    expect(viewProblem(receipt({ type: 'ask_user_response', answers: [{ answer: 'x' }] }))).toMatch(
+      /answers are malformed/
+    );
+    expect(viewProblem(receipt({ type: 'surprise' }))).toMatch(/unknown type/);
+    expect(viewProblem(receipt(null))).toBe('the recorded response is missing');
   });
 
   it('server notes are read only from a single matching entry, and clipped', () => {

@@ -17,7 +17,7 @@ import {
   nativeFixture
 } from './fixtures';
 import { createChatBackend, type ChatBackendState } from './handlers';
-import { POLL_MS, POLL_WINDOW_MS } from './useMainThread';
+import { POLL_MS, POLL_WINDOW_MS } from './useThread';
 
 // The card has its own tests in features/hitl; these only check where the page renders it.
 vi.mock('@/features/hitl', () => ({

@@ -71,8 +71,13 @@ const notRecorded = (snapshot: HITLState): boolean =>
   snapshot.uncertain && !snapshot.stale && !!snapshot.view && !snapshot.view.response;
 
 function errorMessage(snapshot: HITLState): string {
-  if (notRecorded(snapshot)) return 'No decision was recorded. Reload to answer again.';
+  if (notRecorded(snapshot)) return 'Reload to answer again.';
   return snapshot.error ?? '';
+}
+
+/** The record without the given keys. */
+function without<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !keys.includes(key)));
 }
 
 function errorTitle(snapshot: HITLState): string {
@@ -102,6 +107,8 @@ export function HITLRequest({
   const [approvedKeys, setApprovedKeys] = useState<Record<string, string>>({});
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<string[][]>([]);
+  // The Approvals whose evidence moved on since the owner chose them, so the owner can review again.
+  const [evidenceChanged, setEvidenceChanged] = useState<string[]>([]);
   const { view } = snapshot;
   const problem = view ? viewProblem(view) : null;
   const rawPayload = view && !problem ? view.request.payload : undefined;
@@ -122,6 +129,17 @@ export function HITLRequest({
     ) as HITLDraft['decisions'];
   }, [chosen, approvedKeys, mergeReviews]);
   const decisionOf = (id: string) => (Object.hasOwn(decisions, id) ? decisions[id] : undefined);
+  // An Approve that the filter above drops is removed from the draft, not just hidden, so it cannot
+  // come back if the evidence returns to what it was. The owner is asked to approve again. React
+  // applies this during render and re-renders once, so the next pass finds nothing dropped.
+  const dropped = Object.keys(chosen).filter(
+    (id) => chosen[id] === 'approve' && decisions[id] !== 'approve'
+  );
+  if (dropped.length > 0) {
+    setDecisions((d) => without(d, dropped) as HITLDraft['decisions']);
+    setApprovedKeys((k) => without(k, dropped));
+    setEvidenceChanged(dropped);
+  }
 
   const disabled =
     snapshot.busy ||
@@ -208,6 +226,9 @@ export function HITLRequest({
     body = (
       <>
         {payload.hint ? <p className="text-muted-foreground">Agent note: {payload.hint}</p> : null}
+        {evidenceChanged.length > 0 ? (
+          <p role="alert">The merge evidence changed. Review it and approve again.</p>
+        ) : null}
         {tools.map((tool) => {
           const ctx = mergeReviews.find((item) => item.toolId === tool.id);
           const decision = decisionOf(tool.id);
@@ -226,12 +247,12 @@ export function HITLRequest({
                 ) : (
                   <UnavailableMerge
                     toolId={tool.id}
-                    notes={[
-                      ...(ctx.facts?.summary && !hasSummary(ctx.facts)
-                        ? ['The summary and the request context name different pull requests.']
-                        : []),
-                      ...unavailableNotes(view, tool.id)
-                    ]}
+                    reason={
+                      ctx.facts?.summary && !hasSummary(ctx.facts)
+                        ? 'The summary and the request context name different pull requests.'
+                        : null
+                    }
+                    notes={unavailableNotes(view, tool.id)}
                   />
                 )
               ) : null}
@@ -262,6 +283,7 @@ export function HITLRequest({
                       setReasons((r) =>
                         Object.fromEntries(Object.entries(r).filter(([id]) => id !== tool.id))
                       );
+                      setEvidenceChanged((ids) => ids.filter((id) => id !== tool.id));
                     }}
                   >
                     Approve
@@ -271,7 +293,10 @@ export function HITLRequest({
                     className={neutralChoice}
                     aria-label={decisionLabel('Reject', tool)}
                     aria-pressed={decision === 'reject'}
-                    onClick={() => setDecisions((d) => ({ ...d, [tool.id]: 'reject' }))}
+                    onClick={() => {
+                      setDecisions((d) => ({ ...d, [tool.id]: 'reject' }));
+                      setEvidenceChanged((ids) => ids.filter((id) => id !== tool.id));
+                    }}
                   >
                     Reject
                   </Button>

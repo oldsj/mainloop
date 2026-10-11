@@ -20,7 +20,7 @@ The owner's actions on one task: Retry, Reassign and Cancel. The server decides 
 - **Sending:** the button for the action in flight is disabled, and the other actions wait until it settles.
 - **Offline:** every action is disabled with `Mainloop is offline.`
 - **Unconfirmed (lost reply):** the request is kept as **Resend original request**, with its original version, attempt and target, and a **Discard** button. Other actions wait until the owner resends or discards it.
-- **Reassign picker:** the target is chosen from qualified other providers. While providers load it reads `Loading providers…`; if they fail it shows the error; if none qualify it says so.
+- **Reassign picker:** the target is chosen from the enabled other providers that offer the role. While providers load it reads `Loading providers…`; if they fail it shows the error; if none are offered it says `No other provider is available.`
 - **Cancel confirmation:** an in-app dialog with **Keep running** (sends nothing) and **Confirm cancel**. It is never `window.confirm`.
 - **Refused:** the notice shows the backend message in words, with `Server reason: <code>` beneath. A 409 re-reads the task before the notice appears.
 

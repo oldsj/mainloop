@@ -18,6 +18,7 @@ const attention: Schemas['AttentionSnapshot'] = { items: [], count: 0, sessions:
 const activity: Schemas['ActivityItem'][] = [];
 const projects: Schemas['Project'][] = [];
 const workspaces: Schemas['WorkspaceLifecycle'][] = [];
+const tasks: Schemas['TaskView'][] = [];
 
 /** A stream that sends `connected` and then stays open, like the real /events. */
 function eventStream() {
@@ -32,10 +33,10 @@ function eventStream() {
 }
 
 /**
- * Default responses for the local stack (`VITE_MSW=1`) and the test suite. Feature slices add
- * their own fixtures next to this file and spread them into `handlers`.
+ * Responses every surface reads at startup, with empty data. Neither the local stack nor the tests
+ * add a turn timer here: the local stack adds its own chat backend in `browser.ts`.
  */
-export const handlers = [
+export const baseHandlers = [
   http.get(url('/health'), () => HttpResponse.json(health)),
   http.get(url('/events'), async () => {
     await delay(10);
@@ -47,5 +48,14 @@ export const handlers = [
   http.get(url('/activity'), () => HttpResponse.json(activity)),
   http.get(url('/projects'), () => HttpResponse.json(projects)),
   http.get(url('/workspaces'), () => HttpResponse.json(workspaces)),
-  ...createChatBackend({}, { autoEndTurnMs: 1500 }).handlers
+  http.get(url('/tasks'), () => HttpResponse.json(tasks))
 ];
+
+/**
+ * The chat backend the test suite shares when a test does not set its own. `setup.ts` resets it
+ * after each case, so state from one test cannot reach the next.
+ */
+export const testChat = createChatBackend({});
+
+/** Default responses for the test suite. Feature slices add their own next to this file. */
+export const handlers = [...baseHandlers, ...testChat.handlers];

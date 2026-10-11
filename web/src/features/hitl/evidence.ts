@@ -39,7 +39,10 @@ export const hasSummary = (facts: VerifiedMergeContext): facts is SummarizedFact
 export const evidenceKey = (facts: VerifiedMergeContext | null): string =>
   facts ? `${facts.proposal_id ?? ''}:${facts.summary_digest ?? ''}` : '';
 
-/** A PR link counts only when its path is exactly `/{repository}/pull/{number}`. */
+/**
+ * A PR link counts only when its path is exactly `/{repository}/pull/{number}`. The link returned
+ * is rebuilt from those parts, so no query, fragment or userinfo from the server reaches the page.
+ */
 export function prLinkFor(
   value: unknown,
   repository: string | null,
@@ -47,7 +50,48 @@ export function prLinkFor(
 ): string | null {
   const href = safeGithubHref(value);
   if (!href || !repository || prNumber === null) return null;
-  return new URL(href).pathname === `/${repository}/pull/${prNumber}` ? href : null;
+  const path = `/${repository}/pull/${prNumber}`;
+  return new URL(href).pathname === path ? `https://github.com${path}` : null;
+}
+
+/**
+ * A compare link counts only under `/{repository}/compare/`, so it cannot open another repository's
+ * diff. Like the PR link, it is rebuilt from its path alone.
+ */
+export function compareLinkFor(value: unknown, repository: string | null): string | null {
+  const href = safeGithubHref(value);
+  if (!href || !repository) return null;
+  const prefix = `/${repository}/compare/`;
+  const { pathname } = new URL(href);
+  return pathname.startsWith(prefix) && pathname.length > prefix.length
+    ? `https://github.com${pathname}`
+    : null;
+}
+
+/** The recorded response must have the shape the receipt reads; anything else is a problem. */
+function receiptProblem(receipt: unknown): string | null {
+  if (receipt === null || receipt === undefined) return null;
+  const response = (receipt as { response?: unknown }).response;
+  if (!response || typeof response !== 'object') return 'the recorded response is missing';
+  const { type, approvals, answers } = response as {
+    type?: unknown;
+    approvals?: unknown;
+    answers?: unknown;
+  };
+  if (type === 'tool_approval_response') {
+    return Array.isArray(approvals) && approvals.every((a) => !!a && typeof a === 'object')
+      ? null
+      : 'the recorded approvals are malformed';
+  }
+  if (type === 'ask_user_response') {
+    return Array.isArray(answers) &&
+      answers.every(
+        (a) => !!a && typeof a === 'object' && Array.isArray((a as { answer?: unknown }).answer)
+      )
+      ? null
+      : 'the recorded answers are malformed';
+  }
+  return 'the recorded response has an unknown type';
 }
 
 /** A view missing what the renderer reads is a contract violation: show an error, never throw. */
@@ -57,7 +101,7 @@ export function viewProblem(view: HITLView): string | null {
   const { outer, payload } = request as { outer?: unknown; payload?: unknown };
   if (!outer || typeof outer !== 'object') return 'the request has no session identity';
   if (payload === undefined || payload === null) return 'the request has no payload';
-  return null;
+  return receiptProblem(view.response);
 }
 
 /** Only https links leave the app. A relative or script URL is dropped, not repaired. */

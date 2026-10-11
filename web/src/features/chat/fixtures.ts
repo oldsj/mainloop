@@ -1,3 +1,4 @@
+import type { Session } from '@/lib/contract';
 import type { ChatMessage, MainThreadInfo, NativeDeliveryInfo, NativeSessionInfo } from './types';
 
 export const MAIN_SESSION_ID = 'sess-main';
@@ -54,5 +55,35 @@ export function mainThreadFixture(overrides: Partial<MainThreadInfo> = {}): Main
     native: nativeFixture(),
     topics: [],
     ...overrides
+  };
+}
+
+/** A session row for a conversation read. The chat reads only its id; the rest is filler. */
+export function sessionFixture(id: string): Session {
+  return {
+    id,
+    user_id: 'dev-user',
+    title: `Session ${id}`,
+    description: '',
+    prompt: 'Session prompt.',
+    parent_session_id: null,
+    topic: null,
+    agent_kind: 'claude',
+    status: 'active',
+    needs_owner: false,
+    created_at: '2026-01-01T11:00:00Z',
+    started_at: '2026-01-01T11:00:01Z',
+    completed_at: null,
+    archived_at: null,
+    summary: null,
+    error: null,
+    repo_url: null,
+    project_id: null,
+    branch_name: null,
+    base_branch: 'main',
+    model: null,
+    commit_sha: null,
+    color: null,
+    result: null
   };
 }

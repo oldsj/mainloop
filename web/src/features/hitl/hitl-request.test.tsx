@@ -567,6 +567,44 @@ describe('follow-up 1: evidence identity', () => {
       'different pull requests'
     );
     expect(screen.getByRole('button', { name: /^Approve/ })).toBeDisabled();
+    expect(screen.queryByText(/Server note/)).toBeNull();
+    expect(
+      screen.getByText('The summary and the request context name different pull requests.')
+    ).toBeInTheDocument();
+  });
+
+  it('an Approve dropped by a changed digest is not restored when the digest comes back', async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    const props = (view: HITLView) => requestProps({ snapshot: snapshotOf({ view }), onRespond });
+    const approve = () => screen.getByRole('button', { name: /^Approve/ });
+    const { rerender } = renderRouted(
+      <HITLRequest {...props(viewWith(mergeContext({ summary_digest: OLD })))} />
+    );
+    await user.click(approve());
+    expect(approve()).toHaveAttribute('aria-pressed', 'true');
+
+    rerender(<HITLRequest {...props(viewWith(mergeContext({ summary_digest: NEW })))} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The merge evidence changed. Review it and approve again.'
+    );
+    expect(approve()).toHaveAttribute('aria-pressed', 'false');
+
+    rerender(<HITLRequest {...props(viewWith(mergeContext({ summary_digest: OLD })))} />);
+    expect(approve()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send response' })).toBeDisabled();
+
+    await user.click(approve());
+    expect(approve()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a malformed recorded response is a request problem, not a render crash', () => {
+    show({ ...hitlView(), response: { response: { type: 'tool_approval_response' } } as never });
+    expect(screen.getByText('Request cannot be shown')).toBeInTheDocument();
+    expect(screen.getByText(/the recorded approvals are malformed/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send response' })).toBeNull();
   });
 
   it('drops a PR link that does not point at the summary repository and number', () => {
@@ -630,9 +668,10 @@ describe('follow-up 1: copy, links and guards', () => {
       stale: false,
       error: 'Decision delivery uncertain. Checking the recorded result; do not submit again.'
     });
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'No decision was recorded. Reload to answer again.'
-    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('No decision was recorded');
+    expect(alert).toHaveTextContent('Reload to answer again.');
+    expect(alert.textContent?.match(/No decision was recorded/g)).toHaveLength(1);
     for (const group of container.querySelectorAll('fieldset')) expect(group).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send response' })).toBeDisabled();
   });

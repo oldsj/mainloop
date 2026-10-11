@@ -32,7 +32,8 @@ main thread and archived sessions are excluded. **Finished (N)** reveals complet
 cancelled, failed and superseded sessions on desktop and mobile; the button shows as pressed
 while they are visible, and pressing it again hides them. **Idle (N)** exposes available idle
 sessions, with the same pressed state. These filters retain history and do not archive sessions.
-The ambiguous bulk **clear** action is removed. With no current work, the list says **No active sessions** and points to **+ agent** or delegation.
+The ambiguous bulk **clear** action is removed. With no current work, the list says
+**No active sessions** and points to **+ agent** or delegation.
 
 Each session shows its title, native runtime kind, and status. The server derives owner
 attention from the same durable snapshot as the inbox. Task finality and attempt ownership
@@ -152,7 +153,9 @@ Labels: **implemented** means built in `web/` and covered by component or route 
 - **Implemented:** the session list, built from attention, with the finished and idle filters and their counts; session rows; the `/agents` form (Claude Code or Codex, Ctrl/Cmd+Enter submits, blocked while offline); and the session page. The page offers **Stop turn** except on archived, failed and cancelled sessions, **Cancel session** through an in-app confirmation (never `window.confirm`), and **Clear** for completed, failed and cancelled sessions, which returns to the list. It also shows the task link, workspace badges, summary or error, the identity strip, and the not-found, server error and unreachable states.
 - **Implemented:** after any session action, the page re-reads the session, its native state and attention before it shows the result. A `409` therefore shows the current state.
 - **Implemented:** when a list refresh fails after the list has loaded, the list keeps its last rows and shows a **Retry loading sessions** line. Only a failed first load replaces the list with an error.
-- **Wording:** the identity strip's live word follows the frozen app. It shows `live` when the agent is ready, otherwise the agent's own state (for example `busy` or `suspended`), or `unknown` when there is no state yet. A failed or unconfirmed last delivery takes priority and shows as `last message failed` or `last message unconfirmed`, so it never reads `live`. When the backend cannot be reached the word is `unreachable`; the frozen strip has no such word, so the React page adds it.
+- **Implemented:** while the list or the session page first loads, placeholder rows with a row's height sit under the loading text. The text is what a screen reader announces; the placeholders are hidden from it.
+- **Wording:** the identity strip's live word is the agent's own state, shown verbatim. It shows `live` when the agent is ready, otherwise whatever state string the agent reports (for example `busy` or `suspended`, and any other word it sends), or `unknown` when there is no state yet. A failed or unconfirmed last delivery takes priority and shows as `last message failed` or `last message unconfirmed`, so it never reads `live`. When the backend cannot be reached the word is `unreachable`, which the page adds itself; an agent never reports it.
+- **Implemented:** the session chat in the page's chat slot (`SessionChatSlot`). It shows the session's own conversation, with the same timeline, delivery notices, retry and composer as the main thread. It reads `GET /sessions/{id}/native` and `GET /sessions/{id}/conversation`, and sends to `POST /sessions/{id}/message`. Its unsent draft is kept for that session only. While a turn is in flight the header shows the turn's state and a **stop** button. It does not show pending requests or the topic index.
 - **Unreachable:** the page recovers in two ways. When the connection comes back, the shared live-updates module (`web/src/shell/LiveUpdates.tsx`) refetches open queries without a click. The state also offers a manual **Try again** button.
-- **Not built here:** the session chat (the page shows a placeholder where it will go); attention polling and the notification toast. The shell's Sessions panel still shows its placeholder (`web/src/shell/slots.tsx`).
-- **Not proven:** the 3-second native poll while a turn is in flight (not cheap to test with MSW), and any run against a live backend.
+- **Not built here:** the notification toast.
+- **Not proven:** the native poll while a turn is in flight (not cheap to test with MSW), and any run against a live backend, the session chat included.

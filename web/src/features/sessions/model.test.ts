@@ -106,8 +106,14 @@ describe('nativeProviderFor', () => {
 });
 
 describe('loadFailure', () => {
-  it('treats anything without an HTTP response as unreachable', () => {
+  it('treats a fetch with no response and a read timeout as unreachable', () => {
     expect(loadFailure(new TypeError('Failed to fetch'))).toBe('unreachable');
+    expect(loadFailure(new DOMException('Timed out', 'TimeoutError'))).toBe('unreachable');
+  });
+
+  it('reports a malformed body or a client bug as an error, not as unreachable', () => {
+    expect(loadFailure(new SyntaxError('Unexpected token < in JSON'))).toBe('other');
+    expect(loadFailure(new Error('client bug'))).toBe('other');
   });
 
   it('separates not-found, server and other HTTP failures', () => {

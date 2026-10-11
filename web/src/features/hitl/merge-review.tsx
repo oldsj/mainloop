@@ -8,11 +8,11 @@ import type {
 } from '@/lib/contract';
 import { messageTime } from '@/lib/time';
 import {
+  compareLinkFor,
   evidenceKey,
   isReviewable,
   prLinkFor,
   safeExternalHref,
-  safeGithubHref,
   type SummarizedFacts
 } from './evidence';
 
@@ -217,10 +217,11 @@ export function VerifiedMerge({
 }) {
   const { summary } = facts;
   const prUrl = prLinkFor(facts.pr_url, summary.repository, summary.pr_number);
-  const compareUrl = safeGithubHref(facts.compare_url);
+  const compareUrl = compareLinkFor(facts.compare_url, summary.repository);
   const withheld = !isReviewable(facts);
-  // The notice leads with one reason; the list below must not say it twice.
-  const lead = facts.freshness_reason ?? summary.unavailable_reasons[0];
+  // When withheld, the notice leads with one reason and the list below must not repeat it. Otherwise
+  // nothing leads, so every reason is listed.
+  const lead = withheld ? (facts.freshness_reason ?? summary.unavailable_reasons[0]) : undefined;
   const otherReasons = summary.unavailable_reasons.filter((reason) => reason !== lead);
   const key = evidenceKey(facts);
   return (
@@ -376,8 +377,19 @@ export function VerifiedMerge({
   );
 }
 
-/** Shown when a merge call has no usable facts. Nothing here can enable an approval. */
-export function UnavailableMerge({ toolId, notes }: { toolId: string; notes: string[] }) {
+/**
+ * Shown when a merge call has no usable facts. Nothing here can enable an approval. `reason` is this
+ * page's own check; `notes` are what the server said, and only those are labelled as its notes.
+ */
+export function UnavailableMerge({
+  toolId,
+  notes,
+  reason = null
+}: {
+  toolId: string;
+  notes: string[];
+  reason?: string | null;
+}) {
   return (
     <section
       aria-label="Merge context unavailable"
@@ -388,6 +400,7 @@ export function UnavailableMerge({ toolId, notes }: { toolId: string; notes: str
         The server did not send merge evidence this page can verify. Approve is disabled; Reject
         stays available. Refresh status to check again.
       </p>
+      {reason ? <p className="text-muted-foreground">{reason}</p> : null}
       {notes.map((n, i) => (
         <p key={i} className="text-muted-foreground">
           Server note: {n}

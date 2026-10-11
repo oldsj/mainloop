@@ -78,13 +78,19 @@ export type LoadFailure = 'not-found' | 'server' | 'unreachable' | 'other';
 
 /**
  * Sorts a failed read into the states the page shows. Only an HTTP response counts as the backend
- * answering: a 404 is "not found", a 5xx is a server error, and anything without a response (a
- * fetch failure or a timeout) is "unreachable", which is retried rather than reported as missing.
+ * answering: a 404 is "not found", a 5xx is a server error, and a fetch that got no response or a
+ * read that timed out is "unreachable", which is retried rather than reported as missing. Anything
+ * else (a malformed body, a client bug) is "other", an error with its own message.
  */
 export function loadFailure(error: unknown): LoadFailure {
-  if (!(error instanceof ApiError)) return 'unreachable';
-  if (error.status === 404) return 'not-found';
-  if (error.status >= 500) return 'server';
+  if (error instanceof ApiError) {
+    if (error.status === 404) return 'not-found';
+    if (error.status >= 500) return 'server';
+    return 'other';
+  }
+  // A failed fetch rejects with a TypeError; the read timeout is a DOMException named TimeoutError.
+  if (error instanceof TypeError) return 'unreachable';
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'unreachable';
   return 'other';
 }
 

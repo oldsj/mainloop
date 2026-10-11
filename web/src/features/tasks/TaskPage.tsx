@@ -5,11 +5,17 @@ import { ErrorRecovery } from '@/components/shared/error-recovery';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import { createActionTracker } from '@/lib/taskActions';
-import { childrenOf, normalizeView, statusLabel, statusTone } from '@/lib/taskState';
+import { childrenOf, statusLabel, statusTone } from '@/lib/taskState';
 import { useConnection } from '@/shell/ConnectionBanner';
-import { isTaskView } from './cache';
+import { isTaskView, readableView } from './cache';
 import { taskLoadFailure, type LoadFailure } from './model';
-import { sendTaskAction, useProviders, useTask, useTaskList } from './queries';
+import {
+  sendTaskAction,
+  UnreadablePayloadError,
+  useProviders,
+  useTask,
+  useTaskList
+} from './queries';
 import { TaskFacts, TaskHistory } from './TaskDetail';
 import { TaskActions } from './TaskActions';
 
@@ -25,6 +31,20 @@ export function TaskPage({ id }: { id: string }) {
   const providers = useProviders();
   // One tracker per page: a lost reply stays resendable while this task is on screen.
   const [tracker] = useState(() => createActionTracker(sendTaskAction));
+  const onRetry = () => void detail.refetch();
+
+  // A later read that says the task is gone (an action's re-read, say) must not leave the last view
+  // on screen as if it were still current.
+  if (detail.isError && taskLoadFailure(detail.error) === 'not-found') {
+    return (
+      <TaskFailure
+        failure="not-found"
+        error={detail.error}
+        retrying={detail.isFetching}
+        onRetry={onRetry}
+      />
+    );
+  }
 
   if (detail.data === undefined) {
     if (detail.isPending) {
@@ -34,33 +54,24 @@ export function TaskPage({ id }: { id: string }) {
         </p>
       );
     }
+    if (detail.error instanceof UnreadablePayloadError) {
+      return <UnreadableTask retrying={detail.isFetching} onRetry={onRetry} />;
+    }
     return (
       <TaskFailure
         failure={taskLoadFailure(detail.error)}
         error={detail.error}
         retrying={detail.isFetching}
-        onRetry={() => void detail.refetch()}
+        onRetry={onRetry}
       />
     );
   }
 
   // The contract is checked at the boundary: a payload this page cannot read is reported, not rendered.
   const raw: unknown = detail.data;
-  if (!isTaskView(raw)) {
-    return (
-      <div className="p-md">
-        <ErrorRecovery
-          title="Task could not be read"
-          message="Mainloop sent a task this page cannot read."
-          onRetry={() => void detail.refetch()}
-          retryLabel="Retry loading"
-          pending={detail.isFetching}
-        />
-      </div>
-    );
-  }
+  if (!isTaskView(raw)) return <UnreadableTask retrying={detail.isFetching} onRetry={onRetry} />;
 
-  const view = normalizeView(raw);
+  const view = readableView(raw);
   const views = [...(list.data ?? []).filter((row) => row.task.id !== id), view];
   const parentId = view.task.parent_task_id;
   const parent = parentId ? views.find((row) => row.task.id === parentId) : undefined;
@@ -141,6 +152,21 @@ export function TaskPage({ id }: { id: string }) {
       />
       <TaskHistory view={view} childTasks={childTasks} />
     </article>
+  );
+}
+
+/** The backend answered, but with a body this page cannot read. */
+function UnreadableTask({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+  return (
+    <div className="p-md">
+      <ErrorRecovery
+        title="Task could not be read"
+        message="Mainloop sent a task this page cannot read."
+        onRetry={onRetry}
+        retryLabel="Retry loading"
+        pending={retrying}
+      />
+    </div>
   );
 }
 

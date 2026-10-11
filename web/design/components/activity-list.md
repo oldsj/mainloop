@@ -23,7 +23,7 @@ The quieter log of FYIs: merged PRs, provider reports and unavailable input noti
 - **Empty:** "No activity yet".
 - **Rows:** title, content, a **View task** link when the row names a task, a **Dismiss notice** button when the server marks the row `dismissible`, and a local time.
 - **Error:** the recovery block "Could not load activity." with a retry. Rows already shown stay above it.
-- **Dismiss refused:** the server's reason in an alert above the list. The row comes back, and the alert stays until the next dismiss.
+- **Dismiss refused:** the server's reason in an alert above the list. The row comes back, and the alert stays while that row is listed. It clears once the re-read removes the row, or on the next dismiss.
 
 ## Keyboard and screen reader
 

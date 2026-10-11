@@ -3,6 +3,8 @@ import { Inbox, ListTree, MessageSquare, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/components/ui/cn';
+import { InboxBadge, unresolvedCount, useAttention } from '@/features/inbox';
+import { ownerTaskText, TasksBadge, tasksNeedingOwner, useTaskList } from '@/features/tasks';
 import { PanelBoundary } from './PanelBoundary';
 import { InboxPanel, SessionsPanel } from './slots';
 import { ThemeSelector } from './ThemeSelector';
@@ -14,9 +16,26 @@ const TAB_ITEMS = [
   { tab: 'inbox', label: 'Inbox', Icon: Inbox }
 ] as const satisfies readonly { tab: Tab; label: string; Icon: unknown }[];
 
-/** <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. */
+/**
+ * The tab's name. The Inbox tab carries its owner counts, so a screen reader announces them with
+ * the tab, as the badges show them.
+ */
+function tabName(id: Tab, label: string, needs: number, tasks: number): string {
+  if (id !== 'inbox') return label;
+  const parts = [label];
+  if (needs > 0) parts.push(`${needs} need you`);
+  if (tasks > 0) parts.push(ownerTaskText(tasks));
+  return parts.join(', ');
+}
+
+/**
+ * <1024 px: one pane at a time, switched by a bottom tab bar. The tab lives in the URL. The Inbox
+ * tab always mounts its badges, so attention keeps polling while another tab is open.
+ */
 export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode }) {
   const navigate = useNavigate();
+  const needs = unresolvedCount(useAttention().data);
+  const tasks = tasksNeedingOwner(useTaskList().data ?? []).length;
   return (
     <div data-testid="compact-shell" className="flex h-dvh flex-col">
       <header className="gap-sm border-border px-md flex items-center border-b">
@@ -62,7 +81,7 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
             key={id}
             type="button"
             data-testid={`tab-${id}`}
-            aria-label={label}
+            aria-label={tabName(id, label, needs, tasks)}
             aria-pressed={tab === id}
             onClick={() =>
               void navigate({
@@ -78,7 +97,16 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
               tab === id ? 'bg-accent text-primary' : 'text-muted-foreground'
             )}
           >
-            <Icon className="size-4" aria-hidden="true" />[{label.toUpperCase()}]
+            <span className="relative inline-flex">
+              <Icon className="size-4" aria-hidden="true" />
+              {id === 'inbox' && (
+                <span className="absolute -top-2 -right-3 flex items-center gap-0.5">
+                  <InboxBadge />
+                  <TasksBadge compact />
+                </span>
+              )}
+            </span>
+            [{label.toUpperCase()}]
           </button>
         ))}
       </nav>

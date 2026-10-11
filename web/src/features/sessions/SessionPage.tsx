@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useState } from 'react';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { ErrorRecovery } from '@/components/shared/error-recovery';
+import { Skeleton } from '@/components/shared/skeleton';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { Button } from '@/components/ui/button';
 import type { SessionStatus } from '@/lib/contract';
@@ -65,9 +66,14 @@ export function SessionPage({ id }: { id: string }) {
   if (!session) {
     if (detail.isPending) {
       return (
-        <p role="status" className="p-md text-muted-foreground text-sm">
-          Loading session...
-        </p>
+        <div data-testid="session-page-loading" className="gap-sm p-md flex flex-col">
+          <p role="status" className="text-muted-foreground text-sm">
+            Loading session...
+          </p>
+          <Skeleton className="h-5 w-2/5" />
+          <Skeleton className="h-4 w-1/4" />
+          <Skeleton className="h-24 w-full" />
+        </div>
       );
     }
     return (

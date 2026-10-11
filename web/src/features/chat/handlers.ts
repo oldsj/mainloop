@@ -7,11 +7,18 @@ import {
   MAIN_SESSION_ID,
   mainThreadFixture,
   messageFixture,
-  nativeFixture
+  nativeFixture,
+  sessionFixture
 } from './fixtures';
-import type { ChatMessage, MainThreadInfo } from './types';
+import type { ChatMessage, MainThreadInfo, NativeSessionInfo } from './types';
 
 type Schemas = components['schemas'];
+
+/** One session's conversation, as its native routes read it. */
+export interface SessionThreadState {
+  native: NativeSessionInfo;
+  messages: ChatMessage[];
+}
 
 export interface ChatBackendState {
   mainThread: MainThreadInfo;
@@ -20,52 +27,114 @@ export interface ChatBackendState {
   hitlIds: string[];
   /** Every `POST /chat` body the backend received, in order. */
   chatPosts: Schemas['ChatRequest'][];
+  /** Every `POST /sessions/{id}/message` body the backend received, by session, in order. */
+  sessionPosts: Record<string, Schemas['SessionMessageRequest'][]>;
   /** Every session id that got a stop-turn POST. */
   stopped: string[];
   /** How many times `GET /main-thread` was read. */
   mainThreadReads: number;
   /** The next `POST /chat` is refused with this status and detail, then the field clears. */
   rejectNextChat: { status: number; detail: string } | null;
+  /** Sessions other than the main one, created on first use: their native state and messages. */
+  sessionThreads: Record<string, SessionThreadState>;
 }
 
 const url = (path: string) => `${API_URL}${path}`;
 
+/** The conversation id a session's messages carry. A session has one conversation. */
+const sessionConversationId = (sessionId: string) => `conv-${sessionId}`;
+
+/** Marks the in-flight deliveries completed and the turn over. */
+function completeTurn(native: NativeSessionInfo): NativeSessionInfo {
+  return {
+    ...native,
+    turn_in_flight: false,
+    deliveries: native.deliveries.map((delivery) =>
+      delivery.state === 'recorded' ? { ...delivery, state: 'completed' } : delivery
+    )
+  };
+}
+
+/** Records a delivery for the message and starts the turn, as the native backend does. */
+function startTurn(native: NativeSessionInfo, messageId: string): NativeSessionInfo {
+  return {
+    ...native,
+    turn_in_flight: true,
+    deliveries: [
+      ...native.deliveries,
+      deliveryFixture({ message_id: messageId, state: 'recorded' })
+    ]
+  };
+}
+
 /**
- * An in-memory main thread behind the contract's chat routes. Tests read and edit `state`
- * to set up a scenario (a failed delivery, a turn in flight) and to assert what was sent; the
- * local stack (`VITE_MSW=1`) can spread `handlers` for a working demo thread.
+ * An in-memory main thread and session conversations behind the contract's chat routes. Tests read
+ * and edit `state` to set up a scenario (a failed delivery, a turn in flight) and to assert what
+ * was sent; the local stack (`VITE_MSW=1`) can spread `handlers` for a working demo.
  */
 export function createChatBackend(
   initial: Partial<ChatBackendState> = {},
   options: { autoEndTurnMs?: number } = {}
 ) {
-  const state: ChatBackendState = {
+  const freshState = (): ChatBackendState => ({
     mainThread: mainThreadFixture(),
     messages: [],
     hitlIds: [],
     chatPosts: [],
+    sessionPosts: {},
     stopped: [],
     mainThreadReads: 0,
     rejectNextChat: null,
+    sessionThreads: {},
     ...initial
-  };
+  });
+  const state = freshState();
   let counter = state.messages.length;
+  const pendingTurns = new Set<ReturnType<typeof setTimeout>>();
+
+  /**
+   * Puts the backend back to its starting state and drops any scheduled turn end. Tests that share
+   * the default backend call this between cases, so one case's messages cannot leak into the next.
+   */
+  function reset() {
+    for (const timer of pendingTurns) clearTimeout(timer);
+    pendingTurns.clear();
+    Object.assign(state, freshState());
+    counter = state.messages.length;
+  }
+
+  /** Runs a turn's end later, when the backend was asked to auto-end turns. */
+  function scheduleTurnEnd(end: () => void) {
+    if (options.autoEndTurnMs === undefined) return;
+    const timer = setTimeout(() => {
+      pendingTurns.delete(timer);
+      end();
+    }, options.autoEndTurnMs);
+    pendingTurns.add(timer);
+  }
+
+  /** A session's state, created on first use. Its messages are replaced, never edited in place. */
+  function sessionThread(sessionId: string): SessionThreadState {
+    return (
+      state.sessionThreads[sessionId] ?? {
+        native: nativeFixture({ session_id: sessionId }),
+        messages: []
+      }
+    );
+  }
+
+  function putSessionThread(sessionId: string, thread: SessionThreadState) {
+    state.sessionThreads = { ...state.sessionThreads, [sessionId]: thread };
+  }
 
   /**
    * Ends the running turn the way the native backend does: the user message's delivery completes,
    * and the agent's reply, when given, joins the conversation.
    */
   function endTurn(reply?: string) {
-    const native = state.mainThread.native ?? nativeFixture();
     state.mainThread = {
       ...state.mainThread,
-      native: {
-        ...native,
-        turn_in_flight: false,
-        deliveries: native.deliveries.map((delivery) =>
-          delivery.state === 'recorded' ? { ...delivery, state: 'completed' } : delivery
-        )
-      }
+      native: completeTurn(state.mainThread.native ?? nativeFixture())
     };
     if (reply)
       state.messages = [
@@ -78,6 +147,24 @@ export function createChatBackend(
           created_at: new Date().toISOString()
         })
       ];
+  }
+
+  /** The session's counterpart of `endTurn`. */
+  function endSessionTurn(sessionId: string, reply?: string) {
+    const thread = sessionThread(sessionId);
+    const messages = reply
+      ? [
+          ...thread.messages,
+          messageFixture({
+            id: `reply-${++counter}`,
+            conversation_id: sessionConversationId(sessionId),
+            role: 'assistant',
+            content: reply,
+            created_at: new Date().toISOString()
+          })
+        ]
+      : thread.messages;
+    putSessionThread(sessionId, { native: completeTurn(thread.native), messages });
   }
 
   const handlers = [
@@ -122,28 +209,57 @@ export function createChatBackend(
         created_at: new Date().toISOString()
       });
       state.messages = [...state.messages, message];
-      const native = state.mainThread.native ?? nativeFixture();
       // Native answer: the message is recorded and the turn starts; the reply comes later.
       state.mainThread = {
         ...state.mainThread,
         conversation_id: conversationId,
-        native: {
-          ...native,
-          turn_in_flight: true,
-          deliveries: [
-            ...native.deliveries,
-            deliveryFixture({ message_id: message.id, state: 'recorded' })
-          ]
-        }
+        native: startTurn(state.mainThread.native ?? nativeFixture(), message.id)
       };
-      if (options.autoEndTurnMs !== undefined)
-        setTimeout(() => endTurn(`Echo: ${body.message}`), options.autoEndTurnMs);
+      scheduleTurnEnd(() => endTurn(`Echo: ${body.message}`));
       const response: Schemas['ChatResponse'] = {
         conversation_id: conversationId,
         message: null,
         spawned_session_id: null,
         pending: true,
         delivery_message_id: message.id
+      };
+      return HttpResponse.json(response);
+    }),
+    http.get(url('/sessions/:sessionId/native'), ({ params }) =>
+      HttpResponse.json(sessionThread(params.sessionId as string).native)
+    ),
+    http.get(url('/sessions/:sessionId/conversation'), ({ params }) => {
+      const sessionId = params.sessionId as string;
+      const body: Schemas['SessionConversationResponse'] = {
+        session: sessionFixture(sessionId),
+        messages: sessionThread(sessionId).messages
+      };
+      return HttpResponse.json(body);
+    }),
+    http.post(url('/sessions/:sessionId/message'), async ({ params, request }) => {
+      const sessionId = params.sessionId as string;
+      const body = (await request.json()) as Schemas['SessionMessageRequest'];
+      state.sessionPosts = {
+        ...state.sessionPosts,
+        [sessionId]: [...(state.sessionPosts[sessionId] ?? []), body]
+      };
+      const thread = sessionThread(sessionId);
+      if (thread.native.turn_in_flight)
+        return HttpResponse.json({ detail: 'A turn is already running.' }, { status: 409 });
+      const message = messageFixture({
+        id: `sent-${++counter}`,
+        conversation_id: sessionConversationId(sessionId),
+        content: body.message,
+        created_at: new Date().toISOString()
+      });
+      putSessionThread(sessionId, {
+        native: startTurn(thread.native, message.id),
+        messages: [...thread.messages, message]
+      });
+      scheduleTurnEnd(() => endSessionTurn(sessionId, `Echo: ${body.message}`));
+      const response: Schemas['SessionMessageResponse'] = {
+        status: 'ok',
+        message_id: message.id
       };
       return HttpResponse.json(response);
     }),
@@ -157,5 +273,5 @@ export function createChatBackend(
     )
   ];
 
-  return { state, handlers, endTurn };
+  return { state, handlers, endTurn, endSessionTurn, reset };
 }

@@ -6,19 +6,33 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { $api, fetchClient, keys } from '@/api';
 import type { TaskOperation } from '@/lib/contract';
 import type { ActionIntent } from '@/lib/taskActions';
-import { mergeTaskCache, mergeTaskListCache } from './cache';
+import { isTaskView, mergeTaskCache, mergeTaskListCache } from './cache';
+
+/**
+ * A 200 whose body is not the payload this page reads. The held data stays on screen and the query
+ * reports an error.
+ */
+export class UnreadablePayloadError extends Error {}
 
 /**
  * One task's owner read. The version gate keeps a late, older read from replacing a newer view,
- * including the view an SSE event already pushed.
+ * including the view an SSE event already pushed. A malformed body fails the read instead of
+ * replacing the held view, so the page can say the refresh failed and keep showing the last one.
  */
 export function useTask(taskId: string) {
-  return $api.useQuery(
-    'get',
-    '/tasks/{task_id}',
-    { params: { path: { task_id: taskId } } },
-    { structuralSharing: mergeTaskCache }
-  );
+  return useQuery({
+    queryKey: keys.task(taskId),
+    queryFn: async () => {
+      const { data } = await fetchClient.GET('/tasks/{task_id}', {
+        params: { path: { task_id: taskId } }
+      });
+      if (!isTaskView(data)) {
+        throw new UnreadablePayloadError('Mainloop sent a task this page cannot read.');
+      }
+      return data;
+    },
+    structuralSharing: mergeTaskCache
+  });
 }
 
 /**
@@ -31,7 +45,9 @@ export function useTaskList(filter: { project_id?: string; parent_task_id?: stri
     queryKey: [...keys.tasks(), filter],
     queryFn: async () => {
       const { data } = await fetchClient.GET('/tasks', { params: { query: filter } });
-      if (data === undefined) throw new Error('Mainloop returned no task list.');
+      if (!Array.isArray(data)) {
+        throw new UnreadablePayloadError('Mainloop sent a task list this page cannot read.');
+      }
       return data;
     },
     structuralSharing: mergeTaskListCache

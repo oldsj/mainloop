@@ -115,13 +115,15 @@ describe('session page', () => {
     expect(screen.queryByTestId('archive-session')).not.toBeInTheDocument();
   });
 
-  it('shows the chat slot as a placeholder until F2 fills it', async () => {
+  it('mounts the session chat in the slot, with its composer', async () => {
     server.use(...serveSession(session({ id: 's1' })));
     renderSessions('/sessions/s1');
     await heading('Fix login redirect');
     const slot = screen.getByTestId('session-chat-slot');
     expect(slot).toHaveAttribute('data-session-id', 's1');
-    expect(within(slot).getByText("Session chat isn't available yet.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(slot).getByRole('textbox', { name: 'Message' })).toBeEnabled()
+    );
   });
 
   it('shows the not-found state for a session that does not exist', async () => {
@@ -135,6 +137,44 @@ describe('session page', () => {
       'href',
       '/'
     );
+  });
+
+  it('shows a loading state with placeholder bars until the session is read', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      sessionRead(async () => {
+        await released;
+        return HttpResponse.json(session({ id: 's1', title: 'Loaded at last' }));
+      }),
+      ...otherListReads()
+    );
+    renderSessions('/sessions/s1');
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading session...');
+    expect(screen.getByTestId('session-page-loading')).toBeInTheDocument();
+
+    release();
+    expect(await heading('Loaded at last')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-page-loading')).not.toBeInTheDocument();
+  });
+
+  it('reports a body it cannot read as an error, not as unreachable', async () => {
+    server.use(
+      sessionRead(
+        () =>
+          new HttpResponse('<html>not json</html>', {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+      ),
+      ...otherListReads()
+    );
+    renderSessions('/sessions/s1');
+    expect(await screen.findByText('Could not load session')).toBeInTheDocument();
+    expect(screen.queryByText("Can't reach the Mainloop backend.")).not.toBeInTheDocument();
   });
 
   it('shows a server error with a reload instruction and no retry', async () => {

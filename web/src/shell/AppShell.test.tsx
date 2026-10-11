@@ -2,8 +2,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { HttpResponse } from 'msw';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { attentionRead } from '@/features/inbox/test/handlers';
+import { attentionSnapshot } from '@/features/inbox/test/fixtures';
+import { tasksList } from '@/features/tasks/test/handlers';
+import { server } from '@/test/msw/server';
+import { view } from '@/test/fixtures/tasks';
 import { createAppRouter } from '@/router';
+
+// The shell reads several endpoints at once; past the limiter's burst, reads would wait out the default waits.
+vi.mock('@/api/middleware', async (importOriginal) => {
+  const { withFastReads } = await import('@/features/tasks/test/fastReads');
+  return withFastReads(await importOriginal());
+});
 
 function setViewport(wide: boolean) {
   window.matchMedia = ((query: string) =>
@@ -111,5 +123,46 @@ describe('theme selector', () => {
     await user.click(await screen.findByTestId('theme-nord'));
     expect(document.documentElement).toHaveAttribute('data-theme', 'nord');
     expect(localStorage.getItem('mainloop-theme')).toBe('nord');
+  });
+});
+
+describe('compact tab badges', () => {
+  it('shows the Needs-you count on the Inbox tab, read from GET /attention', async () => {
+    setViewport(false);
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([], 3))));
+    await renderAt('/');
+    expect(await screen.findByTestId('inbox-badge')).toHaveTextContent('3');
+    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox, 3 need you');
+  });
+
+  it('shows no count when nothing needs the owner', async () => {
+    setViewport(false);
+    await renderAt('/');
+    expect(screen.queryByTestId('inbox-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tasks-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox');
+  });
+
+  it('shows the owner-task count on the Inbox tab, read from GET /tasks', async () => {
+    setViewport(false);
+    server.use(tasksList(() => HttpResponse.json([view({ reason: 'owner_decision' })])));
+    await renderAt('/');
+    expect(await screen.findByTestId('tasks-badge')).toHaveTextContent('1');
+    expect(screen.getByTestId('tab-inbox')).toHaveAccessibleName('Inbox, 1 task needs you');
+  });
+
+  it('keeps polling attention while another tab is open', async () => {
+    setViewport(false);
+    let reads = 0;
+    server.use(
+      attentionRead(() => {
+        reads++;
+        return HttpResponse.json(attentionSnapshot([], 0));
+      })
+    );
+    await renderAt('/?tab=chat');
+    expect(screen.queryByTestId('inbox-panel')).not.toBeInTheDocument();
+    // The shared poll starts at once and repeats about every four seconds, so this waits past one.
+    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6000 });
   });
 });

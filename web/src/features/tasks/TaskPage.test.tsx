@@ -1,8 +1,10 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { QueryClient } from '@tanstack/react-query';
 import { HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection } from '@/api';
+import { createSseApplier } from '@/api/invalidation';
 import { server } from '@/test/msw/server';
 import { operation, projection, view } from '@/test/fixtures/tasks';
 import { renderTasks } from './test/render';
@@ -192,6 +194,36 @@ describe('task page loading and failure', () => {
     expect(screen.queryByText(/Showing the last known state/)).not.toBeInTheDocument();
   });
 
+  it('shows the task when the list payload is not a list', async () => {
+    server.use(
+      taskRead(() => HttpResponse.json(view())),
+      tasksList(() => HttpResponse.json({})),
+      providersRead()
+    );
+    renderTasks('/tasks/task-1');
+
+    expect(
+      await screen.findByText('Parent and child tasks could not be loaded.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Add retry button' })).toBeInTheDocument();
+  });
+
+  it('shows the task when one of its attempts is malformed', async () => {
+    server.use(
+      taskRead(() => HttpResponse.json({ ...view(), attempts: [null] })),
+      tasksList(() => HttpResponse.json([])),
+      providersRead()
+    );
+    renderTasks('/tasks/task-1');
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Add retry button' })
+    ).toBeVisible();
+    expect(
+      screen.queryByText('Mainloop sent a task this page cannot read.')
+    ).not.toBeInTheDocument();
+  });
+
   it('shows a not-found page for a task the server does not have', async () => {
     server.use(
       taskRead(problem(404, 'Not Found')),
@@ -253,6 +285,64 @@ describe('owner actions', () => {
     expect(bodies).toEqual([
       { request_id: REQUEST_ID, expected_version: 3, expected_attempt_id: 'attempt-1' }
     ]);
+  });
+
+  it('closes the cancel dialog and sends nothing when the task moves on while it is open', async () => {
+    const bodies: unknown[] = [];
+    const page = taskScreen(view({ version: 3 }));
+    server.use(
+      ...serveTaskPage(page),
+      taskAction('cancel', async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(operation({ kind: 'cancel' }));
+      })
+    );
+    const user = userEvent.setup();
+    const { queryClient } = renderTasks('/tasks/task-1');
+
+    await user.click(await screen.findByTestId('task-action-cancel'));
+    await screen.findByRole('alertdialog');
+
+    // Someone else moves the task on while the owner is still deciding.
+    page.view = view({ version: 4 });
+    const apply = createSseApplier(queryClient);
+    apply({ event: 'connected', data: '' });
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'cancel-moved-1', task_id: 'task-1', version: 4 })
+    });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(
+      screen.getByText(
+        'The task changed before you confirmed, so nothing was cancelled. Check it, then cancel again.'
+      )
+    ).toBeInTheDocument();
+    expect(bodies).toEqual([]);
+  });
+
+  it('shows not-found when the re-read after an action finds the task gone', async () => {
+    let gone = false;
+    server.use(
+      taskRead(() =>
+        gone
+          ? HttpResponse.json({ detail: 'Not Found' }, { status: 404 })
+          : HttpResponse.json(allowedView())
+      ),
+      tasksList(() => HttpResponse.json([])),
+      providersRead(),
+      taskAction('retry', () => {
+        gone = true;
+        return HttpResponse.json(operation({ kind: 'retry' }));
+      })
+    );
+    const user = userEvent.setup();
+    renderTasks('/tasks/task-1');
+
+    await user.click(await screen.findByTestId('task-action-retry'));
+
+    expect(await screen.findByTestId('task-not-found')).toHaveTextContent('Task not found');
+    expect(screen.queryByRole('heading', { name: 'Add retry button' })).not.toBeInTheDocument();
   });
 
   it('reassigns to the other provider with the target the owner saw', async () => {
@@ -402,5 +492,87 @@ describe('owner actions', () => {
     expect(await screen.findAllByText('Mainloop is offline.')).not.toHaveLength(0);
     expect(screen.getByTestId('task-action-retry')).toBeDisabled();
     expect(screen.getByTestId('task-action-cancel')).toBeDisabled();
+  });
+});
+
+describe('the held view survives older and malformed reads', () => {
+  /** Waits until no read is in flight, so a read an SSE event started has settled before it asserts. */
+  async function settle(queryClient: QueryClient) {
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  }
+
+  const heading = (name: string) => screen.getByRole('heading', { level: 1, name });
+
+  it('keeps the newer view when an older read lands after it', async () => {
+    const page = taskScreen(view({ version: 5 }));
+    server.use(...serveTaskPage(page));
+    const { queryClient } = renderTasks('/tasks/task-1');
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+
+    // The next read answers with a version older than the one the owner holds.
+    page.view = view({ version: 4, title: 'Stale title' });
+    const apply = createSseApplier(queryClient);
+    apply({ event: 'connected', data: '' });
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'newer-1', task_id: 'task-1', version: 6 })
+    });
+
+    await waitFor(() => expect(page.reads).toBe(2));
+    await settle(queryClient);
+    expect(heading('Add retry button')).toBeInTheDocument();
+    expect(screen.queryByText('Stale title')).not.toBeInTheDocument();
+    expect(screen.getByText(/Acting on version 5/)).toBeInTheDocument();
+  });
+
+  it('makes no read for a task update older than the view held', async () => {
+    const page = taskScreen(view({ version: 5 }));
+    server.use(...serveTaskPage(page));
+    const { queryClient } = renderTasks('/tasks/task-1');
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+
+    const apply = createSseApplier(queryClient);
+    apply({ event: 'connected', data: '' });
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'older-1', task_id: 'task-1', version: 4 })
+    });
+    await settle(queryClient);
+    expect(page.reads).toBe(1);
+
+    // The same applier does read for a newer update, so the check above is not vacuous.
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'newer-2', task_id: 'task-1', version: 6 })
+    });
+    await waitFor(() => expect(page.reads).toBe(2));
+  });
+
+  it('keeps the last good view when a newer update brings a malformed task', async () => {
+    let broken = false;
+    const page = taskScreen(view({ version: 5 }));
+    server.use(
+      taskRead(() =>
+        broken ? HttpResponse.json({ task: { id: 'task-1' } }) : HttpResponse.json(page.view)
+      ),
+      tasksList(() => HttpResponse.json([])),
+      providersRead()
+    );
+    const { queryClient } = renderTasks('/tasks/task-1');
+    await screen.findByRole('heading', { level: 1, name: 'Add retry button' });
+
+    broken = true;
+    const apply = createSseApplier(queryClient);
+    apply({ event: 'connected', data: '' });
+    apply({
+      event: 'task:updated',
+      data: JSON.stringify({ event_id: 'bad-1', task_id: 'task-1', version: 6 })
+    });
+
+    expect(await screen.findByText(/Showing the last known state/)).toBeInTheDocument();
+    expect(heading('Add retry button')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Mainloop sent a task this page cannot read.')
+    ).not.toBeInTheDocument();
   });
 });

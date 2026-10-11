@@ -15,6 +15,10 @@ export function ActivityList() {
   const dismiss = useDismissQueueItem();
   useActivityPoll();
   const items = activityItems(activity.data);
+  // A refusal is about a row. Once the re-read after it removes that row, the message is stale.
+  const refusedId = dismiss.isError ? dismiss.variables.params.path.item_id : null;
+  const refusalStale =
+    refusedId !== null && !items.some((item) => item.queue_item_id === refusedId);
 
   const failure = activity.isError ? (
     <div className="p-md">
@@ -41,7 +45,7 @@ export function ActivityList() {
     <div className="flex flex-col">
       {failure}
 
-      {dismiss.isError ? (
+      {dismiss.isError && !refusalStale ? (
         <p role="alert" className="text-destructive p-md text-sm">
           {messageOf(dismiss.error)}
         </p>

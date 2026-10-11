@@ -4,15 +4,19 @@
  * TanStack `structuralSharing`, which also applies to `setQueryData`, so one rule covers every
  * write path.
  *
- * Payloads are validated at this boundary. A malformed view is passed through unchanged, so the
- * page can say it cannot read the task instead of crashing on a missing field.
+ * Payloads are validated at this boundary. A malformed view never replaces a valid one, and a
+ * malformed attempt is dropped, so the page keeps running instead of crashing on a missing field.
  */
 import { replaceEqualDeep } from '@tanstack/react-query';
-import type { TaskView } from '@/lib/contract';
+import type { TaskAttempt, TaskView } from '@/lib/contract';
 import { normalizeView } from '@/lib/taskState';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** The attempt fields the page reads without a fallback. */
+const isAttempt = (value: unknown): value is TaskAttempt =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.number === 'number';
 
 /** The fields the page reads without a fallback. Everything else is filled by `normalizeView`. */
 export function isTaskView(value: unknown): value is TaskView {
@@ -35,12 +39,22 @@ export function isTaskView(value: unknown): value is TaskView {
 }
 
 /**
+ * The view the page reads: normalised, with any malformed attempt dropped. One bad attempt would
+ * otherwise throw inside `currentAttempt` and `attemptHistory` and take the whole task down.
+ */
+export function readableView(value: TaskView): TaskView {
+  const view = normalizeView(value);
+  return { ...view, attempts: view.attempts.filter(isAttempt) };
+}
+
+/**
  * One task's cached view. An older version keeps the held view; a newer or equal one replaces it,
- * with unchanged parts keeping their references so renders stay cheap.
+ * with unchanged parts keeping their references so renders stay cheap. A malformed payload never
+ * replaces a valid held view: the held one stays, and the read is reported as failed.
  */
 export function mergeTaskCache(prev: unknown, next: unknown): unknown {
-  if (!isTaskView(next)) return next;
-  const fresh = normalizeView(next);
+  if (!isTaskView(next)) return isTaskView(prev) ? prev : next;
+  const fresh = readableView(next);
   if (!isTaskView(prev)) return fresh;
   if (fresh.task.version < prev.task.version) return prev;
   return replaceEqualDeep(prev, fresh);

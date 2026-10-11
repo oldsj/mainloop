@@ -61,22 +61,28 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
   const [remembered, setRemembered] = useState(() => rememberedFrom(tracker, taskId));
   const [sending, setSending] = useState<TaskActionKind | null>(null);
   const [target, setTarget] = useState('');
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  // The task as the owner saw it when the cancel dialog opened. The request is built from this, not
+  // from the live view, so a change that lands while the dialog is open cannot retarget it.
+  const [cancelSeen, setCancelSeen] = useState<TaskView | null>(null);
 
   const targets = reassignTargets(profiles ?? [], view, currentAttempt(view));
-  // Derived, not synced: the first qualified target stands in until the owner picks another.
+  // Derived, not synced: the first target stands in until the owner picks another.
   const selected = targets.some((profile) => profile.id === target)
     ? target
     : (targets[0]?.id ?? '');
   const blockers = switchBlockers(view);
 
-  async function submit(kind: TaskActionKind, options: { targetProfileId?: string } = {}) {
+  async function submit(
+    kind: TaskActionKind,
+    options: { targetProfileId?: string } = {},
+    seen: TaskView = view
+  ) {
     if (tracker.busy(taskId, kind)) return;
     setNotice(null);
     setSending(kind);
     let outcome: ActionOutcome;
     try {
-      outcome = await tracker.submit(kind, view, options);
+      outcome = await tracker.submit(kind, seen, options);
     } catch (error) {
       // Building the request failed before anything was sent (for example, no target chosen).
       setNotice({
@@ -118,6 +124,14 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
 
   const retry = gate('retry');
   const cancel = gate('cancel');
+  // The dialog closes, sending nothing, once the task has moved on from what the owner confirmed:
+  // a new version or attempt, or cancel no longer offered. The owner then re-opens it on the new task.
+  const cancelMoved =
+    cancelSeen !== null &&
+    (cancelSeen.task.version !== view.task.version ||
+      currentAttempt(cancelSeen)?.id !== currentAttempt(view)?.id ||
+      !actionAvailability(view, 'cancel', { busy: false }).enabled);
+  const cancelOpen = cancelSeen !== null && !cancelMoved;
   const reassignGate = gate('reassign');
   const reassign =
     reassignGate.enabled && selected !== ''
@@ -130,7 +144,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
               ? `Could not load providers: ${profilesError instanceof Error ? profilesError.message : 'unknown error'}.`
               : profiles === undefined
                 ? 'Loading providers…'
-                : 'No other qualified provider is available.')
+                : 'No other provider is available.')
         };
 
   return (
@@ -190,6 +204,7 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
                 Discard
               </Button>
             </div>
+            {offline ? <p className="text-muted-foreground text-xs">Mainloop is offline.</p> : null}
             {sending === kind ? (
               <p role="status" className="text-muted-foreground text-xs">
                 Sending request…
@@ -252,12 +267,18 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
             variant="destructive"
             data-testid="task-action-cancel"
             disabled={!cancel.enabled}
-            onClick={() => setConfirmCancel(true)}
+            onClick={() => setCancelSeen(view)}
             className="self-start"
           >
             {LABELS.cancel}
           </Button>
           {cancel.reason ? <p className="text-muted-foreground text-xs">{cancel.reason}</p> : null}
+          {cancelMoved && sending === null ? (
+            <p role="status" className="text-muted-foreground text-xs">
+              The task changed before you confirmed, so nothing was cancelled. Check it, then cancel
+              again.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -282,8 +303,10 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
       ) : null}
 
       <ConfirmDialog
-        open={confirmCancel}
-        onOpenChange={setConfirmCancel}
+        open={cancelOpen}
+        onOpenChange={(open) => {
+          if (!open) setCancelSeen(null);
+        }}
         title="Cancel this task?"
         description="Cancellation is a durable operation. The current attempt is stopped, and the task keeps its capacity until the server confirms the stop."
         confirmLabel="Confirm cancel"
@@ -291,7 +314,8 @@ export function TaskActions({ view, tracker, profiles, profilesError, offline }:
         destructive
         pending={sending === 'cancel'}
         onConfirm={() => {
-          void submit('cancel').then(() => setConfirmCancel(false));
+          if (cancelSeen === null) return;
+          void submit('cancel', {}, cancelSeen).then(() => setCancelSeen(null));
         }}
       />
     </section>

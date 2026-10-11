@@ -138,6 +138,28 @@ describe('sessions list', () => {
     expect(await screen.findByRole('heading', { name: 'New agent session' })).toBeInTheDocument();
   });
 
+  it('shows placeholder rows under the loading text until the first read settles', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      attentionRead(async () => {
+        await released;
+        return HttpResponse.json(attentionSnapshot([]));
+      }),
+      ...otherListReads()
+    );
+    renderSessions('/');
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading sessions…');
+    expect(screen.getByTestId('session-rows-skeleton').querySelectorAll('li')).toHaveLength(3);
+
+    release();
+    expect(await screen.findByText('No active sessions')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-rows-skeleton')).not.toBeInTheDocument();
+  });
+
   it('shows the unreachable state with a retry that recovers', async () => {
     let calls = 0;
     server.use(

@@ -47,10 +47,21 @@ describe('mergeTaskCache', () => {
     expect(mergeTaskCache(held, same)).toBe(held);
   });
 
-  it('passes a malformed payload through so the page can report it', () => {
-    const held = view({ version: 5 });
+  it('passes a malformed payload through when no view is held, so the page can report it', () => {
     const broken = { task: { id: 'task-1' } };
-    expect(mergeTaskCache(held, broken)).toBe(broken);
+    expect(mergeTaskCache(undefined, broken)).toBe(broken);
+  });
+
+  it('keeps a valid held view when the next payload is malformed', () => {
+    const held = view({ version: 5 });
+    expect(mergeTaskCache(held, { task: { id: 'task-1' } })).toBe(held);
+    expect(mergeTaskCache(held, { task: null })).toBe(held);
+  });
+
+  it('drops a malformed attempt and keeps the rest of the task', () => {
+    const malformed = { ...view(), attempts: [null, attempt({ id: 'a2' })] };
+    const merged = mergeTaskCache(undefined, malformed);
+    expect(merged).toMatchObject({ attempts: [{ id: 'a2' }] });
   });
 });
 

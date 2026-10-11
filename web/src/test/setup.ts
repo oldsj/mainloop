@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
+import { testChat } from './msw/handlers';
 import { server } from './msw/server';
 
 // jsdom has no matchMedia; tests set `window.matchMedia` themselves when the width matters.
@@ -18,6 +19,7 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  testChat.reset();
 });
 afterAll(() => server.close());
 

@@ -331,6 +331,29 @@ describe('dismissing an unavailable input notice from Activity', () => {
     expect(await screen.findByText('Input notice unavailable')).toBeInTheDocument();
     await waitFor(() => expect(activityReads).toBeGreaterThanOrEqual(2));
   });
+
+  it('clears the refusal once the re-read shows the row has gone', async () => {
+    const user = userEvent.setup();
+    let activityReads = 0;
+    server.use(
+      attentionRead(() => HttpResponse.json(attentionSnapshot([]))),
+      activityRead(() => {
+        activityReads++;
+        // The first read shows the notice; the re-read after the refusal finds it already gone.
+        return HttpResponse.json(activityReads === 1 ? [noticeRow()] : []);
+      }),
+      dismissPost(problem(409, 'Input notice changed; refresh the inbox'))
+    );
+    renderInbox();
+    await screen.findByText('Nothing needs you');
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Dismiss notice' }));
+
+    expect(await screen.findByText('No activity yet')).toBeInTheDocument();
+    expect(screen.queryByText('Input notice changed; refresh the inbox')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
 
 describe('Activity', () => {
