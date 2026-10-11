@@ -13,6 +13,9 @@ import { Route as IndexRouteImport } from './routes/index';
 import { Route as AgentsRouteImport } from './routes/agents';
 import { Route as HealthRouteImport } from './routes/health';
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id';
+import { Route as SchedulesIndexRouteImport } from './routes/schedules.index';
+import { Route as SchedulesIdRouteImport } from './routes/schedules.$id';
+import { Route as SchedulesNewRouteImport } from './routes/schedules.new';
 import { Route as SessionsIdRouteImport } from './routes/sessions.$id';
 import { Route as TasksIdRouteImport } from './routes/tasks.$id';
 import { Route as WorkspacesIdRouteImport } from './routes/workspaces.$id';
@@ -37,6 +40,21 @@ const ProjectsIdRoute = ProjectsIdRouteImport.update({
   path: '/projects/$id',
   getParentRoute: () => rootRouteImport,
 } as any);
+const SchedulesIndexRoute = SchedulesIndexRouteImport.update({
+  id: '/schedules/',
+  path: '/schedules/',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const SchedulesIdRoute = SchedulesIdRouteImport.update({
+  id: '/schedules/$id',
+  path: '/schedules/$id',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const SchedulesNewRoute = SchedulesNewRouteImport.update({
+  id: '/schedules/new',
+  path: '/schedules/new',
+  getParentRoute: () => rootRouteImport,
+} as any);
 const SessionsIdRoute = SessionsIdRouteImport.update({
   id: '/sessions/$id',
   path: '/sessions/$id',
@@ -58,18 +76,24 @@ export interface FileRoutesByFullPath {
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
   '/projects/$id': typeof ProjectsIdRoute;
+  '/schedules/$id': typeof SchedulesIdRoute;
+  '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/schedules/': typeof SchedulesIndexRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
   '/projects/$id': typeof ProjectsIdRoute;
+  '/schedules/$id': typeof SchedulesIdRoute;
+  '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/schedules': typeof SchedulesIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -77,9 +101,12 @@ export interface FileRoutesById {
   '/agents': typeof AgentsRoute;
   '/health': typeof HealthRoute;
   '/projects/$id': typeof ProjectsIdRoute;
+  '/schedules/$id': typeof SchedulesIdRoute;
+  '/schedules/new': typeof SchedulesNewRoute;
   '/sessions/$id': typeof SessionsIdRoute;
   '/tasks/$id': typeof TasksIdRoute;
   '/workspaces/$id': typeof WorkspacesIdRoute;
+  '/schedules/': typeof SchedulesIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -88,27 +115,36 @@ export interface FileRouteTypes {
     | '/agents'
     | '/health'
     | '/projects/$id'
+    | '/schedules/$id'
+    | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
-    | '/workspaces/$id';
+    | '/workspaces/$id'
+    | '/schedules/';
   fileRoutesByTo: FileRoutesByTo;
   to:
     | '/'
     | '/agents'
     | '/health'
     | '/projects/$id'
+    | '/schedules/$id'
+    | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
-    | '/workspaces/$id';
+    | '/workspaces/$id'
+    | '/schedules';
   id:
     | '__root__'
     | '/'
     | '/agents'
     | '/health'
     | '/projects/$id'
+    | '/schedules/$id'
+    | '/schedules/new'
     | '/sessions/$id'
     | '/tasks/$id'
-    | '/workspaces/$id';
+    | '/workspaces/$id'
+    | '/schedules/';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -116,9 +152,12 @@ export interface RootRouteChildren {
   AgentsRoute: typeof AgentsRoute;
   HealthRoute: typeof HealthRoute;
   ProjectsIdRoute: typeof ProjectsIdRoute;
+  SchedulesIdRoute: typeof SchedulesIdRoute;
+  SchedulesNewRoute: typeof SchedulesNewRoute;
   SessionsIdRoute: typeof SessionsIdRoute;
   TasksIdRoute: typeof TasksIdRoute;
   WorkspacesIdRoute: typeof WorkspacesIdRoute;
+  SchedulesIndexRoute: typeof SchedulesIndexRoute;
 }
 
 declare module '@tanstack/react-router' {
@@ -151,6 +190,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsIdRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    '/schedules/': {
+      id: '/schedules/';
+      path: '/schedules';
+      fullPath: '/schedules/';
+      preLoaderRoute: typeof SchedulesIndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/schedules/$id': {
+      id: '/schedules/$id';
+      path: '/schedules/$id';
+      fullPath: '/schedules/$id';
+      preLoaderRoute: typeof SchedulesIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/schedules/new': {
+      id: '/schedules/new';
+      path: '/schedules/new';
+      fullPath: '/schedules/new';
+      preLoaderRoute: typeof SchedulesNewRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     '/sessions/$id': {
       id: '/sessions/$id';
       path: '/sessions/$id';
@@ -180,9 +240,12 @@ const rootRouteChildren: RootRouteChildren = {
   AgentsRoute: AgentsRoute,
   HealthRoute: HealthRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  SchedulesIdRoute: SchedulesIdRoute,
+  SchedulesNewRoute: SchedulesNewRoute,
   SessionsIdRoute: SessionsIdRoute,
   TasksIdRoute: TasksIdRoute,
   WorkspacesIdRoute: WorkspacesIdRoute,
+  SchedulesIndexRoute: SchedulesIndexRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

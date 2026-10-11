@@ -107,3 +107,44 @@ the binding, the item and `schedule:updated` are written in one transaction.
 
 These paths have fake-kagent and scratch PostgreSQL regression evidence, including HITL adoption
 and a follow-up through the delivery loop. Live kagent behavior has not been measured.
+
+## Web UI (implemented in `web/`, tested with MSW only)
+
+Reached from the project page's "Scheduled runs" link, or directly at `/schedules`. The list covers
+the whole deployment: the contract gives schedules no project scope.
+
+- **List** (`/schedules`): each schedule shows its name, a plain-words reading of its cron line, the
+  raw expression, Active or Paused, its agent, time zone and next run. Pages load with "Load more",
+  in the order the server returns them (by schedule id).
+- **Create** (`/schedules/new`): the agent picker offers enabled providers only. The agent cannot
+  change later. "Start paused" is available here. Resending an unchanged form reuses its request id,
+  so a dropped reply cannot make a second schedule; a changed form gets a new id.
+- **Edit** (`/schedules/$id`): name, five-field schedule, time zone, prompt and execution timeout.
+  Every write sends the etag it was read at, so a save never overwrites a newer version silently.
+  - **412 (changed elsewhere):** the user's edits stay in the form, and the newer saved values show
+    beside them. The user saves again to replace them, or discards their edits to take the saved
+    version.
+  - **409 or 404 (deleted elsewhere):** the form locks.
+- **Pause and resume** send the saved configuration with only the paused flag changed, so unsaved
+  edits are not written. Per the contract, a change applies only to executions reserved after the
+  update.
+- **Run now** sends a request id and confirms "Run requested". The run then appears under Executions.
+- **Delete** asks for confirmation. Future runs stop. Past executions and their sessions remain.
+- **Cron line:** five fields, read the way robfig/cron v3 reads them: minute, hour, day of month,
+  month, day of week (0 to 6, names allowed). Macros such as `@daily`, and `?`, `L`, `W` and `#`, are
+  rejected. Common shapes read as plain words ("Every day at 02:00", "Every 15 minutes"). Other valid
+  expressions read as "Custom:" with each field spelled out. The first problem, if any, is shown.
+- **Time zone:** an IANA name, starting as the browser's zone. Blank means UTC. `Local` is rejected.
+- **Prompt:** 1 to 32,768 bytes, with a live byte count.
+- **Execution timeout:** seconds, default 900, minimum one microsecond. It includes queueing and
+  provisioning.
+- **Executions** (per schedule, newest first): each row says "Scheduled run" or "Manual run", gives
+  its state and any failure reason, and links "Open session" once the run has a session. Otherwise
+  it says "No session yet." Older runs load with "Load older executions".
+
+Not done yet: schedules do not refresh live. The `schedule:updated` event maps to no query
+invalidation, so the pages refresh on reload or after a reconnect.
+
+Evidence: vitest with MSW covers each behaviour above. The MSW handlers are hand-written and no test
+checks them against `api/openapi.yaml`, so the contract match rests on review. No run has been made
+against a live kagent or a deployed Mainloop.

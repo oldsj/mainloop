@@ -155,6 +155,12 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
             >
               Orchestration health
             </Link>
+            <Link
+              to="/schedules"
+              className="text-foreground inline-flex min-h-11 items-center underline"
+            >
+              Scheduled runs
+            </Link>
           </div>
         </div>
       </header>
