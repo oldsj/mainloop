@@ -80,12 +80,18 @@ type (
 	Hang struct{}
 	// Fail streams a JSON-RPC error as an event.
 	Fail struct{ Err *RPCError }
+	// Pause waits before the next step.
+	Pause struct{ D time.Duration }
+	// Comment streams an SSE comment line, which carries no event.
+	Comment struct{}
 )
 
-func (Emit) step() {}
-func (Drop) step() {}
-func (Hang) step() {}
-func (Fail) step() {}
+func (Emit) step()    {}
+func (Drop) step()    {}
+func (Hang) step()    {}
+func (Fail) step()    {}
+func (Pause) step()   {}
+func (Comment) step() {}
 
 // Server is the fake. Create it with New. Its methods are safe for concurrent use.
 type Server struct {
@@ -103,8 +109,11 @@ type Server struct {
 	taskSeq  int
 	sessSeq  int
 
-	// TamperCreate, when set, edits the Session CreateSession returns, to test the contract check.
-	TamperCreate func(*api.Session)
+	// The Tamper hooks edit a reply, to test the client's checks that a reply belongs to its request.
+	// Set them before the first request.
+	TamperSession func(proc string, s *api.Session)
+	TamperReceipt func(*api.WorkspacePreparationReceipt)
+	TamperAgent   func(*api.Agent)
 }
 
 // New starts a fake kagent. Close it with Close.
@@ -273,21 +282,26 @@ func (s *Server) createSession(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id, ok := s.byReq[m.GetRequestId()]; ok && m.GetRequestId() != "" {
-		return connect.NewResponse(&api.CreateSessionResponse{Session: s.tampered(s.sessions[id])}), nil
+		prev := s.sessions[id]
+		if !sameContract(prev, m) {
+			return nil, connect.NewError(connect.CodeAlreadyExists,
+				fmt.Errorf("request id %q was used for a different session", m.GetRequestId()))
+		}
+		return connect.NewResponse(&api.CreateSessionResponse{Session: s.out(kagent.ProcCreateSession, prev)}), nil
 	}
 	s.sessSeq++
 	id := fmt.Sprintf("session-%d", s.sessSeq)
 	sess := &api.Session{
 		Id: id, ContextId: id, Creator: "mainloop", Name: m.GetName(),
-		Agent: m.GetAgent(), Workspace: m.GetWorkspace(),
-		DevelopmentEnvironment: m.GetDevelopmentEnvironment(),
+		Agent: proto.CloneOf(m.GetAgent()), Workspace: proto.CloneOf(m.GetWorkspace()),
+		DevelopmentEnvironment: proto.CloneOf(m.GetDevelopmentEnvironment()),
 		State:                  api.RuntimeState_RUNTIME_STATE_READY,
 		CreatedAt:              timestamppb.Now(), UpdatedAt: timestamppb.Now(),
 	}
 	s.sessions[id] = sess
 	s.order = append(s.order, id)
 	s.byReq[m.GetRequestId()] = id
-	return connect.NewResponse(&api.CreateSessionResponse{Session: s.tampered(sess)}), nil
+	return connect.NewResponse(&api.CreateSessionResponse{Session: s.out(kagent.ProcCreateSession, sess)}), nil
 }
 
 func (s *Server) lookup(id string) (*api.Session, error) {
@@ -307,7 +321,7 @@ func (s *Server) getSession(
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&api.GetSessionResponse{Session: sess}), nil
+	return connect.NewResponse(&api.GetSessionResponse{Session: s.out(kagent.ProcGetSession, sess)}), nil
 }
 
 func (s *Server) listSessions(
@@ -323,7 +337,7 @@ func (s *Server) listSessions(
 	end := min(start+limit, len(s.order))
 	resp := &api.ListSessionsResponse{Page: &api.PageResponse{}}
 	for _, id := range s.order[min(start, end):end] {
-		resp.Sessions = append(resp.Sessions, s.sessions[id])
+		resp.Sessions = append(resp.Sessions, s.out(kagent.ProcListSessions, s.sessions[id]))
 	}
 	if end < len(s.order) {
 		resp.Page.NextPageToken = strconv.Itoa(end)
@@ -341,7 +355,7 @@ func (s *Server) suspend(
 		return nil, err
 	}
 	sess.State = api.RuntimeState_RUNTIME_STATE_SUSPENDED
-	return connect.NewResponse(&api.SuspendSessionResponse{Session: sess}), nil
+	return connect.NewResponse(&api.SuspendSessionResponse{Session: s.out(kagent.ProcSuspendSession, sess)}), nil
 }
 
 func (s *Server) resume(
@@ -354,7 +368,7 @@ func (s *Server) resume(
 		return nil, err
 	}
 	sess.State = api.RuntimeState_RUNTIME_STATE_READY
-	return connect.NewResponse(&api.ResumeSessionResponse{Session: sess}), nil
+	return connect.NewResponse(&api.ResumeSessionResponse{Session: s.out(kagent.ProcResumeSession, sess)}), nil
 }
 
 func (s *Server) deleteSession(
@@ -369,7 +383,7 @@ func (s *Server) deleteSession(
 	}
 	delete(s.sessions, id)
 	s.order = removeString(s.order, id)
-	return connect.NewResponse(&api.DeleteSessionResponse{Session: sess}), nil
+	return connect.NewResponse(&api.DeleteSessionResponse{Session: s.out(kagent.ProcDeleteSession, sess)}), nil
 }
 
 func removeString(list []string, v string) []string {
@@ -390,9 +404,13 @@ func (s *Server) prepare(
 	if _, err := s.lookup(req.Msg.GetSessionId()); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&api.PrepareSessionWorkspaceResponse{
-		Receipt: &api.WorkspacePreparationReceipt{},
-	}), nil
+	receipt := &api.WorkspacePreparationReceipt{
+		Original: proto.CloneOf(req.Msg), ContextId: req.Msg.GetSessionId(),
+	}
+	if s.TamperReceipt != nil {
+		s.TamperReceipt(receipt)
+	}
+	return connect.NewResponse(&api.PrepareSessionWorkspaceResponse{Receipt: receipt}), nil
 }
 
 func (s *Server) getAgent(
@@ -406,7 +424,11 @@ func (s *Server) getAgent(
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("agent %s/%s not found", ref.GetNamespace(), ref.GetName()))
 	}
-	return connect.NewResponse(&api.GetAgentResponse{Agent: agent}), nil
+	out := proto.CloneOf(agent)
+	if s.TamperAgent != nil {
+		s.TamperAgent(out)
+	}
+	return connect.NewResponse(&api.GetAgentResponse{Agent: out}), nil
 }
 
 // ---- A2A -----------------------------------------------------------------------------------
@@ -573,6 +595,15 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, call rpcCall, st
 		case Emit:
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", envelope(call.ID, a2a.StreamResponse{Event: st.Event}, nil))
 			_ = rc.Flush()
+		case Pause:
+			select {
+			case <-time.After(st.D):
+			case <-ctxDone(r):
+				return
+			}
+		case Comment:
+			_, _ = fmt.Fprint(w, ": keepalive\n\n")
+			_ = rc.Flush()
 		case Fail:
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", envelope(call.ID, nil, st.Err))
 			_ = rc.Flush()
@@ -623,11 +654,27 @@ func AgentPath(namespace, name string) string {
 	return "/agents/" + strings.Trim(namespace, "/") + "/" + name
 }
 
-func (s *Server) tampered(sess *api.Session) *api.Session {
-	if s.TamperCreate == nil {
-		return sess
+// out copies a stored Session for a reply, so a reply is never marshalled while another request
+// changes the stored one, and applies the tamper hook. The caller holds s.mu.
+func (s *Server) out(proc string, sess *api.Session) *api.Session {
+	cp := proto.CloneOf(sess)
+	if s.TamperSession != nil {
+		s.TamperSession(proc, cp)
 	}
-	cp := proto.Clone(sess).(*api.Session)
-	s.TamperCreate(cp)
 	return cp
+}
+
+// sameContract reports whether a create request matches the Session made for the same request id.
+func sameContract(prev *api.Session, m *api.CreateSessionRequest) bool {
+	return proto.Equal(prev.GetAgent(), m.GetAgent()) &&
+		proto.Equal(prev.GetWorkspace(), m.GetWorkspace()) &&
+		proto.Equal(prev.GetDevelopmentEnvironment(), m.GetDevelopmentEnvironment())
+}
+
+// ctxDone is r's done channel, or a channel that never closes when there is no request.
+func ctxDone(r *http.Request) <-chan struct{} {
+	if r == nil {
+		return nil
+	}
+	return r.Context().Done()
 }

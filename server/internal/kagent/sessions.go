@@ -50,10 +50,7 @@ func (c *Client) CreateSession(ctx context.Context, req *api.CreateSessionReques
 		return nil, err
 	}
 	s := resp.GetSession()
-	if s.GetId() == "" || s.GetContextId() != s.GetId() ||
-		!proto.Equal(s.GetAgent(), req.GetAgent()) ||
-		!proto.Equal(s.GetWorkspace(), req.GetWorkspace()) ||
-		!proto.Equal(s.GetDevelopmentEnvironment(), req.GetDevelopmentEnvironment()) {
+	if s.GetId() == "" || s.GetContextId() != s.GetId() || !echoesCreate(s, req) {
 		return nil, &OutcomeUnknown{Op: op, Detail: "reply differs from the create contract"}
 	}
 	return s, nil
@@ -68,15 +65,32 @@ func (c *Client) PrepareSessionWorkspace(
 	if err != nil {
 		return nil, err
 	}
-	if resp.GetReceipt() == nil {
-		return nil, &OutcomeUnknown{Op: op, Detail: "no receipt in reply"}
+	// A repeat call after confirmation opens a new challenge and closes task admission, so the
+	// receipt must be proven to belong to this action.
+	r := resp.GetReceipt()
+	if r == nil || r.GetContextId() != req.GetSessionId() || !proto.Equal(r.GetOriginal(), req) {
+		return nil, &OutcomeUnknown{Op: op, Detail: "receipt does not match the request"}
 	}
-	return resp.GetReceipt(), nil
+	return r, nil
 }
 
-func sessionOf(op string, s *api.Session) (*api.Session, error) {
-	if s == nil || s.GetId() == "" {
-		return nil, &OutcomeUnknown{Op: op, Detail: "no session in reply"}
+// echoesCreate reports whether a created Session carries the contract it was created with. It
+// compares the fields this client knows, so a newer kagent that adds a field does not break it.
+func echoesCreate(s *api.Session, req *api.CreateSessionRequest) bool {
+	a, ra := s.GetAgent(), req.GetAgent()
+	w, rw := s.GetWorkspace(), req.GetWorkspace()
+	d, rd := s.GetDevelopmentEnvironment(), req.GetDevelopmentEnvironment()
+	return a.GetNamespace() == ra.GetNamespace() && a.GetName() == ra.GetName() &&
+		w.GetRepo() == rw.GetRepo() && w.GetRef() == rw.GetRef() &&
+		w.GetBranch() == rw.GetBranch() && w.GetDepth() == rw.GetDepth() &&
+		d.GetImage() == rd.GetImage() && d.GetPlatform() == rd.GetPlatform() &&
+		d.GetPolicyIdentity() == rd.GetPolicyIdentity()
+}
+
+// sessionOf checks the reply is for the Session that was asked about.
+func sessionOf(op, id string, s *api.Session) (*api.Session, error) {
+	if s.GetId() != id || s.GetContextId() != id {
+		return nil, &OutcomeUnknown{Op: op, Detail: "reply is for a different session"}
 	}
 	return s, nil
 }
@@ -88,7 +102,7 @@ func (c *Client) GetSession(ctx context.Context, id string) (*api.Session, error
 	if err != nil {
 		return nil, err
 	}
-	return sessionOf(op, resp.GetSession())
+	return sessionOf(op, id, resp.GetSession())
 }
 
 // SuspendSession suspends a Session's runtime.
@@ -98,7 +112,7 @@ func (c *Client) SuspendSession(ctx context.Context, id string) (*api.Session, e
 	if err != nil {
 		return nil, err
 	}
-	return sessionOf(op, resp.GetSession())
+	return sessionOf(op, id, resp.GetSession())
 }
 
 // ResumeSession resumes a suspended Session.
@@ -108,7 +122,7 @@ func (c *Client) ResumeSession(ctx context.Context, id string) (*api.Session, er
 	if err != nil {
 		return nil, err
 	}
-	return sessionOf(op, resp.GetSession())
+	return sessionOf(op, id, resp.GetSession())
 }
 
 // DeleteSession deletes a Session. The reply is the Session as it was being deleted.
@@ -118,7 +132,7 @@ func (c *Client) DeleteSession(ctx context.Context, id string) (*api.Session, er
 	if err != nil {
 		return nil, err
 	}
-	return sessionOf(op, resp.GetSession())
+	return sessionOf(op, id, resp.GetSession())
 }
 
 // ListSessionsPage reads one page. An empty next token means the last page.
@@ -138,17 +152,7 @@ func (c *Client) ListSessionsPage(
 
 // ListSessions reads every Session the identity can see.
 func (c *Client) ListSessions(ctx context.Context) ([]*api.Session, error) {
-	var all []*api.Session
-	token := ""
-	for {
-		page, next, err := c.ListSessionsPage(ctx, token, maxPageSize)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, page...)
-		if next == "" || next == token {
-			return all, nil
-		}
-		token = next
-	}
+	return paginate("SessionService ListSessions", func(token string) ([]*api.Session, string, error) {
+		return c.ListSessionsPage(ctx, token, maxPageSize)
+	})
 }

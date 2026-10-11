@@ -2,6 +2,7 @@ package kagent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -205,7 +206,7 @@ func TestGetAgent(t *testing.T) {
 
 func TestCreateSessionRejectsAReplyThatChangesTheContract(t *testing.T) {
 	c, srv, _ := setup(t)
-	srv.TamperCreate = func(s *api.Session) { s.ContextId = "other" }
+	srv.TamperSession = func(_ string, s *api.Session) { s.ContextId = "other" }
 	_, err := c.CreateSession(ctx, &api.CreateSessionRequest{RequestId: "r"})
 	mustBe[*kagent.OutcomeUnknown](t, err)
 }
@@ -622,7 +623,10 @@ func TestSendNeverRetriesWhatMayHaveBeenAccepted(t *testing.T) {
 	}
 	for name, fault := range cases {
 		t.Run(name, func(t *testing.T) {
-			c, srv, clk := setup(t, func(cfg *kagent.Config) { cfg.RequestTimeout = 100 * time.Millisecond })
+			c, srv, clk := setup(t, func(cfg *kagent.Config) {
+				cfg.RequestTimeout = 100 * time.Millisecond
+				cfg.StreamIdleTimeout = 100 * time.Millisecond
+			})
 			srv.FailNext("SendStreamingMessage", fault)
 			_, err := send(c, "m1")
 			mustBe[*kagent.OutcomeUnknown](t, err)
@@ -831,3 +835,5 @@ func mustBe[T error](t *testing.T, err error) {
 	t.Helper()
 	_ = asType[T](t, err)
 }
+
+func readJSON(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }

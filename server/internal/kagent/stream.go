@@ -25,9 +25,12 @@ func (c *Client) streamOnce(
 		return false, false, err
 	}
 
-	headerWait := time.AfterFunc(c.reqTimeout, cancel)
+	// kagent sends the response headers with the first event, which can be late: the wait for
+	// them is the idle timeout, not the request timeout. The same timer then covers every read
+	// of the body, and any byte, including an SSE comment, resets it.
+	idle := time.AfterFunc(c.idle, cancel)
+	defer idle.Stop()
 	resp, err := c.http.Do(req)
-	headerWait.Stop()
 	if err != nil {
 		return false, false, classifyTransport(op, err)
 	}
@@ -35,10 +38,12 @@ func (c *Client) streamOnce(
 	if err := authStatus(resp); err != nil {
 		return false, false, err
 	}
+	resetIdle := func() { idle.Reset(c.idle) }
 
 	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt != "text/event-stream" {
-		// A refusal arrives as one JSON-RPC body rather than as an SSE error event.
-		body, rerr := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
+		// A plain JSON-RPC body: an error from a gateway or proxy in front of the stream. kagent
+		// itself reports a refusal as the first SSE frame, which is handled below.
+		body, rerr := io.ReadAll(io.LimitReader(&activityReader{r: resp.Body, onRead: resetIdle}, maxReplyBytes+1))
 		if rerr != nil || len(body) > maxReplyBytes {
 			return false, false, &OutcomeUnknown{Op: op, Detail: "reply unreadable", Err: rerr}
 		}
@@ -49,11 +54,8 @@ func (c *Client) streamOnce(
 		return c.deliver(op, raw, yield)
 	}
 
-	idle := time.AfterFunc(c.idle, cancel)
-	defer idle.Stop()
 	var eventErr error
-	readErr := readSSE(resp.Body, func(data []byte) bool {
-		idle.Reset(c.idle)
+	readErr := readSSE(&activityReader{r: resp.Body, onRead: resetIdle}, func(data []byte) bool {
 		// A frame that is not a JSON-RPC envelope mid-stream means the outcome is unknown.
 		raw, perr := parseEnvelope(method, http.StatusBadGateway, data)
 		if perr != nil {
@@ -107,4 +109,18 @@ func decodeEvent(raw json.RawMessage) (a2a.Event, error) {
 		return nil, err
 	}
 	return sr.Event, nil
+}
+
+// activityReader calls onRead after every read that returns data.
+type activityReader struct {
+	r      io.Reader
+	onRead func()
+}
+
+func (a *activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.onRead()
+	}
+	return n, err
 }

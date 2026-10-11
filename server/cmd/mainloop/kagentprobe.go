@@ -48,15 +48,14 @@ func probeIdentity(cfg config.Kagent) string {
 	return "x-user-id " + cfg.UserID
 }
 
-// runKagentProbe loads the settings and runs the probe. config.Load needs AGENT_TOKEN_KEY even
-// though the probe does not use it; any nonblank value will do.
+// runKagentProbe loads only the kagent settings and runs the probe.
 func runKagentProbe(ctx context.Context, stdout, stderr io.Writer) int {
-	cfg, err := config.Load()
+	cfg, err := config.LoadKagent()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "kagent-probe: %v\n", err)
 		return exitFailure
 	}
-	if err := kagentProbe(ctx, cfg.Kagent, stdout); err != nil {
+	if err := kagentProbe(ctx, *cfg, stdout); err != nil {
 		_, _ = fmt.Fprintf(stderr, "kagent-probe: %v\n", err)
 		return exitFailure
 	}

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // HITLExtension is sent on every request so kagent offers human-in-the-loop prompts.
@@ -23,9 +22,7 @@ type tokenSource struct {
 
 	mu    sync.Mutex
 	token string
-	mtime time.Time
-	size  int64
-	read  bool
+	info  os.FileInfo // identity of the file the cached token came from
 }
 
 func (s *tokenSource) bearer() (string, error) {
@@ -35,14 +32,16 @@ func (s *tokenSource) bearer() (string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.read && info.ModTime().Equal(s.mtime) && info.Size() == s.size {
+	// The cache key is the file itself (device and inode), its mtime and its size, so a replaced
+	// file is re-read even if the new one has the same size and mtime.
+	if s.info != nil && os.SameFile(s.info, info) && info.ModTime().Equal(s.info.ModTime()) && info.Size() == s.info.Size() {
 		return s.token, nil
 	}
 	token, err := readToken(s.path)
 	if err != nil {
 		return "", err
 	}
-	s.token, s.mtime, s.size, s.read = token, info.ModTime(), info.Size(), true
+	s.token, s.info = token, info
 	return token, nil
 }
 
@@ -78,20 +77,29 @@ type authTransport struct {
 	base   http.RoundTripper
 	tokens *tokenSource // nil: send x-user-id
 	userID string
+	// host is the gateway's host:port. Credentials go to no other host.
+	host string
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
-	if t.tokens != nil {
-		token, err := t.tokens.bearer()
-		if err != nil {
-			return nil, err
+	// The client follows no redirects, so every request is for the gateway. Even so, a request
+	// for any other host gets no credentials.
+	if req.URL.Host == t.host {
+		if t.tokens != nil {
+			token, err := t.tokens.bearer()
+			if err != nil {
+				if req.Body != nil {
+					_ = req.Body.Close() // a RoundTripper must close the body even on failure
+				}
+				return nil, err
+			}
+			out.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			out.Header.Set("x-user-id", t.userID)
 		}
-		out.Header.Set("Authorization", "Bearer "+token)
-	} else {
-		out.Header.Set("x-user-id", t.userID)
+		out.Header.Set("A2A-Extensions", HITLExtension)
 	}
-	out.Header.Set("A2A-Extensions", HITLExtension)
 
 	var connected bool
 	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { connected = true }}

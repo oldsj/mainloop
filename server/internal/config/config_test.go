@@ -390,3 +390,24 @@ func TestMigrateAllowResetIsExactlyOne(t *testing.T) {
 		}
 	}
 }
+
+func TestParseKagentNeedsNothingElse(t *testing.T) {
+	k, err := ParseKagent(map[string]string{"KAGENT_GATEWAY_URL": "http://127.0.0.1:18083"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.GatewayURL != "http://127.0.0.1:18083" || k.UserID != "mainloop" || k.MainAgent != "mainloop-main" {
+		t.Fatalf("got %+v", k)
+	}
+}
+
+func TestParseKagentChecksTheTokenFile(t *testing.T) {
+	_, err := ParseKagent(map[string]string{"KAGENT_CONTROL_TOKEN_FILE": "/nonexistent/token"})
+	if err == nil || !strings.Contains(err.Error(), "KAGENT_CONTROL_TOKEN_FILE") {
+		t.Fatalf("got %v", err)
+	}
+	_, err = ParseKagent(map[string]string{"KAGENT_REQUEST_TIMEOUT_SECONDS": "soon"})
+	if err == nil || !strings.Contains(err.Error(), "KAGENT_REQUEST_TIMEOUT_SECONDS") {
+		t.Fatalf("got %v", err)
+	}
+}

@@ -23,7 +23,9 @@ import (
 //	SessionError     a SessionService or AgentService call failed with a definite status.
 //	ConfigError      kagent refused our credentials, or we cannot read them.
 //
-// Anything else from the A2A endpoint is an *A2AError.
+// Anything else from the A2A endpoint is an *A2AError, or a *ProtocolError when the reply is not a
+// JSON-RPC envelope at all. A ProtocolError says nothing about delivery: treat it as uncertain,
+// the same as OutcomeUnknown, never as not sent.
 
 const (
 	a2aErrorDomain  = "a2a-protocol.org"
@@ -112,7 +114,9 @@ type TaskNotFound struct{ A2AError }
 // Unwrap lets errors.As find the embedded *A2AError.
 func (e *TaskNotFound) Unwrap() error { return &e.A2AError }
 
-// ProtocolError is a reply that is neither a JSON-RPC envelope nor a gateway failure.
+// ProtocolError is a reply that is neither a JSON-RPC envelope nor a gateway failure, such as a
+// redirect or an unexpected 4xx. For a send it means the message may have been delivered, so
+// delivery code must treat it as uncertain and observe with FindTaskForMessage.
 type ProtocolError struct {
 	Op     string
 	Status int

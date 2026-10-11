@@ -9,6 +9,7 @@ import (
 	"iter"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -158,24 +159,15 @@ func (c *Client) ListTasksPage(
 
 // ListTasks reads every task in a conversation.
 func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
-	var all []*a2a.Task
-	token := ""
-	for {
-		page, next, err := c.ListTasksPage(ctx, agent, contextID, token, maxPageSize)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, page...)
-		if next == "" || next == token {
-			return all, nil
-		}
-		token = next
-	}
+	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {
+		return c.ListTasksPage(ctx, agent, contextID, token, maxPageSize)
+	})
 }
 
 // FindTaskForMessage resolves an uncertain send: it returns the task whose history holds the
 // message id, read again with GetTask so the artifacts are included, or found=false when no
-// task has it. It never sends anything.
+// task has it. If the message is found but the re-read fails, it returns found=true with the
+// error and a nil task. It never sends anything.
 func (c *Client) FindTaskForMessage(
 	ctx context.Context, agent AgentRef, contextID, messageID string,
 ) (task *a2a.Task, found bool, err error) {
@@ -186,22 +178,25 @@ func (c *Client) FindTaskForMessage(
 	for _, t := range tasks {
 		for _, m := range t.History {
 			if m != nil && m.ID == messageID {
+				// found stays true when the re-read fails: the message exists, so the caller must
+				// not conclude it is missing and send it again.
 				full, err := c.GetTask(ctx, agent, string(t.ID))
-				return full, err == nil, err
+				return full, true, err
 			}
 		}
 	}
 	return nil, false, nil
 }
 
-// SubscribeToTask reconnects to a task's events. The first event is the current task.
+// SubscribeToTask reconnects to a task's events. The first event is the current task. The
+// sequence is single-use: ranging over it a second time yields an error and sends nothing.
 func (c *Client) SubscribeToTask(ctx context.Context, agent AgentRef, taskID string) iter.Seq2[a2a.Event, error] {
-	return func(yield func(a2a.Event, error) bool) {
+	return singleUse(func(yield func(a2a.Event, error) bool) {
 		_, _, err := c.streamOnce(ctx, agent, methodSubscribe, a2a.SubscribeToTaskRequest{ID: a2a.TaskID(taskID)}, yield)
 		if err != nil {
 			yield(nil, err)
 		}
-	}
+	})
 }
 
 // SendMessage sends one user message and streams the task's events.
@@ -209,8 +204,12 @@ func (c *Client) SubscribeToTask(ctx context.Context, agent AgentRef, taskID str
 // If kagent refuses the message before any event (SendNotAccepted), the identical message is
 // sent again until the retry budget runs out. Nothing else is ever sent twice: a failure after
 // the request left is yielded as an error, and the caller observes with FindTaskForMessage.
+//
+// The sequence is single-use: kagent does not dedupe a message id once its task has completed,
+// so ranging over it a second time yields an error and sends nothing. To send again, call
+// SendMessage again, and only when NotSent says the first send did not happen.
 func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) iter.Seq2[a2a.Event, error] {
-	return func(yield func(a2a.Event, error) bool) {
+	return singleUse(func(yield func(a2a.Event, error) bool) {
 		if p.Text == "" || p.MessageID == "" || p.ContextID == "" {
 			yield(nil, errors.New("kagent: a message needs text, a message id and a context id"))
 			return
@@ -231,7 +230,7 @@ func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) 
 				return
 			}
 			// kagent's hint, backed off so fast refusals cannot spin through the budget.
-			delay := max(refused.RetryAfter(), min(sendBackoff<<(attempt-1), sendBackoffCap))
+			delay := max(refused.RetryAfter(), min(sendBackoff<<min(attempt-1, 10), sendBackoffCap))
 			if !c.now().Add(delay).Before(deadline) {
 				yield(nil, err)
 				return
@@ -241,5 +240,19 @@ func (c *Client) SendMessage(ctx context.Context, agent AgentRef, p SendParams) 
 				return
 			}
 		}
+	})
+}
+
+var errSequenceUsed = errors.New("kagent: this event sequence was already consumed; it sends nothing a second time")
+
+// singleUse lets a sequence run once. A second range yields errSequenceUsed and does no work.
+func singleUse(seq iter.Seq2[a2a.Event, error]) iter.Seq2[a2a.Event, error] {
+	var used atomic.Bool
+	return func(yield func(a2a.Event, error) bool) {
+		if !used.CompareAndSwap(false, true) {
+			yield(nil, errSequenceUsed)
+			return
+		}
+		seq(yield)
 	}
 }

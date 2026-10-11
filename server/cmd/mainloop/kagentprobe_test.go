@@ -60,13 +60,29 @@ func TestKagentProbeFailsWhenTheGatewayIsDown(t *testing.T) {
 	}
 }
 
-func TestKagentProbeCommandNeedsSettings(t *testing.T) {
+func TestKagentProbeCommandReadsOnlyKagentSettings(t *testing.T) {
+	srv := kagenttest.New()
+	defer srv.Close()
+	srv.AddAgent("kagent", "mainloop-main")
 	t.Setenv("AGENT_TOKEN_KEY", "")
+	t.Setenv("MAINLOOP_OWNER_ID", "")
+	t.Setenv("KAGENT_GATEWAY_URL", srv.URL)
+	var out, errb bytes.Buffer
+	if got := run([]string{"kagent-probe"}, &out, &errb); got != 0 {
+		t.Fatalf("exit = %d, stderr %q", got, errb.String())
+	}
+	if !strings.Contains(out.String(), "agent kagent/mainloop-main: found") {
+		t.Errorf("stdout %q", out.String())
+	}
+}
+
+func TestKagentProbeCommandRejectsBadSettings(t *testing.T) {
+	t.Setenv("KAGENT_CONTROL_TOKEN_FILE", "/nonexistent/token")
 	var out, errb bytes.Buffer
 	if got := run([]string{"kagent-probe"}, &out, &errb); got != exitFailure {
 		t.Fatalf("exit = %d", got)
 	}
-	if !strings.Contains(errb.String(), "kagent-probe:") {
+	if !strings.Contains(errb.String(), "kagent-probe:") || !strings.Contains(errb.String(), "KAGENT_CONTROL_TOKEN_FILE") {
 		t.Errorf("stderr %q", errb.String())
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -47,15 +48,19 @@ type Config struct {
 	UserID string
 	// ControlTokenFile names a bearer token file, re-read when it changes.
 	ControlTokenFile string
-	// RequestTimeout bounds unary calls and the wait for a stream's first response.
+	// RequestTimeout bounds unary calls and the non-streaming A2A calls.
 	RequestTimeout time.Duration
-	// StreamIdleTimeout ends a stream that sends nothing for this long.
+	// StreamIdleTimeout ends a stream that sends nothing for this long. It also bounds the wait
+	// for a stream's first byte, which can come late because kagent sends headers with the first
+	// event.
 	StreamIdleTimeout time.Duration
 	// SendRetryBudget bounds how long a refused send is retried.
 	SendRetryBudget time.Duration
 
-	// Transport is the base round tripper. The default is http.DefaultTransport.
-	Transport http.RoundTripper
+	// Transport is the base transport. It must be a *http.Transport: "never sent" is inferred from
+	// net/http's connection tracing, which another RoundTripper may not provide. The default is a
+	// clone of http.DefaultTransport.
+	Transport *http.Transport
 	// Sleep and Now replace the clock in tests.
 	Sleep func(context.Context, time.Duration) error
 	Now   func() time.Time
@@ -101,11 +106,19 @@ func New(cfg Config) (*Client, error) {
 	if base == "" {
 		return nil, &ConfigError{Msg: "kagent gateway URL is empty"}
 	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, &ConfigError{Msg: "kagent gateway URL must be an absolute http or https URL"}
+	}
 	transport := cfg.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		if def, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = def.Clone()
+		} else {
+			transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+		}
 	}
-	auth := &authTransport{base: transport, userID: cfg.UserID}
+	auth := &authTransport{base: transport, userID: cfg.UserID, host: u.Host}
 	switch {
 	case cfg.ControlTokenFile != "":
 		auth.tokens = &tokenSource{path: cfg.ControlTokenFile}
@@ -113,8 +126,13 @@ func New(cfg Config) (*Client, error) {
 		return nil, &ConfigError{Msg: "kagent needs a user id or a control token file"}
 	}
 	c := &Client{
-		base:       base,
-		http:       &http.Client{Transport: auth},
+		base: base,
+		http: &http.Client{
+			Transport: auth,
+			// Never follow a redirect: the gateway does not redirect, and a hop would resend the
+			// message (307 and 308) and could carry credentials elsewhere.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		reqTimeout: orDefault(cfg.RequestTimeout, defaultRequestTimeout),
 		idle:       orDefault(cfg.StreamIdleTimeout, defaultStreamIdleTimeout),
 		budget:     orDefault(cfg.SendRetryBudget, defaultSendRetryBudget),
@@ -173,8 +191,35 @@ func (c *Client) GetAgent(ctx context.Context, ref AgentRef) (*api.Agent, error)
 	if err != nil {
 		return nil, err
 	}
-	if resp.GetAgent() == nil {
-		return nil, &OutcomeUnknown{Op: "AgentService GetAgent", Detail: "no agent in reply"}
+	got := resp.GetAgent().GetRef()
+	if got.GetNamespace() != ref.Namespace || got.GetName() != ref.Name {
+		// A read has no side effect, so a wrong answer is a definite failure, not an unknown outcome.
+		return nil, &SessionError{
+			Op: "AgentService GetAgent", Code: connect.CodeUnknown, Detail: "reply is for a different agent",
+		}
 	}
 	return resp.GetAgent(), nil
+}
+
+// paginate reads every page of a listing. A server that hands back a page token it already
+// gave would loop forever, and stopping quietly would hide rows, so a repeat is an error.
+func paginate[T any](op string, fetch func(token string) ([]T, string, error)) ([]T, error) {
+	var all []T
+	token := ""
+	seen := map[string]bool{}
+	for {
+		page, next, err := fetch(token)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if next == "" {
+			return all, nil
+		}
+		if seen[next] {
+			return nil, &OutcomeUnknown{Op: op, Detail: "page token repeated"}
+		}
+		seen[next] = true
+		token = next
+	}
 }

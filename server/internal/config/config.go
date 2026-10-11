@@ -258,14 +258,7 @@ func (c *Config) validate() error {
 	if c.WorkspaceDevelopmentPlatform != "linux/arm64" && c.WorkspaceDevelopmentPlatform != "linux/amd64" {
 		fail("WORKSPACE_DEVELOPMENT_PLATFORM must be linux/arm64 or linux/amd64")
 	}
-	if c.Kagent.ControlTokenFile != "" {
-		if c.Kagent.UserID != "mainloop" {
-			fail("service-token mode requires KAGENT_USER_ID=mainloop")
-		}
-		if err := checkControlTokenFile(c.Kagent.ControlTokenFile); err != nil {
-			errs = append(errs, err)
-		}
-	}
+	errs = append(errs, c.Kagent.validate()...)
 	return errors.Join(errs...)
 }
 
