@@ -228,13 +228,13 @@ func (a *SessionsAPI) sessionState(ctx context.Context, row nativeBinding) (stat
 	return &s, ""
 }
 
-// toSession is the wire shape of a session row. needs_owner is false: the attention projection is
-// not ported yet.
-func toSession(r dbq.GetSessionRowRow) api.Session {
+// toSession is the wire shape of a session row. needsOwner is the session's needs_owner: whether it
+// has an attention item the owner can see (the attention_visible view).
+func toSession(r dbq.GetSessionRowRow, needsOwner bool) api.Session {
 	return api.Session{
 		AgentKind: r.AgentKind, ArchivedAt: r.ArchivedAt, BaseBranch: r.BaseBranch, BranchName: r.BranchName,
 		Color: r.Color, CommitSha: r.CommitSha, CompletedAt: r.CompletedAt, CreatedAt: r.CreatedAt,
-		Description: r.Description, Error: r.Error, Id: r.ID, Model: r.Model,
+		Description: r.Description, Error: r.Error, Id: r.ID, Model: r.Model, NeedsOwner: needsOwner,
 		ParentSessionId: r.ParentSessionID, ProjectId: r.ProjectID, Prompt: r.Prompt, RepoUrl: r.RepoURL,
 		Result: resultOf(r.Result), StartedAt: r.StartedAt, Status: api.SessionStatus(r.Status),
 		Summary: r.Summary, Title: r.Title, Topic: r.Topic, UserId: r.UserID,
@@ -252,20 +252,35 @@ func resultOf(raw json.RawMessage) *map[string]interface{} {
 	return &m
 }
 
-func listRow(r dbq.ListSessionRowsRow) api.Session {
-	return toSession(dbq.GetSessionRowRow(r))
+func listRow(r dbq.ListSessionRowsRow, needsOwner bool) api.Session {
+	return toSession(dbq.GetSessionRowRow(r), needsOwner)
+}
+
+// needsOwner reads one session's needs_owner from the attention visibility rule.
+func (a *SessionsAPI) needsOwner(ctx context.Context, q *dbq.Queries, id string) (bool, error) {
+	return q.SessionNeedsOwner(ctx, dbq.SessionNeedsOwnerParams{OwnerID: a.Svc.OwnerID, SessionID: &id})
 }
 
 // ListSessions implements api.StrictServerInterface: the owner's sessions other than the main
 // thread, newest first.
 func (a *SessionsAPI) ListSessions(ctx context.Context, r api.ListSessionsRequestObject) (api.ListSessionsResponseObject, error) {
-	rows, err := dbq.New(a.Svc.Pool).ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: a.Svc.OwnerID, Status: r.Params.Status})
+	q := dbq.New(a.Svc.Pool)
+	rows, err := q.ListSessionRows(ctx, dbq.ListSessionRowsParams{UserID: a.Svc.OwnerID, Status: r.Params.Status})
 	if err != nil {
 		return nil, err
 	}
+	// One read of the same view for the whole list, however many sessions it holds.
+	needing, err := q.ListSessionsNeedingOwner(ctx, a.Svc.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	needs := make(map[string]bool, len(needing))
+	for _, n := range needing {
+		needs[n.SessionID] = true
+	}
 	out := make(api.ListSessions200JSONResponse, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, listRow(row))
+		out = append(out, listRow(row, needs[row.ID]))
 	}
 	return out, nil
 }
@@ -290,7 +305,8 @@ func (a *SessionsAPI) CreateSession(ctx context.Context, r api.CreateSessionRequ
 	if err != nil {
 		return nil, err
 	}
-	return api.CreateSession200JSONResponse(toSession(row)), nil
+	// A session that was just made has no attention item yet.
+	return api.CreateSession200JSONResponse(toSession(row, false)), nil
 }
 
 func create422(v api.HTTPValidationError) (api.CreateSessionResponseObject, error) {
@@ -310,7 +326,11 @@ func (a *SessionsAPI) GetSession(ctx context.Context, r api.GetSessionRequestObj
 	if err != nil {
 		return nil, err
 	}
-	return api.GetSession200JSONResponse(toSession(row)), nil
+	needs, err := a.needsOwner(ctx, dbq.New(a.Svc.Pool), row.ID)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetSession200JSONResponse(toSession(row, needs)), nil
 }
 
 // GetSessionConversation implements api.StrictServerInterface.
@@ -327,6 +347,10 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 	if err != nil {
 		return nil, err
 	}
+	needs, err := a.needsOwner(ctx, q, row.ID)
+	if err != nil {
+		return nil, err
+	}
 	msgs := make([]api.Message, 0, len(rows))
 	for _, m := range rows {
 		msgs = append(msgs, api.Message{
@@ -334,7 +358,7 @@ func (a *SessionsAPI) GetSessionConversation(ctx context.Context, r api.GetSessi
 			Content: m.Content, CreatedAt: m.CreatedAt,
 		})
 	}
-	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row)}), nil
+	return api.GetSessionConversation200JSONResponse(api.SessionConversationResponse{Messages: msgs, Session: toSession(row, needs)}), nil
 }
 
 // GetSessionNative implements api.StrictServerInterface. A session without a native binding is 404.
