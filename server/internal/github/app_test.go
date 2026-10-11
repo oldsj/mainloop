@@ -143,9 +143,8 @@ func TestTokensAreCachedUntilNearExpiry(t *testing.T) {
 
 func TestTokensNearExpiryAreRefreshed(t *testing.T) {
 	fake, app := seeded(t)
-	// 62 s is just outside the one-minute refresh margin, so the token is accepted and cached,
-	// then due for refresh about a second later.
-	fake.TokenTTL = 62 * time.Second
+	// Leave several seconds before the one-minute margin, including the fake's second rounding.
+	fake.TokenTTL = 65 * time.Second
 	ctx := context.Background()
 	for range 2 {
 		if _, err := app.Metadata(ctx, repo); err != nil {
@@ -155,7 +154,7 @@ func TestTokensNearExpiryAreRefreshed(t *testing.T) {
 	if n := len(fake.Mints()); n != 1 {
 		t.Fatalf("%d mints before the margin, want 1", n)
 	}
-	time.Sleep(2100 * time.Millisecond)
+	time.Sleep(5100 * time.Millisecond)
 	if _, err := app.Metadata(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
@@ -300,14 +299,31 @@ func TestScopesOfOneRepositoryShareTheInstallationLookup(t *testing.T) {
 
 // A caller that gives up stops waiting, but the shared work finishes for the others.
 func TestCancelledCallerDoesNotFailTheOthers(t *testing.T) {
-	_, app := seeded(t)
+	fake, app := seeded(t)
 	gone, cancel := context.WithCancel(context.Background())
+	started, release := make(chan struct{}), make(chan struct{})
+	fake.Before("GET", "/repos/oldsj/mainloop/installation", func() {
+		close(started)
+		<-release
+	})
+	result := make(chan error, 1)
+	go func() {
+		_, err := app.Metadata(gone, repo)
+		result <- err
+	}()
+	<-started
 	cancel()
-	if _, err := app.Metadata(gone, repo); !errors.Is(err, context.Canceled) {
+	defer cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		close(release)
 		t.Fatalf("got %v", err)
 	}
+	close(release)
 	if _, err := app.Metadata(context.Background(), repo); err != nil {
 		t.Fatal(err)
+	}
+	if n := fake.Count("GET", "/repos/oldsj/mainloop/installation"); n != 1 {
+		t.Fatalf("%d installation lookups, want the shared lookup reused", n)
 	}
 }
 

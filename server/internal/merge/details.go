@@ -20,6 +20,8 @@ const (
 	descriptionChunk = 16 * 1024
 	// MaxDetailBytes caps the JSON body of one page.
 	MaxDetailBytes = 64 * 1024
+	// The generated HTTP response encoder appends one newline to the marshaled object.
+	detailObjectBytes = MaxDetailBytes - 1
 )
 
 // ErrTooLarge means a page would exceed MaxDetailBytes.
@@ -112,7 +114,7 @@ func (s *Service) Details(ctx context.Context, in DetailsInput) (api.HITLMergeDe
 			if err != nil {
 				return api.HITLMergeDetails{}, err
 			}
-			if len(raw) <= MaxDetailBytes {
+			if len(raw) <= detailObjectBytes {
 				break
 			}
 			if end == start {
@@ -167,7 +169,7 @@ func (s *Service) Details(ctx context.Context, in DetailsInput) (api.HITLMergeDe
 	if err != nil {
 		return api.HITLMergeDetails{}, err
 	}
-	if len(raw) > MaxDetailBytes {
+	if len(raw) > detailObjectBytes {
 		return api.HITLMergeDetails{}, ErrTooLarge
 	}
 	return out, nil
@@ -187,7 +189,7 @@ func fitItems(out *api.HITLMergeDetails, start, n int, item func(i int) api.Merg
 		if err != nil {
 			return nil, 0, err
 		}
-		if len(raw) <= MaxDetailBytes {
+		if len(raw) <= detailObjectBytes {
 			return items, start + len(items), nil
 		}
 		if len(items) <= 1 {
@@ -204,7 +206,7 @@ func pageBudget(out api.HITLMergeDetails) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return MaxDetailBytes - len(raw), nil
+	return detailObjectBytes - len(raw), nil
 }
 
 // encodedLen is the bytes a rune takes inside a JSON string, escapes included.

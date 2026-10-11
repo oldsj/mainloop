@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -156,6 +157,13 @@ func TestReviewDescriptionPageRetryCanShrink(t *testing.T) {
 				raw, _ := json.Marshal(page)
 				if len(raw) > merge.MaxDetailBytes {
 					t.Fatalf("page %d is %d bytes", pages, len(raw))
+				}
+				rec := httptest.NewRecorder()
+				if err := (api.GetHITLMergeDetails200JSONResponse(page)).VisitGetHITLMergeDetailsResponse(rec); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Body.Len() > merge.MaxDetailBytes {
+					t.Fatalf("HTTP page %d is %d bytes, cap %d", pages, rec.Body.Len(), merge.MaxDetailBytes)
 				}
 				got.WriteString(*page.Description)
 				if page.NextCursor == nil {

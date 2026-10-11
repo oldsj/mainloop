@@ -138,11 +138,12 @@ var routePath = regexp.MustCompile(`^/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)\.git/(in
 // Headers that name a route, a rewrite, an actor or a proxy hop. A client has no business sending
 // them to the transport, and one that does is trying to reach something else.
 var routingHeaders = map[string]bool{
-	"Upgrade": true, "Proxy-Authorization": true, "X-Http-Method-Override": true,
-	"X-Original-Url": true, "X-Rewrite-Url": true, "Forwarded": true,
+	"upgrade": true, "proxy-authorization": true, "x-http-method-override": true,
+	"x-original-url": true, "x-rewrite-url": true, "forwarded": true,
+	"x-real-ip": true, "via": true,
 }
 
-var routingPrefixes = []string{"X-Forwarded-", "X-Actor", "X-Session"}
+var routingPrefixes = []string{"x-forwarded-", "x_forwarded_", "x-envoy-", "x-actor", "x-session"}
 
 type request struct {
 	repo      github.Repo
@@ -202,11 +203,12 @@ func (s *Server) parse(r *http.Request) (request, error) {
 		if len(vs) > 1 {
 			return request{}, deny("duplicate_header")
 		}
-		if routingHeaders[k] {
+		name := strings.ToLower(k)
+		if routingHeaders[name] {
 			return request{}, deny("routing_header")
 		}
 		for _, p := range routingPrefixes {
-			if strings.HasPrefix(k, p) {
+			if strings.HasPrefix(name, p) {
 				return request{}, deny("routing_header")
 			}
 		}
@@ -290,8 +292,24 @@ func (s *Server) logUpstream(r *http.Request, msg string, err error) {
 		"error_class", errorClass(err))
 }
 
-// errorClass names the types in an error's chain, outermost first, with no message text.
+// errorClass names known sentinels and other types, outermost first, with no message text.
 func errorClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context.Canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context.DeadlineExceeded"
+	case errors.Is(err, io.EOF):
+		return "io.EOF"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "io.ErrUnexpectedEOF"
+	case errors.Is(err, github.ErrUnavailable):
+		return "github.ErrUnavailable"
+	case errors.Is(err, github.ErrGitRefused):
+		return "github.ErrGitRefused"
+	case errors.Is(err, github.ErrGitTokenReflected):
+		return "github.ErrGitTokenReflected"
+	}
 	var classes []string
 	for e := err; e != nil && len(classes) < 6; e = errors.Unwrap(e) {
 		classes = append(classes, fmt.Sprintf("%T", e))

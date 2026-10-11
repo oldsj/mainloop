@@ -187,9 +187,11 @@ func TestAllowlistRefusesMintsBeforeTheInstallationIsBound(t *testing.T) {
 		Scope: github.Scope{Repo: github.Repo{Owner: "oldsj", Name: "mainloop"}, Permissions: github.Permissions{"metadata": github.Read}},
 		Next:  next,
 	}
-	err := do(t, a, "POST", "https://api.github.com/app/installations/77/access_tokens",
-		`{"repositories":["mainloop"],"permissions":{"metadata":"read"}}`)
-	if !github.IsNotAllowed(err) || next.n.Load() != 0 {
-		t.Fatalf("err %v, forwarded %d", err, next.n.Load())
+	for _, id := range []string{"77", "0"} {
+		err := do(t, a, "POST", "https://api.github.com/app/installations/"+id+"/access_tokens",
+			`{"repositories":["mainloop"],"permissions":{"metadata":"read"}}`)
+		if !github.IsNotAllowed(err) || next.n.Load() != 0 {
+			t.Fatalf("installation %s: err %v, forwarded %d", id, err, next.n.Load())
+		}
 	}
 }

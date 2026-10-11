@@ -14,6 +14,9 @@ and the form stays locked until that read succeeds.
 This selector changes policy only. It does not merge a pull request or approve a pending call.
 See [merge policy](merge-policy.md) for server gates and unproved production prerequisites.
 
+Project detail lists unarchived project sessions and excludes bindings with the `main` role.
+Unbound sessions remain visible.
+
 ## React status (migration F7)
 
 The React projects list, project page, merge policy section and new workspace from a repository

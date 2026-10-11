@@ -129,6 +129,7 @@ func (p *Proxy) resolve(ctx context.Context, workspaceID string) (target, error)
 
 func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, h Host) {
 	if refusedMethod(r.Method) {
+		w.Header().Set("Allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
 		refuse(w, http.StatusMethodNotAllowed, "Preview method not allowed")
 		return
 	}

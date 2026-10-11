@@ -134,6 +134,16 @@ func TestGitFetchCutsOffAReflectedToken(t *testing.T) {
 		"basic": func(pass string) string {
 			return base64.StdEncoding.EncodeToString([]byte("x-access-token:" + pass))
 		},
+		"unpadded": func(pass string) string { return base64.RawStdEncoding.EncodeToString([]byte(pass)) },
+		"unpadded basic": func(pass string) string {
+			return base64.RawStdEncoding.EncodeToString([]byte("x-access-token:" + pass))
+		},
+		"base64 with prefix and suffix": func(pass string) string {
+			return base64.StdEncoding.EncodeToString([]byte("a" + pass + "suffix"))
+		},
+		"base64 with two-byte prefix": func(pass string) string {
+			return base64.StdEncoding.EncodeToString([]byte("ab" + pass + "suffix"))
+		},
 	}
 	for name, form := range forms {
 		for _, split := range []bool{false, true} {

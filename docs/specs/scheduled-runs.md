@@ -73,7 +73,10 @@ inbox item. `scheduled_run_links.execution_id` is the idempotency key, and the l
 the binding, the item and `schedule:updated` are written in one transaction.
 
 - The cursor is held back from executions newer than `Limits.CursorSafetyWindow` (5 minutes by
-  default), so an execution that becomes visible late with a lower id is still found.
+  default), so an execution that becomes visible late with a lower id is still found within that
+  window. Execution IDs are UUIDv7 values minted on kagent replicas. The window assumes replica
+  clock skew plus commit/visibility delay stays below it; a later lower ID can otherwise be missed
+  permanently. Keep replica clocks synchronized and raise the window if that bound is too small.
 - A repeated page token ends the pass with an error instead of looping.
 - The link keeps `session_id` after the session is deleted, and the session is never made again.
   The executions list still shows the id.

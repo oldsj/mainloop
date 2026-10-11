@@ -621,8 +621,12 @@ func TestWebSocketRules(t *testing.T) {
 func TestRefusedMethodsAreNotLookedUpWokenOrTunnelled(t *testing.T) {
 	e := newEnv(t)
 	for _, m := range []string{"CONNECT", "TRACE", "TRACK"} {
-		if rec := e.do(m, wsHost, "/", nil, nil); rec.Code != http.StatusMethodNotAllowed {
+		rec := e.do(m, wsHost, "/", nil, nil)
+		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s: got %d, want 405", m, rec.Code)
+		}
+		if rec.Header().Get("Allow") != "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS" {
+			t.Fatalf("%s: missing allowed methods", m)
 		}
 	}
 	if w, tc := e.waker.counts(); w != 0 || tc != 0 || len(e.router.seen()) != 0 {
@@ -643,6 +647,44 @@ func TestUpstreamSetCookieIsDropped(t *testing.T) {
 	}
 	if v := rec.Header().Values("Set-Cookie"); len(v) != 0 {
 		t.Fatalf("Set-Cookie reached the client: %v", v)
+	}
+}
+
+func TestUpstreamCookieTrailersAreDropped(t *testing.T) {
+	for _, announced := range []bool{true, false} {
+		t.Run(fmt.Sprint(announced), func(t *testing.T) {
+			e := newEnv(t)
+			e.devHandler.Store(http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Trailer", "X-Dev")
+				if announced {
+					w.Header().Add("Trailer", "Set-Cookie")
+				}
+				_, _ = io.WriteString(w, "ok")
+				w.(http.Flusher).Flush()
+				w.Header().Set("X-Dev", "done")
+				if announced {
+					w.Header().Set("Set-Cookie", "s=1; Domain=localhost")
+				} else {
+					w.Header().Set(http.TrailerPrefix+"Set-Cookie", "s=1; Domain=localhost")
+				}
+			})))
+			srv := httptest.NewServer(e.proxy.Route(e.next))
+			defer srv.Close()
+			req, _ := http.NewRequestWithContext(context.Background(), "GET", srv.URL, nil)
+			req.Host = wsHost
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != "ok" || resp.StatusCode != http.StatusOK || resp.Trailer.Get("X-Dev") != "done" {
+				t.Fatalf("body/trailers: %q, %v, %v", body, err, resp.Trailer)
+			}
+			if _, ok := resp.Trailer["Set-Cookie"]; ok || resp.Header.Get("Set-Cookie") != "" {
+				t.Fatal("upstream cookie trailer reached the client")
+			}
+		})
 	}
 }
 

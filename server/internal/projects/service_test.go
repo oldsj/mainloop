@@ -180,6 +180,10 @@ func TestDetailShowsGitHubDataAndSessions(t *testing.T) {
 	}
 	insertSession(t, svc, "s1", p.ID, false)
 	insertSession(t, svc, "s2", p.ID, true) // archived: not listed
+	insertSession(t, svc, "main", p.ID, false)
+	if _, err := svc.Pool.Exec(ctx, `INSERT INTO agent_bindings (session_id, kind, role) VALUES ('main', 'claude', 'main')`); err != nil {
+		t.Fatal(err)
+	}
 	d, err := svc.Detail(ctx, p.ID)
 	if err != nil {
 		t.Fatal(err)

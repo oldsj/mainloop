@@ -158,15 +158,24 @@ func gitHeadersOK(resp *http.Response, want, token string) bool {
 	return true
 }
 
-// tokenForms are the shapes the token can take if GitHub echoes what it was sent: raw, as the
-// base64 of the token, and as the base64 of the Basic credential.
+// tokenForms includes raw and complete Basic credentials, plus the base64 characters determined
+// solely by the token at each possible byte alignment. Those fragments match without padding and
+// even when unrelated bytes precede or follow the token inside the encoded value.
 func tokenForms(token string) [][]byte {
 	enc := base64.StdEncoding
-	return [][]byte{
+	forms := [][]byte{
 		[]byte(token),
-		[]byte(enc.EncodeToString([]byte(token))),
 		[]byte(enc.EncodeToString([]byte("x-access-token:" + token))),
 	}
+	for offset := range 3 {
+		encoded := enc.EncodeToString([]byte(strings.Repeat("a", offset) + token))
+		start := (offset*8 + 5) / 6
+		end := (offset + len(token)) * 8 / 6
+		if end > start {
+			forms = append(forms, []byte(encoded[start:end]))
+		}
+	}
+	return forms
 }
 
 // gitBody streams a response while resetting the idle watchdog on every read and refusing to
@@ -217,7 +226,8 @@ func (b *gitBody) Read(p []byte) (int, error) {
 		if err != nil {
 			keep, b.done = 0, err
 		}
-		b.ready = append(b.ready[:0], window[:len(window)-keep]...)
+		// window is rebuilt only after ready drains, so its releasable prefix needs no copy.
+		b.ready = window[:len(window)-keep]
 		b.pending = append(b.pending[:0], window[len(window)-keep:]...)
 	}
 	if len(b.ready) > 0 {

@@ -174,6 +174,7 @@ FROM sessions s
 LEFT JOIN agent_bindings ab ON ab.session_id = s.id
 LEFT JOIN topics t ON t.id = ab.topic_id
 WHERE s.user_id = $1 AND s.project_id = $2 AND s.archived_at IS NULL
+  AND (ab.role IS NULL OR ab.role <> 'main')
 ORDER BY s.created_at DESC, s.id
 `
 

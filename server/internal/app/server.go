@@ -196,7 +196,10 @@ func (s *Server) Handler() (http.Handler, error) {
 	cfg := d.Config
 	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			// Request bodies are validated before this runs, so this is a decode failure.
+			if httpx.IsBodyTooLarge(err) {
+				httpx.WriteError(w, http.StatusRequestEntityTooLarge, "Request body too large")
+				return
+			}
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")
 			d.Log.Debug("request decode failed", "error", err)
 		},

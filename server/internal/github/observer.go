@@ -111,9 +111,14 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 	if !taskPR(pr, repo, branch) {
 		return TaskObservation{}, nil
 	}
-	ci, err := o.readCI(ctx, repo, pr.Head.SHA)
-	if err != nil {
-		return TaskObservation{}, observationError(err)
+	ci, ciErr := o.readCI(ctx, repo, pr.Head.SHA)
+	if ciErr != nil {
+		// CI availability is independent of PR identity and body. Re-read the PR below before
+		// keeping it, and discard every partial CI page. Cancellation still ends the observation.
+		if ctx.Err() != nil {
+			return TaskObservation{}, observationError(ctx.Err())
+		}
+		ci = "unknown"
 	}
 	fresh, err := o.App.PullRequest(ctx, repo, pr.Number)
 	if err != nil {

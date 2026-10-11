@@ -234,7 +234,11 @@ func TestUpstreamFailuresAreLoggedByClassNotText(t *testing.T) {
 		class string
 	}{
 		{"before the status", &stubUpstream{err: fmt.Errorf("mint: %w", &net.OpError{Op: "dial", Err: errors.New("secret detail")})}, "upstream_unavailable", "*net.OpError"},
-		{"mid-stream", &stubUpstream{reply: &failingBody{err: github.ErrGitTokenReflected}}, "upstream_invalid", "*errors.errorString"},
+		{"unavailable", &stubUpstream{err: github.ErrUnavailable}, "upstream_unavailable", "github.ErrUnavailable"},
+		{"cancelled", &stubUpstream{err: context.Canceled}, "upstream_unavailable", "context.Canceled"},
+		{"refused", &stubUpstream{err: github.ErrGitRefused}, "upstream_refused", "github.ErrGitRefused"},
+		{"truncated", &stubUpstream{err: io.ErrUnexpectedEOF}, "upstream_unavailable", "io.ErrUnexpectedEOF"},
+		{"mid-stream", &stubUpstream{reply: &failingBody{err: github.ErrGitTokenReflected}}, "upstream_invalid", "github.ErrGitTokenReflected"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

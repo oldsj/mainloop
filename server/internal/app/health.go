@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -19,19 +18,10 @@ type Pinger interface {
 const healthTimeout = 2 * time.Second
 
 // HealthAPI implements GET /health. It answers 200 only while the database answers a ping, so a
-// pod with no database is not routed traffic. The response is its own type so that it does not
-// depend on how the contract types the 200 body.
+// pod with no database is not routed traffic.
 type HealthAPI struct {
 	DB  Pinger
 	Log *slog.Logger
-}
-
-type healthOK struct{}
-
-func (healthOK) VisitGetHealthResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	return json.NewEncoder(w).Encode(map[string]string{"status": "healthy", "database": "ok"})
 }
 
 // GetHealth implements the contract operation.
@@ -42,5 +32,5 @@ func (h *HealthAPI) GetHealth(ctx context.Context, _ api.GetHealthRequestObject)
 		h.Log.WarnContext(ctx, "health: database ping failed", "request_id", httpx.RequestID(ctx), "error", err)
 		return nil, httpx.NewError(http.StatusServiceUnavailable, "Database unavailable")
 	}
-	return healthOK{}, nil
+	return api.GetHealth200JSONResponse{Status: api.Healthy, Database: "ok"}, nil
 }

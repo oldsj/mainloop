@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -96,6 +97,12 @@ func (p *Proxy) reverseProxy() *httputil.ReverseProxy {
 			// would reach the owner's other apps. Mainloop uses no cookies, so nothing needs one.
 			// This runs for the WebSocket 101 as well.
 			resp.Header.Del("Set-Cookie")
+			resp.Trailer.Del("Set-Cookie")
+			// Trailer values arrive when the body reaches EOF, after ModifyResponse. Strip them
+			// there too, before ReverseProxy copies the final trailers to the client.
+			if resp.StatusCode != http.StatusSwitchingProtocols {
+				resp.Body = &cookieFreeBody{ReadCloser: resp.Body, resp: resp}
+			}
 			return nil
 		},
 		Transport: tr,
@@ -103,6 +110,17 @@ func (p *Proxy) reverseProxy() *httputil.ReverseProxy {
 		FlushInterval: -1,
 		ErrorHandler:  p.proxyError,
 	}
+}
+
+type cookieFreeBody struct {
+	io.ReadCloser
+	resp *http.Response
+}
+
+func (b *cookieFreeBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.resp.Trailer.Del("Set-Cookie")
+	return n, err
 }
 
 func (p *Proxy) proxyError(w http.ResponseWriter, r *http.Request, err error) {

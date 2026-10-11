@@ -24,6 +24,46 @@ func greenObservation(t *testing.T) (*github.TaskObserver, *githubtest.Server) {
 	return &github.TaskObserver{App: a}, f
 }
 
+func requirePRWithUnknownCI(t *testing.T, got github.TaskObservation, err error) {
+	t.Helper()
+	if err != nil || got.PRNumber != 1 || got.PRHeadSHA != tipSHA || got.PRURL != "https://github.com/o/n/pull/1" ||
+		got.PRBody == nil || got.PRState != "open" || got.CIState != "unknown" || got.CIHeadSHA != "" || got.ObservedAt.IsZero() {
+		t.Fatalf("CI failure should keep the freshly verified PR with unknown CI: %+v, %v", got, err)
+	}
+}
+
+func TestTaskObserverRechecksPRAfterCIFailure(t *testing.T) {
+	for _, change := range []string{"head", "body", "missing", "cancel"} {
+		t.Run(change, func(t *testing.T) {
+			o, f := greenObservation(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			path := "/repos/o/n/commits/" + tipSHA + "/check-runs"
+			f.Fail("GET", path, http.StatusServiceUnavailable)
+			f.Before("GET", path, func() {
+				switch change {
+				case "head":
+					f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].HeadSHA = strings.Repeat("2", 40) })
+				case "body":
+					f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = "changed" })
+				case "missing":
+					f.Fail("GET", "/repos/o/n/pulls/1", http.StatusNotFound)
+				case "cancel":
+					cancel()
+				}
+			})
+			got, err := o.Observe(ctx, "o/n", "feature")
+			if change == "cancel" {
+				if got != (github.TaskObservation{}) || !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled CI read = %+v, %v", got, err)
+				}
+			} else {
+				requireAbsentTaskObservation(t, got, err)
+			}
+		})
+	}
+}
+
 func TestTaskObserverRejectsBodyChangeDuringCollection(t *testing.T) {
 	o, f := greenObservation(t)
 	f.Update("o", "n", func(r *githubtest.Repository) { r.PullRequests[0].Body = "before CI" })
@@ -172,11 +212,14 @@ func TestTaskObserverRejectsMismatchedHeadsAndIdentity(t *testing.T) {
 				})
 			}
 			got, err := o.Observe(context.Background(), "o/n", "feature")
-			if got != (github.TaskObservation{ObservedAt: got.ObservedAt}) || (scenario != "check_head" && err != nil) {
-				t.Fatalf("untrusted head was observed: %+v, %v", got, err)
-			}
-			if scenario == "check_head" && !errors.Is(err, github.ErrObservationRetry) {
-				t.Fatalf("mismatched check was not unavailable: %v", err)
+			if scenario == "check_head" {
+				// Reject the mismatched CI evidence while keeping the independently rechecked PR.
+				requirePRWithUnknownCI(t, got, err)
+				if f.Count("GET", "/repos/o/n/pulls/1") != 2 {
+					t.Fatal("PR was not rechecked after mismatched CI")
+				}
+			} else {
+				requireAbsentTaskObservation(t, got, err)
 			}
 		})
 	}
@@ -270,6 +313,10 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 				o, f := greenObservation(t)
 				f.Fail("GET", path, status)
 				got, err := o.Observe(context.Background(), "o/n", "feature")
+				if strings.Contains(path, "/commits/") {
+					requirePRWithUnknownCI(t, got, err)
+					return
+				}
 				if status == 404 {
 					if err != nil || got.CIState == "success" {
 						t.Fatalf("404 = %+v, %v", got, err)
@@ -296,6 +343,10 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 			o, f := greenObservation(t)
 			f.RateLimit("GET", path)
 			got, err := o.Observe(context.Background(), "o/n", "feature")
+			if strings.Contains(path, "/commits/") {
+				requirePRWithUnknownCI(t, got, err)
+				return
+			}
 			if got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
 				t.Fatalf("rate limit = %+v, %v", got, err)
 			}
@@ -409,9 +460,8 @@ func TestTaskObserverRejectsPartialPages(t *testing.T) {
 			r.Runs[tipSHA] = append(r.Runs[tipSHA], githubtest.CheckRun{ID: int64(i), AppID: 2, Name: fmt.Sprint(i), Conclusion: "success"})
 		}
 	})
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
-		t.Fatalf("over-cap listing = %+v, %v", got, err)
-	}
+	got, err := o.Observe(context.Background(), "o/n", "feature")
+	requirePRWithUnknownCI(t, got, err)
 	// A failure on a later page must discard all the earlier successful results.
 	o, f = greenObservation(t)
 	f.Update("o", "n", func(r *githubtest.Repository) {
@@ -424,10 +474,8 @@ func TestTaskObserverRejectsPartialPages(t *testing.T) {
 	f.Before("GET", path, func() {
 		f.Before("GET", path, func() { f.Fail("GET", path, http.StatusServiceUnavailable) })
 	})
-	got, err := o.Observe(context.Background(), "o/n", "feature")
-	if got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRetry) {
-		t.Fatalf("partial pages = %+v, %v", got, err)
-	}
+	got, err = o.Observe(context.Background(), "o/n", "feature")
+	requirePRWithUnknownCI(t, got, err)
 	var pages []string
 	for _, req := range f.Requests() {
 		if req.Path == path {

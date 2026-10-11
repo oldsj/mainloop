@@ -209,8 +209,11 @@ func (a *Allowlist) match(req *http.Request) (rule, error) {
 		if !ok {
 			continue
 		}
-		if isMint(r) && segs[len(segs)-2] != strconv.FormatInt(a.installation.Load(), 10) {
-			return rule{}, a.deny(req, "outside the repository's installation")
+		if isMint(r) {
+			id := a.installation.Load()
+			if id <= 0 || segs[len(segs)-2] != strconv.FormatInt(id, 10) {
+				return rule{}, a.deny(req, "outside the repository's installation")
+			}
 		}
 		if r.kind == kindRepo || owner != "" {
 			if !strings.EqualFold(owner, a.Scope.Repo.Owner) || !strings.EqualFold(name, a.Scope.Repo.Name) {

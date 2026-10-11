@@ -56,14 +56,22 @@ Errors are plain text `<code> <request_id>`, with no upstream text.
 Towards GitHub the proxy sends only the installation token (contents:read, scoped to the one
 repository), the Git protocol header and a fixed content type. It does not follow redirects, and
 it drops any response that is not a 200 with the exact Git media type or that reflects the token
-in a header or in the body. The token is looked for in three forms: raw, `base64(token)` and the
-Basic credential `base64("x-access-token:" + token)`, including when it is split across reads. A
-token that GitHub reflects split by pkt-line framing is not caught (as in the Python sidecar).
+in a header or in the body. The guard matches the raw token, the Basic credential and the
+base64 fragment determined by the token at each byte alignment, including unpadded encodings,
+encodings with other bytes before or after the token, and forms split across reads. A token split
+by pkt-line framing, or an incomplete token/encoded fragment at the end of a response, is not
+caught. This is a reflection guard, not a general decoder of upstream data.
 A path must be the canonical spelling: `/<owner>/<repo>.git/...` with no doubled `.git`.
 
 When a response is cut off or an upstream call fails, the server logs the request id, the refusal
-code and the error types (never error text). A mid-stream abort is logged before the connection
+code and known sentinel names or other error types (never error text). A mid-stream abort is logged before the connection
 is cut.
+
+Routing-header refusals include `Via`, `X-Real-IP`, `X-Envoy-*` and underscore spellings of
+`X-Forwarded-*`, compared case-insensitively. No client routing header is sent to GitHub.
+The 60-second idle watchdog starts before upload and resets on response reads; upload and the
+wait for the first response byte share that initial bound. There is no per-capability or listener
+concurrency cap; admission limits need a separate capacity policy.
 
 Difference from the Python sidecar: gzip request bodies are accepted and inflated under the same
 size cap; Python refused all compression.
