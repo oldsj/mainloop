@@ -1308,6 +1308,238 @@ class MainProviderTests(PostgresTestCase):
             history,
         )
 
+    async def test_migration_order_preserves_provider_refusal_until_explicit_bootstrap(
+        self,
+    ):
+        for query in (
+            "UPDATE sessions SET archived_at=NOW() WHERE id=$1",
+            "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1",
+            "UPDATE sessions SET status='completed' WHERE id=$1",
+            "UPDATE sessions SET status='failed' WHERE id=$1",
+            "UPDATE sessions SET status='cancelled' WHERE id=$1",
+            "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+            "UPDATE native_bindings SET mcp_grant_kind='none' WHERE session_id=$1",
+            "UPDATE native_bindings SET role='agent' WHERE session_id=$1",
+        ):
+            with self.subTest(query=query):
+                old = await ensure_main_session(self.user)
+                await self.pool.execute(query, old["session_id"])
+                for replay in (False, True):
+                    if replay:
+                        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                    bindings = await self.pool.fetch(
+                        "SELECT * FROM native_bindings ORDER BY session_id"
+                    )
+                    sessions = await self.pool.fetch(
+                        "SELECT * FROM sessions ORDER BY id"
+                    )
+                    cleanup = await self.pool.fetch(
+                        "SELECT * FROM agent_credential_cleanup ORDER BY session_id"
+                    )
+                    for restart in (False, True):
+                        with self.assertRaises(LifecycleDenied):
+                            await main_provider.select(
+                                self.user, "codex", restart_failed=restart
+                            )
+                    self.assertEqual(
+                        await self.pool.fetch(
+                            "SELECT * FROM native_bindings ORDER BY session_id"
+                        ),
+                        bindings,
+                    )
+                    self.assertEqual(
+                        await self.pool.fetch("SELECT * FROM sessions ORDER BY id"),
+                        sessions,
+                    )
+                    self.assertEqual(
+                        await self.pool.fetch(
+                            "SELECT * FROM agent_credential_cleanup ORDER BY session_id"
+                        ),
+                        cleanup,
+                    )
+                    self.assertFalse(self.runtime.creates)
+                    self.publish.assert_not_awaited()
+                    self.spawn.assert_not_called()
+                replacements = await asyncio.gather(
+                    *(ensure_main_session(self.user) for _ in range(4))
+                )
+                fresh = replacements[0]
+                self.assertTrue(all(binding == fresh for binding in replacements))
+                self.assertNotEqual(fresh["session_id"], old["session_id"])
+                self.assertEqual(fresh["main_user_id"], self.user)
+                retired = await ns.get_binding(old["session_id"])
+                self.assertEqual(retired["main_user_id"], self.user)
+                self.assertIsNone(retired["main_owner_id"])
+                self.assertIsNone(retired["token_hash"])
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT conversation_id FROM sessions WHERE id=$1",
+                        fresh["session_id"],
+                    ),
+                    self.cid,
+                )
+                await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                self.assertEqual(
+                    await ensure_main_session(self.user, replace_inactive=False), fresh
+                )
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT count(*) FROM native_bindings WHERE main_owner_id=$1",
+                        self.user,
+                    ),
+                    1,
+                )
+
+    async def test_migration_backfills_membership_from_role_reservation_and_pin(self):
+        # Simulate legacy rows predating durable membership, including a replay
+        # that already cleared the current reservation of a pinned historical main.
+        await self.pool.execute(
+            """UPDATE native_bindings SET main_user_id=NULL,role='agent',main_agent_ref=NULL
+               WHERE session_id=$1""",
+            self.sid,
+        )
+        legacy, _ = await self.bound_session(role="main")
+        await self.pool.execute(
+            "UPDATE native_bindings SET main_user_id=NULL,token_hash=NULL WHERE session_id=$1",
+            legacy,
+        )
+        pinned, _ = await self.bound_session(role="main")
+        await self.pool.execute(
+            """UPDATE native_bindings SET main_user_id=NULL,role='agent',main_agent_ref=$2::jsonb
+               WHERE session_id=$1""",
+            pinned,
+            self.binding["main_agent_ref"],
+        )
+        worker, _ = await self.bound_session()
+        child, _ = await self.bound_session(role="child", parent_session_id=self.sid)
+        other = await ensure_main_session(self.user + "-other")
+        untouched = {
+            sid: await ns.get_binding(sid)
+            for sid in (worker, child, other["session_id"])
+        }
+        await self.pool.execute("ALTER TABLE native_bindings DROP COLUMN main_user_id")
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        once = await self.pool.fetch(
+            "SELECT * FROM native_bindings ORDER BY session_id"
+        )
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM native_bindings ORDER BY session_id"),
+            once,
+        )
+        for sid in (self.sid, legacy, pinned):
+            binding = await ns.get_binding(sid)
+            self.assertEqual(binding["main_user_id"], self.user)
+            self.assertIsNone(binding["main_owner_id"])
+        with self.assertRaises(LifecycleDenied):
+            await ensure_main_session(self.user, replace_inactive=False)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM native_bindings ORDER BY session_id"),
+            once,
+        )
+        fresh = await ensure_main_session(self.user)
+        self.assertNotIn(fresh["session_id"], (self.sid, legacy, pinned))
+        for sid in (self.sid, pinned):
+            self.assertIsNone((await ns.get_binding(sid))["token_hash"])
+            self.assertEqual(
+                await self.pool.fetchval(
+                    "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                    sid,
+                ),
+                1,
+            )
+        for sid, before in untouched.items():
+            self.assertEqual(await ns.get_binding(sid), before)
+        self.assertIsNone(untouched[worker]["main_user_id"])
+        self.assertIsNone(untouched[child]["main_user_id"])
+        self.assertFalse(self.runtime.creates)
+
+    async def test_migration_backfills_membership_from_retained_native_history(self):
+        await self.select()
+        history = await self.pool.fetch("SELECT * FROM main_native_history ORDER BY id")
+        await self.pool.execute(
+            """UPDATE native_bindings SET main_user_id=NULL,main_owner_id=NULL,
+                      main_agent_ref=NULL,role='agent' WHERE session_id=$1""",
+            self.sid,
+        )
+        await self.pool.execute("ALTER TABLE native_bindings DROP COLUMN main_user_id")
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        self.assertEqual((await ns.get_binding(self.sid))["main_user_id"], self.user)
+        with self.assertRaises(LifecycleDenied):
+            await self.select()
+        self.assertEqual(len(self.runtime.creates), 1)
+        fresh = await ensure_main_session(self.user)
+        self.assertNotEqual(fresh["session_id"], self.sid)
+        self.assertIsNone((await ns.get_binding(self.sid))["token_hash"])
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                self.sid,
+            ),
+            1,
+        )
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM main_native_history ORDER BY id"),
+            history,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT conversation_id FROM sessions WHERE id=$1", fresh["session_id"]
+            ),
+            self.cid,
+        )
+
+    async def test_true_first_use_ignores_ordinary_membership_before_and_after_migration(
+        self,
+    ):
+        for replay in (False, True):
+            with self.subTest(replay=replay):
+                user = self.user + f"-ordinary-{replay}"
+                worker, _ = await self.session(user=user)
+                await ns.create_binding(worker, "claude")
+                child, _ = await self.session(user=user)
+                await ns.create_binding(
+                    child, "claude", role="child", parent_session_id=worker
+                )
+                untouched = {sid: await ns.get_binding(sid) for sid in (worker, child)}
+                if replay:
+                    await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                with patch.object(settings, "owner_id", user):
+                    selected = await main_provider.select(user, "codex")
+                    await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                    self.assertEqual(
+                        await main_provider.select(user, "codex"), selected
+                    )
+                fresh = await ns.get_binding(selected.session_id)
+                self.assertEqual(fresh["main_user_id"], user)
+                self.assertEqual(fresh["main_owner_id"], user)
+                self.assertEqual(selected.status, "ready")
+                self.assertNotIn(selected.session_id, (worker, child))
+                for sid, before in untouched.items():
+                    self.assertIsNone(before["main_user_id"])
+                    self.assertEqual(await ns.get_binding(sid), before)
+        self.assertEqual(len(self.runtime.creates), 2)
+
+    async def test_migration_does_not_reclassify_ordinary_bindings_after_role_change(
+        self,
+    ):
+        worker, _ = await self.bound_session()
+        child, _ = await self.bound_session(role="child", parent_session_id=self.sid)
+        for sid in (worker, child):
+            await self.pool.execute(
+                "UPDATE native_bindings SET role='main' WHERE session_id=$1", sid
+            )
+        untouched = {sid: await ns.get_binding(sid) for sid in (worker, child)}
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        self.assertEqual(await ensure_main_session(self.user), self.binding)
+        for sid, before in untouched.items():
+            self.assertIsNone(before["main_user_id"])
+            self.assertIsNone(before["main_owner_id"])
+            self.assertEqual(await ns.get_binding(sid), before)
+
 
 class MainProviderTaskTests(KagentFakeCase):
     reuse_database = True

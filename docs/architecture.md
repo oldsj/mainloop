@@ -204,6 +204,12 @@ authority lock, and delivery completion, reply and turn accounting commit atomic
 The current main-owner slot belongs to a valid coordination binding. Bootstrap releases
 an inactive binding's slot and revokes its remaining bearer in the same transaction that
 claims its replacement, retaining old native contracts, history and delivery receipts.
+`native_bindings.main_user_id` persists historical main membership separately from the
+unique `main_owner_id` reservation. It survives role/authority changes and migration replay.
+Provider operations require a valid main when historical membership exists; only ordinary
+bootstrap can establish a replacement. True first use can still create a main. Migration
+backfills membership once from retained main role, reservation, pinned contract or native history,
+without treating ordinary workers/children in the same main thread as main bindings.
 See [main-provider selection](specs/chat.md#selecting-the-main-provider).
 
 A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;

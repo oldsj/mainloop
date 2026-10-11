@@ -39,12 +39,13 @@ async def _claim_main_owner(
     from mainloop.tasks import lifecycle
 
     candidates = await conn.fetch(
-        """SELECT b.session_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-           WHERE s.user_id=$1 AND (b.role='main' OR b.main_owner_id=$1)
+        """SELECT b.session_id FROM native_bindings b
+           WHERE b.main_user_id=$1
            ORDER BY b.session_id""",
         user_id,
     )
     current = None
+    inactive = []
     for candidate in candidates:
         sid = candidate["session_id"]
         await locks.enter_async_context(push_lifecycle.locked(conn, sid))
@@ -57,7 +58,7 @@ async def _claim_main_owner(
         )
         if row is None:
             continue
-        if row["user_id"] != user_id:
+        if row["user_id"] != user_id or row["main_user_id"] != user_id:
             raise ValueError("main owner changed during bootstrap")
         valid = (
             row["role"] == "main"
@@ -73,14 +74,21 @@ async def _claim_main_owner(
             # Keep the same public binding shape as get_binding.
             current = await native_sessions.get_binding(sid, conn=conn)
         else:
-            if row["main_owner_id"] is not None and not replace_inactive:
-                reason = (
-                    "session_terminal"
-                    if row["archived_at"] is not None
-                    or row["status"] in ("completed", "failed", "cancelled")
-                    else "binding_revoked"
-                )
-                raise lifecycle.LifecycleDenied(reason)
+            inactive.append(row)
+    # Membership survives migration and revocation. Only ordinary bootstrap may
+    # turn an inactive retained main into a new product/native identity.
+    if current is None and inactive and not replace_inactive:
+        row = inactive[0]
+        reason = (
+            "session_terminal"
+            if row["archived_at"] is not None
+            or row["status"] in ("completed", "failed", "cancelled")
+            else "binding_revoked"
+        )
+        raise lifecycle.LifecycleDenied(reason)
+    if replace_inactive:
+        for row in inactive:
+            sid = row["session_id"]
             # Commit revocation and cleanup intent with releasing ownership. The
             # old native ID, pinned Agent, history and delivery receipts stay put.
             if row["main_owner_id"] is not None or row["token_hash"] is not None:
@@ -138,7 +146,7 @@ async def ensure_main_session(user_id: str, *, replace_inactive: bool = True) ->
                      SELECT 1 FROM sessions s WHERE s.conversation_id=c.id
                      AND NOT EXISTS (SELECT 1 FROM native_bindings b
                                      WHERE b.session_id=s.id
-                                     AND (b.role='main' OR b.main_agent_ref IS NOT NULL))
+                                     AND b.main_user_id=$1)
                    ) ORDER BY c.updated_at DESC LIMIT 1""",
                 user_id,
             )

@@ -224,7 +224,7 @@ async def select(
     async with db.connection() as conn:
         exists = await conn.fetchval(
             """SELECT EXISTS(SELECT 1 FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-               WHERE b.main_owner_id=$1 AND s.user_id=$1 AND b.role='main'
+               WHERE b.main_user_id=$1 AND s.user_id=$1 AND b.role='main'
                  AND b.mcp_grant_kind='coordination' AND b.token_hash IS NOT NULL
                  AND b.kagent_deleted_at IS NULL AND s.archived_at IS NULL
                  AND s.status NOT IN ('completed','failed','cancelled'))""",

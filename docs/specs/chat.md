@@ -38,9 +38,13 @@ same transaction that creates its replacement. Concurrent requests share one rep
 using the first-use provider default; existing native contracts and history remain on their
 original bindings, and no prior delivery is replayed. Unsent managed reports can route to the
 valid replacement; claimed or uncertain reports retain their original recipient receipts.
-Migration backfills ownership only for valid mains and refuses competing valid owners.
-Provider operations cannot restart a revoked current owner: bootstrap must first establish
-a valid replacement before a new provider selection.
+Historical main membership persists independently of role or current authority. Migration
+retains that membership, releases inactive current-owner slots, backfills slots only for
+valid mains and refuses competing valid owners. Provider operations cannot restart a revoked
+retained contract, even after startup/schema replay: ordinary bootstrap must first establish
+a valid replacement before a new provider selection. An inactive historical main does not
+block selection or pinned recovery on that replacement. Provider selection on true first
+use remains supported; ordinary workers and children do not count as historical mains.
 
 Repeating the current selection is idempotent. Repeating a pending selection recovers
 its same native create contract; it does not send a prompt. Chat returns `409` while

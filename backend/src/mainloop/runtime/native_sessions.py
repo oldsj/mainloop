@@ -321,8 +321,9 @@ class Ledger:
         await connection.execute(
             """INSERT INTO native_bindings
                (session_id,kind,role,parent_session_id,topic_id,token_hash,
-                mcp_grant_kind,credential_ref)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
+                mcp_grant_kind,credential_ref,main_user_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,
+                       CASE WHEN $3='main' THEN (SELECT user_id FROM sessions WHERE id=$1) END)""",
             session_id,
             kind,
             role,
