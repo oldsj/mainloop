@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
@@ -47,6 +48,11 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"dev_environments", "source_kind", strs(
 			string(dbstate.SourcePrebuiltImage), string(dbstate.SourceDefinitionRepo), string(dbstate.SourceOperatorDefault))},
 		{"environment_grants", "permission", strs(string(dbstate.PermissionUse), string(dbstate.PermissionDerive))},
+		{"project_merge_policy_audit", "old_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
+		{"project_merge_policy_audit", "new_policy", strs(string(dbstate.MergeAuto), string(dbstate.MergeApproval))},
+		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
+		{"environment_versions", "architecture", strs(
+			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},
 	}
 	// Every enumerated CHECK in the schema needs a case above, so a new state column cannot be
 	// added without constants that are held to it.

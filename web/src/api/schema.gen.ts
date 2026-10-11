@@ -221,6 +221,11 @@ export interface paths {
      *
      *     The client should reconnect automatically on disconnect.
      *     EventSource handles this natively.
+     *
+     *     Stored events (everything except `connected` and `heartbeat`) carry an `id`. `connected` carries
+     *     the id the stream starts from; `heartbeat` has no `id`, so it never moves the client's resume point.
+     *     A reconnect with `Last-Event-ID` replays that user's missed events within the retention window;
+     *     a resume point outside it is treated as a fresh connection.
      */
     get: operations['getEvents'];
     put?: never;
@@ -4887,13 +4892,16 @@ export interface operations {
   getEvents: {
     parameters: {
       query?: never;
-      header?: never;
+      header?: {
+        /** @description The `id` of the last event the client received; EventSource sends it on reconnect. */
+        'Last-Event-ID'?: string;
+      };
       path?: never;
       cookie?: never;
     };
     requestBody?: never;
     responses: {
-      /** @description Server-sent event stream; each frame has `id`, `event` and a JSON `data` line. */
+      /** @description Server-sent event stream; each frame has an `event` and a JSON `data` line, and stored events an `id`. */
       200: {
         headers: {
           [name: string]: unknown;
@@ -4911,6 +4919,15 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description The server is starting or shutting down; EventSource retries. */
+      503: {
         headers: {
           [name: string]: unknown;
         };
