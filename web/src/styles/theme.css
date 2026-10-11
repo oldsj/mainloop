@@ -66,6 +66,9 @@
   --radius-md: var(--radius);
   --radius-lg: var(--radius);
   --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 

@@ -57,7 +57,11 @@ The build exits `1` and writes nothing if any of these fail:
 
 The output has no timestamps and keeps a fixed order. Running the build twice leaves the tree unchanged. The generated files are already in the format `trunk fmt` would produce, so formatting does not change them.
 
-CI regeneration and a diff check are planned but not yet in place.
+CI (`.github/workflows/web.yml`) regenerates the files and fails on any diff.
+
+## Radius
+
+Every radius token is `0`: `radius.xs` to `radius.4xl` all alias `radius.default`, so utilities such as `rounded-lg` and `rounded-3xl` resolve to square corners. Tailwind v4 hard-codes bare `rounded` and `rounded-full`, which no token can override. The `tokens/tokens-only` ESLint rule in `web/eslint-rules/` therefore forbids every radius class except `rounded-none` (and the per-side `rounded-t-none` forms). Components use `rounded-none`.
 
 ## Component guidelines
 

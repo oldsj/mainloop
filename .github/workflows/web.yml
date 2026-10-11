@@ -1,0 +1,115 @@
+name: Web
+
+on:
+  pull_request:
+    branches: [main, go-react]
+    paths:
+      - web/**
+      - api/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/web.yml
+  push:
+    branches: [main, go-react]
+    paths:
+      - web/**
+      - api/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/web.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Type check, lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter web...
+      - name: Type check
+        working-directory: web
+        run: node_modules/.bin/tsc -b
+      - name: Lint
+        working-directory: web
+        run: node_modules/.bin/eslint .
+      - name: Unit and component tests
+        working-directory: web
+        run: node_modules/.bin/vitest run
+      - name: Build
+        working-directory: web
+        run: node_modules/.bin/vite build
+      - name: Route tree is up to date
+        # The router plugin rewrites routeTree.gen.ts during the build.
+        run: git diff --exit-code -- web/src/routeTree.gen.ts
+
+  drift:
+    name: Generated files are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter web... --filter .
+      - name: Regenerate API types
+        working-directory: web
+        run: node_modules/.bin/openapi-typescript ../api/openapi.yaml -o src/api/schema.gen.ts && ../node_modules/.bin/prettier --write src/api/schema.gen.ts
+      - name: Regenerate theme and design system
+        run: node web/design/build.ts
+      - name: No generated file changed
+        run: git diff --exit-code
+
+  serve:
+    name: Static server
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: web/serve/go.mod
+          cache: false
+      - name: Test and vet
+        working-directory: web/serve
+        run: go test ./... && go vet ./...
+
+  image:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: web/Dockerfile
+          push: false
+          cache-from: type=gha,scope=web-image
+          cache-to: type=gha,mode=max,scope=web-image
