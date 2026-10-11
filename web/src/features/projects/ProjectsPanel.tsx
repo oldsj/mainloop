@@ -124,7 +124,7 @@ function ProjectRow({ project }: { project: Project }) {
       <Link
         to="/projects/$id"
         params={{ id: project.id }}
-        className="gap-sm p-md border-border bg-background text-foreground hover:bg-accent flex min-h-11 items-center border"
+        className="group gap-sm p-md border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground flex min-h-11 items-center border"
       >
         {avatar ? (
           <img src={avatar} alt="" className="size-8 shrink-0" />
@@ -134,7 +134,9 @@ function ProjectRow({ project }: { project: Project }) {
         <span className="gap-xs flex min-w-0 flex-col">
           <span className="truncate text-sm font-medium">{project.full_name}</span>
           {project.description ? (
-            <span className="text-muted-foreground truncate text-xs">{project.description}</span>
+            <span className="text-muted-foreground group-hover:text-accent-foreground truncate text-xs">
+              {project.description}
+            </span>
           ) : null}
         </span>
       </Link>

@@ -102,7 +102,7 @@ export function CompactShell({ tab, children }: { tab: Tab; children: ReactNode 
             }
             className={cn(
               'gap-xs flex min-h-11 flex-1 flex-col items-center justify-center text-xs',
-              tab === id ? 'bg-accent text-primary' : 'text-muted-foreground'
+              tab === id ? 'bg-accent text-accent-foreground font-bold' : 'text-muted-foreground'
             )}
           >
             {/* The icon takes the middle column, so the badges beside it do not pull it off centre. */}

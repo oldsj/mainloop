@@ -8,8 +8,9 @@ The row in the session list and the header and identity strip at the top of a se
 
 ## Tokens
 
-- Row `bg-background` with `border-border`; selected row `bg-accent text-accent-foreground`.
-- Status words use the same tokens as the delivery receipt. Metadata in `text-muted-foreground`.
+- Row `bg-background` with `border-border`. The open row (`aria-current`) and a hovered row fill with `bg-accent`, and all their text is `text-accent-foreground`, including metadata and status words, so every word stays at 4.5:1 on the fill.
+- The open row also shows a `▌` marker before its title and a bold title. The fill is too close to the plain row to carry the state alone (about 1.5 to 1.9:1 against `bg`), so the marker and weight do.
+- On the plain row, status words use the same tokens as the delivery receipt and metadata uses `text-muted-foreground`. The error line keeps its `Error:` label on the fill.
 - Radius `rounded-none`.
 
 ## What the strip shows

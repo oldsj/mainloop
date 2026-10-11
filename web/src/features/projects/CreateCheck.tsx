@@ -103,13 +103,13 @@ export function CreateCheck({
               <Link
                 to="/workspaces/$id"
                 params={{ id: workspace.workspace_id }}
-                className="gap-sm p-sm border-border bg-background text-foreground hover:bg-accent flex min-h-11 flex-wrap items-center justify-between border"
+                className="group gap-sm p-sm border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground flex min-h-11 flex-wrap items-center justify-between border"
               >
                 <span className="break-words">
                   {workspace.manifest.repo_url.replace('https://github.com/', '')} ·{' '}
                   {workspace.manifest.branch}
                 </span>
-                <span className="text-muted-foreground text-xs">
+                <span className="text-muted-foreground group-hover:text-accent-foreground text-xs">
                   {agentLabel(agentKindOf(workspace.manifest.agent_kind))}
                 </span>
               </Link>

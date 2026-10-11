@@ -32,7 +32,7 @@ export function ThemeSelector() {
                 key={id}
                 value={id}
                 data-testid={`theme-${id}`}
-                className="gap-sm px-sm data-[highlighted]:bg-accent flex min-h-11 cursor-pointer items-center rounded-none text-sm outline-none"
+                className="gap-sm px-sm data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground flex min-h-11 cursor-pointer items-center rounded-none text-sm outline-none data-[highlighted]:font-bold"
               >
                 <span
                   data-theme={id === 'eighties' ? undefined : id}

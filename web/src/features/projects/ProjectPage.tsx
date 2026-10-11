@@ -232,17 +232,23 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                 <Link
                   to="/workspaces/$id"
                   params={{ id: workspace.workspace_id }}
-                  className="gap-sm p-md border-border bg-background text-foreground hover:bg-accent flex min-h-11 flex-wrap items-center justify-between border"
+                  className="group gap-sm p-md border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground flex min-h-11 flex-wrap items-center justify-between border"
                 >
                   <span className="truncate text-sm font-medium">{workspace.manifest.branch}</span>
                   <span className="gap-sm flex flex-wrap items-center text-xs">
                     <span data-testid="workspace-agent-kind">
                       {agentLabel(agentKindOf(workspace.manifest.agent_kind))}
                     </span>
-                    <WorkspaceLifecycleBadge workspace={workspace} />
-                    <WorkspacePublicationBadge workspace={workspace} />
+                    <WorkspaceLifecycleBadge
+                      workspace={workspace}
+                      className="group-hover:text-accent-foreground"
+                    />
+                    <WorkspacePublicationBadge
+                      workspace={workspace}
+                      className="group-hover:text-accent-foreground"
+                    />
                     {workspace.last_activity_at ? (
-                      <span className="text-muted-foreground">
+                      <span className="text-muted-foreground group-hover:text-accent-foreground">
                         Active {relativeTime(workspace.last_activity_at)}
                       </span>
                     ) : null}
