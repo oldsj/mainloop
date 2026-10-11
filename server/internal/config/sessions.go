@@ -9,6 +9,11 @@ type Sessions struct {
 	UncertainRecheck Seconds `env:"SESSION_UNCERTAIN_RECHECK_SECONDS" envDefault:"30"`
 	// FollowPoll is how often a running task is read again once its event stream has ended.
 	FollowPoll Seconds `env:"SESSION_FOLLOW_POLL_SECONDS" envDefault:"2"`
+	// ParkedMax is the longest wait between reads of a task parked for an answer (input or auth
+	// required). The wait grows from FollowPoll up to this.
+	ParkedMax Seconds `env:"SESSION_PARKED_MAX_SECONDS" envDefault:"300"`
+	// ReadyWait is how long a send waits for a starting or resuming kagent Session to be ready.
+	ReadyWait Seconds `env:"SESSION_READY_WAIT_SECONDS" envDefault:"60"`
 	// DeliveryConcurrency is how many deliveries are handled at once. A handler follows a turn to
 	// its end, so this is the number of turns that can run at the same time.
 	DeliveryConcurrency int `env:"SESSION_DELIVERY_CONCURRENCY" envDefault:"16"`

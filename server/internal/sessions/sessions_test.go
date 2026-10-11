@@ -353,8 +353,9 @@ func TestRefusalsEndInFailedAndTheOwnerMaySendAgain(t *testing.T) {
 		if deref(d.EvidenceRef) != "a2a:task/t-fail#failed" {
 			t.Fatalf("evidence %q", deref(d.EvidenceRef))
 		}
-		if len(e.sessionEvents()) != 0 || len(e.messages()) != 1 {
-			t.Fatal("a failed turn mirrored a reply")
+		// Nothing was produced to mirror, but the page is told the turn ended, naming the user message.
+		if evs := e.sessionEvents(); len(evs) != 1 || evs[0].MessageId != id || len(e.messages()) != 1 {
+			t.Fatalf("events %+v, %d messages", e.sessionEvents(), len(e.messages()))
 		}
 	})
 }
@@ -396,6 +397,9 @@ func TestAnUncertainDeliveryNobodyCanFindIsFailedAfterTheHoldWithoutAResend(t *t
 	d := e.waitState(id, dbstate.DeliveryFailed)
 	if !strings.Contains(deref(d.Detail), "not sent again") || e.sends() != 1 {
 		t.Fatalf("detail %q, %d sends", deref(d.Detail), e.sends())
+	}
+	if evs := e.sessionEvents(); len(evs) != 1 || evs[0].MessageId != id {
+		t.Fatalf("the hold expiry published %+v", evs)
 	}
 	// After the hold the owner may resend: that is a new message with a new id.
 	e.waitState(e.send("hi again"), dbstate.DeliveryCompleted)

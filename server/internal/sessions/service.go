@@ -62,6 +62,7 @@ var (
 type Kagent interface {
 	CreateSession(ctx context.Context, req *kagentapi.CreateSessionRequest) (*kagentapi.Session, error)
 	GetSession(ctx context.Context, id string) (*kagentapi.Session, error)
+	ResumeSession(ctx context.Context, id string) (*kagentapi.Session, error)
 	SendMessage(ctx context.Context, agent kagent.AgentRef, p kagent.SendParams) iter.Seq2[a2a.Event, error]
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
@@ -77,6 +78,10 @@ type Options struct {
 	UncertainRecheck time.Duration
 	// FollowPoll is the delay before a running task is read again.
 	FollowPoll time.Duration
+	// ParkedMax caps the growing delay between reads of a parked task.
+	ParkedMax time.Duration
+	// ReadyWait bounds the wait for a kagent Session to become ready.
+	ReadyWait time.Duration
 	// Concurrency is how many deliveries are handled at once.
 	Concurrency int
 	// EnsureEvery is the period of the main-session sweep.
@@ -91,6 +96,8 @@ func OptionsFrom(c config.Sessions) Options {
 		UncertainHold:    c.UncertainHold.Duration(),
 		UncertainRecheck: c.UncertainRecheck.Duration(),
 		FollowPoll:       c.FollowPoll.Duration(),
+		ParkedMax:        c.ParkedMax.Duration(),
+		ReadyWait:        c.ReadyWait.Duration(),
 		Concurrency:      c.DeliveryConcurrency,
 		EnsureEvery:      c.EnsureEvery.Duration(),
 	}
@@ -105,6 +112,8 @@ func (o Options) withDefaults() Options {
 	def(&o.UncertainHold, 30*time.Minute)
 	def(&o.UncertainRecheck, 30*time.Second)
 	def(&o.FollowPoll, 2*time.Second)
+	def(&o.ParkedMax, 5*time.Minute)
+	def(&o.ReadyWait, time.Minute)
 	def(&o.EnsureEvery, time.Minute)
 	def(&o.Lease, 30*time.Second)
 	if o.Concurrency <= 0 {
@@ -257,10 +266,13 @@ func (s *Service) Send(ctx context.Context, messageID, conversationID, text stri
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check open turn: %w", err)
 		}
-		if _, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
+		if n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
 			ID: messageID, SessionID: main.SessionID, Role: string(userRole), Content: text,
 		}); err != nil {
 			return fmt.Errorf("record message: %w", err)
+		} else if n == 0 {
+			// No delivery has this id, so the row is some other message: ids are global.
+			return fmt.Errorf("%w: the message id is already used", ErrInvalid)
 		}
 		if _, err := q.InsertDelivery(ctx, dbq.InsertDeliveryParams{
 			ID: messageID, SessionID: main.SessionID, Source: "user",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,15 +144,11 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMai
 	if err != nil {
 		return nil, err
 	}
+	// The query returns the newest first, to cap at the newest; the view is oldest first, the order
+	// the conversation reads in.
+	slices.Reverse(ds)
 	deliveries := make([]api.NativeDeliveryInfo, 0, len(ds))
-	inFlight, unknown := false, false
 	for _, d := range ds {
-		switch d.State {
-		case dbstate.DeliveryRecorded, dbstate.DeliverySending, dbstate.DeliveryDelivered:
-			inFlight = true
-		case dbstate.DeliveryUncertain:
-			inFlight, unknown = true, true
-		}
 		var detail *string
 		if d.Detail != nil {
 			if s := safeDetail(*d.Detail); s != "" {
@@ -162,6 +159,18 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMai
 			MessageId: d.ID, Source: d.Source, State: string(d.State),
 			TaskId: d.TaskID, EvidenceRef: d.EvidenceRef, Detail: detail,
 		})
+	}
+	// A turn is in flight only while it blocks a send, by the rule Send applies: an open delivery,
+	// or an uncertain one still inside the hold.
+	inFlight, unknown := false, false
+	blocking, err := q.GetBlockingDelivery(ctx, dbq.GetBlockingDeliveryParams{
+		SessionID: row.SessionID, HoldSeconds: a.Svc.opts().UncertainHold.Seconds(),
+	})
+	switch {
+	case err == nil:
+		inFlight, unknown = true, blocking.State == dbstate.DeliveryUncertain
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, err
 	}
 	n := &api.NativeSessionInfo{
 		AgentName: a.Svc.Agent.Name, Deliveries: deliveries, KagentSessionId: row.KagentSessionID,
@@ -176,7 +185,10 @@ func (a *SessionsAPI) native(ctx context.Context, q *dbq.Queries, row dbq.GetMai
 	state, note := a.sessionState(ctx, row)
 	n.SessionState = state
 	if unknown {
-		note = "delivery unknown: the last message was not replayed; check the reply, then send again if needed"
+		note = "delivery unknown: the last message was not replayed; new messages wait until this is settled, then check the reply and send again if needed"
+	} else if n := len(deliveries); n > 0 && deliveries[n-1].State == string(dbstate.DeliveryUncertain) {
+		// Past the hold and not yet settled by the delivery loop: sends are open again.
+		note = "delivery unknown: the last message was not sent again; check the reply, then send again if needed"
 	}
 	if note != "" {
 		n.Note = &note

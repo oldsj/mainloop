@@ -47,3 +47,39 @@ func TestSafeDetailCollapsesAndBounds(t *testing.T) {
 		t.Error("blank not empty")
 	}
 }
+
+func TestSafeDetailLeavesNoStrayBracket(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"authorization":[abc123]}`:        `{"authorization":[redacted]}`,
+		`{"password": ["a b", "c"], "x":1}`: `{"password": [redacted], "x":1}`,
+		`secret=[abc] next`:                 `secret=[redacted] next`,
+	} {
+		if got := safeDetail(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSafeDetailRedactsCookiesAndPrivateKeys(t *testing.T) {
+	cases := map[string][]string{
+		"cookie":     {"proxy said Cookie: session=abc123def; theme=dark; path=/ then failed", "abc123def", "theme=dark"},
+		"set-cookie": {"Set-Cookie: sid=zzTopSecret; Path=/; HttpOnly rejected", "zzTopSecret"},
+		"pem": {"boot failed -----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQEAx0 ab12cd34 -----END RSA PRIVATE KEY----- after",
+			"MIIEowIBAAKCAQEAx0", "ab12cd34"},
+		"pem cut off": {"-----BEGIN PRIVATE KEY----- MIIEvQIBADANBgkq", "MIIEvQIBADANBgkq"},
+	}
+	for name, c := range cases {
+		out := safeDetail(c[0])
+		for _, s := range c[1:] {
+			if strings.Contains(out, s) {
+				t.Errorf("%s: %q leaks %q", name, out, s)
+			}
+		}
+		if !strings.Contains(out, "[redacted]") {
+			t.Errorf("%s: nothing redacted in %q", name, out)
+		}
+	}
+	if got := safeDetail("proxy said Cookie: session=abc; then failed"); !strings.HasSuffix(got, "then failed") {
+		t.Errorf("text after the cookie lost: %q", got)
+	}
+}

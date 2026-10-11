@@ -11,14 +11,20 @@ const detailMax = 300
 
 const (
 	credentialField = `(?:authorization|token|secret|password|passwd|api[_-]?key|[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD))`
-	// A quoted value may hold whitespace and escaped quotes (JSON or a Go %q string).
-	assignmentValue = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)`
+	// A quoted value may hold whitespace and escaped quotes (JSON or a Go %q string). A bracketed
+	// value (a JSON array) goes whole, so no closing bracket is left behind.
+	assignmentValue = `(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[[^\]]*\]|[^\s,;}\[\]][^\s,;}\]]*)`
 )
 
 var secretPatterns = []struct {
 	re   *regexp.Regexp
 	with string
 }{
+	// A private key block, or the rest of the text if the block is cut off.
+	{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`), "[redacted]"},
+	// A Cookie or Set-Cookie header: the pairs and attributes, up to the first space that is not
+	// after a semicolon.
+	{regexp.MustCompile(`(?i)(\b(?:set-)?cookie["']?\s*[:=]\s*)["']?[^\s=;,"']+=[^\s;,"']*(?:;\s*(?:[^\s=;,"']+=[^\s;,"']*|httponly|secure|partitioned))*`), "${1}[redacted]"},
 	{regexp.MustCompile(`(?i)(\bAuthorization["']?\s*[:=]\s*)["']?[A-Za-z][A-Za-z0-9_-]*\s+[^\s"',;}\]]+["']?`), "${1}[redacted]"},
 	{regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`), "Bearer [redacted]"},
 	{regexp.MustCompile(`(?i)(\b` + credentialField + `["']?\s*[=:]\s*)` + assignmentValue), "${1}[redacted]"},

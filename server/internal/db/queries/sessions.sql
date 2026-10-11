@@ -65,20 +65,40 @@ WHERE session_id = sqlc.arg(session_id)
 ORDER BY created_at DESC
 LIMIT 1;
 
--- What a handler needs about the delivery's session.
+-- What a handler needs about the delivery's session. The binding is a LEFT JOIN so a delivery
+-- whose binding is gone still loads, and the handler can fail it instead of retrying for ever.
 -- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       b.kind, b.kagent_session_id, b.kagent_request_id, s.user_id,
+       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id, s.user_id,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
-JOIN agent_bindings b ON b.session_id = d.session_id
 JOIN sessions s ON s.id = d.session_id
+LEFT JOIN agent_bindings b ON b.session_id = d.session_id
 WHERE d.id = $1;
 
--- name: SetBindingKagentSessionIfUnset :execrows
-UPDATE agent_bindings
-SET kagent_session_id = $2, updated_at = now()
-WHERE session_id = $1 AND kagent_session_id IS NULL;
+-- Stores the kagent Session the create returned. Fenced on the delivery's claim and on the
+-- request id the create used, so a claimer that lost its lease, or one whose request id has since
+-- been replaced, changes nothing.
+-- name: SetDeliveryKagentSession :execrows
+UPDATE agent_bindings b
+SET kagent_session_id = sqlc.arg(kagent_session_id), updated_at = now()
+FROM deliveries d
+WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NULL
+  AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(request_id)::text;
+
+-- Drops a kagent Session that kagent no longer has, so the next create runs under a new request
+-- id. Fenced on the delivery's claim and on the Session being replaced.
+-- name: ReplaceDeliveryKagentSession :execrows
+UPDATE agent_bindings b
+SET kagent_session_id = NULL, kagent_request_id = sqlc.arg(new_request_id), standing_hash = NULL,
+    updated_at = now()
+FROM deliveries d
+WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NOT DISTINCT FROM sqlc.narg(old_session_id)::text
+  AND b.kagent_request_id IS NOT DISTINCT FROM sqlc.narg(old_request_id)::text;
 
 -- name: MarkDeliverySending :execrows
 UPDATE deliveries

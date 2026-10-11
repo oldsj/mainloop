@@ -497,8 +497,10 @@ func TestNotifyWakesALoop(t *testing.T) {
 	n := reconcile.NewNotifier(d.Pool, quiet())
 	r := reconcile.NewRunner(d.Pool, quiet(), n)
 	var handled atomic.Int32
-	// The probe's first wake is the notifier's catch-up after LISTEN: once it fires the listener is
-	// subscribed and only a real notification can wake the loop (its poll is 1 h).
+	// The probe's first wake is the notifier's catch-up after LISTEN, which wakes the loop too. A
+	// second wake, from a real notification on the probe channel, shows the listener is subscribed
+	// and the catch-up is behind us, so only the row's own notification can wake the loop (its
+	// poll is 1 h).
 	probe := n.Subscribe("test_probe")
 	r.Add(reconcile.Loop{
 		Name: "example", Table: intents, Interval: time.Hour, Wake: []string{"test_intents"},
@@ -514,6 +516,14 @@ func TestNotifyWakesALoop(t *testing.T) {
 	case <-probe:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the notifier never subscribed")
+	}
+	if _, err := d.Pool.Exec(ctx, `SELECT pg_notify('test_probe', '')`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-probe:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the probe notification never arrived")
 	}
 	if _, err := d.Pool.Exec(ctx, `INSERT INTO test_intents (id, idempotency_key, state) VALUES ('n1', 'n1-key', 'pending')`); err != nil {
 		t.Fatal(err)

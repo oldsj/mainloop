@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -98,9 +99,14 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 		t.ksid = *d.KagentSessionID
 	}
 	var out reconcile.Outcome
-	if c.State == string(dbstate.DeliveryRecorded) {
+	switch {
+	case d.BindingSessionID == nil:
+		// The binding is gone, so nothing can be sent or followed. Fail the row; leaving it would
+		// have it claimed again every lease.
+		out, err = t.settle(ctx, dbstate.DeliveryFailed, "the session has no agent binding", nil, false)
+	case c.State == string(dbstate.DeliveryRecorded):
 		out, err = t.send(ctx)
-	} else {
+	default:
 		out, err = t.observe(ctx)
 	}
 	if errors.Is(err, reconcile.ErrLeaseLost) {
@@ -124,12 +130,55 @@ func lost(n int64, err error) error {
 	return nil
 }
 
-// ensureKagentSession returns the kagent Session of the binding, creating it on first use. The
-// create is idempotent by request id, so repeating it after a crash is safe.
+// ensureKagentSession returns the binding's kagent Session, ready for a turn. It is created on
+// first use and resumed if suspended, and a Session that is still starting is waited for (bounded).
+// A Session kagent no longer has (its idle TTL, or deleted out of band) is replaced once, under a
+// new create request id. Every step is idempotent, so repeating it after a crash is safe, and none
+// holds a database lock across a kagent call.
 func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
-	if t.ksid != "" {
-		return t.ksid, nil
+	for replaced := false; ; replaced = true {
+		var sess *kagentapi.Session
+		var err error
+		if t.ksid == "" {
+			sess, err = t.createKagentSession(ctx)
+		} else {
+			sess, err = t.s.Kagent.GetSession(ctx, t.ksid)
+		}
+		var se *kagent.SessionError
+		gone := errors.As(err, &se) && ((t.ksid != "" && se.Code == connect.CodeNotFound) ||
+			(t.ksid == "" && createHitDeleted(se)))
+		switch {
+		case err != nil && !gone:
+			return "", err
+		case err == nil && sessionEnded(sess):
+			gone = true
+		}
+		if !gone {
+			return t.readyKagentSession(ctx, sess)
+		}
+		if replaced {
+			return "", errors.New("the replacement kagent session is already gone")
+		}
+		if err := t.replaceKagentSession(ctx); err != nil {
+			return "", err
+		}
 	}
+}
+
+// createHitDeleted reports a create that kagent refused because its request id belongs to a
+// Session that has since been deleted.
+func createHitDeleted(e *kagent.SessionError) bool {
+	return e.Code == connect.CodeAlreadyExists && strings.Contains(strings.ToLower(e.Detail), "deleted")
+}
+
+func sessionEnded(s *kagentapi.Session) bool {
+	st := s.GetState()
+	return st == kagentapi.RuntimeState_RUNTIME_STATE_DELETING || st == kagentapi.RuntimeState_RUNTIME_STATE_DELETED
+}
+
+// createKagentSession creates the Session under the binding's request id and stores it. The create
+// is idempotent by request id.
+func (t *turn) createKagentSession(ctx context.Context) (*kagentapi.Session, error) {
 	reqID := "mainloop-session-" + t.d.SessionID
 	if t.d.KagentRequestID != nil && *t.d.KagentRequestID != "" {
 		reqID = *t.d.KagentRequestID
@@ -140,16 +189,82 @@ func (t *turn) ensureKagentSession(ctx context.Context) (string, error) {
 		Name:      "Mainloop main thread",
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	q := dbq.New(t.s.Pool)
-	if _, err := q.SetBindingKagentSessionIfUnset(ctx, dbq.SetBindingKagentSessionIfUnsetParams{
-		SessionID: t.d.SessionID, KagentSessionID: &sess.Id,
-	}); err != nil {
-		return "", fmt.Errorf("store kagent session: %w", err)
+	id, owner, attempts := t.fence()
+	if err := lost(dbq.New(t.s.Pool).SetDeliveryKagentSession(ctx, dbq.SetDeliveryKagentSessionParams{
+		ID: id, LeaseOwner: owner, Attempts: attempts,
+		KagentSessionID: &sess.Id, RequestID: t.d.KagentRequestID,
+	})); err != nil {
+		return nil, fmt.Errorf("store kagent session: %w", err)
 	}
 	t.ksid = sess.Id
-	return sess.Id, nil
+	return sess, nil
+}
+
+// replaceKagentSession forgets the Session kagent no longer has and picks a new create request id,
+// in one write fenced on the delivery's claim and on the values it read.
+func (t *turn) replaceKagentSession(ctx context.Context) error {
+	id, owner, attempts := t.fence()
+	var old *string
+	if t.ksid != "" {
+		old = &t.ksid
+	}
+	newReq := uuid.NewString()
+	if err := lost(dbq.New(t.s.Pool).ReplaceDeliveryKagentSession(ctx, dbq.ReplaceDeliveryKagentSessionParams{
+		ID: id, LeaseOwner: owner, Attempts: attempts, NewRequestID: &newReq,
+		OldSessionID: old, OldRequestID: t.d.KagentRequestID,
+	})); err != nil {
+		return fmt.Errorf("replace kagent session: %w", err)
+	}
+	t.s.log().WarnContext(ctx, "kagent session is gone; a new one will be created",
+		"session_id", t.d.SessionID, "old_kagent_session", t.ksid)
+	t.ksid, t.d.KagentRequestID = "", &newReq
+	return nil
+}
+
+// readyKagentSession returns the Session's id once kagent reports it ready: it resumes a suspended
+// Session once, and polls one that is starting, resuming or suspending until Opts.ReadyWait.
+func (t *turn) readyKagentSession(ctx context.Context, sess *kagentapi.Session) (string, error) {
+	wait := t.s.opts().ReadyWait
+	poll := min(max(wait/20, 10*time.Millisecond), time.Second)
+	deadline := time.Now().Add(wait)
+	resumed := false
+	for {
+		switch st := sess.GetState(); {
+		case st == kagentapi.RuntimeState_RUNTIME_STATE_READY && !changing(sess):
+			return sess.GetId(), nil
+		case st == kagentapi.RuntimeState_RUNTIME_STATE_FAILED:
+			return "", errors.New("the kagent session has failed")
+		case st == kagentapi.RuntimeState_RUNTIME_STATE_DELETING, st == kagentapi.RuntimeState_RUNTIME_STATE_DELETED:
+			return "", errors.New("the kagent session is being deleted")
+		case st == kagentapi.RuntimeState_RUNTIME_STATE_SUSPENDED && !resumed:
+			resumed = true
+			var err error
+			if sess, err = t.s.Kagent.ResumeSession(ctx, t.ksid); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if !time.Now().Before(deadline) {
+			return "", fmt.Errorf("the kagent session is not ready after %s (%s)", wait, sess.GetState())
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(poll):
+		}
+		var err error
+		if sess, err = t.s.Kagent.GetSession(ctx, t.ksid); err != nil {
+			return "", err
+		}
+	}
+}
+
+// changing reports a ready Session that is being suspended or deleted.
+func changing(s *kagentapi.Session) bool {
+	op := s.GetOperation()
+	return op == kagentapi.RuntimeOperation_RUNTIME_OPERATION_SUSPEND || op == kagentapi.RuntimeOperation_RUNTIME_OPERATION_DELETE
 }
 
 // send delivers a recorded message for the first time.
@@ -162,12 +277,15 @@ func (t *turn) send(ctx context.Context) (reconcile.Outcome, error) {
 		if ctx.Err() != nil {
 			return reconcile.Retry(), ctx.Err()
 		}
+		if errors.Is(err, reconcile.ErrLeaseLost) {
+			return reconcile.Retry(), err
+		}
 		var cfg *kagent.ConfigError
 		if errors.As(err, &cfg) || t.c.Attempts >= createAttempts {
 			return t.settle(ctx, dbstate.DeliveryFailed,
-				"not sent: could not create the kagent session: "+err.Error(), nil, false)
+				"not sent: could not prepare the kagent session: "+err.Error(), nil, false)
 		}
-		t.s.log().WarnContext(ctx, "create kagent session failed", "message_id", t.c.ID, "error", err)
+		t.s.log().WarnContext(ctx, "prepare kagent session failed", "message_id", t.c.ID, "error", err)
 		return reconcile.RetryAfter(min(createBackoff<<(t.c.Attempts-1), createBackoffM)), nil
 	}
 
@@ -317,16 +435,36 @@ func (t *turn) refresh(ctx context.Context) (reconcile.Outcome, error) {
 		return t.undecided(ctx, "")
 	case err != nil:
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "task_id", t.taskID, "error", err)
-		return reconcile.RetryAfter(t.pollDelay()), nil
+		return reconcile.RetryAfter(t.errorDelay()), nil
 	}
 	return t.adopt(ctx, task)
 }
 
-func (t *turn) pollDelay() time.Duration {
-	if t.cur == dbstate.DeliveryUncertain {
-		return t.s.opts().UncertainRecheck
+// backoff is base doubled per attempt after the first, up to ceil. Attempts count claims of the
+// row, so a row that keeps coming back waits longer each time.
+func backoff(base, ceil time.Duration, attempts int) time.Duration {
+	d := base
+	for i := 1; i < attempts && d < ceil; i++ {
+		d *= 2
 	}
-	return t.s.opts().FollowPoll
+	return min(d, max(ceil, base))
+}
+
+// errorDelay is the wait before reading a task again after a failed read: the uncertain recheck
+// for an unresolved delivery, else a backoff from FollowPoll up to that same recheck delay.
+func (t *turn) errorDelay() time.Duration {
+	o := t.s.opts()
+	if t.cur == dbstate.DeliveryUncertain {
+		return o.UncertainRecheck
+	}
+	return backoff(o.FollowPoll, o.UncertainRecheck, t.c.Attempts)
+}
+
+// parkedDelay is the wait before looking again at a task parked for someone's answer. It can wait
+// a long time, so it backs off from FollowPoll up to Opts.ParkedMax instead of reading every poll.
+func (t *turn) parkedDelay() time.Duration {
+	o := t.s.opts()
+	return backoff(o.FollowPoll, o.ParkedMax, t.c.Attempts)
 }
 
 // adopt records that the message has a task and moves the turn along: finalize a finished task,
@@ -351,9 +489,12 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 		return t.settle(ctx, dbstate.DeliveryCancelled, "the turn was stopped", task, false)
 	case st == "failed" || st == "rejected":
 		return t.settle(ctx, dbstate.DeliveryFailed, "task "+st+": "+statusText(task), task, st == "failed")
-	case st == "input_required" || st == "auth_required" || !follow:
-		// Parked for someone else, or still running after we followed it: look again later. A
-		// parked task keeps the session's turn open until it is answered.
+	case st == "input_required" || st == "auth_required":
+		// Parked for someone else: it keeps the session's turn open until it is answered, which can
+		// take long, so look again less and less often.
+		return reconcile.RetryAfter(t.parkedDelay()), nil
+	case !follow:
+		// Still running after we followed it to the end of its stream: look again soon.
 		return reconcile.RetryAfter(t.s.opts().FollowPoll), nil
 	}
 	for ev, err := range t.s.Kagent.SubscribeToTask(ctx, t.s.Agent, string(task.ID)) {
@@ -367,13 +508,16 @@ func (t *turn) advance(ctx context.Context, task *a2a.Task, follow bool) (reconc
 	fresh, err := t.s.Kagent.GetTask(ctx, t.s.Agent, string(task.ID))
 	if err != nil {
 		t.s.log().WarnContext(ctx, "read task failed", "message_id", t.c.ID, "task_id", t.taskID, "error", err)
-		return reconcile.RetryAfter(t.pollDelay()), nil
+		return reconcile.RetryAfter(t.errorDelay()), nil
 	}
 	return t.advance(ctx, fresh, false)
 }
 
-// settle ends the delivery in a final state. For a completed task it also mirrors the reply,
-// counts the turn and publishes session:message, all in one transaction with the state change.
+// settle ends the delivery in a final state, in one transaction. A task's reply is mirrored: the
+// whole reply for a completed task, and whatever the agent had produced for a failed or stopped one
+// (the failure reason is the delivery's detail). Every settle publishes session:message last, so a
+// client that is watching sees the turn end whichever way it ended; when no text was mirrored the
+// event names the user message the turn answered.
 func (t *turn) settle(
 	ctx context.Context, final dbstate.DeliveryState, detail string, task *a2a.Task, nativeFailure bool,
 ) (reconcile.Outcome, error) {
@@ -398,25 +542,23 @@ func (t *turn) settle(
 		})); err != nil {
 			return nil, err
 		}
-		var drafts []events.Draft
-		if final == dbstate.DeliveryCompleted && task != nil {
-			if reply := replyText(task); reply != "" {
+		eventMessage := t.c.ID
+		if task != nil {
+			reply := artifactText(task)
+			if final == dbstate.DeliveryCompleted {
+				reply = replyText(task)
+			}
+			if reply != "" {
 				mid := assistantID(t.d.SessionID, task.ID)
-				n, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
+				if _, err := q.InsertSessionMessage(ctx, dbq.InsertSessionMessageParams{
 					ID: mid, SessionID: t.d.SessionID, Role: string(assistantRole), Content: reply,
-				})
-				if err != nil {
+				}); err != nil {
 					return nil, fmt.Errorf("mirror reply: %w", err)
 				}
-				if n > 0 {
-					drafts = append(drafts, events.Draft{
-						UserID: t.d.UserID, Type: events.TypeSessionMessage,
-						Payload: api.EventSessionMessage{
-							SessionId: t.d.SessionID, MessageId: mid, Role: api.EventSessionMessageRoleAssistant,
-						},
-					})
-				}
+				eventMessage = mid
 			}
+		}
+		if final == dbstate.DeliveryCompleted {
 			if err := q.BumpBindingTurns(ctx, t.d.SessionID); err != nil {
 				return nil, fmt.Errorf("count turn: %w", err)
 			}
@@ -424,7 +566,12 @@ func (t *turn) settle(
 		if err := q.RefreshSessionStatus(ctx, t.d.SessionID); err != nil {
 			return nil, fmt.Errorf("refresh session status: %w", err)
 		}
-		return drafts, nil
+		return []events.Draft{{
+			UserID: t.d.UserID, Type: events.TypeSessionMessage,
+			Payload: api.EventSessionMessage{
+				SessionId: t.d.SessionID, MessageId: eventMessage, Role: api.EventSessionMessageRoleAssistant,
+			},
+		}}, nil
 	})
 	if err != nil {
 		return reconcile.Retry(), err
@@ -472,9 +619,8 @@ func messageText(m *a2a.Message) string {
 
 func statusText(task *a2a.Task) string { return messageText(task.Status.Message) }
 
-// replyText is the agent's reply: the text of the artifacts in order, else the last agent message
-// of the task's history.
-func replyText(task *a2a.Task) string {
+// artifactText is the text the agent produced: the artifacts' text in order.
+func artifactText(task *a2a.Task) string {
 	var parts []string
 	for _, a := range task.Artifacts {
 		if a == nil {
@@ -490,8 +636,14 @@ func replyText(task *a2a.Task) string {
 			parts = append(parts, s)
 		}
 	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n")
+}
+
+// replyText is a completed task's reply: its artifacts' text, else the last agent message of the
+// task's history, else the status message.
+func replyText(task *a2a.Task) string {
+	if s := artifactText(task); s != "" {
+		return s
 	}
 	for i := len(task.History) - 1; i >= 0; i-- {
 		if m := task.History[i]; m != nil && m.Role == a2a.MessageRoleAgent {

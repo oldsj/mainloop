@@ -215,12 +215,12 @@ export interface paths {
      *     - heartbeat - periodic keepalive (every 30s)
      *     - inbox:updated - when inbox items change
      *     - schedule:updated - when a schedule changes or starts an execution
-     *     - session:message - when a mirrored reply lands in a session conversation
+     *     - session:message - when a session turn ends: a mirrored reply landed, or the turn failed or was not sent again (re-read the session)
      *     - task:updated - when a task changes; read it with getTask
      *     - workspace:updated - when the workspace lifecycle projection changes
      *
-     *     The client should reconnect automatically on disconnect.
-     *     EventSource handles this natively.
+     *     The client should reconnect on disconnect with backoff. Native EventSource reconnects after a
+     *     dropped stream but not after a non-200 response, so a fetch-based client retries both.
      *
      *     Stored events (everything except `connected` and `heartbeat`) carry an `id`. `connected` carries
      *     the id the stream starts from; `heartbeat` has no `id`, so it never moves the client's resume point.
@@ -1484,7 +1484,10 @@ export interface components {
        * @default false
        */
       turn_in_flight: boolean;
-      /** Deliveries */
+      /**
+       * Deliveries
+       * @description The newest 20 ledgered deliveries of the session, oldest first (the last item is the newest).
+       */
       deliveries: components['schemas']['NativeDeliveryInfo'][];
       /** Note */
       note: string | null;
@@ -4240,7 +4243,7 @@ export interface components {
     EventScheduleUpdated: {
       schedule_id: string;
     };
-    /** @description `session:message`: a mirrored reply landed in a session conversation. */
+    /** @description `session:message`: a session turn ended. `message_id` is the mirrored reply, or, when the turn produced no text (it failed, or was not sent again), the id of the user message it answered. The client re-reads the session. */
     EventSessionMessage: {
       session_id: string;
       message_id: string;
@@ -4926,7 +4929,7 @@ export interface operations {
           'application/json': components['schemas']['HTTPError'];
         };
       };
-      /** @description The server is starting or shutting down; EventSource retries. */
+      /** @description The server is starting or shutting down; clients retry with backoff (native EventSource does not retry a 503). */
       503: {
         headers: {
           [name: string]: unknown;

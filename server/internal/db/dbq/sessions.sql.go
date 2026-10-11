@@ -146,30 +146,31 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 
 const getDeliveryContext = `-- name: GetDeliveryContext :one
 SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.updated_at,
-       b.kind, b.kagent_session_id, b.kagent_request_id, s.user_id,
+       b.session_id AS binding_session_id, b.kagent_session_id, b.kagent_request_id, s.user_id,
        (SELECT m.content FROM session_messages m WHERE m.id = d.id) AS content
 FROM deliveries d
-JOIN agent_bindings b ON b.session_id = d.session_id
 JOIN sessions s ON s.id = d.session_id
+LEFT JOIN agent_bindings b ON b.session_id = d.session_id
 WHERE d.id = $1
 `
 
 type GetDeliveryContextRow struct {
-	ID              string
-	SessionID       string
-	State           dbstate.DeliveryState
-	TaskID          *string
-	EvidenceRef     *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Kind            string
-	KagentSessionID *string
-	KagentRequestID *string
-	UserID          string
-	Content         string
+	ID               string
+	SessionID        string
+	State            dbstate.DeliveryState
+	TaskID           *string
+	EvidenceRef      *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	BindingSessionID *string
+	KagentSessionID  *string
+	KagentRequestID  *string
+	UserID           string
+	Content          string
 }
 
-// What a handler needs about the delivery's session.
+// What a handler needs about the delivery's session. The binding is a LEFT JOIN so a delivery
+// whose binding is gone still loads, and the handler can fail it instead of retrying for ever.
 func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliveryContextRow, error) {
 	row := q.db.QueryRow(ctx, getDeliveryContext, id)
 	var i GetDeliveryContextRow
@@ -181,7 +182,7 @@ func (q *Queries) GetDeliveryContext(ctx context.Context, id string) (GetDeliver
 		&i.EvidenceRef,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Kind,
+		&i.BindingSessionID,
 		&i.KagentSessionID,
 		&i.KagentRequestID,
 		&i.UserID,
@@ -589,19 +590,72 @@ func (q *Queries) RefreshSessionStatus(ctx context.Context, id string) error {
 	return err
 }
 
-const setBindingKagentSessionIfUnset = `-- name: SetBindingKagentSessionIfUnset :execrows
-UPDATE agent_bindings
-SET kagent_session_id = $2, updated_at = now()
-WHERE session_id = $1 AND kagent_session_id IS NULL
+const replaceDeliveryKagentSession = `-- name: ReplaceDeliveryKagentSession :execrows
+UPDATE agent_bindings b
+SET kagent_session_id = NULL, kagent_request_id = $1, standing_hash = NULL,
+    updated_at = now()
+FROM deliveries d
+WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NOT DISTINCT FROM $5::text
+  AND b.kagent_request_id IS NOT DISTINCT FROM $6::text
 `
 
-type SetBindingKagentSessionIfUnsetParams struct {
-	SessionID       string
-	KagentSessionID *string
+type ReplaceDeliveryKagentSessionParams struct {
+	NewRequestID *string
+	ID           string
+	LeaseOwner   *string
+	Attempts     int32
+	OldSessionID *string
+	OldRequestID *string
 }
 
-func (q *Queries) SetBindingKagentSessionIfUnset(ctx context.Context, arg SetBindingKagentSessionIfUnsetParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setBindingKagentSessionIfUnset, arg.SessionID, arg.KagentSessionID)
+// Drops a kagent Session that kagent no longer has, so the next create runs under a new request
+// id. Fenced on the delivery's claim and on the Session being replaced.
+func (q *Queries) ReplaceDeliveryKagentSession(ctx context.Context, arg ReplaceDeliveryKagentSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceDeliveryKagentSession,
+		arg.NewRequestID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.OldSessionID,
+		arg.OldRequestID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setDeliveryKagentSession = `-- name: SetDeliveryKagentSession :execrows
+UPDATE agent_bindings b
+SET kagent_session_id = $1, updated_at = now()
+FROM deliveries d
+WHERE d.id = $2 AND d.lease_owner = $3 AND d.attempts = $4
+  AND b.session_id = d.session_id
+  AND b.kagent_session_id IS NULL
+  AND b.kagent_request_id IS NOT DISTINCT FROM $5::text
+`
+
+type SetDeliveryKagentSessionParams struct {
+	KagentSessionID *string
+	ID              string
+	LeaseOwner      *string
+	Attempts        int32
+	RequestID       *string
+}
+
+// Stores the kagent Session the create returned. Fenced on the delivery's claim and on the
+// request id the create used, so a claimer that lost its lease, or one whose request id has since
+// been replaced, changes nothing.
+func (q *Queries) SetDeliveryKagentSession(ctx context.Context, arg SetDeliveryKagentSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setDeliveryKagentSession,
+		arg.KagentSessionID,
+		arg.ID,
+		arg.LeaseOwner,
+		arg.Attempts,
+		arg.RequestID,
+	)
 	if err != nil {
 		return 0, err
 	}

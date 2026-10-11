@@ -54,10 +54,31 @@ CREATE INDEX deliveries_claim ON deliveries (next_attempt_at, id)
 WHERE state IN ('recorded', 'sending', 'delivered', 'uncertain');
 CREATE INDEX deliveries_session ON deliveries (session_id, created_at DESC);
 
--- One main thread. The partial index is the backstop for the ensure step's advisory lock.
+-- One main thread. The partial index is the backstop for the ensure step's advisory lock. It is
+-- global, not per owner: agent_bindings has no owner column, and the deployment has one owner. The
+-- ensure step's lock and lookup are per owner, so a second owner needs this index replaced.
 CREATE UNIQUE INDEX agent_bindings_one_main ON agent_bindings ((true)) WHERE role = 'main';
 
+-- The main session is never archived. An archived main session would still hold the index above,
+-- and no new one could be created.
+-- +goose StatementBegin
+CREATE FUNCTION refuse_archiving_main_session() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.archived_at IS NOT NULL AND OLD.archived_at IS NULL AND EXISTS (
+        SELECT 1 FROM agent_bindings b WHERE b.session_id = NEW.id AND b.role = 'main'
+    ) THEN
+        RAISE EXCEPTION 'the main session cannot be archived' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER sessions_keep_main BEFORE UPDATE OF archived_at ON sessions
+FOR EACH ROW EXECUTE FUNCTION refuse_archiving_main_session();
+
 -- +goose Down
+DROP TRIGGER IF EXISTS sessions_keep_main ON sessions;
+DROP FUNCTION IF EXISTS refuse_archiving_main_session();
 DROP INDEX IF EXISTS agent_bindings_one_main;
 DROP TABLE IF EXISTS deliveries;
 DROP TABLE IF EXISTS session_messages;

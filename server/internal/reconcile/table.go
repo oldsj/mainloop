@@ -36,7 +36,7 @@ type Table struct {
 var identPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // NewTable describes an intent table. The name is unqualified (the search_path is the mainloop
-// schema) and and each state must be a plain lower-case identifier; it panics otherwise, since both are
+// schema) and each state must be a plain lower-case identifier; it panics otherwise, since both are
 // spliced into SQL and a bad one is a programming error.
 func NewTable(name string, claimable ...string) Table {
 	if !identPattern.MatchString(name) {
