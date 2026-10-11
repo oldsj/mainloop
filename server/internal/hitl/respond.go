@@ -95,6 +95,10 @@ func (s *Service) Respond(ctx context.Context, requestID string, in api.HITLDeci
 		if err != nil {
 			return err
 		}
+		// Before the answer is checked, so every form of answer gets the same 409 and the reason.
+		if isNested(obs) {
+			return fmt.Errorf("%w: %s", ErrConflict, reasonNested)
+		}
 		if err := dec.validate(obs); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
@@ -114,9 +118,6 @@ func (s *Service) Respond(ctx context.Context, requestID string, in api.HITLDeci
 		}
 		if req.Availability != dbstate.HITLPending {
 			return fmt.Errorf("%w: this request is %s and cannot be answered", ErrConflict, req.Availability)
-		}
-		if isNested(obs) {
-			return fmt.Errorf("%w: %s", ErrConflict, reasonNested)
 		}
 		if _, err := q.GetLiveHITLResponse(ctx, req.ID); err == nil {
 			return fmt.Errorf("%w: this request already has an answer", ErrConflict)

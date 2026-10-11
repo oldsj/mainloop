@@ -32,6 +32,11 @@ const (
 	reasonNotAccept = "KAGENT_SEND_NOT_ACCEPTED"
 	reasonNoTask    = "TASK_NOT_FOUND"
 
+	// codeUnsupported and notReadyMessage are kagent's refusal of a send to a Session that is not
+	// READY (A2A ErrUnsupportedOperation).
+	codeUnsupported = -32004
+	notReadyMessage = "Session cannot accept work during a lifecycle operation"
+
 	errorInfoType = "google.rpc.ErrorInfo"
 
 	defaultRetryAfter = 100 * time.Millisecond
@@ -62,7 +67,14 @@ func (e *OutcomeUnknown) Unwrap() error { return e.Err }
 
 // ConfigError means kagent refused the credentials (HTTP 401 or 403, gRPC status 7 or 16, or
 // an A2A auth refusal) or the token file cannot be used. Never replace or resend.
-type ConfigError struct{ Msg string }
+//
+// Credentials is true when the refusal is of our own bearer (HTTP 401, gRPC Unauthenticated, A2A
+// UNAUTHENTICATED, or a token file we cannot use), so every call would fail the same way. A 403,
+// PermissionDenied or A2A UNAUTHORIZED can be about one Agent or conversation alone.
+type ConfigError struct {
+	Msg         string
+	Credentials bool
+}
 
 func (e *ConfigError) Error() string { return e.Msg }
 
@@ -143,8 +155,8 @@ type statusError struct{ status int }
 
 func (e *statusError) Error() string { return "HTTP " + strconv.Itoa(e.status) }
 
-func authRefused(detail string) *ConfigError {
-	return &ConfigError{Msg: "kagent control service configuration failure (" + detail + ")"}
+func authRefused(detail string, credentials bool) *ConfigError {
+	return &ConfigError{Msg: "kagent control service configuration failure (" + detail + ")", Credentials: credentials}
 }
 
 // classifyTransport maps an error from the HTTP layer, with no reply, to a typed error.
@@ -188,7 +200,7 @@ func classifyConnect(op string, err error) error {
 	code := ce.Code()
 	switch {
 	case code == connect.CodePermissionDenied || code == connect.CodeUnauthenticated:
-		return authRefused("grpc " + strconv.Itoa(int(code)))
+		return authRefused("grpc "+strconv.Itoa(int(code)), code == connect.CodeUnauthenticated)
 	case code == connect.CodeDeadlineExceeded || code == connect.CodeAborted ||
 		code == connect.CodeInternal || code == connect.CodeUnavailable:
 		// The companion can answer Aborted after it reserved a Session, so it proves nothing.
@@ -216,7 +228,12 @@ func classifyRPCError(code int, message string, data json.RawMessage) error {
 	}
 	switch {
 	case e.Reason == "UNAUTHENTICATED" || e.Reason == "PERMISSION_DENIED" || e.Reason == "UNAUTHORIZED":
-		return authRefused("A2A auth refusal")
+		return authRefused("A2A auth refusal", e.Reason == "UNAUTHENTICATED")
+	case code == codeUnsupported && message == notReadyMessage:
+		// kagent answers a send to a Session that is suspended, resuming or otherwise changing before it
+		// reserves a dispatch, so nothing ran and the same message can be sent again. The refusal has
+		// no marker, so only this code and text count.
+		return &SendNotAccepted{A2AError: e}
 	case e.Domain == a2aErrorDomain && e.Metadata["reason"] == reasonNotAccept:
 		return &SendNotAccepted{A2AError: e}
 	case e.Reason == reasonNoTask:

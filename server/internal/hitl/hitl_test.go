@@ -1340,9 +1340,17 @@ func TestANestedRequestIsShownButNotAnswerable(t *testing.T) {
 	if err != nil || view.Answerable || view.UnavailableReason == nil {
 		t.Fatalf("view = %+v, %v", view, err)
 	}
-	_, err = e.svc.Respond(context.Background(), r.ID, approveAll("t1"))
-	if !errors.Is(err, hitl.ErrConflict) {
-		t.Fatalf("respond err = %v, want conflict", err)
+	// Every form of answer gets the same refusal, whether or not it fits the request.
+	for name, in := range map[string]api.HITLDecisionInput{
+		"approves the top-level tool": approveAll("t1"),
+		"approves the nested tool":    approveAll("n1"),
+		"approves nothing it asks":    approveAll("nope"),
+		"answers a question":          decision("act-2", answer("q1", "main")),
+	} {
+		_, err = e.svc.Respond(context.Background(), r.ID, in)
+		if !errors.Is(err, hitl.ErrConflict) || !strings.Contains(err.Error(), "delegated agent") {
+			t.Fatalf("%s: respond err = %v, want the nested conflict", name, err)
+		}
 	}
 	if n := e.count(`SELECT count(*) FROM hitl_responses`); n != 0 {
 		t.Fatalf("responses = %d", n)

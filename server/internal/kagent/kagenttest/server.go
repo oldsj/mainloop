@@ -68,6 +68,17 @@ func NotAccepted(retryAfterMs int) *RPCError {
 	}
 }
 
+// NotReady is kagent's refusal of a send to a Session that is suspended or changing: no marker, so
+// the client recognises it by code and text.
+func NotReady() *RPCError {
+	return &RPCError{Code: -32004, Message: "Session cannot accept work during a lifecycle operation"}
+}
+
+// Unauthenticated is the a2a-go ErrUnauthenticated wire shape.
+func Unauthenticated() *RPCError {
+	return &RPCError{Code: -31401, Message: "unauthenticated", Reason: "UNAUTHENTICATED", Domain: "a2a-protocol.org"}
+}
+
 // Unauthorized is the a2a-go ErrUnauthorized wire shape.
 func Unauthorized() *RPCError {
 	return &RPCError{Code: -31403, Message: "permission denied", Reason: "UNAUTHORIZED", Domain: "a2a-protocol.org"}

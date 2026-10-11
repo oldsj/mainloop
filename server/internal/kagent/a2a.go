@@ -102,7 +102,7 @@ func parseEnvelope(method string, status int, body []byte) (json.RawMessage, err
 
 func authStatus(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return authRefused("HTTP " + strconv.Itoa(resp.StatusCode))
+		return authRefused("HTTP "+strconv.Itoa(resp.StatusCode), resp.StatusCode == http.StatusUnauthorized)
 	}
 	return nil
 }

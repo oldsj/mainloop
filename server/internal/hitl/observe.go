@@ -78,9 +78,8 @@ func (s *Service) Observe(ctx context.Context) error {
 			return ctx.Err()
 		}
 		s.diagnose(ctx, hs.KagentSessionID, errDetail(err))
-		var down *kagent.Unreachable
-		if errors.As(err, &down) {
-			break // kagent is not there; the other sessions would fail the same way
+		if stopsScan(err) {
+			break // kagent is not there, or refused our bearer: the other sessions would fail the same way
 		}
 		s.log().WarnContext(ctx, "hitl scan failed", "kagent_session_id", hs.KagentSessionID, "error", err)
 		if isKagentError(err) {
@@ -108,6 +107,17 @@ func (s *Service) Observe(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// stopsScan reports a failure that every session would meet: kagent is unreachable, or it refused
+// our own credentials. Nobody is backed off for it. A refusal of one Agent or conversation is not
+// one of these.
+func stopsScan(err error) bool {
+	var (
+		down *kagent.Unreachable
+		cfg  *kagent.ConfigError
+	)
+	return errors.As(err, &down) || (errors.As(err, &cfg) && cfg.Credentials)
 }
 
 // backOffSession delays the next scan of a session that failed, longer after each failure in a row.

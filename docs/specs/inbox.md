@@ -130,7 +130,8 @@ Built:
   `hitl_sessions` row; a row whose binding no longer names its kagent session is deleted. A scan
   that fails for one session (credentials or wrong-Agent refusal, a lost reply, a timeout, a bad
   reply) records a diagnostic and backs that session off (30 s, doubling to 10 min) while the
-  others go on; an unreachable kagent ends the scanning for that pass. Staleness never comes from
+  others go on; an unreachable kagent, or a refusal of our own bearer (HTTP 401, `UNAUTHENTICATED`), ends the
+  scanning for that pass and backs nobody off. Staleness never comes from
   a scan: it comes from each request's own refresh failing. A task in `input-required` whose status message
   carries the HITL extension becomes a `hitl_requests` row (`pending`), identified by a hash of
   the session, task, status message and request body. Each open request gets an `attention_items`
@@ -147,18 +148,25 @@ Built:
   writes a `hitl_responses` intent row keyed by the action id. The same action id with the same
   answer returns the same receipt; a different answer or request is `409`. One live response per
   request. `action_id` is 1 to 2048 characters. A nested (delegated) request is shown with
-  `answerable=false` and a reason, and answering it is `409`, until G10 implements the leaf rule.
+  `answerable=false` and a reason, and answering it is `409`, whatever the answer says, until G10 implements the leaf rule. A nested
+  request still opens no actionable attention item yet: its card cannot be answered from the
+  inbox, and G9b words it (or opens none).
   The view of a request whose latest response was `rejected_transport` has `response: null`, keeps
   `transport_state`, and says why in `transport_detail`; `transport_detail` is also set for
   recorded, sending and uncertain responses that have a reason. With `MAINLOOP_OWNER_HITL_WRITES_ENABLED` off the route answers `503`.
 - **Dispatch.** A reconcile loop reads the task first and sends only while the task still asks
-  for exactly this request. The row is marked `sending` and committed before the call, and no
+  for exactly this request. Before the send it makes the Session ready as deliveries do: it wakes the
+  workspace and resumes a suspended Session (`sessions.Service.ReadySession`), so an answer to a
+  suspended workspace wakes it. Waking is not a send: while the Session is not ready the response
+  stays `recorded` and is tried again after a minute. kagent's refusal of a send to a Session that is
+  not ready counts as not sent. The row is marked `sending` and committed before the call, and no
   transaction is open across kagent I/O. A send that provably did not leave is retried; any other
   failure records `uncertain`. An uncertain response is never resent: later passes look the
   outbound message id up. Only the original task can accept it: its history must show the id with
   the HITL metadata that was sent. A message that only another task shows is
   `rejected_transport` ("kagent took the answer as a new turn"), as is one whose metadata differs.
-  The lookups back off from 15 s, doubling to 1 h. After ten minutes with no message, the response
+  The lookups back off from 15 s, doubling to 1 h, but never past the end of the hold. After ten
+  minutes with no message, the response
   becomes `rejected_transport` whether the ask still waits or the task moved on, and the owner may
   answer again.
 - **Inbox.** `inbox:updated.unread_count` counts open attention items that are unread.
@@ -169,6 +177,12 @@ Built:
 
 Not built:
 
+- Whether the harness's parked turn survives a suspend of the workspace. A suspended workspace is
+  woken by the answer, but it is not known that the agent's waiting turn is still there to take it
+  (the harness reports "runtime has no parked turn to continue" otherwise). This needs a live
+  check. If it does not survive, the fallback is to count an open ask as workspace activity so an
+  idle workspace with an ask is not suspended; that costs a running pod, so it is the owner's
+  decision.
 - Proof against a real kagent. The production sender (the shared client, with the answer in the
   HITL extension metadata and the `A2A-Extensions` header) is tested only against the in-process
   fake.

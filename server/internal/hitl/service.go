@@ -74,6 +74,13 @@ type AgentResolver interface {
 	ResolveAgent(workspaceNamespace, workspaceName, kind *string, role dbstate.BindingRole) (kagent.AgentRef, error)
 }
 
+// SessionReadier makes a session's kagent Session ready to take a send: it wakes a workspace and
+// resumes a suspended Session, and sends nothing. kagent refuses any send to a Session that is not
+// ready. The sessions package implements it, by the rule deliveries use.
+type SessionReadier interface {
+	ReadySession(ctx context.Context, sessionID string, workspaceID *string, kagentSessionID string) error
+}
+
 // Options tunes the observer and the dispatcher. Zero values take the defaults.
 type Options struct {
 	// ObserveEvery is the period of the observer sweep.
@@ -93,7 +100,10 @@ type Options struct {
 	ReadTimeout time.Duration
 	SendTimeout time.Duration
 	// UncertainHold is how long a response whose message no task shows stays blocking; after it
-	// the response is failed and the request can be answered again.
+	// the response is failed and the request can be answered again. It must stay above kagent's
+	// 2-minute dispatch reservation: a send that reached kagent but was never confirmed cannot be
+	// saved after the reservation expires, so a response failed after the hold can be answered again
+	// without the agent ever seeing two answers. Lowering it under 2 minutes breaks that.
 	UncertainHold time.Duration
 	// UncertainRecheck is the delay before the first lookup of an unresolved response; it doubles
 	// after each lookup up to UncertainCeiling.
@@ -152,6 +162,9 @@ type Service struct {
 	// Agents resolves the Agent that runs each session, by the sessions package's rule. Without it
 	// every session is taken to run on Agent.
 	Agents AgentResolver
+	// Ready makes a session's kagent Session ready before an answer is sent. Without it the answer is
+	// sent as it is.
+	Ready SessionReadier
 	// Agent is the main Agent: the one sessions run on when Agents is nil.
 	Agent kagent.AgentRef
 	// WritesEnabled gates answering. Reading and observing work either way.

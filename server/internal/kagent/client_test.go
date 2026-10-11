@@ -397,25 +397,33 @@ func TestUnaryFailuresThatMayHaveRun(t *testing.T) {
 func codePtr(c connect.Code) *connect.Code { return &c }
 
 func TestAuthRefusalsAreConfigErrors(t *testing.T) {
-	cases := map[string]kagenttest.Fault{
-		"HTTP 401":             {Status: 401},
-		"HTTP 403":             {Status: 403},
-		"grpc unauthenticated": {GRPC: codePtr(connect.CodeUnauthenticated)},
-		"grpc permission":      {GRPC: codePtr(connect.CodePermissionDenied)},
+	// credentials is whether the refusal is of our own bearer, which every call would meet.
+	cases := map[string]struct {
+		fault       kagenttest.Fault
+		credentials bool
+	}{
+		"HTTP 401":             {kagenttest.Fault{Status: 401}, true},
+		"HTTP 403":             {kagenttest.Fault{Status: 403}, false},
+		"grpc unauthenticated": {kagenttest.Fault{GRPC: codePtr(connect.CodeUnauthenticated)}, true},
+		"grpc permission":      {kagenttest.Fault{GRPC: codePtr(connect.CodePermissionDenied)}, false},
 	}
-	for name, fault := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			c, srv, _ := setup(t)
-			srv.FailNext(kagent.ProcGetAgent, fault)
+			srv.FailNext(kagent.ProcGetAgent, tc.fault)
 			_, err := c.GetAgent(ctx, agent)
-			mustBe[*kagent.ConfigError](t, err)
+			if got := asType[*kagent.ConfigError](t, err).Credentials; got != tc.credentials {
+				t.Fatalf("Credentials = %v, want %v", got, tc.credentials)
+			}
 		})
 	}
 	t.Run("A2A HTTP 401", func(t *testing.T) {
 		c, srv, _ := setup(t)
 		srv.FailNext("SendStreamingMessage", kagenttest.Fault{Status: 401})
 		_, err := send(c, "m1")
-		mustBe[*kagent.ConfigError](t, err)
+		if !asType[*kagent.ConfigError](t, err).Credentials {
+			t.Fatal("HTTP 401 refuses our bearer")
+		}
 		if srv.Count("SendStreamingMessage") != 1 {
 			t.Fatal("an auth refusal must not be retried")
 		}
@@ -424,8 +432,30 @@ func TestAuthRefusalsAreConfigErrors(t *testing.T) {
 		c, srv, _ := setup(t)
 		srv.FailNext("GetTask", kagenttest.Fault{RPC: kagenttest.Unauthorized()})
 		_, err := c.GetTask(ctx, agent, "t1")
-		mustBe[*kagent.ConfigError](t, err)
+		if asType[*kagent.ConfigError](t, err).Credentials {
+			t.Fatal("UNAUTHORIZED is about one conversation, not our bearer")
+		}
 	})
+	t.Run("A2A UNAUTHENTICATED", func(t *testing.T) {
+		c, srv, _ := setup(t)
+		srv.FailNext("GetTask", kagenttest.Fault{RPC: kagenttest.Unauthenticated()})
+		_, err := c.GetTask(ctx, agent, "t1")
+		if !asType[*kagent.ConfigError](t, err).Credentials {
+			t.Fatal("UNAUTHENTICATED refuses our bearer")
+		}
+	})
+}
+
+func TestAnUnreadySessionRefusalIsNotSent(t *testing.T) {
+	c, srv, clk := setup(t, func(cfg *kagent.Config) { cfg.SendRetryBudget = 250 * time.Millisecond })
+	for range 5 {
+		srv.FailNext("SendStreamingMessage", kagenttest.Fault{RPC: kagenttest.NotReady()})
+	}
+	_, err := send(c, "m1")
+	mustBe[*kagent.SendNotAccepted](t, err)
+	if !kagent.NotSent(err) || len(clk.sleeps) == 0 {
+		t.Fatalf("not sent = %v, slept %v", kagent.NotSent(err), clk.sleeps)
+	}
 }
 
 func TestOtherGRPCStatusesAreSessionErrors(t *testing.T) {

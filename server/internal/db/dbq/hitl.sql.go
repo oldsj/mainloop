@@ -216,9 +216,11 @@ func (q *Queries) GetHITLResponse(ctx context.Context, arg GetHITLResponseParams
 const getHITLResponseWork = `-- name: GetHITLResponseWork :one
 SELECT r.id, r.request_id, r.decision, r.outbound_message_id, r.state, r.owner_id,
        q.kagent_session_id, q.agent_namespace, q.agent_name, q.context_id, q.task_id,
-       q.status_message_id, q.request_hash, q.availability, q.session_id
+       q.status_message_id, q.request_hash, q.availability, q.session_id,
+       w.id AS workspace_id
 FROM hitl_responses r
 JOIN hitl_requests q ON q.id = r.request_id
+LEFT JOIN workspaces w ON w.id = q.session_id
 WHERE r.id = $1
 `
 
@@ -238,6 +240,7 @@ type GetHITLResponseWorkRow struct {
 	RequestHash       string
 	Availability      dbstate.HITLAvailability
 	SessionID         string
+	WorkspaceID       *string
 }
 
 func (q *Queries) GetHITLResponseWork(ctx context.Context, id string) (GetHITLResponseWorkRow, error) {
@@ -259,6 +262,7 @@ func (q *Queries) GetHITLResponseWork(ctx context.Context, id string) (GetHITLRe
 		&i.RequestHash,
 		&i.Availability,
 		&i.SessionID,
+		&i.WorkspaceID,
 	)
 	return i, err
 }
@@ -791,7 +795,7 @@ SET state = 'uncertain', detail = $4,
     rechecks = CASE WHEN state = 'uncertain' THEN rechecks + 1 ELSE 0 END,
     updated_at = CASE WHEN state = 'uncertain' THEN updated_at ELSE now() END
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'uncertain')
-RETURNING rechecks
+RETURNING rechecks, updated_at
 `
 
 type MarkHITLResponseUncertainParams struct {
@@ -801,18 +805,24 @@ type MarkHITLResponseUncertainParams struct {
 	Detail     *string
 }
 
+type MarkHITLResponseUncertainRow struct {
+	Rechecks  int32
+	UpdatedAt time.Time
+}
+
 // updated_at is when the outcome first became unknown, so a recheck keeps it. rechecks counts the
-// lookups since then, for the delay before the next one; no row means the claim was lost.
-func (q *Queries) MarkHITLResponseUncertain(ctx context.Context, arg MarkHITLResponseUncertainParams) (int32, error) {
+// lookups since then, for the delay before the next one; no row means the claim was lost. updated_at
+// is returned so the delay can be cut to the hold time that remains.
+func (q *Queries) MarkHITLResponseUncertain(ctx context.Context, arg MarkHITLResponseUncertainParams) (MarkHITLResponseUncertainRow, error) {
 	row := q.db.QueryRow(ctx, markHITLResponseUncertain,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,
 		arg.Detail,
 	)
-	var rechecks int32
-	err := row.Scan(&rechecks)
-	return rechecks, err
+	var i MarkHITLResponseUncertainRow
+	err := row.Scan(&i.Rechecks, &i.UpdatedAt)
+	return i, err
 }
 
 const pruneHITLDiagnostics = `-- name: PruneHITLDiagnostics :exec

@@ -156,6 +156,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	deps.Sessions = svc
 	hitlSvc := hitl.NewService(cfg, pool, hitl.FromClient(kc), log)
 	hitlSvc.Agents = svc // one rule for which Agent runs a session
+	hitlSvc.Ready = svc  // wake and resume the Session before an answer is sent
 	deps.HITL = hitlSvc
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {

@@ -141,6 +141,20 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 	if !d.stillAsks(task) {
 		return d.finish(ctx, dbstate.HITLRejectedTransport, "the task no longer waits for this request")
 	}
+	// kagent refuses a send to a Session that is suspended or changing, so make it ready first. This
+	// is not a send: while the workspace or Session is still waking the response stays recorded and
+	// is tried again after StaleRetry.
+	if err := d.ready(ctx); err != nil {
+		if ctx.Err() != nil {
+			return reconcile.Retry(), ctx.Err()
+		}
+		d.s.log().WarnContext(ctx, "hitl answer is waiting for its session to be ready", "action_id", d.c.ID, "error", err)
+		return reconcile.RetryAfter(o.StaleRetry), nil
+	}
+	// Nothing has left yet, so a stop here leaves the response recorded.
+	if err := ctx.Err(); err != nil {
+		return reconcile.Retry(), err
+	}
 	id, owner, attempts := d.fence()
 	if err := lost(dbq.New(d.s.Pool).MarkHITLResponseSending(ctx, dbq.MarkHITLResponseSendingParams{
 		ID: id, LeaseOwner: owner, Attempts: attempts,
@@ -166,11 +180,26 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 	return d.markUncertain(ctx, errDetail(err))
 }
 
+// revertTimeout bounds the write that returns an unsent response to recorded.
+const revertTimeout = 5 * time.Second
+
+// ready makes the response's kagent Session ready for the send, by the rule deliveries use.
+func (d *dispatch) ready(ctx context.Context) error {
+	if d.s.Ready == nil {
+		return nil
+	}
+	return d.s.Ready.ReadySession(ctx, d.w.SessionID, d.w.WorkspaceID, d.w.KagentSessionID)
+}
+
 // notSent returns a response that provably did not leave to recorded, to be tried again.
 func (d *dispatch) notSent(ctx context.Context, cause error, after time.Duration) (reconcile.Outcome, error) {
 	id, owner, attempts := d.fence()
 	detail := errDetail(cause)
-	if err := lost(dbq.New(d.s.Pool).MarkHITLResponseRecorded(ctx, dbq.MarkHITLResponseRecordedParams{
+	// The revert must land even when ctx has ended: the row is still sending, and a row that stays so
+	// is settled and held as if the answer may have left.
+	wctx, stop := context.WithTimeout(context.WithoutCancel(ctx), revertTimeout)
+	defer stop()
+	if err := lost(dbq.New(d.s.Pool).MarkHITLResponseRecorded(wctx, dbq.MarkHITLResponseRecordedParams{
 		ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &detail,
 	})); err != nil {
 		return reconcile.Retry(), err
@@ -281,7 +310,7 @@ func (d *dispatch) judge(ctx context.Context) (verdict, error) {
 // look, up to UncertainCeiling.
 func (d *dispatch) markUncertain(ctx context.Context, detail string) (reconcile.Outcome, error) {
 	id, owner, attempts := d.fence()
-	rechecks, err := dbq.New(d.s.Pool).MarkHITLResponseUncertain(ctx, dbq.MarkHITLResponseUncertainParams{
+	marked, err := dbq.New(d.s.Pool).MarkHITLResponseUncertain(ctx, dbq.MarkHITLResponseUncertainParams{
 		ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &detail,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -291,7 +320,13 @@ func (d *dispatch) markUncertain(ctx context.Context, detail string) (reconcile.
 		return reconcile.Retry(), err
 	}
 	o := d.s.opts()
-	return reconcile.RetryAfter(backoff(o.UncertainRecheck, o.UncertainCeiling, int(rechecks))), nil
+	delay := backoff(o.UncertainRecheck, o.UncertainCeiling, int(marked.Rechecks))
+	// Look again when the hold ends, not at the first doubled delay after it: that is what lets the
+	// answer be tried again on time.
+	if left := o.UncertainHold - time.Since(marked.UpdatedAt); left > 0 {
+		delay = min(delay, left)
+	}
+	return reconcile.RetryAfter(delay), nil
 }
 
 func (d *dispatch) uncertainSince(ctx context.Context) time.Time {

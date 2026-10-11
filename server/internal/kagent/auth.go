@@ -28,7 +28,7 @@ type tokenSource struct {
 func (s *tokenSource) bearer() (string, error) {
 	info, err := os.Stat(s.path)
 	if err != nil {
-		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file"}
+		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file", Credentials: true}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -48,23 +48,23 @@ func (s *tokenSource) bearer() (string, error) {
 func readToken(path string) (string, error) {
 	f, err := os.Open(path) //nolint:gosec // operator-configured path
 	if err != nil {
-		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file"}
+		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file", Credentials: true}
 	}
 	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, controlTokenMaxBytes+1))
 	if err != nil {
-		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file"}
+		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must name a readable token file", Credentials: true}
 	}
 	if len(raw) > controlTokenMaxBytes {
-		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE exceeds 4096 bytes"}
+		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE exceeds 4096 bytes", Credentials: true}
 	}
 	token := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
 	if token == "" {
-		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must contain one nonempty bearer"}
+		return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must contain one nonempty bearer", Credentials: true}
 	}
 	for i := range len(token) {
 		if c := token[i]; c <= 32 || c >= 127 {
-			return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must contain one nonempty ASCII bearer"}
+			return "", &ConfigError{Msg: "KAGENT_CONTROL_TOKEN_FILE must contain one nonempty ASCII bearer", Credentials: true}
 		}
 	}
 	return token, nil
@@ -125,7 +125,7 @@ func (d doer) Do(req *http.Request) (*http.Response, error) {
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		_ = resp.Body.Close()
-		return nil, authRefused("HTTP " + strconv.Itoa(resp.StatusCode))
+		return nil, authRefused("HTTP "+strconv.Itoa(resp.StatusCode), resp.StatusCode == http.StatusUnauthorized)
 	case resp.StatusCode >= http.StatusInternalServerError:
 		_ = resp.Body.Close()
 		return nil, &statusError{status: resp.StatusCode}
