@@ -18,6 +18,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/sessions"
+	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
 )
 
@@ -41,6 +42,7 @@ type Server struct {
 	*events.EventsAPI
 	*workspaces.WorkspacesAPI
 	*sessions.SessionsAPI
+	*tasks.TasksAPI
 
 	fallback
 
@@ -84,6 +86,13 @@ const maxBodyBytes = 4 << 20
 // New builds the Server.
 func New(d Deps) *Server {
 	prov, err := providers.NewAPI(d.Config, d.Pool)
+	var taskSvc *tasks.Service
+	if d.Pool != nil && prov != nil {
+		taskSvc = &tasks.Service{
+			Pool: d.Pool, Providers: prov.Registry, DefaultProfile: d.Config.Tasks.DefaultProviderProfileID,
+			MergeTools: bool(d.Config.MergeToolsEnabled),
+		}
+	}
 	return &Server{
 		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
 		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
@@ -95,6 +104,7 @@ func New(d Deps) *Server {
 		EventsAPI:       events.NewAPI(d.Pool, d.Hub, d.Log, d.Config.Identity.OwnerID),
 		WorkspacesAPI:   &workspaces.WorkspacesAPI{Svc: d.Workspaces},
 		SessionsAPI:     sessions.NewAPI(d.Sessions, d.Config, d.Pool, d.Log),
+		TasksAPI:        &tasks.TasksAPI{Svc: taskSvc, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 		initErr:         err,
 	}

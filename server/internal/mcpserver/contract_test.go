@@ -18,8 +18,6 @@ import (
 // The tools no slice has landed yet. Each slice deletes its names from here when it registers
 // them, which is what makes the missing set exact: a tool missing for any other reason fails.
 var pendingSlices = map[string]string{
-	"delegate": "G8a", "report": "G8a", "task_get": "G8a", "task_list": "G8a",
-	"task_history": "G8a", "task_cancel": "G8a",
 	"open_pull_request": "G10", "prepare_pull_request_merge": "G10", "merge_pull_request": "G10",
 	"merge_pull_request_with_approval": "G10", "get_pull_request_merge_status": "G10",
 }

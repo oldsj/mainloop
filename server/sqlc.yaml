@@ -83,6 +83,62 @@ sql:
                 import: github.com/oldsj/mainloop/server/internal/db/dbstate,
                 type: WorkspaceOpState
               }
+          - column: tasks.mode
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskMode }
+          - column: tasks.selection_source
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskSelection }
+          - column: tasks.status
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskStatus }
+          - column: tasks.reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskReason,
+                pointer: true
+              }
+          - column: task_attempts.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttemptState }
+          - column: task_attempts.role
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: AttemptRole }
+          - column: task_attempts.native_provider
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: NativeProvider }
+          - column: task_operations.kind
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpKind }
+          - column: task_operations.state
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpState }
+          - column: task_operations.last_confirmed_step
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: TaskOpState }
+          - column: task_operations.reason
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskReason,
+                pointer: true
+              }
+          - column: task_artifacts.kind
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskArtifactKind
+              }
+          - column: task_reports.outcome
+            go_type:
+              { import: github.com/oldsj/mainloop/server/internal/db/dbstate, type: ReportOutcome }
+          - column: task_event_deliveries.state
+            go_type:
+              {
+                import: github.com/oldsj/mainloop/server/internal/db/dbstate,
+                type: TaskDeliveryState
+              }
           - db_type: jsonb
             go_type: { import: encoding/json, type: RawMessage }
           - db_type: jsonb

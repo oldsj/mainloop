@@ -27,6 +27,11 @@ JOIN sessions s ON s.id = w.id
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.id = $1 AND w.user_id = $2 AND s.archived_at IS NULL
   AND b.kagent_session_id IS NOT NULL AND b.kagent_deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM task_attempts a JOIN tasks t ON t.id = a.task_id
+    WHERE (a.session_id = w.id OR a.binding_id = w.id OR a.workspace_id = w.id)
+      AND NOT (a.state = 'active' AND coalesce(t.current_attempt_id = a.id, false))
+  )
 `
 
 type GetPreviewTargetParams struct {
@@ -41,7 +46,10 @@ type GetPreviewTargetRow struct {
 }
 
 // Preview proxy: the target a preview host resolves to, and keep-awake leases.
-// The owner's unarchived workspace with a live Session: the only thing a preview may reach.
+// The owner's unarchived workspace with a live Session: the only thing a preview may reach. A
+// workspace that belongs to a task attempt is reachable only while that attempt is active and the
+// task's current one; a fenced, superseded or finished attempt no longer owns it. This is a read,
+// not a lock: the dial checks again.
 func (q *Queries) GetPreviewTarget(ctx context.Context, arg GetPreviewTargetParams) (GetPreviewTargetRow, error) {
 	row := q.db.QueryRow(ctx, getPreviewTarget, arg.ID, arg.UserID)
 	var i GetPreviewTargetRow

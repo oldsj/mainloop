@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -86,14 +87,22 @@ func (s *Server) whoami(ctx context.Context, a agentauth.Actor, args json.RawMes
 		projectID = &a.ProjectID
 	}
 	short := a.BindingID[:min(8, len(a.BindingID))]
+	fields := map[string]any{
+		"session_id": a.BindingID, "role": string(a.Role), "depth": a.Depth,
+		"mcp_grant_kind": string(a.Grant), "grant_status": grantStatus, "scope_status": scopeStatus,
+		"project_id": projectID, "workspace_id": workspaceID, "repository": repository, "branch": branch,
+	}
+	if a.Role == dbstate.RoleSupervisor || a.Role == dbstate.RoleChild {
+		task, err := s.taskIdentity(ctx, a)
+		if err != nil {
+			return Result{}, err
+		}
+		maps.Copy(fields, task)
+	}
 	return Result{
 		Text: fmt.Sprintf("%s %s session=%s depth=%d grant=%s scope=%s",
 			a.Role, a.AgentKind, short, a.Depth, grantStatus, scopeStatus),
-		Structured: map[string]any{
-			"session_id": a.BindingID, "role": string(a.Role), "depth": a.Depth,
-			"mcp_grant_kind": string(a.Grant), "grant_status": grantStatus, "scope_status": scopeStatus,
-			"project_id": projectID, "workspace_id": workspaceID, "repository": repository, "branch": branch,
-		},
+		Structured: fields,
 	}, nil
 }
 

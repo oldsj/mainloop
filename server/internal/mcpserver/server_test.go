@@ -15,9 +15,12 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentauth"
 	"github.com/oldsj/mainloop/server/internal/agentauth/authtest"
+	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
+	"github.com/oldsj/mainloop/server/internal/providers"
+	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 	"github.com/oldsj/mainloop/server/internal/topics"
 )
@@ -31,25 +34,45 @@ type harness struct {
 	handler http.Handler
 }
 
-func newHarness(t *testing.T, mergeTools bool) *harness {
+func newHarness(t *testing.T, mergeTools bool) *harness { return buildHarness(t, mergeTools, false) }
+
+// newTaskHarness authenticates supervisors and children through their task attempts, as serveMCP
+// does. The plain harness gives the task roles a fixed depth instead.
+func newTaskHarness(t *testing.T, mergeTools bool) *harness { return buildHarness(t, mergeTools, true) }
+
+func buildHarness(t *testing.T, mergeTools, realDepth bool) *harness {
 	t.Helper()
 	d := testdb.New(t)
 	env := authtest.NewEnv(d.Pool)
+	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := providers.NewRegistry(cfg.Kagent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := &tasks.Service{Pool: d.Pool, Providers: reg, DefaultProfile: "claude", MergeTools: mergeTools}
 	q := dbq.New(d.Pool)
+	auth := &agentauth.Authenticator{Q: q, Depth: func(_ context.Context, row dbq.GetMCPActorRow) (int, bool, error) {
+		switch row.Role {
+		case dbstate.RoleSupervisor:
+			return 1, false, nil
+		case dbstate.RoleChild:
+			return 2, false, nil
+		}
+		return 0, false, nil
+	},
+	}
+	if realDepth {
+		auth.Depth = taskSvc.AuthDepth
+	}
 	srv := &mcpserver.Server{
-		// The task slice supplies the real DepthFunc; this one only gives the task roles a depth.
-		Auth: &agentauth.Authenticator{Q: q, Depth: func(_ context.Context, row dbq.GetMCPActorRow) (int, bool, error) {
-			switch row.Role {
-			case dbstate.RoleSupervisor:
-				return 1, false, nil
-			case dbstate.RoleChild:
-				return 2, false, nil
-			}
-			return 0, false, nil
-		}},
+		Auth:         auth,
 		Policy:       agentauth.Policy{MergeTools: mergeTools},
 		Queries:      q,
 		Topics:       &topics.Service{Pool: d.Pool},
+		Tasks:        taskSvc,
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AllowedHosts: map[string]bool{host: true},
 	}
@@ -211,16 +234,19 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	ws := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace})
 	sup := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleSupervisor, Grant: dbstate.GrantCoordination, Parent: main.SessionID})
 
-	// Only the implemented tools are listed; the task and pull request tools arrive with their
-	// slices, so the table's other entries are absent, not stubbed.
-	want := []string{"decide", "note", "pending_add", "pending_done", "topic_open", "topics", "whoami"}
+	// Only the implemented tools are listed; the pull request tools arrive with their slice, so
+	// the table's other entries are absent, not stubbed.
+	want := []string{
+		"decide", "delegate", "note", "pending_add", "pending_done", "task_cancel", "task_get", "task_history",
+		"task_list", "topic_open", "topics", "whoami",
+	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"delegate", "report", "task_cancel", "task_get", "task_history", "task_list", "whoami"}) {
 		t.Errorf("supervisor lists %v", got)
 	}
 

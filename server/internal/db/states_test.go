@@ -20,6 +20,16 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 	d := testdb.New(t)
 	quoted := regexp.MustCompile(`'([^']*)'::text`)
 	strs := func(v ...string) []string { return v }
+	taskReasons := strs(
+		string(dbstate.ReasonOwnerDecision), string(dbstate.ReasonAwaitingChild), string(dbstate.ReasonApproval),
+		string(dbstate.ReasonCI), string(dbstate.ReasonPublication), string(dbstate.ReasonHandoff),
+		string(dbstate.ReasonReconciliation), string(dbstate.ReasonProvisioningUnavailable),
+		string(dbstate.ReasonHandoffUnavailable), string(dbstate.ReasonCancelUnavailable))
+	taskOpStates := strs(
+		string(dbstate.TaskOpRequested), string(dbstate.TaskOpDraining), string(dbstate.TaskOpCheckpointRequired),
+		string(dbstate.TaskOpCheckpointVerified), string(dbstate.TaskOpSourceFencing), string(dbstate.TaskOpSourceFenced),
+		string(dbstate.TaskOpTargetCreating), string(dbstate.TaskOpTargetReady), string(dbstate.TaskOpCompleted),
+		string(dbstate.TaskOpBlocked), string(dbstate.TaskOpUncertain))
 	cases := []struct {
 		table, column string
 		values        []string
@@ -61,6 +71,36 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.DeliveryRecorded), string(dbstate.DeliverySending), string(dbstate.DeliveryDelivered),
 			string(dbstate.DeliveryCompleted), string(dbstate.DeliveryFailed), string(dbstate.DeliveryCancelled),
 			string(dbstate.DeliveryUncertain))},
+		{"tasks", "mode", strs(string(dbstate.TaskModeCode), string(dbstate.TaskModeCoordination))},
+		{"tasks", "selection_source", strs(
+			string(dbstate.SelectionExplicit), string(dbstate.SelectionProjectDefault),
+			string(dbstate.SelectionInstallationDefault), string(dbstate.SelectionInherited))},
+		{"tasks", "status", strs(
+			string(dbstate.TaskQueued), string(dbstate.TaskRunning), string(dbstate.TaskWaiting),
+			string(dbstate.TaskBlocked), string(dbstate.TaskCompleted), string(dbstate.TaskFailed),
+			string(dbstate.TaskCancelled))},
+		{"tasks", "reason", taskReasons},
+		{"task_attempts", "native_provider", strs(string(dbstate.ProviderClaude), string(dbstate.ProviderCodex))},
+		{"task_attempts", "role", strs(string(dbstate.AttemptSupervisor), string(dbstate.AttemptChild))},
+		{"task_attempts", "state", strs(
+			string(dbstate.AttemptCreating), string(dbstate.AttemptActive), string(dbstate.AttemptDraining),
+			string(dbstate.AttemptFenced), string(dbstate.AttemptSuperseded), string(dbstate.AttemptFailed),
+			string(dbstate.AttemptCancelled), string(dbstate.AttemptCompleted))},
+		{"task_operations", "kind", strs(
+			string(dbstate.TaskOpCreate), string(dbstate.TaskOpRetry), string(dbstate.TaskOpReassign),
+			string(dbstate.TaskOpCancel))},
+		{"task_operations", "state", taskOpStates},
+		{"task_operations", "last_confirmed_step", taskOpStates},
+		{"task_operations", "reason", taskReasons},
+		{"task_artifacts", "kind", strs(
+			string(dbstate.ArtifactCheckpoint), string(dbstate.ArtifactHandoffManifest),
+			string(dbstate.ArtifactProviderSummary), string(dbstate.ArtifactRetentionReceipt))},
+		{"task_reports", "outcome", strs(
+			string(dbstate.OutcomeProgress), string(dbstate.OutcomeCompleted), string(dbstate.OutcomeFailed),
+			string(dbstate.OutcomeBlocked))},
+		{"task_event_deliveries", "state", strs(
+			string(dbstate.TaskDeliveryPending), string(dbstate.TaskDeliveryQueued), string(dbstate.TaskDeliveryDelivered),
+			string(dbstate.TaskDeliveryUncertain), string(dbstate.TaskDeliveryCancelled))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},

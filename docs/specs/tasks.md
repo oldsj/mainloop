@@ -427,3 +427,18 @@ Labels: **implemented** means built in `web/` and covered by component tests aga
 - **Wording:** the task list is read under its own query key, below the `keys.tasks()` prefix. It does not share the sessions list's `['get', '/tasks']` query. Live invalidation still reaches it.
 - **Implemented:** the tasks count is mounted on the compact **Inbox** tab, and its words are part of that tab's accessible name. The tree is not mounted in the shell: the project route that would show it is not part of this slice.
 - **Not proven:** any run against a live backend, the live SSE stream (the event handling is tested through the applier, not a real stream), and layout at phone width in a browser.
+
+## Go status (G8a)
+
+Labels: **implemented** means built in `server/` and covered by tests on a scratch PostgreSQL. Nothing here is live-proven.
+
+- **Implemented:** the task record (migration `00060_tasks`): tasks, attempts, operations, artifacts, reports and event deliveries. The database refuses a changed owner, mode or hierarchy, a version that goes down, a second unfenced attempt for a task, and a writer generation that does not rise by exactly one.
+- **Implemented:** the task, attempt and operation state machines in `server/internal/tasks`. Every allowed and refused move is tested.
+- **Implemented:** `GET /tasks`, `GET /tasks/{id}`, `GET /task-operations/{id}` and `POST /tasks`, `/tasks/{id}/retry`, `/reassign` and `/cancel`. Reads carry the task version. Writes answer 202 with an operation. An operation is keyed by owner, principal and request ID. The same request ID with the same payload returns the stored operation; with a different payload it answers 409 `request_payload_conflict`.
+- **Implemented:** the MCP tools `delegate`, `report`, `task_get`, `task_history` (the same read as `task_get`), `task_list` and `task_cancel`, with the per-actor visibility in `api/mcp-tools.json`. A supervisor or child binding authenticates only while its attempt is the task's current, live attempt. `whoami` returns the task fields. Merge status stays readable after the task completes only when merge tools are on and the grant is `workspace`.
+- **Implemented:** every task change commits with its `task:updated` event in one transaction, from the API and the MCP process alike. A rolled-back change publishes nothing.
+- **Implemented:** the preview lookup refuses a workspace owned by a task attempt unless that attempt is `active` and the task's current one.
+- **Waits for provisioning (G8b):** `delegate` and `POST /tasks` record the task and a `create` operation, then stop. The operation stays `requested` and the task stays `queued` with reason `provisioning_unavailable`. No workspace, session or writer claim exists yet.
+- **Waits for provisioning (G8b):** cancel of a task with no attempt completes at once. Cancel of a task with an attempt moves the operation to `draining` and leaves it there until the attempt is stopped.
+- **Blocked by contract:** retry and reassign return a `blocked` operation with reason `handoff_unavailable`, and the task view reports both actions as unavailable. The F6 page shows what the server reports, so Reassign stays disabled.
+- **Not built:** the publication projection (it is empty), delivery of reports to parents and the main thread (a report records its delivery rows; nothing sends them), and the role and tool guidance Python prefixed to a delegated brief.

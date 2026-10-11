@@ -15,6 +15,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/k8ssecrets"
 	"github.com/oldsj/mainloop/server/internal/mcpserver"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/tasks"
 	"github.com/oldsj/mainloop/server/internal/topics"
 )
 
@@ -27,9 +28,14 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	taskSvc, err := tasks.NewService(cfg, pool)
+	if err != nil {
+		return err
+	}
 	q := dbq.New(pool)
 	srv := &mcpserver.Server{
-		Auth:         &agentauth.Authenticator{Q: q},
+		Auth:         &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
+		Tasks:        taskSvc,
 		Policy:       agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled)},
 		Queries:      q,
 		Topics:       &topics.Service{Pool: pool},

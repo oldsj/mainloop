@@ -203,6 +203,122 @@ type SessionMessage struct {
 	CreatedAt time.Time
 }
 
+type Task struct {
+	ID                  string
+	OwnerID             string
+	ProjectID           *string
+	TopicID             *string
+	ParentTaskID        *string
+	RootTaskID          string
+	CreatorBindingID    *string
+	Title               string
+	Brief               string
+	Mode                dbstate.TaskMode
+	AssignedProfileID   string
+	SelectionSource     dbstate.TaskSelection
+	ProviderConstraint  *string
+	AcceptedEnvironment json.RawMessage
+	Status              dbstate.TaskStatus
+	Reason              *dbstate.TaskReason
+	DecisionAttemptID   *string
+	DecisionReportID    *string
+	DecisionAction      *string
+	CurrentAttemptID    *string
+	Version             int32
+	CheckoutBranch      *string
+	CheckoutRef         *string
+	CheckoutDepth       *int32
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type TaskArtifact struct {
+	ID          string
+	OperationID string
+	Kind        dbstate.TaskArtifactKind
+	Content     string
+	Sha256      string
+	CreatedAt   time.Time
+}
+
+type TaskAttempt struct {
+	ID                    string
+	TaskID                string
+	Number                int32
+	ProfileID             string
+	NativeProvider        dbstate.NativeProvider
+	ConfigurationRevision string
+	AgentNamespace        string
+	AgentName             string
+	Role                  dbstate.AttemptRole
+	Depth                 int32
+	State                 dbstate.AttemptState
+	CapacityHeld          bool
+	SessionID             *string
+	BindingID             *string
+	WorkspaceID           *string
+	WriterGeneration      *int32
+	BriefDeliveryID       *string
+	PredecessorID         *string
+	SuccessorID           *string
+	EvidenceRefs          []string
+	ResultRef             *string
+	Environment           json.RawMessage
+	InitialRef            *string
+	CheckpointRef         *string
+	ManifestRef           *string
+	SupersededAt          *time.Time
+	ArchivedAt            *time.Time
+	NativeDeletedAt       *time.Time
+	RetentionHold         *string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+type TaskEventDelivery struct {
+	ReportID        string
+	RecipientKey    string
+	TargetAttemptID *string
+	DeliveryID      *string
+	State           dbstate.TaskDeliveryState
+	UpdatedAt       time.Time
+}
+
+type TaskOperation struct {
+	ID                string
+	OwnerID           string
+	PrincipalKey      string
+	RequestID         string
+	RequestDigest     string
+	RequestPayload    json.RawMessage
+	Kind              dbstate.TaskOpKind
+	TaskID            *string
+	AttemptID         *string
+	State             dbstate.TaskOpState
+	LastConfirmedStep dbstate.TaskOpState
+	SourceAttemptID   *string
+	TargetAttemptID   *string
+	CheckpointRef     *string
+	ManifestRef       *string
+	Reason            *dbstate.TaskReason
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type TaskReport struct {
+	ID            string
+	TaskID        string
+	AttemptID     string
+	RequestID     string
+	RequestDigest string
+	Summary       string
+	Outcome       dbstate.ReportOutcome
+	OwnerAction   *string
+	EvidenceRefs  []string
+	TaskVersion   int32
+	CreatedAt     time.Time
+}
+
 type Topic struct {
 	ID         string
 	UserID     string
@@ -260,4 +376,16 @@ type WorkspaceOp struct {
 	LastError      *string
 	QuietSince     *time.Time
 	CreatedAt      time.Time
+}
+
+type WorkspaceWriterClaim struct {
+	OwnerID          string
+	Repository       string
+	Branch           string
+	Generation       int32
+	AttemptID        *string
+	BindingID        *string
+	Held             bool
+	FenceEvidenceRef *string
+	FencedAt         *time.Time
 }
