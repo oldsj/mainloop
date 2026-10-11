@@ -7,15 +7,26 @@ import os
 import socket
 import ssl
 import unittest
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from httpcore._backends.mock import AsyncMockBackend, AsyncMockStream
 from mainloop.push_gate.authorization import ZERO_OID
-from mainloop.push_gate.protocol import Limits, pkt, receipt, receive_commands
-from mainloop.push_gate.transport import create_git_applications
+from mainloop.push_gate.protocol import (
+    Limits,
+    TransportError,
+    pkt,
+    receipt,
+    receive_commands,
+)
+from mainloop.push_gate.transport import (
+    DispatchProof,
+    create_git_applications,
+    log_git_denial,
+)
 from mainloop.push_gate.upstream import FixedGitUpstream, LoopbackFixture
 from tests.runtime.test_push_transport_git import (
     ASSOCIATION,
@@ -270,6 +281,213 @@ class HttpBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 PUSH.encode(),
             ),
         )
+
+    async def test_exact_probe_is_empty_and_rechecks_authority_without_publication(
+        self,
+    ):
+        _, push = self.applications()
+        with patch.object(
+            self.authority,
+            "authorize_dispatch",
+            wraps=self.authority.authorize_dispatch,
+        ) as dispatch:
+            for chunks in (None, [b"0", b"00", b"0"]):
+                status, data, messages = await asgi(push, body=b"0000", chunks=chunks)
+                self.assertEqual((status, data), (200, b""))
+                self.assertIn(
+                    (b"content-type", b"application/x-git-receive-pack-result"),
+                    messages[0]["headers"],
+                )
+                self.assertEqual(
+                    dispatch.call_args.args, (self.authority.binding("git-push"), None)
+                )
+            self.assertEqual(dispatch.call_count, 2)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.authority.records, [])
+        self.assertEqual(self.authority.history, [])
+        self.assertEqual(self.authority.states, {})
+
+    async def test_probe_requires_exact_complete_body_and_existing_limits(self):
+        _, push = self.applications()
+        bodies = (
+            b"",
+            b"0",
+            b"000",
+            b"0001",
+            b"0000\n",
+            b"00000000",
+            b"0000PACK",
+            pkt(b"shallow " + b"1" * 40 + b"\n") + b"0000",
+        )
+        with patch.object(
+            self.authority,
+            "authorize_dispatch",
+            wraps=self.authority.authorize_dispatch,
+        ) as dispatch:
+            for body in bodies:
+                with self.subTest(body=body):
+                    self.assertNotEqual((await asgi(push, body=body))[0], 200)
+            # Advertised length is four; EOF, overflow and truncated transport still deny.
+            for chunks in ([b"000"], [b"0000", b"x"]):
+                self.assertNotEqual(
+                    (await asgi(push, body=b"0000", chunks=chunks))[0], 200
+                )
+            original = push.limits
+            for overrides in ({"body_bytes": 4}, {"disk_bytes": 3}):
+                push.limits = replace(original, **overrides)
+                self.assertNotEqual((await asgi(push, body=b"0000"))[0], 200)
+            push.limits = original
+            dispatch.assert_not_called()
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.authority.records, [])
+
+    async def test_probe_rejects_missing_wrong_purpose_and_inactive_authority(self):
+        _, push = self.applications()
+        for token in (None, READ, PUSH + "_wrong"):
+            headers = [
+                (b"host", b"testserver"),
+                (b"content-type", b"application/x-git-receive-pack-request"),
+                (b"content-length", b"4"),
+            ]
+            if token:
+                headers.append((b"authorization", f"Bearer {token}".encode()))
+            self.assertNotEqual(
+                (await asgi(push, body=b"0000", headers=headers))[0], 200
+            )
+        for overrides in (
+            {"active": False},
+            {"archived": True},
+            {"terminal": True},
+            {"grant_kind": "coordination"},
+        ):
+            self.authority.grant = GRANT.model_copy(update=overrides)
+            self.assertNotEqual((await asgi(push, body=b"0000"))[0], 200)
+        self.authority.grant = GRANT
+        for policy in (
+            POLICY.model_copy(update={"default_branch": "feature"}),
+            POLICY.model_copy(update={"previous_defaults": ("feature",)}),
+            POLICY.model_copy(update={"patterns": ("feature",)}),
+        ):
+            self.authority.policy = policy
+            self.assertNotEqual((await asgi(push, body=b"0000"))[0], 200)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.authority.records, [])
+
+    async def test_probe_revalidates_runtime_writer_policy_and_uncertainty(self):
+        _, push = self.applications()
+        initial = self.authority.binding("git-push")
+        changes = (
+            {
+                "association": ASSOCIATION.model_copy(
+                    update={"actor_uid": "replacement"}
+                )
+            },
+            {"grant": GRANT.model_copy(update={"version": 2})},
+            {"grant": GRANT.model_copy(update={"active": False})},
+            {"grant": GRANT.model_copy(update={"branch": "other"})},
+            {"policy": POLICY.model_copy(update={"default_branch": "feature"})},
+            {"policy": POLICY.model_copy(update={"patterns": ("feature",)})},
+        )
+        for changeset in changes:
+
+            @asynccontextmanager
+            async def changed(binding, prepared, change=changeset):
+                self.assertEqual(binding, initial)
+                self.assertIsNone(prepared)
+                yield DispatchProof(binding.model_copy(update=change))
+
+            with patch.object(self.authority, "authorize_dispatch", changed):
+                self.assertNotEqual((await asgi(push, body=b"0000"))[0], 200)
+        for code in (
+            "credential_revoked",
+            "runtime_unattested",
+            "writer_claim_lost",
+            "stale_writer_generation",
+        ):
+
+            @asynccontextmanager
+            async def denied(binding, prepared, reason=code):
+                self.assertEqual(binding, initial)
+                self.assertIsNone(prepared)
+                raise TransportError(reason)
+                yield  # pragma: no cover - refused by trusted dispatch authority
+
+            with patch.object(self.authority, "authorize_dispatch", denied):
+                status, data, _ = await asgi(push, body=b"0000")
+                self.assertEqual(status, 403)
+                self.assertTrue(data.startswith(code.encode() + b" "))
+        for state in (PublicationState.DISPATCHING, PublicationState.UNKNOWN):
+            self.authority.states = {"held": state}
+            status, data, _ = await asgi(push, body=b"0000")
+            self.assertEqual(status, 403)
+            self.assertTrue(data.startswith(b"publication_unresolved "))
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.authority.records, [])
+
+    async def test_core_denial_logs_are_correlated_and_exclude_untrusted_text(self):
+        _, push = self.applications()
+        headers = [
+            (b"host", b"testserver"),
+            (b"authorization", f"Bearer {PUSH}".encode()),
+            (b"content-type", b"application/x-git-receive-pack-request"),
+            (b"cookie", b"fixture_header_secret"),
+        ]
+        with self.assertLogs("mainloop.push_gate.transport", level="WARNING") as logs:
+            status, _, messages = await asgi(
+                push, body=b"0000fixture_body_secret", headers=headers
+            )
+        self.assertEqual(status, 403)
+        request_id = dict(messages[0]["headers"])[b"x-mainloop-request-id"].decode()
+        self.assertRegex(request_id, r"^[0-9a-f]{32}$")
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(
+            logs.records[0].args, (request_id, "single_ref_required", "commands")
+        )
+        for error in (
+            RuntimeError("fixture_exception_secret", PUSH),
+            TransportError("fixture_log_secret"),
+        ):
+            with (
+                patch.object(
+                    self.authority, "authenticate", AsyncMock(side_effect=error)
+                ),
+                self.assertLogs(
+                    "mainloop.push_gate.transport", level="WARNING"
+                ) as unknown_logs,
+            ):
+                await asgi(push, body=b"0000", headers=headers)
+            self.assertEqual(
+                unknown_logs.records[0].args[1:],
+                ("transport_unavailable", "authentication"),
+            )
+            logs.records.extend(unknown_logs.records)
+        with self.assertLogs(
+            "mainloop.push_gate.transport", level="WARNING"
+        ) as sanitized:
+            log_git_denial(
+                "fixture_id_secret", "fixture_log_secret", "fixture_stage_secret"
+            )
+        self.assertRegex(sanitized.records[0].args[0], r"^[0-9a-f]{32}$")
+        self.assertEqual(
+            sanitized.records[0].args[1:], ("transport_unavailable", "unknown")
+        )
+        logs.records.extend(sanitized.records)
+        rendered = "\n".join(record.getMessage() for record in logs.records)
+        for secret in (
+            PUSH,
+            READ,
+            PAT,
+            "fixture_header_secret",
+            "fixture_body_secret",
+            "fixture_exception_secret",
+            "fixture_log_secret",
+            "fixture_id_secret",
+            "fixture_stage_secret",
+        ):
+            self.assertNotIn(secret, rendered)
+        for record in logs.records:
+            self.assertIsNone(record.exc_info)
+            self.assertIsNone(record.stack_info)
 
     async def test_absent_authority_rejects_startup_and_requests(self):
         read, push = create_git_applications()
@@ -547,6 +765,33 @@ class QuarantineHttpTests(GitFixtureCase):
             ],
             **kwargs,
         )
+
+    async def test_successful_probe_does_not_authorize_the_subsequent_real_post(self):
+        new = await self.commit("first")
+        body = await self.raw_body(ZERO_OID, new)
+        async with self.transport() as (_, _, app):
+            for change in (
+                lambda: setattr(self.authority, "revoked", True),
+                lambda: setattr(
+                    self.authority,
+                    "grant",
+                    GRANT.model_copy(update={"branch": "other"}),
+                ),
+                lambda: self.authority.states.update(
+                    {"held": PublicationState.UNKNOWN}
+                ),
+            ):
+                self.authority.revoked = False
+                self.authority.grant = GRANT
+                self.authority.states.clear()
+                self.assertEqual(
+                    (await self.request_body(app, b"0000"))[:2], (200, b"")
+                )
+                self.assertEqual(self.authority.records, [])
+                change()
+                self.assertNotEqual((await self.request_body(app, body))[0], 200)
+                self.assertEqual(self.fake.receives, [])
+                self.assertEqual(self.authority.records, [])
 
     async def test_split_packets_chunked_body_and_thin_fast_forward(self):
         import hashlib

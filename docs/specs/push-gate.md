@@ -144,6 +144,22 @@ revalidates the original stamp without substituting another issuance. The facade
 port and reuses an existing dispatch connection. Spooling and CPU/object validation remain outside
 locks. Production construction requires this factory; P1 parsing/pack/body/resource rules remain.
 
+Before streaming a large smart-HTTP push, Git may POST a four-byte `0000` probe to
+receive-pack. Only this exact complete body is accepted as a probe, after normal route,
+framing, purpose-bound authentication and binding checks. Current dispatch authority,
+writer/branch policy, runtime association and unresolved-publication fences are rechecked
+before returning HTTP 200 with an empty receive-pack result. The probe creates no publication
+record, seeds no objects and dispatches no upstream Git traffic. Empty, truncated, extra-byte
+and shallow-only bodies remain invalid. The subsequent real POST independently passes the
+unchanged one-ref, object/resource, ancestry, runtime and durable dispatch checks; a successful
+probe proves no publication.
+
+Wrapper and core refusals log only a generated correlation ID and closed denial code/stage
+fields. Unknown codes use `transport_unavailable`; unknown stages use `unknown`. Logs omit
+request fields, credentials, packet contents and exception text. The correlation ID is returned
+in `x-mainloop-request-id`; wrapper status/body behavior remains unchanged. Core responses keep
+their existing safe code/ID behavior, including empty 503 responses on reflected output.
+
 Shallow clients (a checkout with a positive depth; depth 0 clones full history) send `shallow <oid>` lines before the
 command list. The gate accepts distinct, lowercase, non-zero SHA-1 lines only in that position and
 forwards them upstream inside the unchanged body. They grant nothing: ref policy, old-oid,

@@ -40,6 +40,8 @@ class CapturingUpstream(GitBackedUpstream):
         )
         self.case = case
         self.markers = []
+        # Satisfy the parent record guard only after the committed PG checks below.
+        self.authority.records = self.markers
         self.pause_seed = None
 
     async def __call__(self, scope, receive, send):
