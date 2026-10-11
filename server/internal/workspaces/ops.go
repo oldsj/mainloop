@@ -51,11 +51,15 @@ func (s *Service) Register(r *reconcile.Runner) {
 	}
 }
 
+// OrphanSweepName is the sweep lease the scheduled orphan sweep and `sweep-orphans --delete` share, so
+// the two cannot delete at the same time.
+const OrphanSweepName = "workspace-orphans"
+
 func (s *Service) sweeps() []reconcile.Sweep {
 	w := s.Config.Workspaces
 	out := []reconcile.Sweep{
 		{Name: "workspace-archived", Every: w.ArchivedDeleteInterval.Duration(), Run: s.DeleteArchived},
-		{Name: "workspace-orphans", Every: w.OrphanSweepInterval.Duration(), Run: s.scheduledOrphanSweep},
+		{Name: OrphanSweepName, Every: w.OrphanSweepInterval.Duration(), Run: s.scheduledOrphanSweep},
 	}
 	// Without the delivery ledger neither the open-turn check nor delivery activity exists, so the
 	// sweep would suspend a workspace in the middle of a turn. Interim: it stays off until the

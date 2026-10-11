@@ -267,3 +267,23 @@ func TestFailedWakeIsRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// `sweep-orphans --delete` takes the scheduled orphan sweep's lease: it refuses while that sweep
+// holds it, and deletes once it is free.
+func TestOrphanDeleteCommandSharesTheSweepLease(t *testing.T) {
+	h := newHarness(t, nil)
+	orphan := h.strayOn(h.cfg.Kagent.Namespace, h.cfg.Kagent.WorkspaceClaudeAgent, "stray-1")
+	h.svc.Now = func() time.Time { return time.Now().Add(time.Hour) }
+
+	h.exec(`INSERT INTO sweep_leases (name, holder, until) VALUES ($1, 'scheduled-sweep/1', now() + interval '1 minute')`, OrphanSweepName)
+	rep, ran, err := h.svc.deleteOrphansLeased(bg)
+	if err != nil || ran || len(rep.Deleted) != 0 || len(h.sessions()) != 1 {
+		t.Fatalf("ran=%v err=%v %+v: deleted while the scheduled sweep held the lease", ran, err, rep)
+	}
+
+	h.exec(`DELETE FROM sweep_leases WHERE name = $1`, OrphanSweepName)
+	rep, ran, err = h.svc.deleteOrphansLeased(bg)
+	if err != nil || !ran || len(rep.Deleted) != 1 || rep.Deleted[0] != orphan {
+		t.Fatalf("ran=%v err=%v %+v", ran, err, rep)
+	}
+}

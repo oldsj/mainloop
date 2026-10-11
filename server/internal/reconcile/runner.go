@@ -458,7 +458,9 @@ func (r *Runner) RunSweep(ctx context.Context, s Sweep) (ran bool, err error) {
 	}
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	stop := r.keepalive(rctx, cancel, r.sweepLease, log, func(ctx context.Context) error {
+	// The keepalive outlives the run's deadline and a shutdown: only stop() ends it, so the lease
+	// lasts exactly as long as the body, even one that is slow to honour its cancellation.
+	stop := r.keepalive(context.WithoutCancel(rctx), cancel, r.sweepLease, log, func(ctx context.Context) error {
 		return r.extendSweep(ctx, s.Name, holder, r.sweepLease)
 	}, sent)
 	defer stop()

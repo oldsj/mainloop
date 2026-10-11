@@ -112,7 +112,7 @@ func serve(ctx context.Context, cmd string, log *slog.Logger) error {
 }
 
 func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	pool, err := db.NewPool(ctx, cfg)
+	pool, err := db.NewPool(ctx, cfg, db.WithMaxConns(db.APIMaxConns))
 	if err != nil {
 		return err
 	}

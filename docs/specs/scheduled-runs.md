@@ -48,7 +48,7 @@ database clock.
   still land.
 - **Only the sweep's recovery decides a refusal is final.** It replays an intent only when it has no
   unexpired lease, on an Agent this deployment owns now, and only one recovery runs at a time (the
-  advisory lock). kagent dedupes on the request id, so the replay is also the read: a schedule back
+  sweep lease). kagent dedupes on the request id, so the replay is also the read: a schedule back
   confirms the intent; a definite refusal with no other live lease deletes it, because nothing can
   still succeed (the intent is locked while the leases are counted); an uncertain answer leaves it for
   a later pass.

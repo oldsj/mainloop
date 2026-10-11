@@ -17,6 +17,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/pushgate"
+	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
 const (
@@ -83,8 +84,27 @@ func RunSweepOrphans(ctx context.Context, args []string, stdout, stderr io.Write
 	if *forget != "" {
 		return forgetAgent(ctx, svc, *forget, stdout, stderr)
 	}
-	rep, err := svc.SweepOrphans(ctx, OrphanOptions{Delete: *del})
-	return printOrphans(rep, err, *del, stdout, stderr)
+	if !*del {
+		rep, err := svc.SweepOrphans(ctx, OrphanOptions{})
+		return printOrphans(rep, err, false, stdout, stderr)
+	}
+	rep, ran, err := svc.deleteOrphansLeased(ctx)
+	if err == nil && !ran {
+		_, _ = fmt.Fprintln(stderr, "sweep-orphans: the scheduled orphan sweep is running; try again when it has finished")
+		return exitFailure
+	}
+	return printOrphans(rep, err, true, stdout, stderr)
+}
+
+// deleteOrphansLeased is the one-shot deletion under the scheduled orphan sweep's lease, so the two
+// never delete at the same time. ran is false, with no error, when the scheduled sweep holds it.
+func (s *Service) deleteOrphansLeased(ctx context.Context) (rep OrphanReport, ran bool, err error) {
+	ran, err = reconcile.NewRunner(s.Pool, s.Log, nil).RunSweep(ctx, reconcile.Sweep{Name: OrphanSweepName, Every: orphanTimeout, Timeout: orphanTimeout,
+		Run: func(ctx context.Context) (err error) {
+			rep, err = s.SweepOrphans(ctx, OrphanOptions{Delete: true})
+			return err
+		}})
+	return rep, ran, err
 }
 
 // checkSweepFlags rejects a bad flag combination before the command touches the configuration or

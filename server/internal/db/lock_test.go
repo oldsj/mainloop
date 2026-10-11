@@ -62,3 +62,18 @@ func TestInTxRollsBackOnError(t *testing.T) {
 		t.Fatalf("topics = %d, err = %v", n, err)
 	}
 }
+
+func TestPoolCeilingIsPerProcess(t *testing.T) {
+	d := testdb.New(t)
+	if got := d.Pool.Config().MaxConns; got != db.DefaultMaxConns {
+		t.Errorf("default pool ceiling = %d, want %d", got, db.DefaultMaxConns)
+	}
+	api, err := db.NewPoolFromURL(context.Background(), d.URL, db.WithMaxConns(db.APIMaxConns))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	if got := api.Config().MaxConns; got != db.APIMaxConns {
+		t.Errorf("API pool ceiling = %d, want %d", got, db.APIMaxConns)
+	}
+}

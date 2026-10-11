@@ -23,7 +23,7 @@ come from it. See [`../ROADMAP.md`](../ROADMAP.md) for direction.
   and add one line to `New`. Its methods win over the fallback. Each domain type needs a unique
   name (`sessions.SessionsAPI`, not `sessions.API`) or an alias in `app`: an embedded field takes
   its bare type name, so two `API` types collide.
-- `internal/db`: the pgx pool (max 30 connections, `search_path=mainloop`).
+- `internal/db`: the pgx pool (10 connections by default, 30 for serve-api, `search_path=mainloop`).
 - `tools/genfallback`: writes `internal/api/unimplemented.gen.go`.
 
 ## Run locally
