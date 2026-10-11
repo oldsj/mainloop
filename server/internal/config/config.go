@@ -145,7 +145,8 @@ type Git struct {
 	PushOrigin string `env:"GIT_PUSH_ORIGIN"`
 }
 
-// Preview configures the Substrate router used for workspace previews.
+// Preview configures workspace previews: the wildcard base URL and the Substrate router the
+// proxy tunnels through.
 type Preview struct {
 	RouterAddress  string  `env:"SUBSTRATE_ROUTER_ADDRESS" envDefault:"http://atenet-router.ate-system.svc.cluster.local:8081"`
 	BaseURL        string  `env:"SUBSTRATE_PREVIEW_BASE_URL" envDefault:"http://localhost:8001"`
@@ -303,6 +304,7 @@ func (c *Config) validate() error {
 		fail("WORKSPACE_CREATE_RETRY_WINDOW_SECONDS must be at least WORKSPACE_CREATE_RETRY_INITIAL_SECONDS")
 	}
 	errs = append(errs, c.Kagent.validate()...)
+	errs = append(errs, c.Preview.validate(c.Kagent.ActorAtespace)...)
 	return errors.Join(errs...)
 }
 

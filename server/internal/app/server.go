@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/httpx"
+	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/projects"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	"github.com/oldsj/mainloop/server/internal/sessions"
@@ -67,6 +68,9 @@ type Deps struct {
 	// Sessions is the main thread service, shared with the delivery loop. Nil builds one with no
 	// kagent client, which records sends but does not deliver them.
 	Sessions *sessions.Service
+	// Preview routes preview hosts to workspace dev servers. Nil serves no previews, and a
+	// preview host is then refused by the Host guard like any unknown host.
+	Preview *preview.Proxy
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -93,7 +97,8 @@ func New(d Deps) *Server {
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap, then the
-// Host guard, Origin guard, CORS, panic recovery, request id and access log.
+// Host guard, Origin guard and CORS, with preview hosts routed ahead of them, all inside panic
+// recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
@@ -124,14 +129,21 @@ func (s *Server) Handler() (http.Handler, error) {
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request")
 		},
 	})
-	return httpx.Chain(routes,
-		httpx.AccessLog(d.Log),
-		httpx.RequestIDMiddleware,
-		httpx.Recover(d.Log),
+	ownerAPI := httpx.Chain(routes,
 		httpx.HostGuard(cfg.AllowedAPIHosts(), cfg.IsDev(), "/health"),
 		httpx.OriginGuard(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.CORS(cfg.FrontendOrigin(), cfg.IsDev()),
 		httpx.MaxBody(maxBodyBytes),
 		requestValidator(spec),
+	)
+	// Preview hosts are routed before the API's Host guard, which would refuse them.
+	routed := ownerAPI
+	if d.Preview != nil {
+		routed = d.Preview.Route(ownerAPI)
+	}
+	return httpx.Chain(routed,
+		httpx.AccessLog(d.Log),
+		httpx.RequestIDMiddleware,
+		httpx.Recover(d.Log),
 	), nil
 }

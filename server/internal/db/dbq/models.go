@@ -115,6 +115,14 @@ type EventFloor struct {
 	PrunedThrough int64
 }
 
+type PreviewLease struct {
+	ID          string
+	WorkspaceID string
+	Holder      string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
+}
+
 type Project struct {
 	ID                 string
 	UserID             string

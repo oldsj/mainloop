@@ -87,15 +87,18 @@ built; nothing here has been measured against a live kagent.
 - Every state change publishes `workspace:updated` in the same transaction as the change. The
   event carries the workspace lifecycle; it is not a removal notice.
 - `WakeForPreview(workspaceID)` and `Touch(workspaceID)` are the entry points the preview proxy
-  will call: a running workspace is only touched; otherwise a resume operation is queued once for
+  calls: a running workspace is only touched; otherwise a resume operation is queued once for
   any number of concurrent callers, and the call returns when the Session is ready or fails with
   `502`/`409`.
 - Preview URLs are `<port>--<workspace>--preview.<host>` built from `SUBSTRATE_PREVIEW_BASE_URL`, ports sorted
   by number.
+- The preview proxy (G12, `server/internal/preview`), described under "Go preview proxy" in the
+  preview section below. Tests cover it with a fake router and dev server; it has not been run
+  against a real Substrate router.
 
 ### Proposed, not built
 
-- The preview proxy itself (G12), the git gate (SHA resolution, credentials, publication) and the
+- The git gate (SHA resolution, credentials, publication) and the
   per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
 - The delivery ledger (G6a). Open-turn and delivery-activity checks go through an optional
   `Deliveries` interface that is unset until then. Interim: with it unset the idle-suspend sweep is
@@ -283,6 +286,50 @@ loop checks once a minute. A workspace is suspended when it has been quiet for i
 open delivery. It is skipped when the Session is not ready, is mid-operation, or is already
 suspended. The main thread is excluded by role and never suspended by Mainloop idle-out.
 Held reports after a stopped turn do not prevent parking.
+
+## Go preview proxy
+
+Status: implemented in the Go server (G12, tests against fakes). The Python proxy
+(`backend/src/mainloop/runtime/preview_proxy.py`) is frozen reference.
+
+The Go server routes a request whose `Host` parses as a preview host to the proxy, ahead of the
+API middleware (so the Host guard, API Origin guard, CORS and body validation never see it); the
+request id, access log and panic recovery still wrap it. Any other host is the API.
+
+- **Host.** `<port>--<workspace>--preview.<domain>` exactly as above, matched case-insensitively
+  against `SUBSTRATE_PREVIEW_BASE_URL`: the scheme's default port or the URL's port must match, the
+  label is at most 63 characters, the port is 1 to 65535 with no leading zero, and the workspace id
+  is a lower-case DNS-label-shaped id that may contain `--`.
+- **Admission.** The owner's workspace must exist, not be archived and have a live kagent Session,
+  and the port must be in its declared `ports`: `404` otherwise for the workspace, `403` for the
+  port. The lookup repeats at every tunnel dial, so a workspace archived or re-bound between the
+  check and the connect gets no tunnel (`404`).
+- **Origin.** As specified above, checked first. A refused WebSocket handshake is an HTTP `403`
+  (the Go proxy answers before upgrading, so there is no close code `4403`), and an `Upgrade` that
+  is not a `GET` WebSocket handshake is `400`.
+- **Wake.** `workspaces.Service.WakeForPreview`, whose result is trusted for 5 seconds so a page
+  load's many requests do not each ask kagent; the idle clock is still touched on each request.
+  Not confirmed in time shows a `503` "Workspace waking up" page with `Retry-After: 2`; a workspace
+  that cannot be resumed is `409`; any other failure is `502`.
+- **Tunnel.** `CONNECT actor-upstream:<port>` to `SUBSTRATE_ROUTER_ADDRESS` with
+  `ate-target-actor: <KAGENT_ACTOR_ATESPACE>/session-<kagent session id>`, timed by
+  `SUBSTRATE_PREVIEW_CONNECT_TIMEOUT_SECONDS`. A router refusal before anything was sent is retried
+  once, then the waking page; a failure after the request was forwarded is `502` and is never
+  replayed. One tunnel per request (no pooling), no compression, streaming responses are flushed
+  at once, and the dev server has 60 seconds to start answering.
+- **Headers.** The `Host` sent upstream is `actor-upstream:<port>`; the headers listed above are
+  removed from requests and upgrades, along with hop-by-hop headers.
+- **Request cap.** A body over 10 MiB is `413`: at once when `Content-Length` says so, and cut off
+  when a streamed body runs over.
+- **Keep-awake.** A WebSocket takes a lease row (`preview_leases`) when it opens; an HTTP request
+  takes one if it is still running after 10 seconds. The holder renews every 20 seconds (lease TTL
+  60 seconds) and deletes the row on close. A reconcile sweep every 20 seconds, under the runner's
+  advisory lock, calls `Touch` for every workspace with an unexpired lease and prunes rows expired
+  for over a minute. A holder that crashes stops renewing, so its lease lapses without cleanup; the
+  workspace idles out after the usual timeout.
+
+Not covered: WebSocket close codes `4403`/`4404`/`1013` (see Origin above), per-session pooling of
+tunnels, and behaviour against a real router.
 
 ## Orphaned kagent Sessions
 

@@ -21,6 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
+	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/workspaces"
@@ -142,6 +143,11 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	svc := sessions.NewService(cfg, pool, kc, log)
 	deps.Sessions = svc
+	previews, err := preview.New(cfg, pool, wsSvc, log)
+	if err != nil {
+		return err
+	}
+	deps.Preview = previews
 	handler, err := app.New(deps).Handler()
 	if err != nil {
 		return err
@@ -163,6 +169,7 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	wsSvc.Register(runner)
 	runner.Add(svc.DeliveryLoop())
 	runner.AddSweep(svc.EnsureSweep())
+	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })
 	g.Go(func() error { return source.Run(gctx) })
