@@ -26,6 +26,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/preview"
+	"github.com/oldsj/mainloop/server/internal/pushgate"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	"github.com/oldsj/mainloop/server/internal/schedules"
 	"github.com/oldsj/mainloop/server/internal/sessions"
@@ -85,7 +86,7 @@ func usage(w io.Writer) {
 commands:
   serve-api       owner API on :8000
   serve-mcp       MCP listener on :8002
-  serve-git       git transport: read on :8003 (upload-pack proxy), push on :8004 (health only for now)
+  serve-git       git transport: upload-pack on :8003, validated receive-pack on :8004
   migrate         up | status | reset the database schema
   sweep-orphans   list kagent Sessions Mainloop created and no longer references (--delete removes them;
                   --forget-agent ns/name drops an Agent from the swept set)
@@ -105,7 +106,7 @@ func serve(ctx context.Context, cmd string, log *slog.Logger) error {
 	case "serve-mcp":
 		return serveMCP(ctx, cfg, log)
 	case "serve-git":
-		return serveGit(ctx, cfg, log)
+		return serveGitWithPush(ctx, cfg, log)
 	}
 	return errors.New("unreachable")
 }
@@ -192,6 +193,13 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Wake: notifier.Subscribe(events.Channel), Poll: cfg.Events.PollInterval.Duration(),
 	}
 	runner := reconcile.NewRunner(pool, log, notifier)
+	if cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "" {
+		upstream, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
+		if err != nil {
+			return err
+		}
+		(&pushgate.Service{Pool: pool, Native: kc, Upstream: upstream, Credentials: creds}).Register(runner)
+	}
 	runner.AddSweep(events.PruneSweep(pool, time.Duration(cfg.Events.RetentionHours)*time.Hour))
 	wsSvc.Register(runner)
 	registerCredentials(cfg, creds, runner)
@@ -225,5 +233,42 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	g.Go(func() error { return source.Run(gctx) })
 	g.Go(func() error { return runner.Run(gctx) })
 	g.Go(func() error { return httpx.Serve(gctx, log, "api", cfg.ListenAddr(), handler) })
+	return g.Wait()
+}
+
+// serveGitWithPush reuses the read listener and adds the gate on the independent push port.
+// Disabled push listeners still generate safe correlation IDs and closed refusal diagnostics.
+func serveGitWithPush(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		handler, closeFn, err := gitReadHandler(gctx, cfg, log)
+		if err != nil {
+			return err
+		}
+		defer closeFn()
+		return httpx.Serve(gctx, log, "git-read", gitReadAddr, handler)
+	})
+	g.Go(func() error {
+		srv := &pushgate.Server{Log: log, AllowedHosts: cfg.GitPushHosts(), Dev: cfg.IsDev(),
+			Enabled: cfg.Git.TransportEnabled && cfg.Git.PushGateEnabled && cfg.GitHub.AppID != "",
+			Limits:  pushgate.Limits{BodyBytes: cfg.Git.PushGateMaxBodyBytes, CommandBytes: cfg.Git.PushGateMaxCommandBytes}}
+		if srv.Enabled {
+			pool, err := db.NewPool(gctx, cfg)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			kc, err := kagent.New(kagent.FromSettings(cfg.Kagent))
+			if err != nil {
+				return err
+			}
+			upstream, err := pushgate.NewGitHubUpstream(github.Options{AppID: cfg.GitHub.AppID, PrivateKey: cfg.GitHub.AppPrivateKey.Reveal()})
+			if err != nil {
+				return err
+			}
+			srv.Service = &pushgate.Service{Pool: pool, Native: kc, Upstream: upstream}
+		}
+		return httpx.Serve(gctx, log, "git-push", gitPushAddr, srv.Handler())
+	})
 	return g.Wait()
 }

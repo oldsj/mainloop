@@ -188,17 +188,23 @@ type GitPublication struct {
 	LeaseUntil        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	OwnerID           string
 }
 
 type GitPushGrant struct {
-	WorkspaceID   string
-	Branch        string
-	PolicyVersion int64
-	CredentialID  *string
-	State         dbstate.GitGrantState
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	RevokedAt     *time.Time
+	WorkspaceID      string
+	Branch           string
+	PolicyVersion    int64
+	CredentialID     *string
+	State            dbstate.GitGrantState
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	RevokedAt        *time.Time
+	OwnerID          string
+	WriterGeneration int32
+	AttemptID        *string
+	NativeSessionID  string
+	Runtime          json.RawMessage
 }
 
 type HealthCollection struct {
