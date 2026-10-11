@@ -19,7 +19,12 @@ import (
 // framed as gRPC-web, so a test controls the wire a decoded message would hide.
 func rawSessionServer(t *testing.T, session []byte) *kagent.Client {
 	t.Helper()
-	body := protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), session)
+	return rawReplyServer(t, protowire.AppendBytes(protowire.AppendTag(nil, 1, protowire.BytesType), session))
+}
+
+// rawReplyServer answers every call with the given response bytes, framed as gRPC-web.
+func rawReplyServer(t *testing.T, body []byte) *kagent.Client {
+	t.Helper()
 	frame := append([]byte{0, 0, 0, 0, 0}, body...)
 	binary.BigEndian.PutUint32(frame[1:5], uint32(len(body)))
 	trailer := []byte("grpc-status: 0\r\n")
@@ -134,5 +139,26 @@ func TestObserveSessionAcceptsAnUnstatedContextAndGetSessionDoesNot(t *testing.T
 		if _, err := rawSessionServer(t, raw).ObserveSession(ctx, "s-1"); !errors.As(err, &unknown) {
 			t.Errorf("ObserveSession accepted %s: %v", name, err)
 		}
+	}
+}
+
+// A reply that repeats the singular GetSessionResponse.session is ambiguous, as protobuf would merge
+// the copies; the repeated ListSessionsResponse.sessions may carry any number.
+func TestARepeatedSingularSessionEnvelopeIsRefusedAndAListIsNot(t *testing.T) {
+	one := field(1, marshal(t, &api.Session{Id: "s-1", ContextId: "s-1"}))
+	two := field(1, marshal(t, &api.Session{Id: "s-2", ContextId: "s-2"}))
+	var unknown *kagent.OutcomeUnknown
+	if _, err := rawReplyServer(t, append(append([]byte{}, one...), one...)).GetSession(ctx, "s-1"); !errors.As(err, &unknown) {
+		t.Fatalf("GetSession of a doubled envelope: %v, want *OutcomeUnknown", err)
+	}
+	if _, err := rawReplyServer(t, append(append([]byte{}, one...), one...)).ObserveSession(ctx, "s-1"); !errors.As(err, &unknown) {
+		t.Fatalf("ObserveSession of a doubled envelope: %v, want *OutcomeUnknown", err)
+	}
+	if s, err := rawReplyServer(t, one).GetSession(ctx, "s-1"); err != nil || s.GetId() != "s-1" {
+		t.Fatalf("single envelope: %v, %v", s, err)
+	}
+	list, err := rawReplyServer(t, append(append([]byte{}, one...), two...)).ListSessions(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: %v, %v", list, err)
 	}
 }

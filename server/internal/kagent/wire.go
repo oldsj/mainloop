@@ -49,13 +49,21 @@ var (
 	receiptName = (&api.WorkspacePreparationReceipt{}).ProtoReflect().Descriptor().FullName()
 )
 
-// checkReplyWire looks for the Sessions and receipts a reply carries at its top level. A message it
-// cannot walk is left to the protobuf decoder to reject.
+// checkReplyWire looks for the Sessions and receipts a reply carries at its top level. A singular
+// Session or receipt field that appears twice is refused, because protobuf would merge the copies
+// into a message nobody sent; a repeated field (ListSessions.sessions) may appear any number of
+// times. A message it cannot walk is left to the protobuf decoder to reject.
 func checkReplyWire(data []byte, md protoreflect.MessageDescriptor) error {
+	seen := map[protowire.Number]int{}
 	return eachField(data, func(num protowire.Number, payload []byte) error {
 		fd := md.Fields().ByNumber(num)
 		if fd == nil || fd.Message() == nil {
 			return nil
+		}
+		if name := fd.Message().FullName(); name == sessionName || name == receiptName {
+			if seen[num]++; seen[num] > 1 && !fd.IsList() {
+				return fmt.Errorf("%w: field %s of %s appears twice", errAmbiguousWire, fd.Name(), md.Name())
+			}
 		}
 		switch fd.Message().FullName() {
 		case sessionName:
