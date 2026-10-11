@@ -98,6 +98,14 @@ func status(t *testing.T, err error) int {
 	return he.Status
 }
 
+// expireLeases ends every create attempt's lease early, as if its time had run out.
+func (e *env) expireLeases(t *testing.T) {
+	t.Helper()
+	if _, err := e.pool.Exec(ctx, `UPDATE scheduled_run_create_attempts SET expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCRUDEtagAndTrigger(t *testing.T) {
 	e := newEnv(t)
 	sc := create(t, e, "req-1")
@@ -228,15 +236,24 @@ func TestCreateReplayAndRefusals(t *testing.T) {
 	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 1 {
 		t.Fatal("a refused create left state behind")
 	}
-	// One of ours that kagent does not have is a definite refusal: the intent is dropped.
+	// One of ours that kagent does not have is a definite refusal. The route returns it and ends its
+	// own lease but keeps the intent; the sweep's replay is refused too, with nothing else in flight,
+	// and only that drops the intent.
 	if _, err := e.pool.Exec(ctx, `INSERT INTO kagent_agents (namespace, name) VALUES ('kagent', 'ghost')`); err != nil {
 		t.Fatal(err)
 	}
 	if s := status(t, mk("ghost", "x", "req-2")); s != http.StatusNotFound {
 		t.Fatalf("Agent kagent does not have: %d", s)
 	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE request_id = 'req-2'`) != 1 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts`) != 0 {
+		t.Fatal("a route refusal must keep the intent and end its own lease")
+	}
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE request_id = 'req-2'`) != 0 {
-		t.Fatal("a create kagent refused left its intent")
+		t.Fatal("the sweep's refused replay did not drop the intent")
 	}
 	if s := status(t, mk("claude", strings.Repeat("x", 32769), "req-3")); s != http.StatusUnprocessableEntity {
 		t.Fatalf("oversized prompt: %d", s)
@@ -469,8 +486,7 @@ func createBody(request string) *api.ScheduledRunCreate {
 func TestLostCreateReplyIsRecoveredByTheSweep(t *testing.T) {
 	e := newEnv(t)
 	l := &lostReply{Kagent: e.svc.Kagent, pool: e.pool, lose: true}
-	svc := &schedules.Service{Pool: e.pool, Kagent: l, OwnerID: owner, Limits: schedules.Limits{
-		CursorSafetyWindow: -1, IntentGrace: time.Nanosecond}}
+	svc := &schedules.Service{Pool: e.pool, Kagent: l, OwnerID: owner, Limits: schedules.Limits{CursorSafetyWindow: -1}}
 	_, err := schedules.NewAPI(svc).CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("lost")})
 	if status(t, err) != http.StatusBadGateway {
 		t.Fatalf("a lost reply: %v", err)
@@ -481,8 +497,16 @@ func TestLostCreateReplyIsRecoveredByTheSweep(t *testing.T) {
 	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
 		t.Fatal("expected kagent to hold the schedule and the registry only the intent")
 	}
-	// The execution of a schedule nobody has confirmed yet is not adopted before the sweep recovers it.
+	// The attempt's lease is still live (the create may yet land), so the sweep leaves the intent be.
 	l.lose = false
+	if err := svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
+		t.Fatal("the sweep replayed an intent whose lease was still live")
+	}
+	// Once the lease has run out the sweep replays it, and the replay is also the read.
+	e.expireLeases(t)
 	if err := svc.Adopt(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -775,13 +799,13 @@ func TestARepeatedExecutionPageTokenEndsThePass(t *testing.T) {
 // create on an Agent that is no longer ours.
 func TestRecoveryDoesNotCreateOnAnAgentThatLeftTheDeployment(t *testing.T) {
 	e := newEnv(t)
-	e.svc.Limits.IntentGrace = time.Nanosecond
 	code := connect.CodeUnavailable
 	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &code})
 	_, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("ownership-change")})
 	if status(t, err) != http.StatusBadGateway || e.srv.ScheduleCount() != 0 {
 		t.Fatalf("setup: want an unaccepted create with a durable intent; err=%v schedules=%d", err, e.srv.ScheduleCount())
 	}
+	e.expireLeases(t)
 	if _, err := e.pool.Exec(ctx, `DELETE FROM kagent_agents WHERE namespace = 'kagent' AND name = 'claude'`); err != nil {
 		t.Fatal(err)
 	}
@@ -911,42 +935,6 @@ func TestConcurrentRefusalKeepsSuccessfulCreateRegistered(t *testing.T) {
 	}
 }
 
-// A lone definite refusal still drops its intent; a refusal after an uncertain attempt does not (that
-// attempt may have made the schedule), and the sweep ends it once the grace has passed.
-func TestRefusalDropsALoneIntentButNotOneAfterAnUncertainAttempt(t *testing.T) {
-	e := newEnv(t)
-	refused := connect.CodeFailedPrecondition
-	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
-	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("alone")}); status(t, err) != http.StatusNotFound {
-		t.Fatalf("lone refusal: %v", err)
-	}
-	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 0 {
-		t.Fatal("a lone refused create left its intent")
-	}
-
-	unavailable := connect.CodeUnavailable
-	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &unavailable})
-	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("after-unknown")}); status(t, err) != http.StatusBadGateway {
-		t.Fatalf("uncertain attempt: %v", err)
-	}
-	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
-	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("after-unknown")}); status(t, err) != http.StatusNotFound {
-		t.Fatalf("refusal after an uncertain attempt: %v", err)
-	}
-	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent' AND contested`) != 1 {
-		t.Fatal("a refusal right after an uncertain attempt dropped the intent")
-	}
-	// Past the grace the sweep replays on its own; kagent refuses it again, with nothing else in flight.
-	e.svc.Limits.IntentGrace = time.Nanosecond
-	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &refused})
-	if err := e.svc.Adopt(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 0 {
-		t.Fatal("the sweep's lone refused replay did not end the intent")
-	}
-}
-
 // A success whose registry row is gone is an error the client retries, never a silent 201.
 func TestConfirmWithoutAnIntentIsAnErrorAndTheRetryHeals(t *testing.T) {
 	e := newEnv(t)
@@ -980,4 +968,226 @@ func (d *deleteIntentBeforeReply) CreateScheduledRun(c context.Context, req *kag
 		}
 	}
 	return sc, err
+}
+
+// slowSuccess starts the first of two overlapping creates of one request id (see
+// concurrentCreateReplies): it reaches kagent and commits, but its reply is held back.
+type slowSuccess struct {
+	r     *concurrentCreateReplies
+	first chan struct {
+		resp api.CreateScheduleResponseObject
+		err  error
+	}
+}
+
+func startSlowSuccess(t *testing.T, c context.Context, e *env, request string) *slowSuccess {
+	t.Helper()
+	r := &concurrentCreateReplies{Kagent: e.svc.Kagent, firstStarted: make(chan struct{}), firstMaySend: make(chan struct{}),
+		firstCommitted: make(chan struct{}), firstMayReturn: make(chan struct{})}
+	e.svc.Kagent = r
+	s := &slowSuccess{r: r, first: make(chan struct {
+		resp api.CreateScheduleResponseObject
+		err  error
+	}, 1)}
+	go func() {
+		resp, err := e.api.CreateSchedule(c, api.CreateScheduleRequestObject{Body: createBody(request)})
+		s.first <- struct {
+			resp api.CreateScheduleResponseObject
+			err  error
+		}{resp, err}
+	}()
+	select {
+	case <-r.firstStarted:
+	case <-c.Done():
+		t.Fatal(c.Err())
+	}
+	// The attempt stays in flight for a while, as a slow success does.
+	time.Sleep(150 * time.Millisecond)
+	return s
+}
+
+// finish lets the held-back success commit and return, and checks it was registered and adopted.
+func (s *slowSuccess) finish(t *testing.T, c context.Context, e *env) {
+	t.Helper()
+	select {
+	case <-s.r.firstMaySend:
+	default:
+		close(s.r.firstMaySend)
+	}
+	close(s.r.firstMayReturn)
+	var got struct {
+		resp api.CreateScheduleResponseObject
+		err  error
+	}
+	select {
+	case got = <-s.first:
+	case <-c.Done():
+		t.Fatal(c.Err())
+	}
+	if got.err != nil {
+		t.Fatalf("the slow success failed: %v", got.err)
+	}
+	id := got.resp.(api.CreateSchedule201JSONResponse).Body.Id
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE schedule_id = $1 AND state = 'created'`, id) != 1 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts`) != 0 {
+		t.Fatal("the slow success was not registered, or left a lease")
+	}
+	if _, err := e.api.GetSchedule(c, api.GetScheduleRequestObject{ScheduleId: id}); err != nil {
+		t.Fatalf("the created schedule is not readable: %v", err)
+	}
+	if e.scheduleEvents(t) != 1 {
+		t.Fatalf("schedule:updated events = %d, want 1", e.scheduleEvents(t))
+	}
+	x := fire(e, id)
+	reserve(e, x.GetId(), "ks-slow-success", running)
+	if err := e.svc.Adopt(c); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_links`) != 1 {
+		t.Fatal("the created schedule was not adopted")
+	}
+}
+
+// An attempt that is slow but succeeds is not undone by a refusal from a route retry, however long
+// the first has been running: the refusal ends only its own lease.
+func TestSlowSuccessSurvivesARouteRefusal(t *testing.T) {
+	e := newEnv(t)
+	c, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	s := startSlowSuccess(t, c, e, "slow-route")
+	if _, err := e.api.CreateSchedule(c, api.CreateScheduleRequestObject{Body: createBody("slow-route")}); status(t, err) != http.StatusNotFound {
+		t.Fatalf("route refusal: %v", err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts`) != 1 {
+		t.Fatal("a route refusal must keep the intent and end only its own lease")
+	}
+	s.finish(t, c, e)
+}
+
+// While an attempt holds an unexpired lease the sweep does not replay the intent at all, so it
+// cannot refuse it either.
+func TestSlowSuccessSurvivesTheRecoverySweep(t *testing.T) {
+	e := newEnv(t)
+	c, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	s := startSlowSuccess(t, c, e, "slow-recovery")
+	if err := e.svc.Adopt(c); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.r.n.Load(); n != 1 {
+		t.Fatalf("the sweep sent a create while an attempt's lease was live: %d creates", n)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
+		t.Fatal("the sweep dropped an intent with a live lease")
+	}
+	s.finish(t, c, e)
+}
+
+// refuseAfterLease is kagent refusing the sweep's replay while another attempt takes a lease.
+type refuseAfterLease struct {
+	schedules.Kagent
+	pool *pgxpool.Pool
+}
+
+func (r *refuseAfterLease) CreateScheduledRun(c context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error) {
+	if _, err := r.pool.Exec(c, `INSERT INTO scheduled_run_create_attempts (request_id, expires_at)
+		VALUES ($1, now() + interval '1 minute')`, req.GetRequestId()); err != nil {
+		return nil, err
+	}
+	return nil, &kagent.SessionError{Code: connect.CodeFailedPrecondition, Detail: "refused"}
+}
+
+// The recovery's refusal is final only when no other lease is live.
+func TestRecoveryRefusalKeepsAnIntentWhileAnotherLeaseIsLive(t *testing.T) {
+	e := newEnv(t)
+	unavailable := connect.CodeUnavailable
+	e.srv.FailNext(kagent.ProcCreateScheduledRun, kagenttest.Fault{GRPC: &unavailable})
+	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("contested")}); status(t, err) != http.StatusBadGateway {
+		t.Fatalf("setup: %v", err)
+	}
+	e.expireLeases(t)
+	e.svc.Kagent = &refuseAfterLease{Kagent: e.svc.Kagent, pool: e.pool}
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
+		t.Fatal("a refusal deleted an intent while another attempt's lease was live")
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts`) != 1 {
+		t.Fatal("the recovery's own lease should have ended, the other one stayed")
+	}
+}
+
+// abandoned hangs a create until its context ends, as a kagent that never answers does.
+type abandoned struct {
+	schedules.Kagent
+	hang     atomic.Bool
+	calls    atomic.Int32
+	deadline atomic.Pointer[time.Time]
+}
+
+func (a *abandoned) CreateScheduledRun(c context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error) {
+	a.calls.Add(1)
+	if !a.hang.Load() {
+		return a.Kagent.CreateScheduledRun(c, req)
+	}
+	d, ok := c.Deadline()
+	if !ok {
+		return nil, errors.New("the create has no deadline")
+	}
+	a.deadline.Store(&d)
+	<-c.Done()
+	return nil, &kagent.OutcomeUnknown{Op: "CreateScheduledRun", Detail: "no answer", Err: c.Err()}
+}
+
+// An attempt cannot outlive its lease: its call is cut off a margin before the lease expires, and
+// the sweep replays the intent only after that, finding the schedule through kagent's dedupe.
+func TestAbandonedAttemptsLeaseExpiresThenRecoveryReplays(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Limits = schedules.Limits{CursorSafetyWindow: -1, CreateAttemptBound: 2 * time.Second, CreateAttemptMargin: 400 * time.Millisecond}
+	a := &abandoned{Kagent: e.svc.Kagent}
+	a.hang.Store(true)
+	e.svc.Kagent = a
+
+	begun := time.Now()
+	_, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("abandoned")})
+	if status(t, err) != http.StatusBadGateway {
+		t.Fatalf("abandoned create: %v", err)
+	}
+	var expires time.Time
+	if err := e.pool.QueryRow(ctx, `SELECT expires_at FROM scheduled_run_create_attempts`).Scan(&expires); err != nil {
+		t.Fatalf("an uncertain attempt must leave its lease to expire: %v", err)
+	}
+	d := *a.deadline.Load()
+	if gap := expires.Sub(d); gap < 400*time.Millisecond {
+		t.Fatalf("the call's deadline is %v before the lease expires, want at least the 400ms margin", gap)
+	}
+	if returned := time.Since(begun); returned >= 2*time.Second-400*time.Millisecond+300*time.Millisecond {
+		t.Fatalf("the call outlived its deadline: returned after %v", returned)
+	}
+
+	// The lease is still live: the sweep does not replay.
+	a.hang.Store(false)
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls.Load() != 1 || e.srv.ScheduleCount() != 0 {
+		t.Fatalf("the sweep replayed under a live lease: %d calls", a.calls.Load())
+	}
+	// Once it has expired the replay goes out and confirms.
+	for deadline := time.Now().Add(5 * time.Second); e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts WHERE expires_at > now()`) > 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the lease did not expire")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.calls.Load() != 2 || e.srv.ScheduleCount() != 1 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'created'`) != 1 ||
+		e.count(t, `SELECT count(*) FROM scheduled_run_create_attempts`) != 0 {
+		t.Fatalf("the replay after expiry did not confirm: %d calls", a.calls.Load())
+	}
 }

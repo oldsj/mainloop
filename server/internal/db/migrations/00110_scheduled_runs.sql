@@ -20,11 +20,6 @@ CREATE TABLE scheduled_run_schedules (
     -- protojson of the ScheduledRunConfig the create sent, for the replay.
     create_config jsonb NOT NULL,
     state text NOT NULL DEFAULT 'intent' CHECK (state IN ('intent', 'created')),
-    -- When the latest create attempt began (NULL: none yet), and whether it overlapped or closely
-    -- followed another. A contested intent is not deleted by one attempt's refusal: the other attempt
-    -- may still have made the schedule.
-    attempt_at timestamptz,
-    contested boolean NOT NULL DEFAULT false,
     schedule_id text UNIQUE,
     cursor_execution_id text NOT NULL DEFAULT '',
     deleted_at timestamptz,
@@ -35,6 +30,18 @@ CREATE TABLE scheduled_run_schedules (
     CHECK (settled_at IS NULL OR deleted_at IS NOT NULL)
 );
 CREATE INDEX scheduled_run_schedules_open ON scheduled_run_schedules (owner_id) WHERE settled_at IS NULL;
+
+-- A create attempt (a route call, a client retry or a recovery replay) holds a lease on its intent
+-- until expires_at. The attempt's call to kagent runs under a deadline derived from the lease, so no
+-- attempt outlives it. While any lease is unexpired another attempt may still make the schedule, so
+-- an attempt's refusal proves nothing; only the sweep's recovery, when no other lease is live, takes
+-- a refusal as final and deletes the intent. Expiry is compared with the database clock.
+CREATE TABLE scheduled_run_create_attempts (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_id text NOT NULL REFERENCES scheduled_run_schedules (request_id) ON DELETE CASCADE,
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX scheduled_run_create_attempts_request ON scheduled_run_create_attempts (request_id, expires_at);
 
 -- One row per execution Mainloop has taken up: the idempotency record of the adoption. The id of
 -- the session it made is derived from the execution id, so a replay after a crash finds the same
@@ -58,4 +65,5 @@ CREATE INDEX scheduled_run_links_schedule ON scheduled_run_links (schedule_id, e
 
 -- +goose Down
 DROP TABLE IF EXISTS scheduled_run_links;
+DROP TABLE IF EXISTS scheduled_run_create_attempts;
 DROP TABLE IF EXISTS scheduled_run_schedules;

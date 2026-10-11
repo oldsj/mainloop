@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -170,6 +171,9 @@ func (s *Service) confirm(ctx context.Context, requestID string, sc *kagentapi.S
 		if err != nil {
 			return nil, err
 		}
+		if err := q.DeleteScheduledRunAttempts(ctx, requestID); err != nil {
+			return nil, err
+		}
 		if n == 0 {
 			row, err := q.GetScheduledRunByRequest(ctx, dbq.GetScheduledRunByRequestParams{RequestID: requestID, OwnerID: s.OwnerID})
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -202,57 +206,160 @@ func definite(err error) bool {
 
 var errRequestIDReused = httpx.NewError(http.StatusConflict, "request_id was already used with a different request")
 
-// beginCreate writes the create intent before anything is sent. A row that already holds the
-// request id must hold the same Agent and config, or the request is a different one under a used key.
-func (s *Service) beginCreate(
-	ctx context.Context, requestID string, agent *kagentapi.ResourceReference, cfg *kagentapi.ScheduledRunConfig,
-) error {
-	raw, err := protojson.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	q := dbq.New(s.Pool)
-	if _, err := q.InsertScheduledRunIntent(ctx, dbq.InsertScheduledRunIntentParams{
-		RequestID: requestID, OwnerID: s.OwnerID, AgentNamespace: agent.GetNamespace(), AgentName: agent.GetName(), CreateConfig: raw,
-	}); err != nil {
-		return err
-	}
-	row, err := q.GetScheduledRunByRequest(ctx, dbq.GetScheduledRunByRequestParams{RequestID: requestID, OwnerID: s.OwnerID})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errRequestIDReused // the key belongs to another owner
-	}
-	if err != nil {
-		return err
-	}
-	var had kagentapi.ScheduledRunConfig
-	if err := protojson.Unmarshal(row.CreateConfig, &had); err != nil {
-		return err
-	}
-	if row.AgentNamespace != agent.GetNamespace() || row.AgentName != agent.GetName() || !proto.Equal(&had, cfg) {
-		return errRequestIDReused
-	}
-	return q.BeginScheduledRunAttempt(ctx, dbq.BeginScheduledRunAttemptParams{
-		RequestID: requestID, Recent: time.Now().Add(-s.Limits.intentGrace()),
-	})
+// lease is one create attempt's hold on its intent. The zero lease is an attempt on a request that
+// is no longer an intent (already confirmed): it sends the create to read the schedule back and
+// holds nothing.
+type lease struct {
+	id int64
+	// deadline is when the attempt's call to kagent is cut off: the lease's expiry less the margin.
+	deadline time.Time
 }
 
-// attempt sends the create of an intent whose attempt has begun and records the answer. A schedule
-// confirms the intent. A definite refusal drops it unless another attempt overlapped or closely
-// preceded this one (that attempt may have made the schedule); an uncertain error leaves it for the
-// sweep to replay. sendErr is kagent's answer or failure; regErr is the registry's.
-func (s *Service) attempt(
+// errIntentGone says the request has no intent row to lease.
+var errIntentGone = errors.New("no create intent for the request")
+
+// lease takes a lease on the intent: any attempt may, or with onlyIfIdle just the recovery, and only
+// when no other attempt's lease is live. The clock is read before the insert, so the deadline can
+// only be earlier than the lease's expiry.
+func (s *Service) lease(ctx context.Context, requestID string, onlyIfIdle bool) (lease, error) {
+	q := dbq.New(s.Pool)
+	if err := q.DeleteExpiredScheduledRunAttempts(ctx, requestID); err != nil {
+		return lease{}, err
+	}
+	bound := s.Limits.attemptBound()
+	start := time.Now()
+	var id int64
+	var err error
+	if onlyIfIdle {
+		id, err = q.BeginRecoveryAttempt(ctx, dbq.BeginRecoveryAttemptParams{RequestID: requestID, BoundSecs: bound.Seconds()})
+	} else {
+		id, err = q.BeginScheduledRunAttempt(ctx, dbq.BeginScheduledRunAttemptParams{RequestID: requestID, BoundSecs: bound.Seconds()})
+	}
+	var pe *pgconn.PgError
+	switch {
+	case errors.Is(err, pgx.ErrNoRows), errors.As(err, &pe) && pe.Code == pgerrForeignKey:
+		return lease{}, errIntentGone // the intent was confirmed, or deleted while this attempt began
+	case err != nil:
+		return lease{}, err
+	}
+	return lease{id: id, deadline: start.Add(bound - s.Limits.attemptMargin())}, nil
+}
+
+// pgerrForeignKey is the SQLSTATE of a foreign key violation: the intent went between the lease's
+// read of it and its insert.
+const pgerrForeignKey = "23503"
+
+// beginCreate writes the create intent before anything is sent and takes the attempt's lease. A row
+// that already holds the request id must hold the same Agent and config, or the request is a
+// different one under a used key. An intent the sweep deletes while the attempt begins is written
+// again.
+func (s *Service) beginCreate(
 	ctx context.Context, requestID string, agent *kagentapi.ResourceReference, cfg *kagentapi.ScheduledRunConfig,
-) (sc *kagentapi.ScheduledRun, sendErr, regErr error) {
-	sc, err := s.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{Agent: agent, RequestId: requestID, Config: cfg})
+) (lease, error) {
+	raw, err := protojson.Marshal(cfg)
 	if err != nil {
-		if definite(err) {
-			if _, derr := dbq.New(s.Pool).DeleteScheduledRunIntent(ctx, requestID); derr != nil {
-				s.log().WarnContext(ctx, "dropping a refused schedule intent failed", "error", derr)
+		return lease{}, err
+	}
+	q := dbq.New(s.Pool)
+	missed := false
+	for range 3 {
+		n, err := q.InsertScheduledRunIntent(ctx, dbq.InsertScheduledRunIntentParams{
+			RequestID: requestID, OwnerID: s.OwnerID, AgentNamespace: agent.GetNamespace(), AgentName: agent.GetName(), CreateConfig: raw,
+		})
+		if err != nil {
+			return lease{}, err
+		}
+		row, err := q.GetScheduledRunByRequest(ctx, dbq.GetScheduledRunByRequestParams{RequestID: requestID, OwnerID: s.OwnerID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Either the sweep deleted the intent after the insert (the next round writes it again) or
+			// the key belongs to another owner (it is not ours twice running).
+			if n == 0 && missed {
+				return lease{}, errRequestIDReused
+			}
+			missed = n == 0
+			continue
+		}
+		if err != nil {
+			return lease{}, err
+		}
+		var had kagentapi.ScheduledRunConfig
+		if err := protojson.Unmarshal(row.CreateConfig, &had); err != nil {
+			return lease{}, err
+		}
+		if row.AgentNamespace != agent.GetNamespace() || row.AgentName != agent.GetName() || !proto.Equal(&had, cfg) {
+			return lease{}, errRequestIDReused
+		}
+		l, err := s.lease(ctx, requestID, false)
+		if errors.Is(err, errIntentGone) {
+			if row.State == "created" {
+				return lease{}, nil
+			}
+			continue
+		}
+		return l, err
+	}
+	return lease{}, fmt.Errorf("the create intent for request %s keeps disappearing", requestID)
+}
+
+// attempt sends the create of an intent whose lease the attempt holds, under the lease's deadline, and
+// records the answer.
+//   - A schedule confirms the intent, whatever other attempts are doing.
+//   - A definite refusal ends this attempt's lease. Only the sweep's recovery (final) goes on to
+//     decide the refusal is final: it deletes the intent when no other lease is live, because then
+//     nothing can still succeed. A route attempt never deletes it.
+//   - An uncertain error leaves the lease to expire: the create may still land, and the sweep
+//     replays it only after the lease ends.
+//
+// sendErr is kagent's answer or failure; regErr is the registry's.
+func (s *Service) attempt(
+	ctx context.Context, l lease, requestID string, agent *kagentapi.ResourceReference, cfg *kagentapi.ScheduledRunConfig, final bool,
+) (sc *kagentapi.ScheduledRun, sendErr, regErr error) {
+	callCtx := ctx
+	if l.id != 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithDeadline(ctx, l.deadline)
+		defer cancel()
+	}
+	sc, err := s.Kagent.CreateScheduledRun(callCtx, &kagentapi.CreateScheduledRunRequest{Agent: agent, RequestId: requestID, Config: cfg})
+	if err != nil {
+		if definite(err) && l.id != 0 {
+			var rerr error
+			if final {
+				rerr = s.settleRefusal(ctx, requestID, l.id)
+			} else {
+				rerr = dbq.New(s.Pool).EndScheduledRunAttempt(ctx, l.id)
+			}
+			if rerr != nil {
+				s.log().WarnContext(ctx, "ending a refused schedule create attempt failed", "request_id", requestID, "error", rerr)
 			}
 		}
 		return nil, err, nil
 	}
 	return sc, nil, s.confirm(ctx, requestID, sc)
+}
+
+// settleRefusal is the recovery's verdict on a refusal: with no other live lease nothing can still
+// make the schedule, so the intent goes; otherwise only this attempt's lease ends. The intent is
+// locked first, so no attempt can take a lease between the count and the delete. No network I/O runs
+// inside the transaction.
+func (s *Service) settleRefusal(ctx context.Context, requestID string, leaseID int64) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		if _, err := q.LockScheduledRunIntent(ctx, requestID); errors.Is(err, pgx.ErrNoRows) {
+			return nil // confirmed meanwhile
+		} else if err != nil {
+			return err
+		}
+		others, err := q.CountOtherLiveScheduledRunAttempts(ctx, dbq.CountOtherLiveScheduledRunAttemptsParams{RequestID: requestID, ID: leaseID})
+		if err != nil {
+			return err
+		}
+		if others > 0 {
+			return q.EndScheduledRunAttempt(ctx, leaseID)
+		}
+		_, err = q.DeleteScheduledRunIntent(ctx, requestID)
+		return err
+	})
 }
 
 // maxListPages bounds how many kagent pages one list call reads looking for this instance's schedules.
@@ -337,10 +444,11 @@ func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleR
 		return nil, httpx.NewError(http.StatusForbidden, "That Agent does not belong to this deployment")
 	}
 	agent := &kagentapi.ResourceReference{Namespace: r.Body.Agent.Namespace, Name: r.Body.Agent.Name}
-	if err := a.Svc.beginCreate(ctx, r.Body.RequestId, agent, cfg); err != nil {
+	l, err := a.Svc.beginCreate(ctx, r.Body.RequestId, agent, cfg)
+	if err != nil {
 		return nil, err
 	}
-	sc, sendErr, regErr := a.Svc.attempt(ctx, r.Body.RequestId, agent, cfg)
+	sc, sendErr, regErr := a.Svc.attempt(ctx, l, r.Body.RequestId, agent, cfg, false)
 	if sendErr != nil {
 		return nil, a.Svc.refusal(sendErr, true)
 	}

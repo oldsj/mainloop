@@ -9,33 +9,60 @@ ON CONFLICT (request_id) DO NOTHING;
 -- name: GetScheduledRunByRequest :one
 SELECT * FROM scheduled_run_schedules WHERE request_id = $1 AND owner_id = $2;
 
--- kagent answered the create: the schedule is ours.
+-- kagent answered the create: the schedule is ours, and no attempt's lease matters any more.
 -- name: ConfirmScheduledRunCreate :execrows
 UPDATE scheduled_run_schedules
 SET state = 'created', schedule_id = $2, updated_at = now()
 WHERE request_id = $1 AND state = 'intent';
 
--- A create attempt begins. It is contested when the previous attempt began within the grace: that attempt
--- may still be running or may have made the schedule, so this one's refusal proves nothing.
--- name: BeginScheduledRunAttempt :exec
-UPDATE scheduled_run_schedules
-SET contested = coalesce(attempt_at > sqlc.arg(recent)::timestamptz, false), attempt_at = now(), updated_at = now()
-WHERE request_id = $1 AND state = 'intent';
+-- name: DeleteScheduledRunAttempts :exec
+DELETE FROM scheduled_run_create_attempts WHERE request_id = $1;
 
--- kagent refused a create. When no other attempt overlapped or closely preceded it, nothing exists and
--- the intent goes; a contested intent stays for the sweep.
+-- A create attempt takes a lease of bound_secs on its intent. No row back: the request is not an
+-- intent (confirmed, or deleted by the sweep).
+-- name: BeginScheduledRunAttempt :one
+INSERT INTO scheduled_run_create_attempts (request_id, expires_at)
+SELECT s.request_id, now() + make_interval(secs => sqlc.arg(bound_secs)::float8)
+FROM scheduled_run_schedules s
+WHERE s.request_id = $1 AND s.state = 'intent'
+RETURNING id;
+
+-- The recovery's lease: only when no other attempt's lease is live.
+-- name: BeginRecoveryAttempt :one
+INSERT INTO scheduled_run_create_attempts (request_id, expires_at)
+SELECT s.request_id, now() + make_interval(secs => sqlc.arg(bound_secs)::float8)
+FROM scheduled_run_schedules s
+WHERE s.request_id = $1 AND s.state = 'intent'
+    AND NOT EXISTS (
+        SELECT 1 FROM scheduled_run_create_attempts a WHERE a.request_id = s.request_id AND a.expires_at > now()
+    )
+RETURNING id;
+
+-- name: DeleteExpiredScheduledRunAttempts :exec
+DELETE FROM scheduled_run_create_attempts WHERE request_id = $1 AND expires_at <= now();
+
+-- name: EndScheduledRunAttempt :exec
+DELETE FROM scheduled_run_create_attempts WHERE id = $1;
+
+-- The recovery decides a refusal is final. The intent row is locked first, which also holds off any
+-- attempt that would take a lease (its foreign key waits), so the live-lease count cannot change under it.
+-- name: LockScheduledRunIntent :one
+SELECT request_id FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' FOR UPDATE;
+
+-- name: CountOtherLiveScheduledRunAttempts :one
+SELECT count(*) FROM scheduled_run_create_attempts WHERE request_id = $1 AND id <> $2 AND expires_at > now();
+
 -- name: DeleteScheduledRunIntent :execrows
-DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND NOT contested;
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent';
 
--- An intent on an Agent that has been outside this deployment for long enough.
--- name: DeleteStaleUnownedIntent :exec
-DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= sqlc.arg(before)::timestamptz;
-
--- Creates that may have been sent and not confirmed, whose latest attempt began before the grace.
+-- Creates that may have been sent and not confirmed, with no live attempt.
 -- name: ListScheduledRunIntents :many
-SELECT * FROM scheduled_run_schedules
-WHERE owner_id = $1 AND state = 'intent' AND coalesce(attempt_at, created_at) <= sqlc.arg(before)::timestamptz
-ORDER BY created_at;
+SELECT s.* FROM scheduled_run_schedules s
+WHERE s.owner_id = $1 AND s.state = 'intent'
+    AND NOT EXISTS (
+        SELECT 1 FROM scheduled_run_create_attempts a WHERE a.request_id = s.request_id AND a.expires_at > now()
+    )
+ORDER BY s.created_at;
 
 -- name: GetScheduledRunSchedule :one
 SELECT * FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2;

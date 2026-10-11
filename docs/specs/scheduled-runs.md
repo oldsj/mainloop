@@ -28,19 +28,37 @@ Everything below applies that rule.
 ## Create and its idempotency key (implemented)
 
 The registry row (request id, Agent, config, state `intent`) is written before `CreateScheduledRun`
-is sent, and the request id goes to kagent unchanged. A lost reply is recovered by replaying the
-create from the row: the retry from the client does it, and so does the sweep once the intent is
-older than `Limits.IntentGrace`. kagent returns the schedule the first send made, and the row becomes
-`created`. A request id reused with a different Agent or config is 409, and so is a replay whose
-schedule has since been deleted.
+is sent, and the request id goes to kagent unchanged. A request id reused with a different Agent or
+config is 409, and so is a replay whose schedule has since been deleted.
 
-Attempts can overlap (a client retry while the first call is still running, or the sweep). A definite
-refusal from kagent deletes the intent only when no other attempt began within `Limits.IntentGrace`
-before or after it, because another attempt may have made the schedule. A contested intent stays and
-the sweep replays it after the grace; a lone refusal then ends it. A success whose registry row is
-gone, or is registered to another schedule, is an error the client retries; it is never answered 201
-without the row. The sweep reads the owned Agents before it replays and sends no create for an intent on an Agent
-this deployment no longer owns; that intent waits for the Agent to return.
+Each send of the create is an **attempt** (the route, a client retry, the sweep's replay). An
+attempt takes a **lease** on the intent, expiring `Limits.CreateAttemptBound` later (2 minutes by
+default), and its call to kagent runs under a deadline `Limits.CreateAttemptMargin` (15 seconds by
+default) before the lease expires. No attempt can outlive its lease. Expiry is compared with the
+database clock.
+
+- **A schedule back wins.** Any attempt that gets one confirms the row (`intent` to `created`, with
+  `schedule:updated`, in one transaction) and drops the leases. A confirmation that finds no row, or
+  another schedule under the request id, is an error the client retries; it is never answered 201
+  without the row.
+- **A route attempt's refusal never deletes the intent.** It returns its own refusal and ends its own
+  lease. Another attempt may still make the schedule: kagent checks the Agent and inserts as separate
+  steps, so one call can be refused while another commits.
+- **An uncertain answer** (timeout, 5xx, lost reply) leaves the lease to run out, since the create may
+  still land.
+- **Only the sweep's recovery decides a refusal is final.** It replays an intent only when it has no
+  unexpired lease, on an Agent this deployment owns now, and only one recovery runs at a time (the
+  advisory lock). kagent dedupes on the request id, so the replay is also the read: a schedule back
+  confirms the intent; a definite refusal with no other live lease deletes it, because nothing can
+  still succeed (the intent is locked while the leases are counted); an uncertain answer leaves it for
+  a later pass.
+- An intent on an Agent the deployment no longer owns is not replayed; it waits for the Agent to
+  return.
+
+Residual risk: a kagent server that commits a create more than the margin after the client's deadline
+(its handler outliving the cancelled call) could land after the recovery's refusal deleted the
+intent. The margin bounds that: 15 seconds by default, and in practice more, because the kagent
+client's own request timeout (30 seconds by default) ends the call well before the lease's deadline.
 
 One Mainloop instance per kagent principal is an invariant (a second environment gets its own
 kagent). The registry and the owned-Agent filter keep the routes and the sweep to this instance's own

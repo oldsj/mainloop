@@ -57,14 +57,20 @@ type Limits struct {
 	// cursor can still commit after the cursor passed it; waiting out the window lets it show up
 	// first. Negative turns the window off.
 	CursorSafetyWindow time.Duration
-	// IntentGrace is how long a create intent is left to the request that wrote it before the sweep
-	// replays it.
-	IntentGrace time.Duration
+	// CreateAttemptBound is how long one create attempt holds its lease on the intent. The attempt's
+	// call to kagent is cut off CreateAttemptMargin before the lease ends, so nothing it sent can
+	// still be pending when the sweep may replay the create. Zero means 2 minutes.
+	CreateAttemptBound time.Duration
+	// CreateAttemptMargin is the slack between a call's deadline and its lease's expiry: the time
+	// kagent has to finish a request it was handed just before the client gave up, and Mainloop to
+	// record the answer. Zero means 15 seconds (at most a quarter of the bound).
+	CreateAttemptMargin time.Duration
 }
 
 const (
-	defaultCursorSafetyWindow = 5 * time.Minute
-	defaultIntentGrace        = 30 * time.Second
+	defaultCursorSafetyWindow  = 5 * time.Minute
+	defaultCreateAttemptBound  = 2 * time.Minute
+	defaultCreateAttemptMargin = 15 * time.Second
 )
 
 func (l Limits) cursorWindow() time.Duration {
@@ -77,11 +83,19 @@ func (l Limits) cursorWindow() time.Duration {
 	return l.CursorSafetyWindow
 }
 
-func (l Limits) intentGrace() time.Duration {
-	if l.IntentGrace <= 0 {
-		return defaultIntentGrace
+func (l Limits) attemptBound() time.Duration {
+	if l.CreateAttemptBound <= 0 {
+		return defaultCreateAttemptBound
 	}
-	return l.IntentGrace
+	return l.CreateAttemptBound
+}
+
+func (l Limits) attemptMargin() time.Duration {
+	margin := l.CreateAttemptMargin
+	if margin <= 0 {
+		margin = defaultCreateAttemptMargin
+	}
+	return min(margin, l.attemptBound()/4)
 }
 
 func (s *Service) log() *slog.Logger {

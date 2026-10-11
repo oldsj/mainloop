@@ -85,14 +85,13 @@ func (s *Service) Adopt(ctx context.Context) error {
 // recoverCreates replays the creates that were sent and never confirmed (the reply was lost, or the
 // process ended between the intent and the answer). It sends a create only for an intent on an Agent
 // this deployment owns now, as the routes do: a replay is a fresh create, so it must not outlive the
-// ownership that allowed the first send. Other intents are left for the Agent to return. kagent
-// dedupes on the request id, so a replay returns the schedule an earlier send made, or makes it now.
+// ownership that allowed the first send. Other intents are left for the Agent to return. It replays
+// only an intent with no unexpired attempt lease. kagent dedupes on the request id, so the replay is
+// also the read: a schedule back confirms the intent; a definite refusal, with no other live lease,
+// deletes it (nothing can still succeed); an uncertain answer leaves it for a later pass.
 func (s *Service) recoverCreates(ctx context.Context, owned map[string]bool) error {
 	q := dbq.New(s.Pool)
-	now := time.Now()
-	rows, err := q.ListScheduledRunIntents(ctx, dbq.ListScheduledRunIntentsParams{
-		OwnerID: s.OwnerID, Before: now.Add(-s.Limits.intentGrace()),
-	})
+	rows, err := q.ListScheduledRunIntents(ctx, s.OwnerID)
 	if err != nil {
 		return err
 	}
@@ -109,14 +108,16 @@ func (s *Service) recoverCreates(ctx context.Context, owned map[string]bool) err
 			errs = append(errs, err)
 			continue
 		}
-		if err := q.BeginScheduledRunAttempt(ctx, dbq.BeginScheduledRunAttemptParams{
-			RequestID: row.RequestID, Recent: now.Add(-s.Limits.intentGrace()),
-		}); err != nil {
+		l, err := s.lease(ctx, row.RequestID, true)
+		if errors.Is(err, errIntentGone) {
+			continue // an attempt took a lease since the list, or the intent was settled
+		}
+		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		agent := &kagentapi.ResourceReference{Namespace: row.AgentNamespace, Name: row.AgentName}
-		_, sendErr, regErr := s.attempt(ctx, row.RequestID, agent, &cfg)
+		_, sendErr, regErr := s.attempt(ctx, l, row.RequestID, agent, &cfg, true)
 		if regErr != nil || (sendErr != nil && !definite(sendErr)) {
 			err := errors.Join(regErr, sendErr)
 			s.log().WarnContext(ctx, "schedule create recovery failed", "request_id", row.RequestID, "error", err)

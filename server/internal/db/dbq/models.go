@@ -374,6 +374,12 @@ type ProjectProviderPreference struct {
 	Version   int64
 }
 
+type ScheduledRunCreateAttempt struct {
+	ID        int64
+	RequestID string
+	ExpiresAt time.Time
+}
+
 type ScheduledRunLink struct {
 	ExecutionID       string
 	ScheduleID        string
@@ -392,8 +398,6 @@ type ScheduledRunSchedule struct {
 	AgentName         string
 	CreateConfig      json.RawMessage
 	State             string
-	AttemptAt         *time.Time
-	Contested         bool
 	ScheduleID        *string
 	CursorExecutionID string
 	DeletedAt         *time.Time
