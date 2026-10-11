@@ -166,6 +166,20 @@ const REFUSAL_NOTICE: Record<MainProviderRefusalCode, (requested: MainProvider) 
 
 const REFUSAL_CODES = Object.keys(REFUSAL_NOTICE) as MainProviderRefusalCode[];
 
+/** The notice for a chat message the backend refused because of the main's provider state. */
+const SEND_REFUSAL_NOTICE: Record<MainProviderRefusalCode, string> = {
+  busy: 'Message not sent: the main has open work or changed while the request ran.',
+  pending: 'Message not sent: a provider switch is pending.',
+  unconfirmed: 'Message not sent: kagent could not confirm the main is idle.',
+  unresolved: 'Message not sent: a native create for the main is unresolved.',
+  agent_unavailable: "Message not sent: the other provider isn't installed here. Nothing changed."
+};
+
+/** The notice for a refused chat message, from its code. The caller adds the box note. */
+export function sendRefusalNotice(code: MainProviderRefusalCode): string {
+  return SEND_REFUSAL_NOTICE[code];
+}
+
 /**
  * The refusal code a failed request carries, or null. Only a code the contract names counts; any
  * other value, or none, leaves the notice to the server's detail text.

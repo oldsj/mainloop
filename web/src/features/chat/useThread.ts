@@ -5,6 +5,7 @@ import type { Message, NativeDelivery } from '@/lib/contract';
 import { deliveryNotices } from '@/lib/delivery';
 import { createSendGuard, retryMessage } from '@/lib/messageSend';
 import { clearDraft, NEW_CONVERSATION, sessionDraftKey } from './drafts';
+import { refusalCode, sendRefusalNotice } from './mainProvider';
 import type { NativeSessionInfo } from './types';
 
 /** While a turn is in flight the thread is re-read this often, as a fallback to `session:message`. */
@@ -25,6 +26,9 @@ const LOST_REPLY_UNCONFIRMED =
 /** The words for a send the backend did not accept. */
 export function sendErrorText(error: unknown, restored: boolean): string {
   const suffix = restored ? BACK_IN_BOX : '';
+  const code = refusalCode(error);
+  if (code && error instanceof SendError && error.status === 409)
+    return `${sendRefusalNotice(code)}${suffix}`;
   if (error instanceof SendError && (error.status === 409 || error.status === 0))
     return `${error.message}${suffix}`;
   return `Could not send the message.${suffix}`;
