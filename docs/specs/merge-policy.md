@@ -352,8 +352,8 @@ escaping, malformed payloads and merge slots. This is not deployed or browser/li
 ### Web request card and submit state
 
 The React client (`web/src/features/hitl`) renders `HITLCard` and `HITLRequest` against the
-contract in `api/openapi.yaml`. The Go endpoints are not merged yet, so this behaviour is
-proven against a test server, not a live backend.
+contract in `api/openapi.yaml`. The Go endpoints and request cards have isolated PostgreSQL,
+fake-runtime and component test coverage; this is not deployed proof.
 
 - All cards for one request id share one state machine and one query-cache entry. Only one
   submit per request is in flight. The card polls only while the tab is visible and stops once
@@ -416,3 +416,22 @@ attention recovery and confirmed task runtime cleanup are integrated. Uncertain-
 handoff holds, atomic PR-claim/attempt association and any native parent publication notification remain
 serialized integration dependencies. Local PostgreSQL/fake-upstream regressions qualify these
 application seams; no new production activation or live-provider qualification follows.
+
+### Go merge card context (A1)
+
+Implemented with scratch PostgreSQL, fake kagent identity reads and React component tests.
+`HITLView.merge` now carries each configured merge tool's proposal id, repository, PR number,
+head/base names and SHAs, candidate state/deadline, summary digest and the bounded immutable
+`MergeSummary` already stored at preparation. This includes title/description excerpt, path
+preview and counts, policy/protected-path reasons, and captured CI. These values render as text;
+full description, paths and checks still load through `GetHITLMergeDetails` paging.
+
+The runtime Session must still run on the recorded Agent. That Agent's named `template_name`
+and the binding's provider must select exactly one merge configuration, whose public tool name
+matches the native call. The proposal must belong to the same owner, project and session, and the
+binding must still name the request's runtime. Inline, unknown or ambiguous templates, other
+runtime Agents, and cross-scope proposal ids yield unavailable context. The observer performs the
+same resolution before binding proposal attention, so browser reads are not needed to populate
+the inbox. Native tool arguments alone are never verified context. A stale request, ended
+candidate, or passed deadline marks the context stale; unavailable captured evidence remains
+unavailable. Merge execution retains its existing consent and fresh-evidence checks.

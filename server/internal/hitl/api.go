@@ -7,7 +7,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/api"
 )
 
-// API serves the HITL routes. Merge details are not served here yet; they stay on the 501 stub.
+// API serves the HITL routes. The merge package serves the paged merge details route.
 type API struct {
 	Svc *Service
 }

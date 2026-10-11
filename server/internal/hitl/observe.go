@@ -235,11 +235,22 @@ func (s *Service) newRequestID(sc scope, taskID string, o *observed) string {
 
 // adopt writes the request and its inbox card, and retires an older live ask of the same task.
 func (s *Service) adopt(ctx context.Context, sc scope, t *a2a.Task, o *observed) error {
+	if err := s.adoptRequest(ctx, sc, t, o); err != nil {
+		return err
+	}
+	r, err := dbq.New(s.Pool).GetHITLRequest(ctx, dbq.GetHITLRequestParams{ID: s.newRequestID(sc, string(t.ID), o), OwnerID: sc.ownerID})
+	if err != nil {
+		return err
+	}
+	return s.bindMerges(ctx, r)
+}
+
+func (s *Service) adoptRequest(ctx context.Context, sc scope, t *a2a.Task, o *observed) error {
 	id := s.newRequestID(sc, string(t.ID), o)
 	q := dbq.New(s.Pool)
 	if cur, err := q.GetHITLRequest(ctx, dbq.GetHITLRequestParams{ID: id, OwnerID: sc.ownerID}); err == nil {
 		if cur.Availability == dbstate.HITLPending || cur.Availability == dbstate.HITLStale {
-			return s.confirm(ctx, cur)
+			return s.confirmRequest(ctx, cur)
 		}
 		return nil // final: the same ask is not reopened
 	} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -341,6 +352,13 @@ func clip(s string, n int) string {
 // confirm records that kagent still shows the request. A stale request reopens, which the inbox
 // hears about.
 func (s *Service) confirm(ctx context.Context, r dbq.HitlRequest) error {
+	if err := s.confirmRequest(ctx, r); err != nil {
+		return err
+	}
+	return s.bindMerges(ctx, r)
+}
+
+func (s *Service) confirmRequest(ctx context.Context, r dbq.HitlRequest) error {
 	if r.Availability != dbstate.HITLStale {
 		return dbq.New(s.Pool).ConfirmHITLRequest(ctx, r.ID)
 	}

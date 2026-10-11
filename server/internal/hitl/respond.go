@@ -240,6 +240,13 @@ func (s *Service) View(ctx context.Context, requestID string) (api.HITLView, err
 		Request: proj, RouteRequestId: req.ID, WritesEnabled: s.WritesEnabled,
 		UnavailableReason: req.UnavailableReason, Context: s.contextOf(ctx, req),
 	}
+	merges, err := s.mergeContexts(ctx, req, obs)
+	if err != nil {
+		return api.HITLView{}, err
+	}
+	if len(merges) > 0 {
+		view.Merge = &merges
+	}
 	live := false
 	resp, err := q.GetLatestHITLResponse(ctx, dbq.GetLatestHITLResponseParams{RequestID: req.ID, OwnerID: s.OwnerID})
 	switch {

@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { API_URL } from '@/api/config';
 import { keys } from '@/api';
-import { hitlView } from '@/test/fixtures/hitl';
+import { approvalRequest, hitlView, mergeContext, mergeSummary } from '@/test/fixtures/hitl';
 import { projection, view as taskView } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
 import { createFakeHITL } from './handlers';
@@ -24,6 +24,69 @@ beforeEach(() => {
 });
 
 describe('HITLCard', () => {
+  it('renders the server merge context as text and loads details only when opened', async () => {
+    server.use(http.get(`${API_URL}/tasks`, () => HttpResponse.json([])));
+    const base = hitlView(id);
+    fake.views.set(id, {
+      ...base,
+      request: {
+        ...base.request,
+        payload: approvalRequest({
+          tools: [
+            {
+              id: 'a',
+              call_id: 'call',
+              name: 'mainloop.merge_pull_request_with_approval',
+              args: { proposal_id: 'proposal-1', request_id: 'merge-1' }
+            }
+          ]
+        })
+      },
+      merge: [
+        mergeContext({
+          state: 'prepared',
+          summary: mergeSummary({
+            title: '<img src=x onerror=alert(1)>',
+            description_excerpt: '<script>run()</script>'
+          })
+        })
+      ]
+    });
+    const details: string[] = [];
+    server.use(
+      http.get(`${API_URL}/hitl/${id}/merge/proposal-1/details`, ({ request }) => {
+        details.push(request.url);
+        return HttpResponse.json({
+          request_id: id,
+          proposal_id: 'proposal-1',
+          section: 'files',
+          cursor: 0,
+          next_cursor: null,
+          truncated: false,
+          summary_digest: 'a'.repeat(64),
+          items: [{ filename: 'src/retry.ts' }]
+        });
+      })
+    );
+    const user = userEvent.setup();
+    const { container } = renderRouted(<HITLCard requestId={id} />);
+    expect(
+      await screen.findByRole('heading', { name: '<img src=x onerror=alert(1)>' })
+    ).toBeInTheDocument();
+    expect(container.querySelector('img, script')).toBeNull();
+    expect(container).toHaveTextContent('<script>run()</script>');
+    expect(container).toHaveTextContent('owner/repo #7');
+    expect(container).toHaveTextContent('Head: feature');
+    expect(container).toHaveTextContent('b'.repeat(40));
+    expect(container).toHaveTextContent('Base: main');
+    expect(container).toHaveTextContent('Proposal proposal-1');
+    expect(container).toHaveTextContent('Merge state: prepared');
+    expect(details).toHaveLength(0);
+    await user.click(screen.getByText('Changed paths'));
+    expect(await screen.findByText('src/retry.ts')).toBeInTheDocument();
+    expect(details).toHaveLength(1);
+  });
+
   it('loads the request, mirrors it into the query cache and links the owning task', async () => {
     server.use(
       http.get(`${API_URL}/tasks`, () =>

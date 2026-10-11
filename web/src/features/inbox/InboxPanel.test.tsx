@@ -151,6 +151,22 @@ describe('Needs you', () => {
     );
   });
 
+  it('links an unresolved runtime stop to task evidence', async () => {
+    const row = attentionItem(queueItem(), {
+      id: 'reconciliation:task-9',
+      reason_code: 'runtime_stop_unresolved',
+      queue_item: null,
+      task_id: 'task-9',
+      title: 'Recover stopped child'
+    });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([row]))));
+    renderInbox();
+    expect(await screen.findByRole('link', { name: 'Review task evidence' })).toHaveAttribute(
+      'href',
+      '/tasks/task-9'
+    );
+  });
+
   it('shows an error with retry when the first read fails, then recovers', async () => {
     const user = userEvent.setup();
     let reads = 0;

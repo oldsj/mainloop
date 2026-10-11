@@ -190,8 +190,8 @@ Not built:
 - Proof against a real kagent. The production sender (the shared client, with the answer in the
   HITL extension metadata and the `A2A-Extensions` header) is tested only against the in-process
   fake.
-- Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do
-  answering nested delegated requests (shown, not answerable) and task-tree attention links.
+- Answering nested delegated requests (shown, not answerable) and task-tree attention links.
+  Merge details are served by the Go merge slice; the Go card context is described below.
 
 ## Go attention, activity and queue (G9b)
 
@@ -244,3 +244,28 @@ reference.
   repeat). Native requests and queue items answer `409`, unknown ids `404`.
 - **Not built.** `403` (there is one owner), queue expiry, FYI notification rows, and delivery of
   an answer to the main thread.
+
+## Reconciliation and merge attention (A1)
+
+Implemented in the Go server with scratch PostgreSQL and fake-runtime tests; no deployed proof.
+
+- The attention sweep opens one `task_reconciliation` item per task (`reconciliation:<task id>`)
+  for `blocked/reconciliation`, or for any attempt carrying `runtime-stop-unresolved` evidence
+  whose durable stop state is not `confirmed`. Its closed `reason_code` is `reconciliation` or
+  `runtime_stop_unresolved`, with the unresolved stop taking precedence. A cancelled task, ended
+  session, or replaced attempt still needs this item while its stop remains unresolved. Confirmation
+  clears the stop need without deleting historical evidence; an independent reconciliation block
+  continues to need attention. The item resolves when both conditions clear, and reopens under
+  the same identity if the need recurs. It links to task evidence and grants no new task action.
+- The HITL observer binds merge calls to the runtime's named template and configured provider/tool,
+  then stores their owner/session/project-scoped proposal associations. The attention sweep opens
+  one `merge_proposal` item per approval-route proposal (`merge:<proposal id>`, reason
+  `merge_approval`), linked to its canonical HITL request. The card remains a structured HITL
+  response, not an ordinary queue answer. A pure merge request suppresses its generic native inbox
+  item; a mixed batch shows its generic item for the other tools when no proposal item remains.
+- Recording approval or refusal resolves proposal attention, as do supersession, expiry, a passed
+  deadline, a request becoming unavailable, or the candidate leaving `prepared`. A response rejected
+  by transport can reopen attention while the same proposal still waits. Final or archived sessions
+  and obsolete task attempts cannot reopen merge approval items.
+- Both lifecycles write only on a changed need or association. Repeated unchanged sweeps create no
+  duplicate rows, change no item timestamps, and publish no extra `inbox:updated` events.

@@ -8,12 +8,15 @@
 //     write attention rows, so the sweep keeps them honest: it opens one for each blocked task that
 //     asks for the owner's decision and resolves it when the decision clears, the attempt is
 //     replaced or the task finishes.
+//   - task_reconciliation: one item per blocked task or unconfirmed runtime stop, including stops
+//     still held by final tasks or older attempts. Confirmation clears the stop's need.
+//   - merge_proposal: one item per proposal awaiting approval, linked to its canonical HITL ask.
 //   - queue: written by [Open], for questions other slices put to the owner. The owner's answer is
 //     stored on the row (detail.response) for that slice to read; nothing is delivered from here.
 //
 // needs_owner: a session needs the owner when it has a visible attention item. Visibility is one
-// rule, the attention_visible view of migration 00070 (the session is neither archived nor
-// finished, a HITL request has no live answer, and the item's task and attempt are still current).
+// rule, the attention_visible view of migration 00070. Reconciliation needs survive session and
+// task finality; ordinary items require a live session/current attempt and no live HITL answer.
 // The snapshot, its count, the unread count and [Service.NeedsOwner] all read it, so they cannot
 // disagree.
 //
@@ -43,9 +46,11 @@ import (
 
 // The attention sources.
 const (
-	SourceHITL         = "hitl_request"
-	SourceTaskDecision = "task_decision"
-	SourceQueue        = "queue"
+	SourceHITL           = "hitl_request"
+	SourceTaskDecision   = "task_decision"
+	SourceReconciliation = "task_reconciliation"
+	SourceMerge          = "merge_proposal"
+	SourceQueue          = "queue"
 )
 
 // noticePrefix marks the queue_item_id of an input notice (a hitl_diagnostics row).
@@ -89,7 +94,7 @@ func (s *Service) Sweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "attention", Every: every, Run: s.SyncTasks}
 }
 
-// SyncTasks opens an item for each task that waits for the owner's decision and resolves the
+// SyncTasks opens items for owner decisions, reconciliation needs and merge proposals, and resolves the
 // items whose need has ended: a decision that cleared, a question of a finished task, an item of a
 // finished or archived session, an item whose task has finished or whose attempt was replaced,
 // archived or deleted. It publishes one inbox:updated when it changed an item, or when the unread
@@ -104,6 +109,8 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 		var changed []string
 		for _, step := range []func(context.Context, string) ([]string, error){
 			q.OpenTaskDecisionAttention, q.ResolveStaleTaskDecisions, q.ResolveQueueForFinishedTasks,
+			q.OpenTaskReconciliationAttention, q.ResolveTaskReconciliationAttention,
+			q.OpenMergeProposalAttention, q.ResolveMergeProposalAttention,
 			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
 			ids, err := step(ctx, s.OwnerID)
@@ -290,6 +297,10 @@ func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
 	if r.SessionID != nil {
 		out.SessionIds = append(out.SessionIds, *r.SessionID)
 	}
+	if r.ReasonCode != nil {
+		reason := api.AttentionItemReasonCode(*r.ReasonCode)
+		out.ReasonCode = &reason
+	}
 	switch r.SourceKind {
 	case SourceHITL:
 		// The attention row's task_id is kagent's task, not a Mainloop task, so it is not exposed.
@@ -300,6 +311,19 @@ func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
 			return out, false
 		}
 		out.Id, out.TaskId = "task:"+*r.TaskID, r.TaskID
+	case SourceReconciliation:
+		out.Id, out.TaskId = "reconciliation:"+r.SourceID, r.TaskID
+	case SourceMerge:
+		var detail struct {
+			RequestID string `json:"hitl_request_id"`
+		}
+		if json.Unmarshal(r.Detail, &detail) != nil || detail.RequestID == "" {
+			return out, false
+		}
+		out.Id = "merge:" + r.SourceID
+		item := r
+		item.SourceID = detail.RequestID
+		out.QueueItem = s.hitlQueueItem(item)
 	case SourceQueue:
 		out.Id, out.TaskId = "queue:"+r.SourceID, r.TaskID
 		qi, ok := s.queueItem(r)

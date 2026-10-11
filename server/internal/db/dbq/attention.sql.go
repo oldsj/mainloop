@@ -32,7 +32,7 @@ func (q *Queries) DismissNotice(ctx context.Context, arg DismissNoticeParams) (i
 }
 
 const getAttentionBySource = `-- name: GetAttentionBySource :one
-SELECT id, owner_id, kind, source_kind, source_id, session_id, task_id, title, needed, href, state, detail, read_at, created_at, updated_at, resolved_at FROM attention_items WHERE owner_id = $1 AND source_kind = $2 AND source_id = $3
+SELECT id, owner_id, kind, source_kind, source_id, session_id, task_id, title, needed, reason_code, href, state, detail, read_at, created_at, updated_at, resolved_at FROM attention_items WHERE owner_id = $1 AND source_kind = $2 AND source_id = $3
 `
 
 type GetAttentionBySourceParams struct {
@@ -54,6 +54,7 @@ func (q *Queries) GetAttentionBySource(ctx context.Context, arg GetAttentionBySo
 		&i.TaskID,
 		&i.Title,
 		&i.Needed,
+		&i.ReasonCode,
 		&i.Href,
 		&i.State,
 		&i.Detail,
@@ -271,7 +272,7 @@ func (q *Queries) ListActivityReports(ctx context.Context, ownerID string) ([]Li
 
 const listOpenAttention = `-- name: ListOpenAttention :many
 
-SELECT a.id, a.owner_id, a.kind, a.source_kind, a.source_id, a.session_id, a.task_id, a.title, a.needed, a.href, a.state, a.detail, a.read_at, a.created_at, a.updated_at, a.resolved_at
+SELECT a.id, a.owner_id, a.kind, a.source_kind, a.source_id, a.session_id, a.task_id, a.title, a.needed, a.reason_code, a.href, a.state, a.detail, a.read_at, a.created_at, a.updated_at, a.resolved_at
 FROM attention_items a
 JOIN attention_visible v ON v.id = a.id
 WHERE v.owner_id = $1
@@ -301,6 +302,7 @@ func (q *Queries) ListOpenAttention(ctx context.Context, ownerID string) ([]Atte
 			&i.TaskID,
 			&i.Title,
 			&i.Needed,
+			&i.ReasonCode,
 			&i.Href,
 			&i.State,
 			&i.Detail,
@@ -320,7 +322,7 @@ func (q *Queries) ListOpenAttention(ctx context.Context, ownerID string) ([]Atte
 }
 
 const listSessionsNeedingOwner = `-- name: ListSessionsNeedingOwner :many
-SELECT v.session_id::text AS session_id, bool_or(v.source_kind = 'hitl_request')::boolean AS waiting_on_input
+SELECT v.session_id::text AS session_id, bool_or(v.source_kind IN ('hitl_request', 'merge_proposal'))::boolean AS waiting_on_input
 FROM attention_visible v
 WHERE v.owner_id = $1 AND v.session_id IS NOT NULL
 GROUP BY v.session_id
@@ -346,6 +348,61 @@ func (q *Queries) ListSessionsNeedingOwner(ctx context.Context, ownerID string) 
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openMergeProposalAttention = `-- name: OpenMergeProposalAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, session_id, title, needed, href, reason_code, detail)
+SELECT DISTINCT ON (p.id) 'attn_merge_' || p.id, p.owner_id, 'approval', 'merge_proposal', p.id, r.session_id,
+       coalesce(p.presentation->>'title', 'Merge proposal'),
+       'Approve merge of ' || c.repository || ' #' || c.pr_number::text,
+       '/sessions/' || r.session_id || '?hitl=' || r.id, 'merge_approval',
+       jsonb_build_object('hitl_request_id', r.id)
+FROM hitl_merge_tools m
+JOIN hitl_requests r ON r.id = m.request_id
+JOIN merge_proposals p ON p.id = m.proposal_id AND p.owner_id = r.owner_id AND p.session_id = r.session_id
+JOIN merge_candidates c ON c.id = p.candidate_id AND c.owner_id = p.owner_id
+JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+WHERE r.owner_id = $1 AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+  AND (c.deadline IS NULL OR c.deadline > now())
+  AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+  AND s.project_id = c.project_id
+  AND NOT EXISTS (
+      SELECT 1 FROM task_attempts at JOIN tasks t ON t.id = at.task_id
+      WHERE at.session_id = r.session_id AND (
+          t.status IN ('completed', 'failed', 'cancelled') OR at.archived_at IS NOT NULL OR at.native_deleted_at IS NOT NULL
+          OR at.state NOT IN ('creating', 'active', 'draining')
+          OR (at.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM at.id)))
+  AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+ORDER BY p.id, r.created_at DESC, r.id
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(), session_id = EXCLUDED.session_id,
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
+    href = EXCLUDED.href, detail = EXCLUDED.detail
+WHERE a.state <> 'open' OR a.detail IS DISTINCT FROM EXCLUDED.detail
+RETURNING id
+`
+
+// One proposal item linked to its latest live native approval request. The observer establishes
+// the trusted association; this sweep performs no runtime or GitHub I/O.
+func (q *Queries) OpenMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, openMergeProposalAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -390,6 +447,43 @@ func (q *Queries) OpenTaskDecisionAttention(ctx context.Context, ownerID string)
 	return items, nil
 }
 
+const openTaskReconciliationAttention = `-- name: OpenTaskReconciliationAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href, reason_code)
+SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_reconciliation', n.task_id,
+       n.task_id, n.title,
+       CASE n.reason_code WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
+       ELSE 'Task needs reconciliation; inspect its attempt evidence.' END,
+       '/tasks/' || n.task_id, n.reason_code
+FROM task_reconciliation_needs n WHERE n.owner_id = $1
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(),
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
+    title = EXCLUDED.title, needed = EXCLUDED.needed, reason_code = EXCLUDED.reason_code
+WHERE a.state <> 'open' OR (a.title, a.needed, a.reason_code) IS DISTINCT FROM (EXCLUDED.title, EXCLUDED.needed, EXCLUDED.reason_code)
+RETURNING id
+`
+
+// Reopen the same task item only when a need recurs; unchanged sweeps write nothing.
+func (q *Queries) OpenTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, openTaskReconciliationAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resolveAttentionHiddenForGood = `-- name: ResolveAttentionHiddenForGood :many
 UPDATE attention_items a
 SET state = 'resolved', resolved_at = now(), updated_at = now()
@@ -401,7 +495,7 @@ FROM (
         WHEN ta.id IS NOT NULL THEN ta.task_id
         WHEN i.source_kind <> 'hitl_request' THEN i.task_id
     END
-    WHERE i.owner_id = $1 AND i.state = 'open'
+    WHERE i.owner_id = $1 AND i.state = 'open' AND i.source_kind <> 'task_reconciliation'
       AND (
           t.status IN ('completed', 'failed', 'cancelled')
           OR ta.archived_at IS NOT NULL OR ta.native_deleted_at IS NOT NULL
@@ -451,6 +545,46 @@ RETURNING a.id
 // row does not wait for a session that is gone.
 func (q *Queries) ResolveFinishedSessionAttention(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveFinishedSessionAttention, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveMergeProposalAttention = `-- name: ResolveMergeProposalAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'merge_proposal' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
+      JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
+      JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
+      JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+      JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+      WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
+        AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+        AND (c.deadline IS NULL OR c.deadline > now())
+        AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+        AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+  )
+RETURNING a.id
+`
+
+// Approval/refusal ends the owner's need as soon as it is recorded; a rejected transport can
+// reopen it. Supersession, expiry and all later candidate states also end it.
+func (q *Queries) ResolveMergeProposalAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveMergeProposalAttention, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -519,6 +653,33 @@ RETURNING a.id
 
 func (q *Queries) ResolveStaleTaskDecisions(ctx context.Context, ownerID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, resolveStaleTaskDecisions, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resolveTaskReconciliationAttention = `-- name: ResolveTaskReconciliationAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'task_reconciliation' AND a.state = 'open'
+  AND NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
+RETURNING a.id
+`
+
+func (q *Queries) ResolveTaskReconciliationAttention(ctx context.Context, ownerID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveTaskReconciliationAttention, ownerID)
 	if err != nil {
 		return nil, err
 	}

@@ -3084,6 +3084,13 @@ components:
       title: AskUserResponse
     AttentionItem:
       properties:
+        reason_code:
+          description: Closed reason for reconciliation or merge approval attention; absent for other sources.
+          type: string
+          enum:
+            - reconciliation
+            - runtime_stop_unresolved
+            - merge_approval
         id:
           type: string
           title: Id
@@ -8649,6 +8656,7 @@ components:
       additionalProperties: false
       description: Server-resolved merge context for one native tool call. pr_url and compare_url appear only when the repository, number, head and base are well formed.
     HITLView:
+      description: Owner-scoped native request with bounded merge summaries, bound by the runtime AgentTemplate and configured tool name. Full merge evidence uses getHITLMergeDetails paging.
       type: object
       properties:
         request:
@@ -8680,6 +8688,7 @@ components:
         writes_enabled:
           type: boolean
         merge:
+          description: Server-resolved proposal, repository, PR, pinned commits, policy and summary for each configured merge tool call. No client interpretation of tool arguments grants authority.
           anyOf:
             - type: array
               items:

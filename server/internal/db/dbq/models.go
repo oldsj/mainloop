@@ -46,6 +46,7 @@ type AttentionItem struct {
 	TaskID     *string
 	Title      string
 	Needed     string
+	ReasonCode *string
 	Href       string
 	State      dbstate.AttentionState
 	Detail     json.RawMessage
@@ -276,6 +277,12 @@ type HitlDiagnostic struct {
 	Detail           string
 	ObservedAt       time.Time
 	DismissedAt      *time.Time
+}
+
+type HitlMergeTool struct {
+	RequestID  string
+	ToolID     string
+	ProposalID string
 }
 
 type HitlRequest struct {
@@ -665,6 +672,13 @@ type TaskOperation struct {
 	LeaseUntil        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type TaskReconciliationNeed struct {
+	TaskID     string
+	OwnerID    string
+	Title      string
+	ReasonCode string
 }
 
 type TaskReport struct {

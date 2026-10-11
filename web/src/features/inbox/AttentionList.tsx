@@ -91,7 +91,9 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
           params={{ id: taskId }}
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
         >
-          Review task and decide
+          {item.reason_code === 'reconciliation' || item.reason_code === 'runtime_stop_unresolved'
+            ? 'Review task evidence'
+            : 'Review task and decide'}
         </Link>
       ) : null}
     </div>

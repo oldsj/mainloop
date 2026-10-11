@@ -144,6 +144,53 @@ func (q *Queries) GetHITLContext(ctx context.Context, arg GetHITLContextParams) 
 	return i, err
 }
 
+const getHITLMergeProposal = `-- name: GetHITLMergeProposal :one
+SELECT p.id AS proposal_id, p.presentation, p.summary_digest, c.state, c.deadline, b.kind AS provider
+FROM merge_proposals p
+JOIN merge_candidates c ON c.id = p.candidate_id AND c.owner_id = p.owner_id
+JOIN sessions s ON s.id = p.session_id AND s.user_id = p.owner_id AND s.project_id = c.project_id
+JOIN agent_bindings b ON b.session_id = s.id
+WHERE p.id = $1 AND p.owner_id = $2 AND p.session_id = $3 AND b.kagent_session_id = $4
+  AND b.kagent_deleted_at IS NULL AND c.route = 'approval'
+`
+
+type GetHITLMergeProposalParams struct {
+	ID              string
+	OwnerID         string
+	SessionID       string
+	KagentSessionID *string
+}
+
+type GetHITLMergeProposalRow struct {
+	ProposalID    string
+	Presentation  json.RawMessage
+	SummaryDigest string
+	State         dbstate.MergeState
+	Deadline      *time.Time
+	Provider      string
+}
+
+// The proposal context is scoped to the native request's owner, session, current runtime and
+// project. A native payload naming another session's proposal is not a display association.
+func (q *Queries) GetHITLMergeProposal(ctx context.Context, arg GetHITLMergeProposalParams) (GetHITLMergeProposalRow, error) {
+	row := q.db.QueryRow(ctx, getHITLMergeProposal,
+		arg.ID,
+		arg.OwnerID,
+		arg.SessionID,
+		arg.KagentSessionID,
+	)
+	var i GetHITLMergeProposalRow
+	err := row.Scan(
+		&i.ProposalID,
+		&i.Presentation,
+		&i.SummaryDigest,
+		&i.State,
+		&i.Deadline,
+		&i.Provider,
+	)
+	return i, err
+}
+
 const getHITLRequest = `-- name: GetHITLRequest :one
 SELECT id, owner_id, session_id, kagent_session_id, agent_namespace, agent_name, context_id, task_id, status_message_id, request_hash, kind, payload, availability, unavailable_reason, observed_at, checked_at, attempted_at, created_at, updated_at FROM hitl_requests WHERE id = $1 AND owner_id = $2
 `
@@ -377,6 +424,26 @@ func (q *Queries) InsertHITLDiagnostic(ctx context.Context, arg InsertHITLDiagno
 		arg.RepeatSeconds,
 	)
 	return err
+}
+
+const insertHITLMergeTool = `-- name: InsertHITLMergeTool :execrows
+INSERT INTO hitl_merge_tools (request_id, tool_id, proposal_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (request_id, tool_id) DO NOTHING
+`
+
+type InsertHITLMergeToolParams struct {
+	RequestID  string
+	ToolID     string
+	ProposalID string
+}
+
+func (q *Queries) InsertHITLMergeTool(ctx context.Context, arg InsertHITLMergeToolParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertHITLMergeTool, arg.RequestID, arg.ToolID, arg.ProposalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertHITLRequest = `-- name: InsertHITLRequest :execrows

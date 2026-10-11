@@ -280,6 +280,7 @@ export function VerifiedMerge({
         Proposal <code>{facts.proposal_id}</code> · project policy v{summary.policy_version} ·
         protected globs v{summary.globs_version}
       </p>
+      {facts.state ? <p className="text-muted-foreground">Merge state: {facts.state}</p> : null}
       <p className="text-muted-foreground">
         Reviewed summary SHA-256: <code>{facts.summary_digest}</code>
       </p>

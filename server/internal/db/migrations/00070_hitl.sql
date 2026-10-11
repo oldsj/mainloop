@@ -102,6 +102,16 @@ CREATE INDEX hitl_requests_session ON hitl_requests (session_id, created_at, id)
 CREATE INDEX hitl_requests_refresh ON hitl_requests (attempted_at, id)
 WHERE availability IN ('pending', 'stale');
 
+-- Trusted template/tool associations learned by the observer. Proposals are created by the later
+-- merge migration, so proposal_id has no foreign key here. Queries also check owner/session scope.
+CREATE TABLE hitl_merge_tools (
+    request_id text NOT NULL REFERENCES hitl_requests (id) ON DELETE CASCADE,
+    tool_id text NOT NULL,
+    proposal_id text NOT NULL,
+    PRIMARY KEY (request_id, tool_id)
+);
+CREATE INDEX hitl_merge_tools_proposal ON hitl_merge_tools (proposal_id);
+
 CREATE TABLE hitl_responses (
     -- The client's action id.
     id text PRIMARY KEY,
@@ -159,6 +169,7 @@ CREATE TABLE attention_items (
     task_id text,
     title text NOT NULL,
     needed text NOT NULL,
+    reason_code text CHECK (reason_code IN ('reconciliation', 'runtime_stop_unresolved', 'merge_approval')),
     href text NOT NULL,
     state text NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved', 'dismissed')),
     -- What a source needs beyond the columns above (G9b: queue content, context, options).
@@ -171,6 +182,20 @@ CREATE TABLE attention_items (
 );
 CREATE INDEX attention_items_open ON attention_items (owner_id, created_at DESC, id)
 WHERE state = 'open';
+
+-- One current need per task, even if a cancelled task or an older attempt still holds a runtime.
+-- Stop evidence is historical: a confirmed stop clears its need without deleting the evidence.
+CREATE VIEW task_reconciliation_needs AS
+SELECT t.id AS task_id, t.owner_id, t.title,
+       CASE WHEN EXISTS (
+           SELECT 1 FROM task_attempts a WHERE a.task_id = t.id
+             AND 'runtime-stop-unresolved' = ANY(a.evidence_refs) AND a.stop_state <> 'confirmed'
+       ) THEN 'runtime_stop_unresolved' ELSE 'reconciliation' END AS reason_code
+FROM tasks t
+WHERE (t.status = 'blocked' AND t.reason = 'reconciliation') OR EXISTS (
+    SELECT 1 FROM task_attempts a WHERE a.task_id = t.id
+      AND 'runtime-stop-unresolved' = ANY(a.evidence_refs) AND a.stop_state <> 'confirmed'
+);
 
 -- The one visibility rule (G9b): the open attention items the owner should see now. The snapshot,
 -- its count, the unread count and a session's needs_owner all read this view, so they cannot
@@ -192,19 +217,38 @@ LEFT JOIN tasks t ON t.id = CASE
     WHEN a.source_kind <> 'hitl_request' THEN a.task_id
 END
 WHERE a.state = 'open'
+  AND (a.source_kind <> 'task_reconciliation' OR EXISTS (
+      SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id))
+  -- Proposal items render their entire native request. Suppress a generic duplicate while one is
+  -- open; pure merge requests stay suppressed after their proposals end. A mixed batch's other
+  -- input becomes visible again when its last proposal item resolves.
+  AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
+      SELECT 1 FROM attention_items m WHERE m.source_kind = 'merge_proposal' AND m.state = 'open'
+        AND m.owner_id = a.owner_id AND m.detail->>'hitl_request_id' = a.source_id))
+  AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
+      SELECT 1 FROM hitl_requests r WHERE r.id = a.source_id
+        AND r.kind = 'tool_approval' AND r.payload->>'nested' IS NULL
+        AND jsonb_array_length(r.payload->'tools') > 0
+        AND jsonb_array_length(r.payload->'tools') = (
+            SELECT count(*) FROM hitl_merge_tools m WHERE m.request_id = r.id)))
+  AND (a.source_kind <> 'merge_proposal' OR NOT EXISTS (
+      SELECT 1 FROM hitl_responses r WHERE r.request_id = a.detail->>'hitl_request_id'
+        AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')))
   AND (a.session_id IS NULL OR (s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')))
   AND (a.source_kind <> 'hitl_request' OR NOT EXISTS (
       SELECT 1 FROM hitl_responses r
       WHERE r.request_id = a.source_id AND r.state IN ('recorded', 'sending', 'accepted', 'uncertain')))
-  AND (t.id IS NULL OR t.status NOT IN ('completed', 'failed', 'cancelled'))
+  AND (a.source_kind = 'task_reconciliation' OR t.id IS NULL OR t.status NOT IN ('completed', 'failed', 'cancelled'))
   AND (ta.id IS NULL OR (
       ta.archived_at IS NULL AND ta.native_deleted_at IS NULL
       AND ta.state IN ('creating', 'active', 'draining') AND t.current_attempt_id = ta.id));
 
 -- +goose Down
 DROP VIEW IF EXISTS attention_visible;
+DROP VIEW IF EXISTS task_reconciliation_needs;
 DROP TABLE IF EXISTS attention_items;
 DROP TABLE IF EXISTS hitl_diagnostics;
 DROP TABLE IF EXISTS hitl_responses;
+DROP TABLE IF EXISTS hitl_merge_tools;
 DROP TABLE IF EXISTS hitl_requests;
 DROP TABLE IF EXISTS hitl_sessions;

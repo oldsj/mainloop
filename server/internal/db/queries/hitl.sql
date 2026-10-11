@@ -211,3 +211,19 @@ WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded';
 UPDATE hitl_responses
 SET state = 'recorded', detail = $4, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'sending';
+
+-- The proposal context is scoped to the native request's owner, session, current runtime and
+-- project. A native payload naming another session's proposal is not a display association.
+-- name: GetHITLMergeProposal :one
+SELECT p.id AS proposal_id, p.presentation, p.summary_digest, c.state, c.deadline, b.kind AS provider
+FROM merge_proposals p
+JOIN merge_candidates c ON c.id = p.candidate_id AND c.owner_id = p.owner_id
+JOIN sessions s ON s.id = p.session_id AND s.user_id = p.owner_id AND s.project_id = c.project_id
+JOIN agent_bindings b ON b.session_id = s.id
+WHERE p.id = $1 AND p.owner_id = $2 AND p.session_id = $3 AND b.kagent_session_id = $4
+  AND b.kagent_deleted_at IS NULL AND c.route = 'approval';
+
+-- name: InsertHITLMergeTool :execrows
+INSERT INTO hitl_merge_tools (request_id, tool_id, proposal_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (request_id, tool_id) DO NOTHING;

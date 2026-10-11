@@ -13,7 +13,7 @@ ORDER BY a.created_at DESC, a.id;
 -- The sessions that need the owner, in one read: those with a visible item, and whether one of
 -- them is a native input request (the session then reads waiting_on_user).
 -- name: ListSessionsNeedingOwner :many
-SELECT v.session_id::text AS session_id, bool_or(v.source_kind = 'hitl_request')::boolean AS waiting_on_input
+SELECT v.session_id::text AS session_id, bool_or(v.source_kind IN ('hitl_request', 'merge_proposal'))::boolean AS waiting_on_input
 FROM attention_visible v
 WHERE v.owner_id = $1 AND v.session_id IS NOT NULL
 GROUP BY v.session_id;
@@ -142,7 +142,7 @@ FROM (
         WHEN ta.id IS NOT NULL THEN ta.task_id
         WHEN i.source_kind <> 'hitl_request' THEN i.task_id
     END
-    WHERE i.owner_id = $1 AND i.state = 'open'
+    WHERE i.owner_id = $1 AND i.state = 'open' AND i.source_kind <> 'task_reconciliation'
       AND (
           t.status IN ('completed', 'failed', 'cancelled')
           OR ta.archived_at IS NOT NULL OR ta.native_deleted_at IS NOT NULL
@@ -163,3 +163,78 @@ SELECT coalesce(
      ORDER BY e.id DESC
      LIMIT 1),
     -1)::int AS unread_count;
+
+-- Reopen the same task item only when a need recurs; unchanged sweeps write nothing.
+-- name: OpenTaskReconciliationAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, task_id, title, needed, href, reason_code)
+SELECT 'attn_reconciliation_' || n.task_id, n.owner_id, 'owner_decision', 'task_reconciliation', n.task_id,
+       n.task_id, n.title,
+       CASE n.reason_code WHEN 'runtime_stop_unresolved' THEN 'Runtime stop remains unconfirmed; reconcile the held claim and capacity.'
+       ELSE 'Task needs reconciliation; inspect its attempt evidence.' END,
+       '/tasks/' || n.task_id, n.reason_code
+FROM task_reconciliation_needs n WHERE n.owner_id = $1
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(),
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
+    title = EXCLUDED.title, needed = EXCLUDED.needed, reason_code = EXCLUDED.reason_code
+WHERE a.state <> 'open' OR (a.title, a.needed, a.reason_code) IS DISTINCT FROM (EXCLUDED.title, EXCLUDED.needed, EXCLUDED.reason_code)
+RETURNING id;
+
+-- name: ResolveTaskReconciliationAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'task_reconciliation' AND a.state = 'open'
+  AND NOT EXISTS (SELECT 1 FROM task_reconciliation_needs n WHERE n.task_id = a.task_id AND n.owner_id = a.owner_id)
+RETURNING a.id;
+
+-- One proposal item linked to its latest live native approval request. The observer establishes
+-- the trusted association; this sweep performs no runtime or GitHub I/O.
+-- name: OpenMergeProposalAttention :many
+INSERT INTO attention_items AS a (id, owner_id, kind, source_kind, source_id, session_id, title, needed, href, reason_code, detail)
+SELECT DISTINCT ON (p.id) 'attn_merge_' || p.id, p.owner_id, 'approval', 'merge_proposal', p.id, r.session_id,
+       coalesce(p.presentation->>'title', 'Merge proposal'),
+       'Approve merge of ' || c.repository || ' #' || c.pr_number::text,
+       '/sessions/' || r.session_id || '?hitl=' || r.id, 'merge_approval',
+       jsonb_build_object('hitl_request_id', r.id)
+FROM hitl_merge_tools m
+JOIN hitl_requests r ON r.id = m.request_id
+JOIN merge_proposals p ON p.id = m.proposal_id AND p.owner_id = r.owner_id AND p.session_id = r.session_id
+JOIN merge_candidates c ON c.id = p.candidate_id AND c.owner_id = p.owner_id
+JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+WHERE r.owner_id = $1 AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+  AND (c.deadline IS NULL OR c.deadline > now())
+  AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+  AND s.project_id = c.project_id
+  AND NOT EXISTS (
+      SELECT 1 FROM task_attempts at JOIN tasks t ON t.id = at.task_id
+      WHERE at.session_id = r.session_id AND (
+          t.status IN ('completed', 'failed', 'cancelled') OR at.archived_at IS NOT NULL OR at.native_deleted_at IS NOT NULL
+          OR at.state NOT IN ('creating', 'active', 'draining')
+          OR (at.state <> 'creating' AND t.current_attempt_id IS DISTINCT FROM at.id)))
+  AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+ORDER BY p.id, r.created_at DESC, r.id
+ON CONFLICT (source_kind, source_id) DO UPDATE
+SET state = 'open', resolved_at = NULL, updated_at = now(), session_id = EXCLUDED.session_id,
+    read_at = CASE WHEN a.state <> 'open' THEN NULL ELSE a.read_at END,
+    href = EXCLUDED.href, detail = EXCLUDED.detail
+WHERE a.state <> 'open' OR a.detail IS DISTINCT FROM EXCLUDED.detail
+RETURNING id;
+
+-- Approval/refusal ends the owner's need as soon as it is recorded; a rejected transport can
+-- reopen it. Supersession, expiry and all later candidate states also end it.
+-- name: ResolveMergeProposalAttention :many
+UPDATE attention_items a SET state = 'resolved', resolved_at = now(), updated_at = now()
+WHERE a.owner_id = $1 AND a.source_kind = 'merge_proposal' AND a.state = 'open'
+  AND NOT EXISTS (
+      SELECT 1 FROM merge_proposals p JOIN merge_candidates c ON c.id = p.candidate_id
+      JOIN hitl_requests r ON r.id = a.detail->>'hitl_request_id'
+      JOIN hitl_merge_tools m ON m.request_id = r.id AND m.proposal_id = p.id
+      JOIN sessions s ON s.id = r.session_id AND s.user_id = r.owner_id
+      JOIN agent_bindings b ON b.session_id = r.session_id AND b.kagent_session_id = r.kagent_session_id AND b.kagent_deleted_at IS NULL
+      WHERE p.id = a.source_id AND p.owner_id = a.owner_id AND r.owner_id = p.owner_id AND p.session_id = r.session_id
+        AND r.availability IN ('pending', 'stale') AND c.route = 'approval' AND c.state = 'prepared'
+        AND (c.deadline IS NULL OR c.deadline > now())
+        AND s.project_id = c.project_id AND s.archived_at IS NULL AND s.status NOT IN ('completed', 'failed', 'cancelled', 'superseded')
+        AND NOT EXISTS (SELECT 1 FROM hitl_responses h WHERE h.request_id = r.id AND h.state IN ('recorded', 'sending', 'accepted', 'uncertain'))
+  )
+RETURNING a.id;

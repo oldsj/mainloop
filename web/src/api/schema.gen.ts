@@ -1114,6 +1114,11 @@ export interface components {
     };
     /** AttentionItem */
     AttentionItem: {
+      /**
+       * @description Closed reason for reconciliation or merge approval attention; absent for other sources.
+       * @enum {string}
+       */
+      reason_code?: 'reconciliation' | 'runtime_stop_unresolved' | 'merge_approval';
       /** Id */
       id: string;
       /**
@@ -4198,6 +4203,7 @@ export interface components {
       state: string | null;
       deadline: string | null;
     };
+    /** @description Owner-scoped native request with bounded merge summaries, bound by the runtime AgentTemplate and configured tool name. Full merge evidence uses getHITLMergeDetails paging. */
     HITLView: {
       request: components['schemas']['HITLProjection'];
       response: components['schemas']['DecisionReceipt'] | null;
@@ -4209,6 +4215,7 @@ export interface components {
       unavailable_reason: string | null;
       context: components['schemas']['HITLContext'];
       writes_enabled: boolean;
+      /** @description Server-resolved proposal, repository, PR, pinned commits, policy and summary for each configured merge tool call. No client interpretation of tool arguments grants authority. */
       merge: components['schemas']['VerifiedMergeContext'][] | null;
     };
     /** @description One changed file (files section) or CI record (checks section); the GitHub fields beyond these pass through. */

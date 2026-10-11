@@ -172,14 +172,19 @@ type Service struct {
 	WritesEnabled bool
 	Log           *slog.Logger
 	Opts          Options
+	// MergeConfigs binds native tool names to the runtime's named template and provider.
+	MergeConfigs []config.MergeConfiguration
+	MergeRuntime MergeRuntime
 }
 
 // NewService builds the service from the configuration.
 func NewService(cfg *config.Config, pool *pgxpool.Pool, k Kagent, log *slog.Logger) *Service {
+	runtime, _ := k.(MergeRuntime)
 	return &Service{
 		Pool: pool, Kagent: k, OwnerID: cfg.Identity.OwnerID, Log: log,
 		Agent:         kagent.AgentRef{Namespace: cfg.Kagent.Namespace, Name: cfg.Kagent.MainAgent},
 		WritesEnabled: bool(cfg.OwnerHITLWritesEnabled),
+		MergeConfigs:  cfg.MergeConfigurations, MergeRuntime: runtime,
 	}
 }
 

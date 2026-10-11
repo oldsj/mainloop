@@ -137,6 +137,9 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 			string(dbstate.MergeBlocked), string(dbstate.MergeExpired), string(dbstate.MergeSuperseded),
 			string(dbstate.MergeMerged))},
 		// No state machine, so no dbstate type: the contract enum is the constant the CHECK must match.
+		{"attention_items", "reason_code", strs(
+			string(api.AttentionItemReasonCodeReconciliation), string(api.AttentionItemReasonCodeRuntimeStopUnresolved),
+			string(api.AttentionItemReasonCodeMergeApproval))},
 		{"environment_versions", "architecture", strs(
 			string(api.EnvironmentVersionArchitectureAmd64), string(api.EnvironmentVersionArchitectureArm64))},
 		{"tasks", "pr_state", strs(
