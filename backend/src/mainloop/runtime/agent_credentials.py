@@ -17,7 +17,6 @@ from mainloop.runtime.kagent_client import SessionCredential
 SECRET_KEY = "authorization"  # nosec B105 - Kubernetes data key, not a credential
 SECRET_LABELS = {"mainloop.dev/actor-egress": "true", "mainloop.dev/purpose": "mcp"}
 logger = logging.getLogger(__name__)
-MCP_ORIGIN = "http://mainloop-mcp.mainloop.svc.cluster.local"
 # Pairs only a task attempt can own. Coordination children also exist outside tasks (session
 # delegation), so only a ``child``/``workspace`` or ``supervisor`` binding is delegated by its pair.
 DELEGATED_PAIRS = frozenset({("supervisor", "workspace"), ("child", "workspace")})
@@ -126,9 +125,9 @@ credentials = CredentialStore()
 def credential_reference(binding_id: str) -> SessionCredential:
     """Return the non-secret CreateSession reference for one binding."""
     return SessionCredential(
-        origin=MCP_ORIGIN,
+        origin=settings.mcp_origin,
         header="Authorization",
-        secret_name=f"mainloop-mcp-{binding_id}",
+        secret_name=f"{settings.credential_secret_prefix}-mcp-{binding_id}",
         secret_key=SECRET_KEY,
     )
 

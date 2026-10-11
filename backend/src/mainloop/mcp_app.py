@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 from fastapi import HTTPException
+from mainloop.config import settings
 from mainloop.db import db
 from mainloop.db.tasks import TaskError
 from mainloop.runtime.agent_tools import AgentService, Ctx
@@ -193,8 +194,8 @@ def create_app(service: AgentService | None = None):
             streamable_http_path=path,
             transport_security=TransportSecuritySettings(
                 allowed_hosts=[
-                    "mainloop-mcp.mainloop.svc.cluster.local",
-                    "mainloop-mcp.mainloop.svc.cluster.local:*",
+                    settings.mcp_host,
+                    f"{settings.mcp_host}:*",
                     "localhost:*",
                     "127.0.0.1:*",
                     "testserver",

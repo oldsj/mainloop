@@ -364,12 +364,23 @@ without them, and the features that need them stay unavailable:
 | `kagent-control-token`   | `current`                                                    | No kagent sessions; also enable the `control-auth` component in the overlay |
 | `kagent-control-ca`      | `ca.crt` (cert-manager)                                      | As above                                                                    |
 
-Agent sessions also need code changes before they can work here. The MCP host
-allowlist, the agent credential MCP origin and the Git proxy origins are fixed to
-the production namespace (`mainloop-*.mainloop.svc.cluster.local`), and per-binding
-credential Secrets share production's `mainloop-mcp-*` names in the `kagent`
-namespace. Until those are parameterised per namespace, the dev agents can be
-created and their harness images swapped, but they cannot call Mainloop tools.
+Agent paths are per namespace. `MAINLOOP_NAMESPACE` (default `mainloop`, set to
+`mainloop-dev` here) sets the origins agents call, `http://mainloop-mcp.<ns>.svc.cluster.local`
+and `http://mainloop-git-{read,push}.<ns>.svc.cluster.local`, the MCP server's accepted Host,
+and the prefix of the per-binding credential Secrets Mainloop writes in the shared `kagent`
+namespace. The prefix is the namespace itself, so production keeps `mainloop-mcp-*` and
+`mainloop-git-{read,push}-*`, and mainloop-dev writes `mainloop-dev-mcp-*` and
+`mainloop-dev-git-{read,push}-*`. Secrets are deleted only by exact name. The Git origin
+settings accept only the configured namespace's two origins.
+
+The dev agents still cannot call Mainloop tools until the infrastructure repository adds
+mainloop-dev's credential tuples and MCP origin to kagent's service policy and lets
+`mainloop-dev:mainloop-backend` manage Secrets in `kagent`.
+
+Production and mainloop-dev share one kagent principal, so each can list the other's
+Sessions. `mainloop-sweep-kagent-sessions` only considers Sessions on the Agents its own
+settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two instances' Agents
+disjoint, as the `*-dev` names do.
 
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
 the namespace, the database and the dev agents.

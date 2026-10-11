@@ -15,8 +15,11 @@ data:
   DEV_MODE: 'true'
   IS_TEST_ENV: 'false'
   NATIVE_CHILD_KINDS: claude,codex
-  # The Git and MCP origins are fixed to the production namespace in code, so the
-  # agent paths stay off here (see docs/dev-environment.md#live-dev-instance).
+  # Derives the MCP and Git origins (*.mainloop-dev.svc.cluster.local) and the
+  # mainloop-dev- prefix of this instance's credential Secrets in the kagent namespace.
+  MAINLOOP_NAMESPACE: mainloop-dev
+  # Off until a testrepo-only path is decided: the shared GitHub App can reach
+  # every repository it is installed on (see docs/dev-environment.md#live-dev-instance).
   GIT_TRANSPORT_ENABLED: 'false'
   PUSH_GATE_ENABLED: 'false'
   MAINLOOP_MERGE_TOOLS_ENABLED: 'false'

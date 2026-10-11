@@ -1,5 +1,6 @@
 """Configuration management."""
 
+import re
 from urllib.parse import quote_plus, urlsplit
 
 from mainloop.runtime.control_credentials import read_control_token
@@ -7,6 +8,8 @@ from pydantic import Field, SecretStr, computed_field, field_validator, model_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from models.provider import ProviderProfile
+
+_DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 
 
 class Settings(BaseSettings):
@@ -24,18 +27,58 @@ class Settings(BaseSettings):
     # Reserved contract only; this slice installs no listener even when enabled.
     push_gate_enabled: bool = Field(False, validation_alias="PUSH_GATE_ENABLED")
     git_transport_enabled: bool = False
-    git_read_origin: str = "http://mainloop-git-read.mainloop.svc.cluster.local"
-    git_push_origin: str = "http://mainloop-git-push.mainloop.svc.cluster.local"
+    # Derived from MAINLOOP_NAMESPACE when unset; any other value is rejected.
+    git_read_origin: str = ""
+    git_push_origin: str = ""
     push_gate_origin: str = ""
     push_gate_max_command_bytes: int = Field(262144, ge=1)
     push_gate_max_body_bytes: int = Field(268435456, ge=1)
 
+    # The namespace this instance's Services run in. Every in-cluster origin agents call (MCP,
+    # Git read and push) and the prefix of its per-binding credential Secrets in the shared
+    # kagent namespace derive from it, so two instances sharing one kagent never collide.
+    mainloop_namespace: str = "mainloop"
+
+    @field_validator("mainloop_namespace")
+    @classmethod
+    def _namespace_label(cls, value: str) -> str:
+        if not _DNS_LABEL.fullmatch(value):
+            raise ValueError("MAINLOOP_NAMESPACE must be a DNS label")
+        # Another instance's Secret prefix must never match production's names
+        # (``mainloop-mcp-*``, ``mainloop-git-read-*``, ``mainloop-git-push-*``).
+        if value != "mainloop" and value.startswith(("mainloop-mcp", "mainloop-git")):
+            raise ValueError("MAINLOOP_NAMESPACE collides with production names")
+        return value
+
+    def service_origin(self, service: str) -> str:
+        """Return the in-cluster origin of one of this instance's Services."""
+        return f"http://{service}.{self.mainloop_namespace}.svc.cluster.local"
+
+    @property
+    def mcp_origin(self) -> str:
+        return self.service_origin("mainloop-mcp")
+
+    @property
+    def mcp_host(self) -> str:
+        return urlsplit(self.mcp_origin).netloc
+
+    @property
+    def credential_secret_prefix(self) -> str:
+        """Prefix of per-binding Secret names in the shared kagent namespace.
+
+        It is the namespace itself: ``mainloop`` in production, ``mainloop-dev`` for the live
+        dev instance. The kagent credential policy matches each instance by this prefix.
+        """
+        return self.mainloop_namespace
+
     @model_validator(mode="after")
     def _git_configuration(self):
         for purpose in ("read", "push"):
-            if getattr(self, f"git_{purpose}_origin") != (
-                f"http://mainloop-git-{purpose}.mainloop.svc.cluster.local"
-            ):
+            field = f"git_{purpose}_origin"
+            expected = self.service_origin(f"mainloop-git-{purpose}")
+            if not getattr(self, field):
+                setattr(self, field, expected)
+            elif getattr(self, field) != expected:
                 raise ValueError("Git origin is not sanctioned")
         if self.git_transport_enabled and not self.agent_token_key.strip():
             raise ValueError("Git transport requires AGENT_TOKEN_KEY")

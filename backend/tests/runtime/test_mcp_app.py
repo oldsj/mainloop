@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mainloop.mcp_app import TOOLS, create_app, invoke
-from mainloop.runtime.agent_credentials import MCP_ORIGIN, CredentialStore
+from mainloop.runtime.agent_credentials import CredentialStore
 from mainloop.runtime.agent_identity import hash_token
 from mainloop.runtime.agent_tools import AgentService, Ctx
 from mainloop.runtime.kagent_client import (
@@ -18,6 +18,8 @@ from mainloop.runtime.kagent_client import (
 from mainloop.runtime.policy import Actor, PolicyError, surface_tools, tools_for
 from mainloop.tasks.lifecycle import LifecycleDenied
 from tests.runtime.test_context_model import KINDS, FakeStore
+
+MCP_ORIGIN = "http://mainloop-mcp.mainloop.svc.cluster.local"
 
 
 class MCPTests(unittest.IsolatedAsyncioTestCase):

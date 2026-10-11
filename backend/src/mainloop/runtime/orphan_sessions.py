@@ -5,6 +5,12 @@ workspace row can outlive its Session if kagent was unreachable. Mainloop cannot
 itself, so this lists every Session kagent holds for ``KAGENT_USER_ID`` that no binding names.
 It only lists unless ``--delete`` is given.
 
+Only Sessions on an Agent this instance's settings name (the ``KAGENT_*_AGENT`` settings and the
+configured provider profiles) are considered. Production and the live dev instance share one
+kagent principal, so each sees the other's Sessions; they use disjoint Agents, and this filter
+keeps each sweep to its own. A Session whose Agent is unknown, or was configured here once but
+no longer is, is never listed or deleted. Keep the two instances' Agents disjoint.
+
 Run it with the backend's environment (database and kagent settings). The production image has
 no ``uv``; the command is on PATH::
 
@@ -27,6 +33,7 @@ import asyncio
 import logging
 import sys
 
+from mainloop.config import settings
 from mainloop.db import db
 from mainloop.runtime import native_sessions as ns
 from mainloop.runtime.kagent_client import KagentError, KagentSession, RuntimeState
@@ -48,15 +55,45 @@ async def _bound_ids() -> tuple[set[str], int]:
     return {r["kagent_session_id"] for r in rows}, unresolved
 
 
+def instance_agents() -> frozenset[tuple[str, str]]:
+    """Return the (namespace, name) of every kagent Agent this instance's settings name."""
+    from mainloop.providers import registry
+
+    names = (
+        settings.kagent_main_agent,
+        settings.kagent_claude_agent,
+        settings.kagent_codex_agent,
+        settings.kagent_workspace_claude_agent,
+        settings.kagent_workspace_codex_agent,
+        settings.kagent_supervisor_claude_agent,
+        settings.kagent_supervisor_codex_agent,
+    )
+    agents = {(settings.kagent_namespace, name) for name in names}
+    for profile in registry().profiles:
+        agents.update((ref.namespace, ref.name) for ref in profile.agents.values())
+    return frozenset(agents)
+
+
+def _ours(session: KagentSession, agents: frozenset[tuple[str, str]]) -> bool:
+    return session.agent is not None and (
+        (session.agent.namespace, session.agent.name) in agents
+    )
+
+
 async def find_orphans() -> tuple[list[KagentSession], int]:
-    """Return the Sessions with no binding, and the number of bindings with no Session id yet.
+    """Return this instance's Sessions with no binding, and the bindings with no Session id yet.
 
     The bindings are read after the listing, so a Session created during the listing is not
     reported just because the listing was older than its binding.
     """
+    agents = instance_agents()
     sessions = await ns.get_client().list_sessions()
     bound, unresolved = await _bound_ids()
-    orphans = [s for s in sessions if s.state not in _GONE and s.id not in bound]
+    orphans = [
+        s
+        for s in sessions
+        if s.state not in _GONE and s.id not in bound and _ours(s, agents)
+    ]
     return orphans, unresolved
 
 
