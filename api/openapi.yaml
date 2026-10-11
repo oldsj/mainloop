@@ -35,6 +35,8 @@ tags:
     description: Development environments, versions, grants and selection.
   - name: tasks
     description: Task reads, task operations and task actions.
+  - name: schedules
+    description: Scheduled agent runs proxied from kagent; schedules, triggers and executions.
 paths:
   /activity:
     get:
@@ -510,8 +512,13 @@ paths:
         SSE endpoint for real-time updates.
 
         Streams events for:
-        - inbox:updated - when inbox items change
+        - connected - first frame of every stream
         - heartbeat - periodic keepalive (every 30s)
+        - inbox:updated - when inbox items change
+        - schedule:updated - when a schedule changes or starts an execution
+        - session:message - when a mirrored reply lands in a session conversation
+        - task:updated - when a task changes; read it with getTask
+        - workspace:updated - when the workspace lifecycle projection changes
 
         The client should reconnect automatically on disconnect.
         EventSource handles this natively.
@@ -527,6 +534,7 @@ paths:
                   - $ref: '#/components/schemas/EventConnected'
                   - $ref: '#/components/schemas/EventHeartbeat'
                   - $ref: '#/components/schemas/EventInboxUpdated'
+                  - $ref: '#/components/schemas/EventScheduleUpdated'
                   - $ref: '#/components/schemas/EventSessionMessage'
                   - $ref: '#/components/schemas/EventTaskUpdated'
                   - $ref: '#/components/schemas/EventWorkspaceUpdated'
@@ -543,6 +551,8 @@ paths:
           $ref: '#/components/schemas/EventHeartbeat'
         inbox:updated:
           $ref: '#/components/schemas/EventInboxUpdated'
+        schedule:updated:
+          $ref: '#/components/schemas/EventScheduleUpdated'
         session:message:
           $ref: '#/components/schemas/EventSessionMessage'
         task:updated:
@@ -1460,6 +1470,389 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /schedules:
+    get:
+      tags:
+        - schedules
+      summary: List Schedules
+      description: The owner's schedules, one page at a time. Ordered by schedule id, not by creation time.
+      operationId: listSchedules
+      x-served-by: go
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            default: 50
+            title: Limit
+        - name: page_token
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+            title: Page Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunPage'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+    post:
+      tags:
+        - schedules
+      summary: Create Schedule
+      description: Create a scheduled agent run. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body returns 409.
+      operationId: createSchedule
+      x-served-by: go
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduledRunCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          headers:
+            ETag:
+              description: Quoted etag of the schedule (a UUID). Send it back as If-Match on update.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunOutput'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /schedules/{schedule_id}:
+    get:
+      tags:
+        - schedules
+      summary: Get Schedule
+      description: A deleted schedule returns 404.
+      operationId: getSchedule
+      x-served-by: go
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Schedule Id
+      responses:
+        '200':
+          description: Successful Response
+          headers:
+            ETag:
+              description: Quoted etag of the schedule (a UUID). Send it back as If-Match on update.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunOutput'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+    put:
+      tags:
+        - schedules
+      summary: Update Schedule
+      description: Replace the schedule configuration. Requires If-Match with the etag from the last read; a stale etag returns 412 and no If-Match returns 428. A deleted schedule returns 409.
+      operationId: updateSchedule
+      x-served-by: go
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Schedule Id
+        - name: If-Match
+          in: header
+          # the server returns 428 when this header is missing, so it is not required here
+          required: false
+          description: Quoted etag from the last read, for example "3f1c...". Required in practice; a missing header returns 428.
+          schema:
+            type: string
+            title: If-Match
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduledRunConfigInput'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          headers:
+            ETag:
+              description: Quoted etag of the schedule after the update. Send it back as If-Match on the next update.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunOutput'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '412':
+          description: Precondition Failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '428':
+          description: Precondition Required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+    delete:
+      tags:
+        - schedules
+      summary: Delete Schedule
+      description: Deleting an already-deleted schedule also returns 204.
+      operationId: deleteSchedule
+      x-served-by: go
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Schedule Id
+      responses:
+        '204':
+          description: Successful Response
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /schedules/{schedule_id}/executions:
+    get:
+      tags:
+        - schedules
+      summary: List Schedule Executions
+      description: One page of a schedule's executions, newest first. Each execution links to its session once one is reserved.
+      operationId: listScheduleExecutions
+      x-served-by: go
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Schedule Id
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+            default: 50
+            title: Limit
+        - name: page_token
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+            title: Page Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunExecutionPage'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /schedules/{schedule_id}/trigger:
+    post:
+      tags:
+        - schedules
+      summary: Trigger Schedule
+      description: Start one execution now. Returns 202 with the new execution, usually in pending state. A repeated request_id returns the execution it created.
+      operationId: triggerSchedule
+      x-served-by: go
+      parameters:
+        - name: schedule_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Schedule Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduledRunTriggerRequest'
+        required: true
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduledRunExecutionOutput'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /sessions:
     get:
       tags:
@@ -3753,6 +4146,325 @@ components:
       required:
         - name
       title: RegisterEnvironment
+    # kagent ScheduledRunService (fork commit ce402bf): proto/kagent/api/v1alpha1/scheduled_runs.proto.
+    # Field limits are copied from that file; cron and time-zone rules are from go/api/scheduledrun/schedule.go.
+    ScheduledRunAgentRef:
+      # kagent: common.proto ResourceReference (the agent to run)
+      properties:
+        namespace:
+          type: string
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+          title: Namespace
+        name:
+          type: string
+          maxLength: 253
+          minLength: 1
+          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+          title: Name
+      additionalProperties: false
+      type: object
+      required:
+        - namespace
+        - name
+      title: ScheduledRunAgentRef
+    ScheduledRunConfigInput:
+      # kagent ScheduledRunConfig, input side: omitted fields take kagent's defaults
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          title: Name
+          default: ''
+        schedule:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Schedule
+          description: Five-field cron expression (minute hour day-of-month month day-of-week). Macros such as @daily are rejected.
+        time_zone:
+          type: string
+          maxLength: 253
+          title: Time Zone
+          default: UTC
+          description: IANA time zone name, for example Europe/London. Blank means UTC; Local is rejected.
+        prompt:
+          type: string
+          maxLength: 32768
+          minLength: 1
+          pattern: \S
+          title: Prompt
+          description: Sent to the agent on each firing. At most 32768 bytes; maxLength counts characters, so the server also checks the byte count.
+        paused:
+          type: boolean
+          title: Paused
+          default: false
+          description: Pauses the schedule. Config changes apply only to executions reserved after the update.
+        execution_timeout_seconds:
+          type: number
+          format: double
+          minimum: 0.000001
+          maximum: 9223372036
+          title: Execution Timeout Seconds
+          default: 900
+          description: Includes queueing and provisioning. Default 900 (15 minutes); the minimum is one microsecond.
+      additionalProperties: false
+      type: object
+      required:
+        - schedule
+        - prompt
+      title: ScheduledRunConfigInput
+    ScheduledRunConfigOutput:
+      # kagent ScheduledRunConfig, output side: every field is always sent
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          title: Name
+        schedule:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Schedule
+          description: Five-field cron expression (minute hour day-of-month month day-of-week).
+        time_zone:
+          type: string
+          maxLength: 253
+          title: Time Zone
+        prompt:
+          type: string
+          maxLength: 32768
+          minLength: 1
+          pattern: \S
+          title: Prompt
+        paused:
+          type: boolean
+          title: Paused
+        execution_timeout_seconds:
+          type: number
+          format: double
+          minimum: 0.000001
+          maximum: 9223372036
+          title: Execution Timeout Seconds
+      additionalProperties: false
+      type: object
+      required:
+        - name
+        - schedule
+        - time_zone
+        - prompt
+        - paused
+        - execution_timeout_seconds
+      title: ScheduledRunConfigOutput
+    ScheduledRunCreate:
+      # kagent CreateScheduledRunRequest: agent, request_id (1-128) and config are required
+      properties:
+        request_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Request Id
+          description: Idempotency key for this create. Use a new value per create; a retry must reuse it.
+        agent:
+          $ref: '#/components/schemas/ScheduledRunAgentRef'
+        config:
+          $ref: '#/components/schemas/ScheduledRunConfigInput'
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+        - agent
+        - config
+      title: ScheduledRunCreate
+    ScheduledRunOutput:
+      # kagent ScheduledRun. Omitted on purpose: creator (always the caller), request_hash (internal)
+      # and deleted_at (a deleted schedule is returned as 404).
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Schedule UUID.
+        agent:
+          $ref: '#/components/schemas/ScheduledRunAgentRef'
+        config:
+          $ref: '#/components/schemas/ScheduledRunConfigOutput'
+        etag:
+          type: string
+          title: Etag
+          description: UUID that changes on every update. Send it back quoted as If-Match.
+        next_execution_time:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Next Execution Time
+          description: Null when kagent has no next firing time.
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - agent
+        - config
+        - etag
+        - next_execution_time
+        - created_at
+        - updated_at
+      title: ScheduledRunOutput
+    ScheduledRunTriggerRequest:
+      # kagent TriggerScheduledRunRequest.request_id: 1-128 characters
+      properties:
+        request_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Request Id
+          description: Idempotency key. A repeated request_id returns the execution it already created.
+      additionalProperties: false
+      type: object
+      required:
+        - request_id
+      title: ScheduledRunTriggerRequest
+    ScheduledRunExecutionOutput:
+      # kagent ScheduledRunExecution. Omitted: creator (the schedule's owner) and the
+      # UNSPECIFIED state, which a stored execution never has.
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Execution UUIDv7, so ids are time-ordered.
+        scheduled_run_id:
+          type: string
+          title: Scheduled Run Id
+        scheduled_time:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Scheduled Time
+          description: Set for a cron firing; null for a manual trigger.
+        manual_request_id:
+          anyOf:
+            - type: string
+              maxLength: 128
+              minLength: 1
+            - type: 'null'
+          title: Manual Request Id
+          description: Set for a manual trigger; null for a cron firing.
+        prompt:
+          type: string
+          title: Prompt
+          description: The prompt this execution was reserved with.
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        deadline:
+          type: string
+          format: date-time
+          title: Deadline
+          description: When the execution times out if it has not finished.
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Session Id
+          description: Null until a session is reserved. Kept after that session is deleted, so it is history, not proof the session still exists.
+        state:
+          type: string
+          enum:
+            - pending
+            - running
+            - succeeded
+            - failed
+            - timed_out
+          title: State
+        task_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Task Id
+          description: Original A2A task. Null until set; does not change when the conversation continues.
+        completed_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Completed At
+        failure_reason:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Failure Reason
+          description: Stable explanation of a failure; null when there is none.
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - scheduled_run_id
+        - scheduled_time
+        - manual_request_id
+        - prompt
+        - created_at
+        - deadline
+        - session_id
+        - state
+        - task_id
+        - completed_at
+        - failure_reason
+      title: ScheduledRunExecutionOutput
+    ScheduledRunPage:
+      properties:
+        items:
+          # no cap in kagent beyond PageRequest.limit (at most 100 per page)
+          items:
+            $ref: '#/components/schemas/ScheduledRunOutput'
+          type: array
+          maxItems: 100
+          title: Items
+        next_page_token:
+          anyOf:
+            - type: string
+              maxLength: 128
+            - type: 'null'
+          title: Next Page Token
+          description: Send as page_token for the next page; null on the last page.
+      additionalProperties: false
+      type: object
+      required:
+        - items
+        - next_page_token
+      title: ScheduledRunPage
+    ScheduledRunExecutionPage:
+      properties:
+        items:
+          # kagent PageRequest.limit is at most 100 per page
+          items:
+            $ref: '#/components/schemas/ScheduledRunExecutionOutput'
+          type: array
+          maxItems: 100
+          title: Items
+        next_page_token:
+          anyOf:
+            - type: string
+              maxLength: 128
+            - type: 'null'
+          title: Next Page Token
+          description: Send as page_token for the next page; null on the last page.
+      additionalProperties: false
+      type: object
+      required:
+        - items
+        - next_page_token
+      title: ScheduledRunExecutionPage
     SelectEnvironment:
       properties:
         environment_id:
@@ -8241,6 +8953,15 @@ components:
           minimum: 0
       additionalProperties: false
       description: '`inbox:updated`: either field is omitted when unknown.'
+    EventScheduleUpdated:
+      type: object
+      properties:
+        schedule_id:
+          type: string
+      required:
+        - schedule_id
+      additionalProperties: false
+      description: '`schedule:updated`: names a change; read the schedule with getSchedule or its executions with listScheduleExecutions.'
     EventSessionMessage:
       type: object
       properties:
