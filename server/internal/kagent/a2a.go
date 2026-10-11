@@ -179,6 +179,31 @@ func (c *Client) ListTasksPage(
 	return resp.Tasks, resp.NextPageToken, nil
 }
 
+// ListWaitingTasksPage reads one page of the tasks of a conversation that wait for input, each with
+// at most its latest history message. A waiting task's ask is in its status message, so this is
+// all a watcher needs and it stays small however long the conversation is; read a task with
+// GetTask for its whole history.
+func (c *Client) ListWaitingTasksPage(
+	ctx context.Context, agent AgentRef, contextID, token string, limit int,
+) (tasks []*a2a.Task, next string, err error) {
+	history := 1
+	raw, err := c.call(ctx, agent, methodListTasks, a2a.ListTasksRequest{
+		ContextID:     contextID,
+		Status:        a2a.TaskStateInputRequired,
+		HistoryLength: &history,
+		PageSize:      min(max(limit, 1), maxPageSize),
+		PageToken:     token,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	var resp a2a.ListTasksResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, "", &OutcomeUnknown{Op: "A2A " + methodListTasks, Detail: "bad task list", Err: err}
+	}
+	return resp.Tasks, resp.NextPageToken, nil
+}
+
 // ListTasks reads every task in a conversation.
 func (c *Client) ListTasks(ctx context.Context, agent AgentRef, contextID string) ([]*a2a.Task, error) {
 	return paginate("A2A "+methodListTasks, func(token string) ([]*a2a.Task, string, error) {

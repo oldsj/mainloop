@@ -7,8 +7,10 @@
 -- Design choices:
 --
 --   * Ownership is the session binding. A kagent session is adopted only when an agent_bindings
---     row names it, and the owner is that session's user. There is no creator check or alias
---     table: nested (subagent) requests, associations and merge enrichment arrive with G10, which
+--     row names it, and the owner is that session's user. The row stores the Agent that runs the
+--     session (kagent scopes a conversation to its Agent), resolved by the sessions package. A
+--     row whose binding no longer names its kagent session is deleted. There is no creator check
+--     or alias table: nested (subagent) requests, associations and merge enrichment arrive with G10, which
 --     adds its own tables beside these ones.
 --   * A request's id is derived from its outer identity (gateway, session, task, status message,
 --     request hash), so observing the same ask twice is a no-op, and a changed ask is a new row.
@@ -57,6 +59,10 @@ CREATE TABLE hitl_sessions (
     task_cursor text,
     -- NULL until the first scan; the scan order is least recently scanned first.
     scanned_at timestamptz,
+    -- A scan that failed for this session alone backs the session off: consecutive failures and
+    -- the time before which it is not scanned again. A success clears both.
+    failures integer NOT NULL DEFAULT 0,
+    next_scan_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -114,6 +120,8 @@ CREATE TABLE hitl_responses (
     ),
     detail text,
     attempts integer NOT NULL DEFAULT 0,
+    -- Lookups made while uncertain, so the recheck delay can grow.
+    rechecks integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     lease_owner text,
     lease_until timestamptz,

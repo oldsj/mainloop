@@ -404,9 +404,3 @@ func (d *decision) hash() (string, error) {
 	}
 	return hashOf(canon), nil
 }
-
-// responseMessage builds the A2A message that carries a response: the native response sits in the
-// HITL extension's metadata, and the text part is a label.
-func responseMessage(native map[string]any) map[string]any {
-	return map[string]any{kagent.HITLExtension: native}
-}

@@ -34,15 +34,51 @@ func (q *Queries) ConfirmHITLRequest(ctx context.Context, id string) error {
 	return err
 }
 
-const countOpenAttention = `-- name: CountOpenAttention :one
-SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open'
+const countUnreadAttention = `-- name: CountUnreadAttention :one
+SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open' AND read_at IS NULL
 `
 
-func (q *Queries) CountOpenAttention(ctx context.Context, ownerID string) (int32, error) {
-	row := q.db.QueryRow(ctx, countOpenAttention, ownerID)
+func (q *Queries) CountUnreadAttention(ctx context.Context, ownerID string) (int32, error) {
+	row := q.db.QueryRow(ctx, countUnreadAttention, ownerID)
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const deleteStaleHITLSessions = `-- name: DeleteStaleHITLSessions :execrows
+DELETE FROM hitl_sessions h
+WHERE h.owner_id = $1
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_bindings b
+      WHERE b.session_id = h.session_id AND b.kagent_session_id = h.kagent_session_id
+  )
+`
+
+// A session whose binding no longer names its kagent session (replaced or removed) is not scanned.
+func (q *Queries) DeleteStaleHITLSessions(ctx context.Context, ownerID string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleHITLSessions, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failHITLSessionScan = `-- name: FailHITLSessionScan :exec
+UPDATE hitl_sessions
+SET failures = failures + 1, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => $1::float8)
+WHERE kagent_session_id = $2
+`
+
+type FailHITLSessionScanParams struct {
+	DelaySeconds    float64
+	KagentSessionID string
+}
+
+// This session alone failed: leave it alone for a while, longer after each failure in a row.
+func (q *Queries) FailHITLSessionScan(ctx context.Context, arg FailHITLSessionScanParams) error {
+	_, err := q.db.Exec(ctx, failHITLSessionScan, arg.DelaySeconds, arg.KagentSessionID)
+	return err
 }
 
 const finishHITLResponse = `-- name: FinishHITLResponse :execrows
@@ -144,7 +180,7 @@ func (q *Queries) GetHITLRequest(ctx context.Context, arg GetHITLRequestParams) 
 }
 
 const getHITLResponse = `-- name: GetHITLResponse :one
-SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses WHERE id = $1 AND owner_id = $2
+SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses WHERE id = $1 AND owner_id = $2
 `
 
 type GetHITLResponseParams struct {
@@ -167,6 +203,7 @@ func (q *Queries) GetHITLResponse(ctx context.Context, arg GetHITLResponseParams
 		&i.State,
 		&i.Detail,
 		&i.Attempts,
+		&i.Rechecks,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
@@ -227,7 +264,7 @@ func (q *Queries) GetHITLResponseWork(ctx context.Context, id string) (GetHITLRe
 }
 
 const getLatestHITLResponse = `-- name: GetLatestHITLResponse :one
-SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses
+SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses
 WHERE request_id = $1 AND owner_id = $2
 ORDER BY (state <> 'rejected_transport') DESC, created_at DESC, id DESC
 LIMIT 1
@@ -253,6 +290,7 @@ func (q *Queries) GetLatestHITLResponse(ctx context.Context, arg GetLatestHITLRe
 		&i.State,
 		&i.Detail,
 		&i.Attempts,
+		&i.Rechecks,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
@@ -263,7 +301,7 @@ func (q *Queries) GetLatestHITLResponse(ctx context.Context, arg GetLatestHITLRe
 }
 
 const getLiveHITLResponse = `-- name: GetLiveHITLResponse :one
-SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses
+SELECT id, request_id, owner_id, idempotency_key, decision, decision_hash, outbound_message_id, receipt, state, detail, attempts, rechecks, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM hitl_responses
 WHERE request_id = $1 AND state IN ('recorded', 'sending', 'accepted', 'uncertain')
 `
 
@@ -282,6 +320,7 @@ func (q *Queries) GetLiveHITLResponse(ctx context.Context, requestID string) (Hi
 		&i.State,
 		&i.Detail,
 		&i.Attempts,
+		&i.Rechecks,
 		&i.NextAttemptAt,
 		&i.LeaseOwner,
 		&i.LeaseUntil,
@@ -410,6 +449,89 @@ func (q *Queries) InsertHITLResponse(ctx context.Context, arg InsertHITLResponse
 	return err
 }
 
+const insertHITLSession = `-- name: InsertHITLSession :exec
+INSERT INTO hitl_sessions (kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id)
+VALUES ($1, $2, $3, $4, $5, $1)
+ON CONFLICT (kagent_session_id) DO NOTHING
+`
+
+type InsertHITLSessionParams struct {
+	KagentSessionID string
+	SessionID       string
+	OwnerID         string
+	AgentNamespace  string
+	AgentName       string
+}
+
+func (q *Queries) InsertHITLSession(ctx context.Context, arg InsertHITLSessionParams) error {
+	_, err := q.db.Exec(ctx, insertHITLSession,
+		arg.KagentSessionID,
+		arg.SessionID,
+		arg.OwnerID,
+		arg.AgentNamespace,
+		arg.AgentName,
+	)
+	return err
+}
+
+const listHITLBindingsToAdopt = `-- name: ListHITLBindingsToAdopt :many
+
+SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
+FROM agent_bindings b
+JOIN sessions s ON s.id = b.session_id
+LEFT JOIN workspaces w ON w.id = b.session_id
+WHERE b.kagent_session_id IS NOT NULL AND s.archived_at IS NULL AND s.user_id = $1
+  AND NOT EXISTS (SELECT 1 FROM hitl_sessions h WHERE h.kagent_session_id = b.kagent_session_id)
+ORDER BY b.session_id
+`
+
+type ListHITLBindingsToAdoptRow struct {
+	SessionID               string
+	KagentSessionID         *string
+	UserID                  string
+	Kind                    string
+	Role                    dbstate.BindingRole
+	WorkspaceAgentNamespace *string
+	WorkspaceAgentName      *string
+}
+
+// Human-in-the-loop: the observer's checkpoints and requests, and the response ledger
+// (internal/hitl).
+//
+// The "fenced" response queries record a claimer's outcome: they match only the row's current
+// claim (id, lease_owner, attempts) and report rows affected, so a claimer that lost its lease
+// changes nothing. The ones that move to a final state also release the lease.
+// The bound kagent sessions the observer has not adopted yet, with what the sessions package needs
+// to resolve the Agent that runs each.
+func (q *Queries) ListHITLBindingsToAdopt(ctx context.Context, userID string) ([]ListHITLBindingsToAdoptRow, error) {
+	rows, err := q.db.Query(ctx, listHITLBindingsToAdopt, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHITLBindingsToAdoptRow{}
+	for rows.Next() {
+		var i ListHITLBindingsToAdoptRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.KagentSessionID,
+			&i.UserID,
+			&i.Kind,
+			&i.Role,
+			&i.WorkspaceAgentNamespace,
+			&i.WorkspaceAgentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHITLDiagnostics = `-- name: ListHITLDiagnostics :many
 SELECT runtime_session_id, detail, observed_at
 FROM hitl_diagnostics WHERE owner_id = $1 ORDER BY id DESC LIMIT 100
@@ -442,10 +564,11 @@ func (q *Queries) ListHITLDiagnostics(ctx context.Context, ownerID string) ([]Li
 }
 
 const listHITLSessionsToScan = `-- name: ListHITLSessionsToScan :many
-SELECT hs.kagent_session_id, hs.session_id, hs.owner_id, hs.agent_namespace, hs.agent_name, hs.context_id, hs.task_cursor, hs.scanned_at, hs.created_at, hs.updated_at FROM hitl_sessions hs
+SELECT hs.kagent_session_id, hs.session_id, hs.owner_id, hs.agent_namespace, hs.agent_name, hs.context_id, hs.task_cursor, hs.scanned_at, hs.failures, hs.next_scan_at, hs.created_at, hs.updated_at FROM hitl_sessions hs
 JOIN sessions s ON s.id = hs.session_id AND s.archived_at IS NULL
 WHERE hs.owner_id = $1
   AND (hs.scanned_at IS NULL OR hs.scanned_at <= now() - make_interval(secs => $2::float8))
+  AND (hs.next_scan_at IS NULL OR hs.next_scan_at <= now())
 ORDER BY hs.scanned_at NULLS FIRST, hs.kagent_session_id
 LIMIT $3
 `
@@ -474,6 +597,8 @@ func (q *Queries) ListHITLSessionsToScan(ctx context.Context, arg ListHITLSessio
 			&i.ContextID,
 			&i.TaskCursor,
 			&i.ScannedAt,
+			&i.Failures,
+			&i.NextScanAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -660,11 +785,13 @@ func (q *Queries) MarkHITLResponseSending(ctx context.Context, arg MarkHITLRespo
 	return result.RowsAffected(), nil
 }
 
-const markHITLResponseUncertain = `-- name: MarkHITLResponseUncertain :execrows
+const markHITLResponseUncertain = `-- name: MarkHITLResponseUncertain :one
 UPDATE hitl_responses
 SET state = 'uncertain', detail = $4,
+    rechecks = CASE WHEN state = 'uncertain' THEN rechecks + 1 ELSE 0 END,
     updated_at = CASE WHEN state = 'uncertain' THEN updated_at ELSE now() END
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'uncertain')
+RETURNING rechecks
 `
 
 type MarkHITLResponseUncertainParams struct {
@@ -674,18 +801,18 @@ type MarkHITLResponseUncertainParams struct {
 	Detail     *string
 }
 
-// updated_at is when the outcome first became unknown, so a recheck keeps it.
-func (q *Queries) MarkHITLResponseUncertain(ctx context.Context, arg MarkHITLResponseUncertainParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markHITLResponseUncertain,
+// updated_at is when the outcome first became unknown, so a recheck keeps it. rechecks counts the
+// lookups since then, for the delay before the next one; no row means the claim was lost.
+func (q *Queries) MarkHITLResponseUncertain(ctx context.Context, arg MarkHITLResponseUncertainParams) (int32, error) {
+	row := q.db.QueryRow(ctx, markHITLResponseUncertain,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,
 		arg.Detail,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	var rechecks int32
+	err := row.Scan(&rechecks)
+	return rechecks, err
 }
 
 const pruneHITLDiagnostics = `-- name: PruneHITLDiagnostics :exec
@@ -743,7 +870,7 @@ func (q *Queries) SetHITLAvailability(ctx context.Context, arg SetHITLAvailabili
 
 const setHITLSessionScan = `-- name: SetHITLSessionScan :exec
 UPDATE hitl_sessions
-SET task_cursor = $1, updated_at = now(),
+SET task_cursor = $1, updated_at = now(), failures = 0, next_scan_at = NULL,
     scanned_at = CASE WHEN $2::boolean THEN now() ELSE scanned_at END
 WHERE kagent_session_id = $3
 `
@@ -754,7 +881,8 @@ type SetHITLSessionScanParams struct {
 	KagentSessionID string
 }
 
-// A scan that is not done keeps its old scanned_at, so the session is picked again at once.
+// A scan that is not done keeps its old scanned_at, so the session is picked again at once. A page
+// that was read clears the session's failure backoff.
 func (q *Queries) SetHITLSessionScan(ctx context.Context, arg SetHITLSessionScanParams) error {
 	_, err := q.db.Exec(ctx, setHITLSessionScan, arg.Cursor, arg.Done, arg.KagentSessionID)
 	return err
@@ -792,36 +920,6 @@ func (q *Queries) SupersedeLiveHITLForTask(ctx context.Context, arg SupersedeLiv
 		return nil, err
 	}
 	return items, nil
-}
-
-const syncHITLSessions = `-- name: SyncHITLSessions :execrows
-
-INSERT INTO hitl_sessions (kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id)
-SELECT b.kagent_session_id, b.session_id, s.user_id, $1, $2, b.kagent_session_id
-FROM agent_bindings b
-JOIN sessions s ON s.id = b.session_id
-WHERE b.kagent_session_id IS NOT NULL AND s.archived_at IS NULL AND s.user_id = $3
-ON CONFLICT (kagent_session_id) DO NOTHING
-`
-
-type SyncHITLSessionsParams struct {
-	AgentNamespace string
-	AgentName      string
-	UserID         string
-}
-
-// Human-in-the-loop: the observer's checkpoints and requests, and the response ledger
-// (internal/hitl).
-//
-// The "fenced" response queries record a claimer's outcome: they match only the row's current
-// claim (id, lease_owner, attempts) and report rows affected, so a claimer that lost its lease
-// changes nothing. The ones that move to a final state also release the lease.
-func (q *Queries) SyncHITLSessions(ctx context.Context, arg SyncHITLSessionsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, syncHITLSessions, arg.AgentNamespace, arg.AgentName, arg.UserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const upsertHITLAttention = `-- name: UpsertHITLAttention :exec

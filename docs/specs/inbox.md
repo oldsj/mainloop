@@ -122,15 +122,23 @@ observer above is frozen reference; the Go slice covers a subset of it.
 
 Built:
 
-- **Observer.** A sweep on `reconcile.Runner` lists each bound session's kagent tasks read-only,
-  keeping a task-cursor checkpoint per session. A task in `input-required` whose status message
+- **Observer.** A sweep on `reconcile.Runner` lists each bound session's waiting kagent tasks
+  (filtered to `input-required`, each with only its latest message) read-only, keeping a
+  task-cursor checkpoint per session. Each session is asked on the Agent that runs it, resolved by
+  the same rule the session routes use (`sessions.Service.ResolveAgent`: the workspace's Agent,
+  else the main Agent for the main role, else the provider profile's) and stored on its
+  `hitl_sessions` row; a row whose binding no longer names its kagent session is deleted. A scan
+  that fails for one session (credentials or wrong-Agent refusal, a lost reply, a timeout, a bad
+  reply) records a diagnostic and backs that session off (30 s, doubling to 10 min) while the
+  others go on; an unreachable kagent ends the scanning for that pass. Staleness never comes from
+  a scan: it comes from each request's own refresh failing. A task in `input-required` whose status message
   carries the HITL extension becomes a `hitl_requests` row (`pending`), identified by a hash of
   the session, task, status message and request body. Each open request gets an `attention_items`
   row, and `inbox:updated` is published in the same transaction. A request appears within one scan
   interval.
 - **Availability.** `pending` becomes `answered` when the task shows the response message,
   `unavailable` when the task moves on or disappears or a newer ask replaces it, and `stale`
-  (not answerable) when kagent has not confirmed it for two minutes. A stale request reopens when
+  (not answerable) when its own refresh has not been confirmed by kagent for two minutes. A stale request reopens when
   kagent confirms it again. Attention rows resolve when a request leaves `pending`/`stale`.
 - **Malformed asks** (no tools, a bad question list, an oversized payload) create no card; they
   appear as diagnostics on `GET /hitl-observer/status`.
@@ -138,14 +146,24 @@ Built:
   top-level tool decided, question ids and counts matching, answers within the choices), then
   writes a `hitl_responses` intent row keyed by the action id. The same action id with the same
   answer returns the same receipt; a different answer or request is `409`. One live response per
-  request. With `MAINLOOP_OWNER_HITL_WRITES_ENABLED` off the route answers `503`.
+  request. `action_id` is 1 to 2048 characters. A nested (delegated) request is shown with
+  `answerable=false` and a reason, and answering it is `409`, until G10 implements the leaf rule.
+  The view of a request whose latest response was `rejected_transport` has `response: null`, keeps
+  `transport_state`, and says why in `transport_detail`; `transport_detail` is also set for
+  recorded, sending and uncertain responses that have a reason. With `MAINLOOP_OWNER_HITL_WRITES_ENABLED` off the route answers `503`.
 - **Dispatch.** A reconcile loop reads the task first and sends only while the task still asks
   for exactly this request. The row is marked `sending` and committed before the call, and no
   transaction is open across kagent I/O. A send that provably did not leave is retried; any other
   failure records `uncertain`. An uncertain response is never resent: later passes look the
-  outbound message id up in the task and move to `accepted` when it appears. After ten minutes
-  with the ask still waiting and no message, it becomes `rejected_transport` and the owner may
+  outbound message id up. Only the original task can accept it: its history must show the id with
+  the HITL metadata that was sent. A message that only another task shows is
+  `rejected_transport` ("kagent took the answer as a new turn"), as is one whose metadata differs.
+  The lookups back off from 15 s, doubling to 1 h. After ten minutes with no message, the response
+  becomes `rejected_transport` whether the ask still waits or the task moved on, and the owner may
   answer again.
+- **Inbox.** `inbox:updated.unread_count` counts open attention items that are unread.
+  `GET /sessions/{id}/hitl` lists the newest 100 requests, oldest first within them, so a
+  conversation reads top to bottom and the cap drops the oldest.
 - **Routes.** `GET /sessions/{id}/hitl`, `GET /hitl/{id}`, `POST /hitl/{id}/respond`,
   `GET /hitl-observer/status`.
 
@@ -154,7 +172,5 @@ Not built:
 - Proof against a real kagent. The production sender (the shared client, with the answer in the
   HITL extension metadata and the `A2A-Extensions` header) is tested only against the in-process
   fake.
-- Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do nested delegated requests and
-  task-tree attention links.
-- An uncertain response whose task has moved on without ever showing the message is rechecked
-  indefinitely rather than resolved.
+- Merge details (`/hitl/{id}/merge/{proposal_id}/details`) stay on the 501 stub, as do
+  answering nested delegated requests (shown, not answerable) and task-tree attention links.

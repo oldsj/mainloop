@@ -5,27 +5,54 @@
 -- claim (id, lease_owner, attempts) and report rows affected, so a claimer that lost its lease
 -- changes nothing. The ones that move to a final state also release the lease.
 
--- name: SyncHITLSessions :execrows
-INSERT INTO hitl_sessions (kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id)
-SELECT b.kagent_session_id, b.session_id, s.user_id, $1, $2, b.kagent_session_id
+-- The bound kagent sessions the observer has not adopted yet, with what the sessions package needs
+-- to resolve the Agent that runs each.
+-- name: ListHITLBindingsToAdopt :many
+SELECT b.session_id, b.kagent_session_id, s.user_id, b.kind, b.role,
+       w.agent_namespace AS workspace_agent_namespace, w.agent_name AS workspace_agent_name
 FROM agent_bindings b
 JOIN sessions s ON s.id = b.session_id
-WHERE b.kagent_session_id IS NOT NULL AND s.archived_at IS NULL AND s.user_id = $3
+LEFT JOIN workspaces w ON w.id = b.session_id
+WHERE b.kagent_session_id IS NOT NULL AND s.archived_at IS NULL AND s.user_id = $1
+  AND NOT EXISTS (SELECT 1 FROM hitl_sessions h WHERE h.kagent_session_id = b.kagent_session_id)
+ORDER BY b.session_id;
+
+-- name: InsertHITLSession :exec
+INSERT INTO hitl_sessions (kagent_session_id, session_id, owner_id, agent_namespace, agent_name, context_id)
+VALUES ($1, $2, $3, $4, $5, $1)
 ON CONFLICT (kagent_session_id) DO NOTHING;
+
+-- A session whose binding no longer names its kagent session (replaced or removed) is not scanned.
+-- name: DeleteStaleHITLSessions :execrows
+DELETE FROM hitl_sessions h
+WHERE h.owner_id = $1
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_bindings b
+      WHERE b.session_id = h.session_id AND b.kagent_session_id = h.kagent_session_id
+  );
 
 -- name: ListHITLSessionsToScan :many
 SELECT hs.* FROM hitl_sessions hs
 JOIN sessions s ON s.id = hs.session_id AND s.archived_at IS NULL
 WHERE hs.owner_id = $1
   AND (hs.scanned_at IS NULL OR hs.scanned_at <= now() - make_interval(secs => sqlc.arg(every_seconds)::float8))
+  AND (hs.next_scan_at IS NULL OR hs.next_scan_at <= now())
 ORDER BY hs.scanned_at NULLS FIRST, hs.kagent_session_id
 LIMIT sqlc.arg(max_sessions);
 
 -- name: SetHITLSessionScan :exec
--- A scan that is not done keeps its old scanned_at, so the session is picked again at once.
+-- A scan that is not done keeps its old scanned_at, so the session is picked again at once. A page
+-- that was read clears the session's failure backoff.
 UPDATE hitl_sessions
-SET task_cursor = sqlc.narg(cursor), updated_at = now(),
+SET task_cursor = sqlc.narg(cursor), updated_at = now(), failures = 0, next_scan_at = NULL,
     scanned_at = CASE WHEN sqlc.arg(done)::boolean THEN now() ELSE scanned_at END
+WHERE kagent_session_id = sqlc.arg(kagent_session_id);
+
+-- name: FailHITLSessionScan :exec
+-- This session alone failed: leave it alone for a while, longer after each failure in a row.
+UPDATE hitl_sessions
+SET failures = failures + 1, updated_at = now(),
+    next_scan_at = now() + make_interval(secs => sqlc.arg(delay_seconds)::float8)
 WHERE kagent_session_id = sqlc.arg(kagent_session_id);
 
 -- name: ListHITLToRefresh :many
@@ -96,8 +123,8 @@ UPDATE attention_items
 SET state = 'resolved', resolved_at = now(), updated_at = now()
 WHERE source_kind = 'hitl_request' AND source_id = $1 AND state = 'open';
 
--- name: CountOpenAttention :one
-SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open';
+-- name: CountUnreadAttention :one
+SELECT count(*)::int FROM attention_items WHERE owner_id = $1 AND state = 'open' AND read_at IS NULL;
 
 -- name: InsertHITLDiagnostic :exec
 INSERT INTO hitl_diagnostics (owner_id, runtime_session_id, detail)
@@ -153,12 +180,15 @@ UPDATE hitl_responses
 SET state = 'sending', detail = NULL, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'recorded';
 
--- name: MarkHITLResponseUncertain :execrows
--- updated_at is when the outcome first became unknown, so a recheck keeps it.
+-- name: MarkHITLResponseUncertain :one
+-- updated_at is when the outcome first became unknown, so a recheck keeps it. rechecks counts the
+-- lookups since then, for the delay before the next one; no row means the claim was lost.
 UPDATE hitl_responses
 SET state = 'uncertain', detail = $4,
+    rechecks = CASE WHEN state = 'uncertain' THEN rechecks + 1 ELSE 0 END,
     updated_at = CASE WHEN state = 'uncertain' THEN updated_at ELSE now() END
-WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'uncertain');
+WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'uncertain')
+RETURNING rechecks;
 
 -- name: FinishHITLResponse :execrows
 UPDATE hitl_responses

@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
+	"github.com/oldsj/mainloop/server/internal/sessions"
 	"github.com/oldsj/mainloop/server/internal/testdb"
 )
 
@@ -43,14 +45,21 @@ type fakeKagent struct {
 	mu      sync.Mutex
 	tasks   map[string]*a2a.Task
 	listErr error
-	getErr  error
-	findErr error
-	sendErr error
+	// listErrFor fails the listing of one conversation only.
+	listErrFor map[string]error
+	// wantAgent, when set, makes every call for another Agent fail like kagent does: it refuses a
+	// conversation the calling Agent does not own.
+	wantAgent *kagent.AgentRef
+	getErr    error
+	findErr   error
+	sendErr   error
 	// onSend runs inside SendHITL after the send is recorded. Nil moves the task out of
 	// input-required and adds the message to its history, like a kagent that accepts.
 	onSend func(f *fakeKagent, s hitl.Send) error
 	sends  []hitl.Send
 	finds  int // FindTaskForMessage calls
+	lists  []listCall
+	gets   int // GetTask calls
 }
 
 func newFake() *fakeKagent { return &fakeKagent{tasks: map[string]*a2a.Task{}} }
@@ -79,16 +88,58 @@ func (f *fakeKagent) sendCount() int {
 	return len(f.sends)
 }
 
-func (f *fakeKagent) ListTasksPage(_ context.Context, _ kagent.AgentRef, contextID, token string, limit int) ([]*a2a.Task, string, error) {
+// refuses is kagent's answer to an Agent that does not own the conversation.
+func (f *fakeKagent) refuses(agent kagent.AgentRef) error {
+	if f.wantAgent != nil && agent != *f.wantAgent {
+		return &kagent.ConfigError{Msg: "kagent control service configuration failure (A2A auth refusal)"}
+	}
+	return nil
+}
+
+type listCall struct {
+	agent     kagent.AgentRef
+	contextID string
+}
+
+func (f *fakeKagent) listed(contextID string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.lists {
+		if c.contextID == contextID {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeKagent) getCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gets
+}
+
+func (f *fakeKagent) ListWaitingTasksPage(_ context.Context, agent kagent.AgentRef, contextID, token string, limit int) ([]*a2a.Task, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lists = append(f.lists, listCall{agent, contextID})
+	if err := f.refuses(agent); err != nil {
+		return nil, "", err
+	}
 	if f.listErr != nil {
 		return nil, "", f.listErr
 	}
+	if err := f.listErrFor[contextID]; err != nil {
+		return nil, "", err
+	}
 	var all []*a2a.Task
 	for _, t := range f.tasks {
-		if t.ContextID == contextID {
-			all = append(all, clone(t))
+		if t.ContextID == contextID && t.Status.State == a2a.TaskStateInputRequired {
+			c := clone(t)
+			if n := len(c.History); n > 1 {
+				c.History = c.History[n-1:] // the listing carries only the latest message
+			}
+			all = append(all, c)
 		}
 	}
 	slices.SortFunc(all, func(a, b *a2a.Task) int {
@@ -116,9 +167,13 @@ func (f *fakeKagent) ListTasksPage(_ context.Context, _ kagent.AgentRef, context
 	return all[min(start, len(all)):end], next, nil
 }
 
-func (f *fakeKagent) GetTask(_ context.Context, _ kagent.AgentRef, taskID string) (*a2a.Task, error) {
+func (f *fakeKagent) GetTask(_ context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.gets++
+	if err := f.refuses(agent); err != nil {
+		return nil, err
+	}
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -149,8 +204,12 @@ func (f *fakeKagent) FindTaskForMessage(_ context.Context, _ kagent.AgentRef, co
 	return nil, false, nil
 }
 
-func (f *fakeKagent) SendHITL(_ context.Context, _ kagent.AgentRef, s hitl.Send) error {
+func (f *fakeKagent) SendHITL(_ context.Context, agent kagent.AgentRef, s hitl.Send) error {
 	f.mu.Lock()
+	if err := f.refuses(agent); err != nil {
+		f.mu.Unlock()
+		return err
+	}
 	if f.sendErr != nil {
 		err := f.sendErr
 		f.mu.Unlock()
@@ -170,8 +229,16 @@ func (f *fakeKagent) accept(s hitl.Send) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t := f.tasks[s.TaskID]
-	t.History = append(t.History, &a2a.Message{ID: s.MessageID, Role: a2a.MessageRoleUser})
+	t.History = append(t.History, userMessage(s))
 	t.Status = a2a.TaskStatus{State: a2a.TaskStateWorking}
+}
+
+// userMessage is the response message as kagent keeps it in the task history.
+func userMessage(s hitl.Send) *a2a.Message {
+	return &a2a.Message{
+		ID: s.MessageID, Role: a2a.MessageRoleUser, Extensions: []string{kagent.HITLExtension},
+		Metadata: map[string]any{kagent.HITLExtension: s.Native},
+	}
 }
 
 func statusMessage(id string, request map[string]any) *a2a.Message {
@@ -584,6 +651,9 @@ func TestSendTimeoutIsUncertainAndNeverResent(t *testing.T) {
 	if err != nil || view.Answerable || view.TransportState == nil || *view.TransportState != "uncertain" {
 		t.Fatalf("view = %+v, %v", view, err)
 	}
+	if view.Response == nil || view.TransportDetail == nil || *view.TransportDetail == "" {
+		t.Fatalf("an uncertain answer keeps its receipt and says why: %+v", view)
+	}
 	// Another answer is refused while the first one is unresolved.
 	_, err = e.svc.Respond(context.Background(), req.ID, decision("act-2", api.ToolApprovalResponse{
 		Type: api.ToolApprovalResponseTypeToolApprovalResponse, Approvals: []api.ToolApproval{{Id: "t1", Approved: false}},
@@ -595,7 +665,7 @@ func TestSendTimeoutIsUncertainAndNeverResent(t *testing.T) {
 	// The message turns out to have arrived: the next pass sees it and accepts, without a send.
 	e.k.set(func() {
 		task := e.k.tasks["task-a"]
-		task.History = append(task.History, &a2a.Message{ID: e.k.sends[0].MessageID})
+		task.History = append(task.History, userMessage(e.k.sends[0]))
 		task.Status = a2a.TaskStatus{State: a2a.TaskStateWorking}
 	})
 	e.waitResponse("act-1", dbstate.HITLAccepted)
@@ -631,6 +701,9 @@ func TestUncertainHoldFailsOnlyWhileTheAskStillWaits(t *testing.T) {
 	again, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1"))
 	if err != nil || again.TransportState == nil || *again.TransportState != "rejected_transport" {
 		t.Fatalf("repeat of the failed action: %+v, %v", again, err)
+	}
+	if again.Response != nil || again.TransportDetail == nil || !strings.Contains(*again.TransportDetail, "never showed") {
+		t.Fatalf("a failed answer is not shown as the answer, and says why: %+v", again)
 	}
 	// A fresh action id sends again, because the first answer is known not to have landed.
 	e.run()
@@ -933,7 +1006,7 @@ func TestMalformedAskIsADiagnosticOnly(t *testing.T) {
 	}
 }
 
-func TestSettleFindsTheMessageInAnotherTaskOnlyWhenTheAskMovedOn(t *testing.T) {
+func TestAMessageInAnotherTaskIsNotAnAcceptedAnswer(t *testing.T) {
 	e := newEnv(t)
 	e.k.onSend = func(*fakeKagent, hitl.Send) error { return context.DeadlineExceeded }
 	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
@@ -955,12 +1028,95 @@ func TestSettleFindsTheMessageInAnotherTaskOnlyWhenTheAskMovedOn(t *testing.T) {
 		e.k.tasks["task-a"].Status = a2a.TaskStatus{State: a2a.TaskStateCanceled}
 		e.k.tasks["task-z"] = &a2a.Task{
 			ID: "task-z", ContextID: ksid, Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
-			History: []*a2a.Message{{ID: e.k.sends[0].MessageID}},
+			History: []*a2a.Message{userMessage(e.k.sends[0])},
 		}
 	})
-	e.waitResponse("act-1", dbstate.HITLAccepted)
+	r := e.waitResponse("act-1", dbstate.HITLRejectedTransport)
+	if !strings.Contains(deref(r.Detail), "new turn") {
+		t.Fatalf("detail = %q, want the new-turn reason", deref(r.Detail))
+	}
 	if n := e.k.sendCount(); n != 1 {
 		t.Fatalf("sends = %d, want 1", n)
+	}
+	view, err := e.svc.View(context.Background(), req.ID)
+	if err != nil || view.Response != nil || view.TransportDetail == nil || !strings.Contains(*view.TransportDetail, "new turn") {
+		t.Fatalf("view = %+v, %v", view, err)
+	}
+}
+
+func TestAMessageWithAnotherAnswerIsRejected(t *testing.T) {
+	e := newEnv(t)
+	e.k.onSend = func(f *fakeKagent, s hitl.Send) error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		other := userMessage(s)
+		other.Metadata = map[string]any{kagent.HITLExtension: map[string]any{"type": "tool_approval_response", "approvals": []any{}}}
+		task := f.tasks[s.TaskID]
+		task.History = append(task.History, other)
+		task.Status = a2a.TaskStatus{State: a2a.TaskStateWorking}
+		return nil
+	}
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	r := e.waitResponse("act-1", dbstate.HITLRejectedTransport)
+	if !strings.Contains(deref(r.Detail), "different answer") {
+		t.Fatalf("detail = %q", deref(r.Detail))
+	}
+}
+
+func TestAMovedOnTaskFailsTheAnswerOnlyAfterTheHold(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) {
+		s.Opts.UncertainHold = 300 * time.Millisecond
+		s.Opts.UncertainCeiling = 100 * time.Millisecond
+	})
+	e.k.onSend = func(*fakeKagent, hitl.Send) error { return context.DeadlineExceeded }
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLUncertain)
+	// The task moved on and no task shows the message. Until the hold ends the answer may still turn up.
+	e.k.set(func() { e.k.tasks["task-a"].Status = a2a.TaskStatus{State: a2a.TaskStateCanceled} })
+	time.Sleep(100 * time.Millisecond)
+	if got := e.response("act-1").State; got != dbstate.HITLUncertain {
+		t.Fatalf("state before the hold ended = %s, want uncertain", got)
+	}
+	r := e.waitResponse("act-1", dbstate.HITLRejectedTransport)
+	if !strings.Contains(deref(r.Detail), "moved on") {
+		t.Fatalf("detail = %q", deref(r.Detail))
+	}
+	if n := e.k.sendCount(); n != 1 {
+		t.Fatalf("sends = %d, want 1", n)
+	}
+}
+
+func TestUncertainRechecksBackOff(t *testing.T) {
+	e := newEnv(t)
+	e.k.onSend = func(*fakeKagent, hitl.Send) error { return context.DeadlineExceeded }
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	req := e.requestFor("task-a")
+	e.run()
+	if _, err := e.svc.Respond(context.Background(), req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLUncertain)
+	before := e.k.getCount()
+	time.Sleep(400 * time.Millisecond)
+	// 20 ms, 40 ms, 80 ms, 160 ms: a flat 20 ms would read about twenty times.
+	if n := e.k.getCount() - before; n > 8 {
+		t.Fatalf("%d lookups in 400 ms; the recheck delay does not grow", n)
+	}
+	if n := e.count(`SELECT rechecks FROM hitl_responses WHERE id = 'act-1'`); n < 2 {
+		t.Fatalf("rechecks = %d, want at least 2", n)
 	}
 }
 
@@ -975,4 +1131,271 @@ func clone(t *a2a.Task) *a2a.Task {
 	c := *t
 	c.History = slices.Clone(t.History)
 	return &c
+}
+
+// addSession binds another Mainloop session to its own kagent session.
+func (e *env) addSession(id, kagentSession, role string) {
+	e.t.Helper()
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx,
+		`INSERT INTO sessions (id, user_id, title, description, prompt) VALUES ($1, $2, 'Other', 'd', 'p')`, id, owner); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx,
+		`INSERT INTO agent_bindings (session_id, kind, role, kagent_session_id) VALUES ($1, 'claude', $2, $3)`,
+		id, role, kagentSession); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func inContext(t *a2a.Task, contextID string) *a2a.Task {
+	t.ContextID = contextID
+	return t
+}
+
+func TestAWorkspaceSessionIsAskedOnItsOwnAgent(t *testing.T) {
+	wsAgent := kagent.AgentRef{Namespace: "kagent", Name: "claude-ws"}
+	e := newEnv(t, func(s *hitl.Service) {
+		s.Agents = &sessions.Service{Agent: agent}
+	})
+	// The only session is workspace-bound, and kagent refuses any Agent but the workspace's.
+	ctx := context.Background()
+	for _, q := range []string{
+		`DELETE FROM agent_bindings`,
+		`DELETE FROM sessions`,
+	} {
+		if _, err := e.pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.addSession("sess-ws", "ks-ws", "agent")
+	for _, q := range []string{
+		`INSERT INTO projects (id, user_id, owner, name, full_name, html_url) VALUES ('p', $1, 'o', 'n', 'o/n', 'https://x')`,
+		`INSERT INTO workspaces (id, user_id, project_id, repo_url, branch, agent_kind, agent_namespace, agent_name, request_id)
+		 VALUES ('sess-ws', $1, 'p', 'https://x', 'b', 'claude', 'kagent', 'claude-ws', 'req-ws')`,
+	} {
+		if _, err := e.pool.Exec(ctx, q, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.k.set(func() { e.k.wantAgent = &wsAgent })
+	e.k.put(inContext(waitingTask("task-a", "msg-a", toolRequest("t1")), "ks-ws"))
+
+	e.observe()
+	req := e.requestFor("task-a")
+	if req.AgentNamespace != wsAgent.Namespace || req.AgentName != wsAgent.Name {
+		t.Fatalf("request agent = %s/%s, want the workspace's %s", req.AgentNamespace, req.AgentName, wsAgent.Name)
+	}
+	var hsAgent string
+	if err := e.pool.QueryRow(ctx, `SELECT agent_name FROM hitl_sessions WHERE kagent_session_id = 'ks-ws'`).Scan(&hsAgent); err != nil || hsAgent != wsAgent.Name {
+		t.Fatalf("hitl_sessions agent = %q, %v", hsAgent, err)
+	}
+	e.run()
+	if _, err := e.svc.Respond(ctx, req.ID, approveAll("t1")); err != nil {
+		t.Fatal(err)
+	}
+	e.waitResponse("act-1", dbstate.HITLAccepted)
+}
+
+func TestAMainSessionUsesTheMainAgent(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) {
+		s.Agents = &sessions.Service{Agent: agent}
+	})
+	e.k.set(func() { e.k.wantAgent = &agent })
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	if got := e.requestFor("task-a").AgentName; got != agent.Name {
+		t.Fatalf("agent = %q", got)
+	}
+}
+
+func TestAUnresolvableSessionIsReportedAndSkipped(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) { s.Agents = &sessions.Service{Agent: agent} })
+	e.addSession("sess-2", "ks-2", "agent") // no workspace and no provider registry
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	if n := e.count(`SELECT count(*) FROM hitl_sessions`); n != 1 {
+		t.Fatalf("hitl_sessions = %d, want only the resolvable one", n)
+	}
+	st, err := e.svc.Status(context.Background())
+	if err != nil || len(st.Diagnostics) == 0 {
+		t.Fatalf("status = %+v, %v", st, err)
+	}
+}
+
+func TestAPoisonedSessionDoesNotStarveTheObserver(t *testing.T) {
+	for name, poison := range map[string]error{
+		"config":          &kagent.ConfigError{Msg: "kagent control service configuration failure (A2A auth refusal)"},
+		"outcome unknown": &kagent.OutcomeUnknown{Op: "A2A tasks/list", Detail: "reply unreadable"},
+		"deadline":        context.DeadlineExceeded,
+		"protocol":        &kagent.ProtocolError{Op: "A2A tasks/list", Status: 500},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, func(s *hitl.Service) {
+				s.Opts.StaleAfter = 30 * time.Millisecond
+				s.Opts.ScanBackoff, s.Opts.ScanBackoffCeiling = time.Hour, time.Hour
+			})
+			e.addSession("sess-2", "ks-2", "agent")
+			e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+			e.k.put(inContext(waitingTask("task-b", "msg-b", askRequest("q1")), "ks-2"))
+			e.observe()
+			if n := len(e.requests()); n != 2 {
+				t.Fatalf("requests = %d, want 2", n)
+			}
+
+			// ks-1 now fails to list, and ks-2's task moves on while a new one appears there.
+			e.k.set(func() {
+				e.k.listErrFor = map[string]error{ksid: poison}
+				e.k.tasks["task-b"].Status = a2a.TaskStatus{State: a2a.TaskStateCompleted}
+				e.k.tasks["task-c"] = inContext(waitingTask("task-c", "msg-c", askRequest("q2")), "ks-2")
+			})
+			time.Sleep(60 * time.Millisecond) // longer than StaleAfter
+			e.observe()
+			if got := e.requestFor("task-c"); got.Availability != dbstate.HITLPending {
+				t.Fatalf("the healthy session was not scanned: %+v", got)
+			}
+			if got := e.requestFor("task-b").Availability; got != dbstate.HITLUnavailable {
+				t.Fatalf("the refresh loop did not run: task-b is %s", got)
+			}
+			// The failing session's own request is confirmed by its own read, so it is not stale.
+			if got := e.requestFor("task-a").Availability; got != dbstate.HITLPending {
+				t.Fatalf("a scan failure made a readable request %s", got)
+			}
+			var failures int
+			var next *time.Time
+			if err := e.pool.QueryRow(context.Background(),
+				`SELECT failures, next_scan_at FROM hitl_sessions WHERE kagent_session_id = $1`, ksid).Scan(&failures, &next); err != nil {
+				t.Fatal(err)
+			}
+			if failures != 1 || next == nil || !next.After(time.Now().Add(30*time.Minute)) {
+				t.Fatalf("failures %d, next scan %v; the session should be backed off", failures, next)
+			}
+			st, err := e.svc.Status(context.Background())
+			if err != nil || !slices.ContainsFunc(st.Diagnostics, func(d api.HITLObserverDiagnostic) bool { return d.RuntimeSessionId == ksid }) {
+				t.Fatalf("no diagnostic for the failing session: %+v, %v", st, err)
+			}
+
+			// The backed-off session is left alone; the other one is still read.
+			before, beforeOther := e.k.listed(ksid), e.k.listed("ks-2")
+			e.observe()
+			if e.k.listed(ksid) != before || e.k.listed("ks-2") == beforeOther {
+				t.Fatalf("listed ks-1 %d→%d, ks-2 %d→%d", before, e.k.listed(ksid), beforeOther, e.k.listed("ks-2"))
+			}
+		})
+	}
+}
+
+func TestASessionComesBackAfterItsBackoff(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) {
+		s.Opts.ScanBackoff, s.Opts.ScanBackoffCeiling = 20*time.Millisecond, 20*time.Millisecond
+	})
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.k.set(func() { e.k.listErrFor = map[string]error{ksid: &kagent.ConfigError{Msg: "refused"}} })
+	e.observe()
+	if n := len(e.requests()); n != 0 {
+		t.Fatalf("requests = %d", n)
+	}
+	e.k.set(func() { e.k.listErrFor = nil })
+	time.Sleep(40 * time.Millisecond)
+	e.observe()
+	if n := len(e.requests()); n != 1 {
+		t.Fatalf("requests after the backoff = %d, want 1", n)
+	}
+	if n := e.count(`SELECT failures FROM hitl_sessions WHERE kagent_session_id = 'ks-1'`); n != 0 {
+		t.Fatalf("failures after a good scan = %d", n)
+	}
+}
+
+func TestAnUnreachableKagentEndsTheScanButStalenessComesFromRefresh(t *testing.T) {
+	e := newEnv(t, func(s *hitl.Service) { s.Opts.StaleAfter = 30 * time.Millisecond })
+	e.addSession("sess-2", "ks-2", "agent")
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	e.k.set(func() {
+		e.k.listErr = &kagent.Unreachable{Err: errors.New("down")}
+		e.k.getErr = e.k.listErr
+	})
+	time.Sleep(60 * time.Millisecond)
+	e.observe()
+	if got := e.requestFor("task-a").Availability; got != dbstate.HITLStale {
+		t.Fatalf("availability = %s, want stale (its own read failed)", got)
+	}
+	// Unreachable is not the session's fault: nobody is backed off.
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE failures > 0`); n != 0 {
+		t.Fatalf("%d sessions backed off by an outage", n)
+	}
+}
+
+func TestANestedRequestIsShownButNotAnswerable(t *testing.T) {
+	e := newEnv(t)
+	req := toolRequest("t1")
+	req["nested"] = map[string]any{
+		"task_id": "sub-task", "context_id": "sub-ctx", "subagent_name": "helper",
+		"tools": []any{map[string]any{"id": "n1", "call_id": "call-n1", "name": "run_n1", "args": map[string]any{}}},
+	}
+	e.k.put(waitingTask("task-a", "msg-a", req))
+	e.observe()
+	r := e.requestFor("task-a")
+	view, err := e.svc.View(context.Background(), r.ID)
+	if err != nil || view.Answerable || view.UnavailableReason == nil {
+		t.Fatalf("view = %+v, %v", view, err)
+	}
+	_, err = e.svc.Respond(context.Background(), r.ID, approveAll("t1"))
+	if !errors.Is(err, hitl.ErrConflict) {
+		t.Fatalf("respond err = %v, want conflict", err)
+	}
+	if n := e.count(`SELECT count(*) FROM hitl_responses`); n != 0 {
+		t.Fatalf("responses = %d", n)
+	}
+}
+
+func TestActionIDMayBe2048Characters(t *testing.T) {
+	e := newEnv(t)
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.observe()
+	r := e.requestFor("task-a")
+	long := approveAll("t1")
+	long.ActionId = strings.Repeat("a", 2049)
+	if _, err := e.svc.Respond(context.Background(), r.ID, long); !errors.Is(err, hitl.ErrInvalid) {
+		t.Fatalf("2049 characters: err = %v, want invalid", err)
+	}
+	long.ActionId = strings.Repeat("a", 2048)
+	if _, err := e.svc.Respond(context.Background(), r.ID, long); err != nil {
+		t.Fatalf("2048 characters: %v", err)
+	}
+}
+
+func TestAReplacedBindingDropsItsObserverRow(t *testing.T) {
+	e := newEnv(t)
+	e.observe()
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = 'ks-1'`); n != 1 {
+		t.Fatalf("hitl_sessions = %d", n)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE agent_bindings SET kagent_session_id = 'ks-new' WHERE session_id = $1`, session); err != nil {
+		t.Fatal(err)
+	}
+	e.observe()
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = 'ks-1'`); n != 0 {
+		t.Fatalf("the old observer row survived: %d", n)
+	}
+	if n := e.count(`SELECT count(*) FROM hitl_sessions WHERE kagent_session_id = 'ks-new'`); n != 1 {
+		t.Fatalf("the new observer row is missing: %d", n)
+	}
+}
+
+func TestInboxUnreadCountCountsUnread(t *testing.T) {
+	e := newEnv(t)
+	e.k.put(waitingTask("task-a", "msg-a", toolRequest("t1")))
+	e.k.put(waitingTask("task-b", "msg-b", askRequest("q1")))
+	e.observe()
+	if _, err := e.pool.Exec(context.Background(), `UPDATE attention_items SET read_at = now() WHERE task_id = 'task-a'`); err != nil {
+		t.Fatal(err)
+	}
+	e.k.put(waitingTask("task-c", "msg-c", askRequest("q2")))
+	e.observe()
+	var n int
+	if err := e.pool.QueryRow(context.Background(),
+		`SELECT (payload->>'unread_count')::int FROM events WHERE type = 'inbox:updated' ORDER BY id DESC LIMIT 1`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("unread_count = %d, %v; three are open and one is read", n, err)
+	}
 }

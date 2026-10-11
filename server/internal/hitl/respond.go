@@ -18,6 +18,18 @@ import (
 
 const gateway = "kagent"
 
+// maxActionID is the contract's limit on HITLDecisionInput.action_id.
+const maxActionID = 2048
+
+// reasonNested says why a delegated request is shown but cannot be answered. The leaf rule, which
+// decides what an answer to a nested request means, is G10's.
+const reasonNested = "This request comes from a delegated agent. Answering those requests is not supported yet."
+
+// isNested reports whether the ask was raised by a delegated (nested) task.
+func isNested(o *observed) bool {
+	return (o.tools != nil && o.tools.Nested != nil) || (o.ask != nil && o.ask.Nested != nil)
+}
+
 // parseStored reads a stored request payload back into the validated form.
 func parseStored(r dbq.HitlRequest) (*observed, error) {
 	o := &observed{kind: r.Kind, payload: r.Payload, hash: r.RequestHash, statusMessageID: r.StatusMessageID}
@@ -63,8 +75,8 @@ func (s *Service) Respond(ctx context.Context, requestID string, in api.HITLDeci
 	if !s.WritesEnabled {
 		return api.HITLView{}, ErrDisabled
 	}
-	if in.ActionId == "" || len(in.ActionId) > 256 {
-		return api.HITLView{}, fmt.Errorf("%w: action_id must be 1 to 256 characters", ErrInvalid)
+	if in.ActionId == "" || len(in.ActionId) > maxActionID {
+		return api.HITLView{}, fmt.Errorf("%w: action_id must be 1 to %d characters", ErrInvalid, maxActionID)
 	}
 	dec, err := decodeDecision(in.Response)
 	if err != nil {
@@ -102,6 +114,9 @@ func (s *Service) Respond(ctx context.Context, requestID string, in api.HITLDeci
 		}
 		if req.Availability != dbstate.HITLPending {
 			return fmt.Errorf("%w: this request is %s and cannot be answered", ErrConflict, req.Availability)
+		}
+		if isNested(obs) {
+			return fmt.Errorf("%w: %s", ErrConflict, reasonNested)
 		}
 		if _, err := q.GetLiveHITLResponse(ctx, req.ID); err == nil {
 			return fmt.Errorf("%w: this request already has an answer", ErrConflict)
@@ -224,18 +239,31 @@ func (s *Service) View(ctx context.Context, requestID string) (api.HITLView, err
 	resp, err := q.GetLatestHITLResponse(ctx, dbq.GetLatestHITLResponseParams{RequestID: req.ID, OwnerID: s.OwnerID})
 	switch {
 	case err == nil:
-		var receipt api.DecisionReceipt
-		if err := json.Unmarshal(resp.Receipt, &receipt); err != nil {
-			return api.HITLView{}, fmt.Errorf("read receipt: %w", err)
-		}
-		view.Response = &receipt
 		state := string(resp.State)
 		view.TransportState = &state
-		live = resp.State != dbstate.HITLRejectedTransport
+		// A response kagent never took can be given again, so it is not shown as the answer; the
+		// state and the reason stay.
+		if resp.State != dbstate.HITLRejectedTransport {
+			var receipt api.DecisionReceipt
+			if err := json.Unmarshal(resp.Receipt, &receipt); err != nil {
+				return api.HITLView{}, fmt.Errorf("read receipt: %w", err)
+			}
+			view.Response = &receipt
+			live = true
+		}
+		if resp.Detail != nil && resp.State != dbstate.HITLAccepted {
+			detail := clip(*resp.Detail, 2000)
+			view.TransportDetail = &detail
+		}
 	case !errors.Is(err, pgx.ErrNoRows):
 		return api.HITLView{}, err
 	}
-	view.Answerable = s.WritesEnabled && req.Availability == dbstate.HITLPending && !live
+	nested := isNested(obs)
+	view.Answerable = s.WritesEnabled && req.Availability == dbstate.HITLPending && !live && !nested
+	if nested && view.UnavailableReason == nil {
+		reason := reasonNested
+		view.UnavailableReason = &reason
+	}
 	return view, nil
 }
 

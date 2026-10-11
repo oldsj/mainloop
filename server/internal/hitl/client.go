@@ -29,6 +29,9 @@ type clientAdapter struct{ *kagent.Client }
 // is not cut short. Errors keep their kagent types, so kagent.NotSent still tells a send that
 // never left from one that may have.
 func (a clientAdapter) SendHITL(ctx context.Context, agent kagent.AgentRef, s Send) error {
+	if err := ctx.Err(); err != nil {
+		return &kagent.Unreachable{Err: err} // nothing was sent
+	}
 	run, cancel := context.WithTimeout(context.WithoutCancel(ctx), turnCap)
 	first := make(chan error, 1) // receives exactly one value
 	go func() {

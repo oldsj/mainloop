@@ -77,10 +77,7 @@ func (s *Service) ownedBinding(ctx context.Context, sessionID string) (dbq.GetOw
 // bindingAgentOf is the kagent Agent that runs a session: the one its workspace was created on,
 // else the one its provider and role name.
 func (s *Service) bindingAgentOf(b dbq.GetOwnedSessionBindingRow) (kagent.AgentRef, error) {
-	if b.WorkspaceAgentNamespace != nil && b.WorkspaceAgentName != nil {
-		return kagent.AgentRef{Namespace: *b.WorkspaceAgentNamespace, Name: *b.WorkspaceAgentName}, nil
-	}
-	return s.bindingAgent(&b.Kind, b.Role)
+	return s.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
 }
 
 // kagentSessionOf is the kagent Session a delivery was sent to, else the binding's.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -47,17 +46,21 @@ func scopeOfRequest(r dbq.HitlRequest) scope {
 	}
 }
 
-// Observe makes one pass: it picks up the bound sessions, reads a few pages of each least recently
-// scanned session's tasks, adopts tasks that wait with a valid ask, and re-reads the live requests
-// that are due. Everything it learns is written in small transactions after the kagent read that
-// produced it, and a cursor moves only after its page was handled, so a pass that dies half way (an
-// outage, a restart) repeats work and loses none.
+// Observe makes one pass: it picks up the bound sessions, reads a few pages of each due session's
+// tasks, adopts tasks that wait with a valid ask, and re-reads the live requests that are due.
+// Everything it learns is written in small transactions after the kagent read that produced it, and
+// a cursor moves only after its page was handled, so a pass that dies half way (an outage, a
+// restart) repeats work and loses none.
+//
+// A scan that fails for one session (kagent refusing its conversation, losing a reply, timing out)
+// costs that session a diagnostic and a growing delay, and the pass goes on with the others. Only
+// an unreachable kagent ends the scanning, since the rest would fail the same way. Staleness never
+// comes from a scan: each request goes stale by its own refresh failing, and the refresh loop runs
+// whatever the scan did.
 func (s *Service) Observe(ctx context.Context) error {
 	o := s.opts()
 	q := dbq.New(s.Pool)
-	if _, err := q.SyncHITLSessions(ctx, dbq.SyncHITLSessionsParams{
-		AgentNamespace: s.Agent.Namespace, AgentName: s.Agent.Name, UserID: s.OwnerID,
-	}); err != nil {
+	if err := s.syncSessions(ctx); err != nil {
 		return fmt.Errorf("sync sessions: %w", err)
 	}
 	sessions, err := q.ListHITLSessionsToScan(ctx, dbq.ListHITLSessionsToScanParams{
@@ -67,17 +70,21 @@ func (s *Service) Observe(ctx context.Context) error {
 		return fmt.Errorf("list sessions: %w", err)
 	}
 	for _, hs := range sessions {
-		if err := s.scanSession(ctx, hs); err != nil {
-			if isOutage(err) {
-				s.diagnose(ctx, hs.KagentSessionID, errDetail(err))
-				s.staleOnOutage(ctx) // the rest would fail the same way; retry on the next pass
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			s.diagnose(ctx, hs.KagentSessionID, errDetail(err))
-			s.log().WarnContext(ctx, "hitl scan failed", "kagent_session_id", hs.KagentSessionID, "error", err)
+		err := s.scanSession(ctx, hs)
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.diagnose(ctx, hs.KagentSessionID, errDetail(err))
+		var down *kagent.Unreachable
+		if errors.As(err, &down) {
+			break // kagent is not there; the other sessions would fail the same way
+		}
+		s.log().WarnContext(ctx, "hitl scan failed", "kagent_session_id", hs.KagentSessionID, "error", err)
+		if isKagentError(err) {
+			s.backOffSession(ctx, hs)
 		}
 	}
 	due, err := q.ListHITLToRefresh(ctx, dbq.ListHITLToRefreshParams{
@@ -91,12 +98,11 @@ func (s *Service) Observe(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			s.diagnose(ctx, r.KagentSessionID, errDetail(err))
 			if isOutage(err) {
-				s.diagnose(ctx, r.KagentSessionID, errDetail(err))
 				s.noteOutage(ctx, r)
 				continue
 			}
-			s.diagnose(ctx, r.KagentSessionID, errDetail(err))
 			s.log().WarnContext(ctx, "hitl refresh failed", "request_id", r.ID, "error", err)
 			_ = q.AttemptHITLRequest(ctx, r.ID)
 		}
@@ -104,7 +110,53 @@ func (s *Service) Observe(ctx context.Context) error {
 	return nil
 }
 
-// scanSession reads up to PagesPerScan pages of one session's tasks from its cursor.
+// backOffSession delays the next scan of a session that failed, longer after each failure in a row.
+func (s *Service) backOffSession(ctx context.Context, hs dbq.HitlSession) {
+	o := s.opts()
+	delay := backoff(o.ScanBackoff, o.ScanBackoffCeiling, int(hs.Failures))
+	if err := dbq.New(s.Pool).FailHITLSessionScan(ctx, dbq.FailHITLSessionScanParams{
+		KagentSessionID: hs.KagentSessionID, DelaySeconds: delay.Seconds(),
+	}); err != nil {
+		s.log().WarnContext(ctx, "back off hitl session", "kagent_session_id", hs.KagentSessionID, "error", err)
+	}
+}
+
+// syncSessions makes hitl_sessions match the bindings: a bound kagent session is added with the
+// Agent the sessions package resolves for it (the rule sessions use to talk to the same
+// conversation), and a row whose binding no longer names it is removed. A session whose Agent
+// cannot be resolved is left out and reported, and tried again on the next pass.
+func (s *Service) syncSessions(ctx context.Context) error {
+	q := dbq.New(s.Pool)
+	if _, err := q.DeleteStaleHITLSessions(ctx, s.OwnerID); err != nil {
+		return err
+	}
+	rows, err := q.ListHITLBindingsToAdopt(ctx, s.OwnerID)
+	if err != nil {
+		return err
+	}
+	for _, b := range rows {
+		agent := s.Agent
+		if s.Agents != nil {
+			var err error
+			agent, err = s.Agents.ResolveAgent(b.WorkspaceAgentNamespace, b.WorkspaceAgentName, &b.Kind, b.Role)
+			if err != nil {
+				s.diagnose(ctx, *b.KagentSessionID, "cannot tell which agent runs this session: "+err.Error())
+				continue
+			}
+		}
+		if err := q.InsertHITLSession(ctx, dbq.InsertHITLSessionParams{
+			KagentSessionID: *b.KagentSessionID, SessionID: b.SessionID, OwnerID: b.UserID,
+			AgentNamespace: agent.Namespace, AgentName: agent.Name,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scanSession reads up to PagesPerScan pages of one session's waiting tasks from its cursor. The
+// listing is filtered to input-required and carries only each task's latest message, which is the
+// status message that holds the ask, so adopting a task needs no further read.
 func (s *Service) scanSession(ctx context.Context, hs dbq.HitlSession) error {
 	o := s.opts()
 	q := dbq.New(s.Pool)
@@ -116,7 +168,7 @@ func (s *Service) scanSession(ctx context.Context, hs dbq.HitlSession) error {
 	}
 	for range o.PagesPerScan {
 		rctx, cancel := context.WithTimeout(ctx, o.ReadTimeout)
-		tasks, next, err := s.Kagent.ListTasksPage(rctx, agent, hs.ContextID, token, o.PageSize)
+		tasks, next, err := s.Kagent.ListWaitingTasksPage(rctx, agent, hs.ContextID, token, o.PageSize)
 		cancel()
 		if err != nil {
 			var perr *kagent.ProtocolError
@@ -224,7 +276,7 @@ func (s *Service) adopt(ctx context.Context, sc scope, t *a2a.Task, o *observed)
 func attentionID(requestID string) string { return "attn_" + requestID }
 
 func inboxDraft(ctx context.Context, q *dbq.Queries, ownerID, item string) ([]events.Draft, error) {
-	n, err := q.CountOpenAttention(ctx, ownerID)
+	n, err := q.CountUnreadAttention(ctx, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -324,21 +376,6 @@ func (s *Service) noteOutage(ctx context.Context, r dbq.HitlRequest) {
 	_ = dbq.New(s.Pool).AttemptHITLRequest(ctx, r.ID)
 }
 
-// staleOnOutage applies the staleness rule to live requests when the listing itself is down and no
-// per-request read is tried.
-func (s *Service) staleOnOutage(ctx context.Context) {
-	o := s.opts()
-	due, err := dbq.New(s.Pool).ListHITLToRefresh(ctx, dbq.ListHITLToRefreshParams{
-		OwnerID: s.OwnerID, EverySeconds: o.RefreshEvery.Seconds(), MaxRequests: int32(o.RefreshBatch), //nolint:gosec // small bounded option
-	})
-	if err != nil {
-		return
-	}
-	for _, r := range due {
-		s.noteOutage(ctx, r)
-	}
-}
-
 // refresh re-reads a live request's task.
 func (s *Service) refresh(ctx context.Context, r dbq.HitlRequest) error {
 	o := s.opts()
@@ -374,21 +411,15 @@ func (s *Service) refresh(ctx context.Context, r dbq.HitlRequest) error {
 		dbstate.HITLPending, dbstate.HITLStale)
 }
 
-// answeredIn reports whether a live response of the request is in the task's history.
+// answeredIn reports whether a live response of the request is in the task's history with the
+// answer that was sent.
 func (s *Service) answeredIn(ctx context.Context, r dbq.HitlRequest, task *a2a.Task) bool {
 	resp, err := dbq.New(s.Pool).GetLiveHITLResponse(ctx, r.ID)
 	if err != nil {
 		return false
 	}
-	return hasMessage(task, resp.OutboundMessageID)
-}
-
-// hasMessage reports whether the task's history shows a message with this id.
-func hasMessage(t *a2a.Task, messageID string) bool {
-	if t == nil {
-		return false
-	}
-	return slices.ContainsFunc(t.History, func(m *a2a.Message) bool { return m != nil && m.ID == messageID })
+	present, matches := messageIn(task, resp.OutboundMessageID, resp.Decision)
+	return present && matches
 }
 
 func (s *Service) diagnose(ctx context.Context, runtimeSessionID, detail string) {

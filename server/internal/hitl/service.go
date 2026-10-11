@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 )
 
@@ -55,13 +56,22 @@ type Send struct {
 // Kagent is the part of kagent this package uses. The reads are the sessions package's own; the
 // send carries the HITL extension metadata.
 type Kagent interface {
-	ListTasksPage(ctx context.Context, agent kagent.AgentRef, contextID, token string, limit int) ([]*a2a.Task, string, error)
+	// ListWaitingTasksPage lists the tasks of a conversation that wait for input, with at most their
+	// latest history message.
+	ListWaitingTasksPage(ctx context.Context, agent kagent.AgentRef, contextID, token string, limit int) ([]*a2a.Task, string, error)
 	GetTask(ctx context.Context, agent kagent.AgentRef, taskID string) (*a2a.Task, error)
 	FindTaskForMessage(ctx context.Context, agent kagent.AgentRef, contextID, messageID string) (*a2a.Task, bool, error)
 	// SendHITL sends the response once. It returns when the stream ends, fails or ctx ends; the
 	// caller reads the task to learn whether kagent took it. An error for which kagent.NotSent is
 	// true proves nothing was sent.
 	SendHITL(ctx context.Context, agent kagent.AgentRef, s Send) error
+}
+
+// AgentResolver says which kagent Agent runs a session. kagent scopes a conversation to the Agent
+// that owns it and refuses any other, so the observer and the dispatcher must ask the right one.
+// The sessions package implements it.
+type AgentResolver interface {
+	ResolveAgent(workspaceNamespace, workspaceName, kind *string, role dbstate.BindingRole) (kagent.AgentRef, error)
 }
 
 // Options tunes the observer and the dispatcher. Zero values take the defaults.
@@ -85,8 +95,14 @@ type Options struct {
 	// UncertainHold is how long a response whose message no task shows stays blocking; after it
 	// the response is failed and the request can be answered again.
 	UncertainHold time.Duration
-	// UncertainRecheck is the delay between lookups of an unresolved response.
+	// UncertainRecheck is the delay before the first lookup of an unresolved response; it doubles
+	// after each lookup up to UncertainCeiling.
 	UncertainRecheck time.Duration
+	UncertainCeiling time.Duration
+	// ScanBackoff is the delay before a session that failed to scan is tried again; it doubles
+	// with each failure in a row up to ScanBackoffCeiling.
+	ScanBackoff        time.Duration
+	ScanBackoffCeiling time.Duration
 	// StaleRetry is the delay before a response is tried again after it provably was not sent, or while its request is stale.
 	StaleRetry time.Duration
 	// DiagnosticRepeat suppresses a repeated diagnostic for this long.
@@ -118,6 +134,9 @@ func (o Options) withDefaults() Options {
 	def(&o.SendTimeout, 10*time.Second)
 	def(&o.UncertainHold, 10*time.Minute)
 	def(&o.UncertainRecheck, 15*time.Second)
+	def(&o.UncertainCeiling, time.Hour)
+	def(&o.ScanBackoff, 30*time.Second)
+	def(&o.ScanBackoffCeiling, 10*time.Minute)
 	def(&o.StaleRetry, time.Minute)
 	def(&o.DiagnosticRepeat, 5*time.Minute)
 	defInt(&o.Concurrency, 4)
@@ -130,7 +149,10 @@ type Service struct {
 	Pool    *pgxpool.Pool
 	Kagent  Kagent
 	OwnerID string
-	// Agent is the kagent agent every Mainloop session runs on.
+	// Agents resolves the Agent that runs each session, by the sessions package's rule. Without it
+	// every session is taken to run on Agent.
+	Agents AgentResolver
+	// Agent is the main Agent: the one sessions run on when Agents is nil.
 	Agent kagent.AgentRef
 	// WritesEnabled gates answering. Reading and observing work either way.
 	WritesEnabled bool
@@ -163,8 +185,9 @@ func (s *Service) agentOf(namespace, name string) kagent.AgentRef {
 	return kagent.AgentRef{Namespace: namespace, Name: name}
 }
 
-// isOutage reports whether err says kagent cannot be asked right now, so the rest of a pass would
-// fail the same way. A definite answer about one task or session is not an outage.
+// isOutage reports whether err says kagent could not answer: it was unreachable, refused the
+// credentials, lost the reply or sent nonsense. It does not say whose fault that is: the same
+// errors come from one bad session and from a dead gateway.
 func isOutage(err error) bool {
 	var (
 		unreachable *kagent.Unreachable
@@ -174,6 +197,29 @@ func isOutage(err error) bool {
 	)
 	return errors.As(err, &unreachable) || errors.As(err, &unknown) || errors.As(err, &cfg) ||
 		errors.As(err, &proto) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// isKagentError reports whether err came from kagent (or its absence) rather than from our own
+// database, so it says something about the session that was asked.
+func isKagentError(err error) bool {
+	var (
+		notFound *kagent.TaskNotFound
+		a2aErr   *kagent.A2AError
+		session  *kagent.SessionError
+	)
+	return isOutage(err) || errors.As(err, &notFound) || errors.As(err, &a2aErr) || errors.As(err, &session)
+}
+
+// backoff is base doubled n times, held at ceiling.
+func backoff(base, ceiling time.Duration, n int) time.Duration {
+	d := base
+	for range n {
+		if d >= ceiling {
+			break
+		}
+		d *= 2
+	}
+	return min(d, ceiling)
 }
 
 // errDetail describes a failure for the owner without echoing kagent's text, which is untrusted.

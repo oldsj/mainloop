@@ -145,10 +145,18 @@ func (s *Service) handle(ctx context.Context, c reconcile.Claim) (reconcile.Outc
 // agentFor is the kagent Agent that runs the delivery's session: the Agent a workspace was created
 // on, the configured main Agent, or the provider profile's Agent for the binding's kind and role.
 func (s *Service) agentFor(d dbq.GetDeliveryContextRow) (kagent.AgentRef, error) {
-	if d.WorkspaceAgentNamespace != nil && d.WorkspaceAgentName != nil {
-		return kagent.AgentRef{Namespace: *d.WorkspaceAgentNamespace, Name: *d.WorkspaceAgentName}, nil
+	return s.ResolveAgent(d.WorkspaceAgentNamespace, d.WorkspaceAgentName, d.BindingKind, dbstate.BindingRole(d.BindingRole))
+}
+
+// ResolveAgent is the one rule for which kagent Agent runs a session: the Agent its workspace was
+// created on when it has one, else the configured main Agent for the main role, else the provider
+// profile's Agent for the binding's kind and role. kagent scopes a conversation to the Agent that
+// owns it, so anything that talks to a session's tasks must ask this Agent.
+func (s *Service) ResolveAgent(workspaceNamespace, workspaceName, kind *string, role dbstate.BindingRole) (kagent.AgentRef, error) {
+	if workspaceNamespace != nil && workspaceName != nil {
+		return kagent.AgentRef{Namespace: *workspaceNamespace, Name: *workspaceName}, nil
 	}
-	return s.bindingAgent(d.BindingKind, dbstate.BindingRole(d.BindingRole))
+	return s.bindingAgent(kind, role)
 }
 
 // bindingAgent is the Agent for a binding that has no workspace.

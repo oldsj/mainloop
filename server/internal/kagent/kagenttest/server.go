@@ -566,9 +566,12 @@ func (s *Server) listTasks(p a2a.ListTasksRequest) *a2a.ListTasksResponse {
 	defer s.mu.Unlock()
 	var match []*a2a.Task
 	for _, t := range s.tasks {
-		if p.ContextID == "" || t.ContextID == p.ContextID {
+		if (p.ContextID == "" || t.ContextID == p.ContextID) && (p.Status == "" || t.Status.State == p.Status) {
 			cp := *t
 			cp.Artifacts = nil // a listed task has no artifacts
+			if p.HistoryLength != nil && *p.HistoryLength < len(cp.History) {
+				cp.History = cp.History[len(cp.History)-*p.HistoryLength:] // the most recent messages
+			}
 			match = append(match, &cp)
 		}
 	}

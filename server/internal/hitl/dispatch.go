@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -129,9 +131,14 @@ func (d *dispatch) send(ctx context.Context) (reconcile.Outcome, error) {
 		return d.finish(ctx, dbstate.HITLRejectedTransport, "kagent no longer has the task")
 	case err != nil:
 		return reconcile.Retry(), fmt.Errorf("check task before send: %w", err) // nothing was sent
-	case hasMessage(task, d.w.OutboundMessageID):
-		return d.finish(ctx, dbstate.HITLAccepted, "")
-	case !d.stillAsks(task):
+	}
+	if present, matches := messageIn(task, d.w.OutboundMessageID, d.w.Decision); present {
+		if matches {
+			return d.finish(ctx, dbstate.HITLAccepted, "")
+		}
+		return d.finish(ctx, dbstate.HITLRejectedTransport, detailOtherAnswer)
+	}
+	if !d.stillAsks(task) {
 		return d.finish(ctx, dbstate.HITLRejectedTransport, "the task no longer waits for this request")
 	}
 	id, owner, attempts := d.fence()
@@ -174,60 +181,117 @@ func (d *dispatch) notSent(ctx context.Context, cause error, after time.Duration
 	return reconcile.Retry(), nil
 }
 
-// confirmSent follows a send that returned cleanly: the message must show up in the task before
-// the response counts as accepted.
+// Details of a response that was not taken.
+const (
+	detailNewTurn     = "kagent took the answer as a new turn, not as the answer to this request"
+	detailOtherAnswer = "kagent holds a different answer under this message id"
+	detailNeverShown  = "kagent never showed the answer; the request can be answered again"
+	detailMovedOn     = "the task moved on without the answer"
+)
+
+// confirmSent follows a send that returned cleanly: the task must show the message before the
+// response counts as accepted.
 func (d *dispatch) confirmSent(ctx context.Context) (reconcile.Outcome, error) {
-	task, found, err := d.lookup(ctx)
-	if found && (err != nil || hasMessage(task, d.w.OutboundMessageID)) {
-		return d.finish(ctx, dbstate.HITLAccepted, "")
-	}
-	if err != nil {
-		return d.markUncertain(ctx, errDetail(err))
-	}
-	return d.markUncertain(ctx, "kagent does not show the answer yet")
+	return d.resolve(ctx, false)
 }
 
-func (d *dispatch) markUncertain(ctx context.Context, detail string) (reconcile.Outcome, error) {
-	id, owner, attempts := d.fence()
-	if err := lost(dbq.New(d.s.Pool).MarkHITLResponseUncertain(ctx, dbq.MarkHITLResponseUncertainParams{
-		ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &detail,
-	})); err != nil {
-		return reconcile.Retry(), err
-	}
-	return reconcile.RetryAfter(d.s.opts().UncertainRecheck), nil
-}
-
-// settle handles a response whose send may have happened. It never sends: it looks the message
-// id up in the task. A response that no task shows after UncertainHold is failed, but only while
-// the task still waits for the ask, which proves kagent did not act on the answer.
+// settle handles a response whose send may have happened. It never sends: it looks the message id
+// up. After UncertainHold without the message it fails the response, which is safe in both cases
+// it can end in: the task still waits for the ask (kagent did not act on the answer) or has moved
+// on without the message (the answer is not what moved it).
 func (d *dispatch) settle(ctx context.Context) (reconcile.Outcome, error) {
-	o := d.s.opts()
-	task, found, err := d.lookup(ctx)
-	if found && (err != nil || hasMessage(task, d.w.OutboundMessageID)) {
-		return d.finish(ctx, dbstate.HITLAccepted, "")
-	}
+	return d.resolve(ctx, time.Since(d.uncertainSince(ctx)) >= d.s.opts().UncertainHold)
+}
+
+type verdict int
+
+const (
+	// The original task shows the message, with the stored answer.
+	shown verdict = iota
+	// The original task shows the message id with a different answer.
+	otherAnswer
+	// The original task still waits for the ask, without the message.
+	waiting
+	// The message is in another task: kagent took it as a new turn.
+	newTurn
+	// The original task moved on (or is gone) and no task shows the message.
+	movedOn
+)
+
+// resolve looks the message up and settles the response by what it finds. Only the original task
+// can accept a response: it must show the outbound message id with the HITL metadata that was
+// sent. A message that only another task shows was not the answer to this request.
+func (d *dispatch) resolve(ctx context.Context, pastHold bool) (reconcile.Outcome, error) {
+	v, err := d.judge(ctx)
 	if err != nil {
 		return d.markUncertain(ctx, errDetail(err)) // keeps the original uncertain-since time
 	}
-	since := d.uncertainSince(ctx)
-	if time.Since(since) < o.UncertainHold {
+	switch v {
+	case shown:
+		return d.finish(ctx, dbstate.HITLAccepted, "")
+	case otherAnswer:
+		return d.finish(ctx, dbstate.HITLRejectedTransport, detailOtherAnswer)
+	case newTurn:
+		return d.finish(ctx, dbstate.HITLRejectedTransport, detailNewTurn)
+	case waiting:
+		if pastHold {
+			return d.finish(ctx, dbstate.HITLRejectedTransport, detailNeverShown)
+		}
 		return d.markUncertain(ctx, "kagent does not show the answer yet")
+	default:
+		if pastHold {
+			return d.finish(ctx, dbstate.HITLRejectedTransport, detailMovedOn)
+		}
+		return d.markUncertain(ctx, "kagent does not show the answer, and the task has moved on")
 	}
-	gctx, cancelGet := context.WithTimeout(ctx, o.ReadTimeout)
-	t, gerr := d.s.Kagent.GetTask(gctx, d.agent, d.w.TaskID)
-	cancelGet()
+}
+
+// judge reads the original task, and the rest of the conversation only when that task has moved on
+// without showing the message.
+func (d *dispatch) judge(ctx context.Context) (verdict, error) {
+	rctx, cancel := context.WithTimeout(ctx, d.s.opts().ReadTimeout)
+	defer cancel()
+	t, err := d.s.Kagent.GetTask(rctx, d.agent, d.w.TaskID)
 	var gone *kagent.TaskNotFound
 	switch {
-	case errors.As(gerr, &gone):
-		return d.finish(ctx, dbstate.HITLRejectedTransport, "kagent no longer has the task")
-	case gerr != nil:
-		return d.markUncertain(ctx, errDetail(gerr))
-	case hasMessage(t, d.w.OutboundMessageID):
-		return d.finish(ctx, dbstate.HITLAccepted, "")
-	case d.stillAsks(t):
-		return d.finish(ctx, dbstate.HITLRejectedTransport, "kagent never showed the answer; the request can be answered again")
+	case err == nil:
+		if present, matches := messageIn(t, d.w.OutboundMessageID, d.w.Decision); present {
+			if matches {
+				return shown, nil
+			}
+			return otherAnswer, nil
+		}
+		if d.stillAsks(t) {
+			return waiting, nil
+		}
+	case !errors.As(err, &gone):
+		return 0, err
 	}
-	return d.markUncertain(ctx, "kagent does not show the answer, and the task has moved on")
+	_, found, err := d.s.Kagent.FindTaskForMessage(rctx, d.agent, d.w.ContextID, d.w.OutboundMessageID)
+	switch {
+	case err != nil:
+		return 0, err
+	case found:
+		return newTurn, nil
+	}
+	return movedOn, nil
+}
+
+// markUncertain keeps the response uncertain and asks again after a delay that doubles with each
+// look, up to UncertainCeiling.
+func (d *dispatch) markUncertain(ctx context.Context, detail string) (reconcile.Outcome, error) {
+	id, owner, attempts := d.fence()
+	rechecks, err := dbq.New(d.s.Pool).MarkHITLResponseUncertain(ctx, dbq.MarkHITLResponseUncertainParams{
+		ID: id, LeaseOwner: owner, Attempts: attempts, Detail: &detail,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return reconcile.Retry(), reconcile.ErrLeaseLost
+	}
+	if err != nil {
+		return reconcile.Retry(), err
+	}
+	o := d.s.opts()
+	return reconcile.RetryAfter(backoff(o.UncertainRecheck, o.UncertainCeiling, int(rechecks))), nil
 }
 
 func (d *dispatch) uncertainSince(ctx context.Context) time.Time {
@@ -238,21 +302,29 @@ func (d *dispatch) uncertainSince(ctx context.Context) time.Time {
 	return r.UpdatedAt
 }
 
-// lookup finds the task that shows this response's message. The usual place is the task the
-// response was sent to, so that is one cheap GetTask. Only when that task no longer waits for the
-// ask (kagent may have taken the message into another task) does it list the whole conversation.
-func (d *dispatch) lookup(ctx context.Context) (task *a2a.Task, found bool, err error) {
-	rctx, cancel := context.WithTimeout(ctx, d.s.opts().ReadTimeout)
-	defer cancel()
-	t, err := d.s.Kagent.GetTask(rctx, d.agent, d.w.TaskID)
-	var gone *kagent.TaskNotFound
-	switch {
-	case err == nil && hasMessage(t, d.w.OutboundMessageID):
-		return t, true, nil
-	case err == nil && d.stillAsks(t):
-		return nil, false, nil // still waiting for the answer: it has not arrived
-	case err != nil && !errors.As(err, &gone):
-		return nil, false, err
+// messageIn reports whether the task's history shows a message with this id, and whether that
+// message carries the HITL metadata that was sent.
+func messageIn(t *a2a.Task, messageID string, sent []byte) (present, matches bool) {
+	if t == nil {
+		return false, false
 	}
-	return d.s.Kagent.FindTaskForMessage(rctx, d.agent, d.w.ContextID, d.w.OutboundMessageID)
+	i := slices.IndexFunc(t.History, func(m *a2a.Message) bool { return m != nil && m.ID == messageID })
+	if i < 0 {
+		return false, false
+	}
+	return true, sameJSON(t.History[i].Metadata[kagent.HITLExtension], sent)
+}
+
+// sameJSON reports whether got, a value kagent returned, is the JSON document sent.
+func sameJSON(got any, sent []byte) bool {
+	var want any
+	if json.Unmarshal(sent, &want) != nil {
+		return false
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		return false
+	}
+	var back any
+	return json.Unmarshal(raw, &back) == nil && reflect.DeepEqual(back, want)
 }

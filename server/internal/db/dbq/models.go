@@ -186,6 +186,7 @@ type HitlResponse struct {
 	State             dbstate.HITLResponseState
 	Detail            *string
 	Attempts          int32
+	Rechecks          int32
 	NextAttemptAt     time.Time
 	LeaseOwner        *string
 	LeaseUntil        *time.Time
@@ -202,6 +203,8 @@ type HitlSession struct {
 	ContextID       string
 	TaskCursor      *string
 	ScannedAt       *time.Time
+	Failures        int32
+	NextScanAt      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

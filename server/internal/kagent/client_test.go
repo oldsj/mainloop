@@ -843,6 +843,27 @@ func TestGetTaskAndListTasks(t *testing.T) {
 	}
 }
 
+func TestListWaitingTasksPageFiltersByStatusAndTrimsHistory(t *testing.T) {
+	c, srv, _ := setup(t)
+	msgs := func(ids ...string) []*a2a.Message {
+		var out []*a2a.Message
+		for _, id := range ids {
+			out = append(out, &a2a.Message{ID: id, Role: a2a.MessageRoleUser})
+		}
+		return out
+	}
+	srv.AddTask(&a2a.Task{ID: "t1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}, History: msgs("a", "b", "c")})
+	srv.AddTask(&a2a.Task{ID: "t2", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}, History: msgs("d")})
+	srv.AddTask(&a2a.Task{ID: "t3", ContextID: "ctx-2", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}})
+	page, next, err := c.ListWaitingTasksPage(ctx, agent, "ctx-1", "", 10)
+	if err != nil || next != "" || len(page) != 1 || page[0].ID != "t1" {
+		t.Fatalf("page %+v, next %q, err %v", page, next, err)
+	}
+	if len(page[0].History) != 1 || page[0].History[0].ID != "c" {
+		t.Fatalf("history = %+v, want only the latest message", page[0].History)
+	}
+}
+
 func TestFindTaskForMessageRereadsTheTaskForItsArtifactsAndReportsAMiss(t *testing.T) {
 	c, srv, _ := setup(t)
 	srv.AddTask(&a2a.Task{
