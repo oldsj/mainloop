@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -38,15 +39,25 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	pool := testdb.New(t).Pool
 	srv := kagenttest.New()
 	t.Cleanup(srv.Close)
 	srv.AddAgent("kagent", "claude")
+	return newEnvOn(t, srv, "claude")
+}
+
+// newEnvOn is one Mainloop instance (its own database) on a shared kagent, owning one Agent. The
+// safety window is off so executions made a moment ago settle; its own test turns it on.
+func newEnvOn(t *testing.T, srv *kagenttest.Server, agent string) *env {
+	t.Helper()
+	pool := testdb.New(t).Pool
+	if _, err := pool.Exec(ctx, `INSERT INTO kagent_agents (namespace, name) VALUES ('kagent', $1)`, agent); err != nil {
+		t.Fatal(err)
+	}
 	kc, err := kagent.New(kagent.Config{GatewayURL: srv.URL, UserID: "mainloop"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := &schedules.Service{Pool: pool, Kagent: kc, OwnerID: owner}
+	svc := &schedules.Service{Pool: pool, Kagent: kc, OwnerID: owner, Limits: schedules.Limits{CursorSafetyWindow: -1}}
 	return &env{pool: pool, srv: srv, svc: svc, api: schedules.NewAPI(svc)}
 }
 
@@ -172,7 +183,7 @@ func TestCRUDEtagAndTrigger(t *testing.T) {
 	// An update or a trigger of a deleted schedule is 409.
 	_, err = e.api.UpdateSchedule(ctx, api.UpdateScheduleRequestObject{
 		ScheduleId: sc.Id, Body: &body, Params: api.UpdateScheduleParams{IfMatch: &etag}})
-	if s := status(t, err); s != http.StatusConflict && s != http.StatusPreconditionFailed {
+	if s := status(t, err); s != http.StatusConflict {
 		t.Fatalf("update after delete: %d", s)
 	}
 	_, err = e.api.TriggerSchedule(ctx, api.TriggerScheduleRequestObject{
@@ -209,8 +220,22 @@ func TestCreateReplayAndRefusals(t *testing.T) {
 	if s := status(t, mk("claude", "other prompt", "req-1")); s != http.StatusConflict {
 		t.Fatalf("request id reused with another body: %d", s)
 	}
-	if s := status(t, mk("nobody", "x", "req-2")); s != http.StatusNotFound {
-		t.Fatalf("unknown Agent: %d", s)
+	// An Agent outside this deployment's set is refused before anything is written or sent.
+	if s := status(t, mk("not-ours", "x", "req-2")); s != http.StatusForbidden {
+		t.Fatalf("foreign Agent: %d", s)
+	}
+	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 1 {
+		t.Fatal("a refused create left state behind")
+	}
+	// One of ours that kagent does not have is a definite refusal: the intent is dropped.
+	if _, err := e.pool.Exec(ctx, `INSERT INTO kagent_agents (namespace, name) VALUES ('kagent', 'ghost')`); err != nil {
+		t.Fatal(err)
+	}
+	if s := status(t, mk("ghost", "x", "req-2")); s != http.StatusNotFound {
+		t.Fatalf("Agent kagent does not have: %d", s)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE request_id = 'req-2'`) != 0 {
+		t.Fatal("a create kagent refused left its intent")
 	}
 	if s := status(t, mk("claude", strings.Repeat("x", 32769), "req-3")); s != http.StatusUnprocessableEntity {
 		t.Fatalf("oversized prompt: %d", s)
@@ -387,22 +412,6 @@ func TestConcurrentSweepsAdoptOnce(t *testing.T) {
 	}
 }
 
-func TestExecutionsBeforeTheScheduleWasAdoptedAreIgnored(t *testing.T) {
-	e := newEnv(t)
-	sc := create(t, e, "req-1")
-	old := fire(e, sc.Id)
-	reserve(e, old.GetId(), "ks-old", failedSt)
-	e.srv.EditExecution(old.GetId(), func(x *kagentapi.ScheduledRunExecution) {
-		x.CreatedAt = timestamppb.New(time.Now().Add(-48 * time.Hour))
-	})
-	if err := e.svc.Adopt(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if e.count(t, `SELECT count(*) FROM scheduled_run_links`) != 0 || e.count(t, `SELECT count(*) FROM sessions`) != 0 {
-		t.Fatal("history from before the schedule's creation was adopted")
-	}
-}
-
 func TestDeletedScheduleIsDrainedOnceThenSettled(t *testing.T) {
 	e := newEnv(t)
 	sc := create(t, e, "req-1")
@@ -428,32 +437,329 @@ func TestDeletedScheduleIsDrainedOnceThenSettled(t *testing.T) {
 	}
 }
 
-func TestSweepFindsASchedulePersistedOnlyInKagent(t *testing.T) {
+// lostReply sends a create to kagent and then reports the reply as lost, noting whether the intent
+// row was already written when the create left.
+type lostReply struct {
+	schedules.Kagent
+	pool       *pgxpool.Pool
+	lose       bool
+	intentSeen int
+}
+
+func (l *lostReply) CreateScheduledRun(c context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error) {
+	var n int
+	_ = l.pool.QueryRow(c, `SELECT count(*) FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent'`,
+		req.GetRequestId()).Scan(&n)
+	l.intentSeen += n
+	sc, err := l.Kagent.CreateScheduledRun(c, req)
+	if err == nil && l.lose {
+		return nil, &kagent.OutcomeUnknown{Op: "CreateScheduledRun", Detail: "reply lost"}
+	}
+	return sc, err
+}
+
+func createBody(request string) *api.ScheduledRunCreate {
+	return &api.ScheduledRunCreate{
+		Agent: api.ScheduledRunAgentRef{Namespace: "kagent", Name: "claude"}, RequestId: request,
+		Config: api.ScheduledRunConfigInput{Schedule: "0 9 * * *", Prompt: "report"},
+	}
+}
+
+func TestLostCreateReplyIsRecoveredByTheSweep(t *testing.T) {
 	e := newEnv(t)
-	// A create whose reply was lost: kagent has the schedule, the registry does not.
-	sc, err := e.svc.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{
-		Agent: &kagentapi.ResourceReference{Namespace: "kagent", Name: "claude"}, RequestId: "lost",
-		Config: &kagentapi.ScheduledRunConfig{Schedule: "0 9 * * *", Prompt: "p"},
-	})
+	l := &lostReply{Kagent: e.svc.Kagent, pool: e.pool, lose: true}
+	svc := &schedules.Service{Pool: e.pool, Kagent: l, OwnerID: owner, Limits: schedules.Limits{
+		CursorSafetyWindow: -1, IntentGrace: time.Nanosecond}}
+	_, err := schedules.NewAPI(svc).CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("lost")})
+	if status(t, err) != http.StatusBadGateway {
+		t.Fatalf("a lost reply: %v", err)
+	}
+	if l.intentSeen != 1 {
+		t.Fatal("the create was sent before its intent was written")
+	}
+	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'intent'`) != 1 {
+		t.Fatal("expected kagent to hold the schedule and the registry only the intent")
+	}
+	// The execution of a schedule nobody has confirmed yet is not adopted before the sweep recovers it.
+	l.lose = false
+	if err := svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := e.pool.QueryRow(ctx, `SELECT schedule_id FROM scheduled_run_schedules WHERE request_id = 'lost' AND state = 'created'`).Scan(&id); err != nil {
+		t.Fatalf("the sweep did not finish the create: %v", err)
+	}
+	if e.srv.ScheduleCount() != 1 || e.scheduleEvents(t) != 1 {
+		t.Fatalf("recovery made %d schedules and %d events", e.srv.ScheduleCount(), e.scheduleEvents(t))
+	}
+	// The client's retry now finds the same schedule and publishes nothing.
+	resp, err := schedules.NewAPI(svc).CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("lost")})
+	if err != nil || resp.(api.CreateSchedule201JSONResponse).Body.Id != id || e.scheduleEvents(t) != 1 {
+		t.Fatalf("retry: %v %v", resp, err)
+	}
+}
+
+func TestLostCreateReplyIsRecoveredByTheClientsRetry(t *testing.T) {
+	e := newEnv(t)
+	l := &lostReply{Kagent: e.svc.Kagent, pool: e.pool, lose: true}
+	svc := &schedules.Service{Pool: e.pool, Kagent: l, OwnerID: owner}
+	a := schedules.NewAPI(svc)
+	if _, err := a.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("lost")}); status(t, err) != http.StatusBadGateway {
+		t.Fatalf("a lost reply: %v", err)
+	}
+	l.lose = false
+	resp, err := a.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("lost")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	x := fire(e, sc.GetId())
+	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE state = 'created' AND schedule_id = $1`,
+		resp.(api.CreateSchedule201JSONResponse).Body.Id) != 1 {
+		t.Fatal("the retry did not settle the intent on the schedule the first send made")
+	}
+}
+
+func TestCreateReplayOfADeletedScheduleIsConflict(t *testing.T) {
+	e := newEnv(t)
+	sc := create(t, e, "req-1")
+	if _, err := e.api.DeleteSchedule(ctx, api.DeleteScheduleRequestObject{ScheduleId: sc.Id}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: createBody("req-1")})
+	if status(t, err) != http.StatusConflict {
+		t.Fatalf("replay of a deleted schedule: %v", err)
+	}
+	if e.srv.ScheduleCount() != 1 {
+		t.Fatal("the replay made a second schedule")
+	}
+}
+
+// Two Mainloop instances (separate databases) on one kagent principal, each owning its own Agent.
+// B must not list, read, change, trigger or adopt what A made, and cannot make a schedule on A's Agent.
+func TestAnotherInstancesSchedulesAreInvisibleAndUntouchable(t *testing.T) {
+	srv := kagenttest.New()
+	t.Cleanup(srv.Close)
+	srv.AddAgent("kagent", "prod-agent")
+	srv.AddAgent("kagent", "dev-agent")
+	a, b := newEnvOn(t, srv, "prod-agent"), newEnvOn(t, srv, "dev-agent")
+
+	resp, err := a.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: &api.ScheduledRunCreate{
+		Agent: api.ScheduledRunAgentRef{Namespace: "kagent", Name: "prod-agent"}, RequestId: "prod-req",
+		Config: api.ScheduledRunConfigInput{Schedule: "0 9 * * *", Prompt: "prod report"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := resp.(api.CreateSchedule201JSONResponse).Body
+	x := fire(a, sc.Id)
+	reserve(a, x.GetId(), "ks-prod", failedSt)
+
+	ls, err := b.api.ListSchedules(ctx, api.ListSchedulesRequestObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(ls.(api.ListSchedules200JSONResponse).Items); n != 0 {
+		t.Fatalf("B lists %d schedule(s) it did not create", n)
+	}
+	if al, _ := a.api.ListSchedules(ctx, api.ListSchedulesRequestObject{}); len(al.(api.ListSchedules200JSONResponse).Items) != 1 {
+		t.Fatal("A no longer lists its own schedule")
+	}
+	etag := `"` + sc.Etag + `"`
+	body := api.ScheduledRunConfigInput{Schedule: "0 10 * * *", Prompt: "hijacked"}
+	calls := map[string]func() error{
+		"get": func() error {
+			_, err := b.api.GetSchedule(ctx, api.GetScheduleRequestObject{ScheduleId: sc.Id})
+			return err
+		},
+		"update": func() error {
+			_, err := b.api.UpdateSchedule(ctx, api.UpdateScheduleRequestObject{
+				ScheduleId: sc.Id, Body: &body, Params: api.UpdateScheduleParams{IfMatch: &etag}})
+			return err
+		},
+		"delete": func() error {
+			_, err := b.api.DeleteSchedule(ctx, api.DeleteScheduleRequestObject{ScheduleId: sc.Id})
+			return err
+		},
+		"trigger": func() error {
+			_, err := b.api.TriggerSchedule(ctx, api.TriggerScheduleRequestObject{
+				ScheduleId: sc.Id, Body: &api.ScheduledRunTriggerRequest{RequestId: "b-run"}})
+			return err
+		},
+		"executions": func() error {
+			_, err := b.api.ListScheduleExecutions(ctx, api.ListScheduleExecutionsRequestObject{ScheduleId: sc.Id})
+			return err
+		},
+	}
+	for name, call := range calls {
+		if s := status(t, call()); s != http.StatusNotFound {
+			t.Errorf("B %s on A's schedule: %d, want 404", name, s)
+		}
+	}
+	if xs, _, err := a.svc.Kagent.ListScheduledRunExecutionsPage(ctx, sc.Id, "", 10); err != nil || len(xs) != 1 {
+		t.Fatalf("B triggered a run on A's schedule: %v %d", err, len(xs))
+	}
+	got, _ := srv.ScheduledRun(sc.Id)
+	if got.GetDeletedAt() != nil || got.GetConfig().GetPrompt() != "prod report" {
+		t.Fatal("B changed A's schedule")
+	}
+	_, err = b.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: &api.ScheduledRunCreate{
+		Agent: api.ScheduledRunAgentRef{Namespace: "kagent", Name: "prod-agent"}, RequestId: "b-req",
+		Config: api.ScheduledRunConfigInput{Schedule: "0 9 * * *", Prompt: "x"},
+	}})
+	if status(t, err) != http.StatusForbidden {
+		t.Fatalf("B creating on A's Agent: %v", err)
+	}
+
+	if err := b.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.count(t, `SELECT count(*) FROM sessions`) != 0 || b.count(t, `SELECT count(*) FROM scheduled_run_links`) != 0 ||
+		b.count(t, `SELECT count(*) FROM attention_items WHERE source_id LIKE 'sched_exec_%'`) != 0 {
+		t.Fatal("B adopted A's execution")
+	}
+	if err := a.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.count(t, `SELECT count(*) FROM sessions`) != 1 {
+		t.Fatal("A did not adopt its own execution")
+	}
+}
+
+// kagent fails the whole list on one malformed schedule. The sweep does not read the list, so the
+// schedules Mainloop made are still adopted.
+func TestAFailedScheduleListDoesNotStopAdoption(t *testing.T) {
+	e := newEnv(t)
+	sc := create(t, e, "req-1")
+	x := fire(e, sc.Id)
+	reserve(e, x.GetId(), "ks-1", running)
+	code := connect.CodeInternal
+	e.srv.FailNext(kagent.ProcListScheduledRuns, kagenttest.Fault{GRPC: &code})
+	if err := e.svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_links`) != 1 ||
+		e.count(t, `SELECT count(*) FROM agent_bindings WHERE kagent_session_id = 'ks-1'`) != 1 {
+		t.Fatal("a failed list stopped adoption")
+	}
+}
+
+// hiding wraps the client and hides one execution from listings until released, which is what a
+// reader sees while that execution's insert has not committed yet.
+type hiding struct {
+	schedules.Kagent
+	hide string
+}
+
+func (h *hiding) ListScheduledRunExecutionsPage(
+	c context.Context, scheduleID, token string, limit int,
+) ([]*kagentapi.ScheduledRunExecution, string, error) {
+	list, next, err := h.Kagent.ListScheduledRunExecutionsPage(c, scheduleID, token, limit)
+	out := list[:0]
+	for _, e := range list {
+		if e.GetId() != h.hide {
+			out = append(out, e)
+		}
+	}
+	return out, next, err
+}
+
+// An execution whose id sorts below the cursor but becomes visible after the cursor moved past it
+// is still found, because the cursor stays behind executions created within the safety window.
+func TestCursorStaysBehindRecentExecutions(t *testing.T) {
+	e := newEnv(t)
+	sc := create(t, e, "req-1")
+	early := fire(e, sc.Id) // lower UUIDv7
+	late := fire(e, sc.Id)  // higher UUIDv7
+	reserve(e, early.GetId(), "ks-early", failedSt)
+	reserve(e, late.GetId(), "ks-late", failedSt)
+	h := &hiding{Kagent: e.svc.Kagent, hide: early.GetId()}
+	svc := &schedules.Service{Pool: e.pool, Kagent: h, OwnerID: owner} // default window
+	if err := svc.Adopt(ctx); err != nil {                             // early is not visible yet
+		t.Fatal(err)
+	}
+	h.hide = ""
+	for range 3 {
+		if err := svc.Adopt(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.count(t, `SELECT count(*) FROM scheduled_run_links WHERE execution_id = $1`, early.GetId()); n != 1 {
+		t.Fatalf("the late-visible execution has %d links", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM sessions`); n != 2 {
+		t.Fatalf("%d sessions", n)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE cursor_execution_id = ''`) != 1 {
+		t.Fatal("the cursor moved past executions inside the window")
+	}
+
+	// Once they are older than the window the cursor does move.
+	for _, x := range []*kagentapi.ScheduledRunExecution{early, late} {
+		e.srv.EditExecution(x.GetId(), func(x *kagentapi.ScheduledRunExecution) {
+			x.CreatedAt = timestamppb.New(time.Now().Add(-time.Hour))
+		})
+	}
+	if err := svc.Adopt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM scheduled_run_schedules WHERE cursor_execution_id = $1`, late.GetId()) != 1 {
+		t.Fatal("the cursor did not advance over settled executions")
+	}
+}
+
+// The link keeps the session id after the session is deleted, and the session is never made again.
+func TestDeletedSessionIsNotRecreated(t *testing.T) {
+	e := newEnv(t)
+	sc := create(t, e, "req-1")
+	x := fire(e, sc.Id)
 	reserve(e, x.GetId(), "ks-1", running)
 	if err := e.svc.Adopt(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, st := e.sessionOf(t, x.GetId()); st != "active" {
-		t.Fatalf("status %s", st)
-	}
-	// The retried create now finds the same schedule and attaches the request id.
-	if _, err := e.api.CreateSchedule(ctx, api.CreateScheduleRequestObject{Body: &api.ScheduledRunCreate{
-		Agent: api.ScheduledRunAgentRef{Namespace: "kagent", Name: "claude"}, RequestId: "lost",
-		Config: api.ScheduledRunConfigInput{Schedule: "0 9 * * *", Prompt: "p"},
-	}}); err != nil {
+	sid, _ := e.sessionOf(t, x.GetId())
+	if _, err := e.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, sid); err != nil {
 		t.Fatal(err)
 	}
-	if e.srv.ScheduleCount() != 1 || e.count(t, `SELECT count(*) FROM scheduled_run_schedules`) != 1 {
-		t.Fatal("the retry made a second schedule")
+	for range 2 {
+		if err := e.svc.Adopt(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.count(t, `SELECT count(*) FROM sessions`) != 0 {
+		t.Fatal("a deleted session was made again")
+	}
+	lr, err := e.api.ListScheduleExecutions(ctx, api.ListScheduleExecutionsRequestObject{ScheduleId: sc.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := lr.(api.ListScheduleExecutions200JSONResponse).Items
+	if len(items) != 1 || items[0].SessionId == nil || *items[0].SessionId != sid {
+		t.Fatalf("the execution lost its session id: %+v", items)
+	}
+}
+
+// repeating answers every execution page with the same next token.
+type repeating struct{ schedules.Kagent }
+
+func (r repeating) ListScheduledRunExecutionsPage(
+	c context.Context, scheduleID, token string, limit int,
+) ([]*kagentapi.ScheduledRunExecution, string, error) {
+	list, _, err := r.Kagent.ListScheduledRunExecutionsPage(c, scheduleID, token, limit)
+	return list, "same-token", err
+}
+
+func TestARepeatedExecutionPageTokenEndsThePass(t *testing.T) {
+	e := newEnv(t)
+	sc := create(t, e, "req-1")
+	fire(e, sc.Id)
+	svc := &schedules.Service{Pool: e.pool, Kagent: repeating{e.svc.Kagent}, OwnerID: owner, Limits: e.svc.Limits}
+	done := make(chan error, 1)
+	go func() { done <- svc.Adopt(ctx) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "repeated") {
+			t.Fatalf("want a repeated-token error, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the pass followed a repeated page token for good")
 	}
 }

@@ -1,23 +1,44 @@
--- Scheduled runs: the schedule registry and the per-execution links (internal/schedules).
+-- Scheduled runs: the create intent / schedule registry and the per-execution links (internal/schedules).
 
--- Records a schedule Mainloop created or found. A replay of the create (same request id) finds the
--- row; one the sweep found first is given the request id.
--- name: UpsertScheduledRunSchedule :execrows
-INSERT INTO scheduled_run_schedules (
-    schedule_id, owner_id, agent_namespace, agent_name, request_id, adopt_from
-) VALUES ($1, $2, $3, $4, sqlc.narg(request_id), $5)
-ON CONFLICT (schedule_id) DO UPDATE
-SET request_id = coalesce(scheduled_run_schedules.request_id, EXCLUDED.request_id),
-    updated_at = now()
-WHERE scheduled_run_schedules.request_id IS NULL AND EXCLUDED.request_id IS NOT NULL;
+-- The intent is written before the create is sent; a replay of the same request id finds the row.
+-- name: InsertScheduledRunIntent :execrows
+INSERT INTO scheduled_run_schedules (request_id, owner_id, agent_namespace, agent_name, create_config)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (request_id) DO NOTHING;
+
+-- name: GetScheduledRunByRequest :one
+SELECT * FROM scheduled_run_schedules WHERE request_id = $1 AND owner_id = $2;
+
+-- kagent answered the create: the schedule is ours.
+-- name: ConfirmScheduledRunCreate :execrows
+UPDATE scheduled_run_schedules
+SET state = 'created', schedule_id = $2, updated_at = now()
+WHERE request_id = $1 AND state = 'intent';
+
+-- kagent refused the create for good: nothing exists, so the intent goes.
+-- name: DeleteScheduledRunIntent :exec
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent';
+
+-- Creates that may have been sent and not confirmed, old enough that the request that sent them has ended.
+-- name: ListScheduledRunIntents :many
+SELECT * FROM scheduled_run_schedules
+WHERE owner_id = $1 AND state = 'intent' AND created_at <= sqlc.arg(before)::timestamptz
+ORDER BY created_at;
 
 -- name: GetScheduledRunSchedule :one
 SELECT * FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2;
 
+-- name: ListScheduledRunSchedulesByID :many
+SELECT * FROM scheduled_run_schedules WHERE owner_id = $1 AND schedule_id = ANY(sqlc.arg(schedule_ids)::text[]);
+
 -- name: ListScheduledRunSchedulesToAdopt :many
 SELECT * FROM scheduled_run_schedules
-WHERE owner_id = $1 AND settled_at IS NULL
+WHERE owner_id = $1 AND state = 'created' AND settled_at IS NULL
 ORDER BY schedule_id;
+
+-- Every Agent a create was ever sent to: with the configured Agents, the set this deployment owns.
+-- name: ListScheduleOwnedAgents :many
+SELECT namespace, name FROM kagent_agents;
 
 -- name: MarkScheduledRunScheduleDeleted :exec
 UPDATE scheduled_run_schedules

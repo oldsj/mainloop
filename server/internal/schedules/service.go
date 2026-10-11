@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/oldsj/mainloop/server/internal/api"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/providers"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentapi"
@@ -24,7 +25,6 @@ type Kagent interface {
 	CreateScheduledRun(ctx context.Context, req *kagentapi.CreateScheduledRunRequest) (*kagentapi.ScheduledRun, error)
 	GetScheduledRun(ctx context.Context, id string) (*kagentapi.ScheduledRun, error)
 	ListScheduledRunsPage(ctx context.Context, token string, limit int) ([]*kagentapi.ScheduledRun, string, error)
-	ListScheduledRuns(ctx context.Context) ([]*kagentapi.ScheduledRun, error)
 	UpdateScheduledRun(ctx context.Context, id, etag string, config *kagentapi.ScheduledRunConfig) (*kagentapi.ScheduledRun, error)
 	DeleteScheduledRun(ctx context.Context, id string) (*kagentapi.ScheduledRun, error)
 	TriggerScheduledRun(ctx context.Context, id, requestID string) (*kagentapi.ScheduledRunExecution, error)
@@ -47,6 +47,41 @@ type Service struct {
 	Log       *slog.Logger
 	// SweepEvery is the adoption sweep's period; zero means 5 seconds.
 	SweepEvery time.Duration
+	Limits     Limits
+}
+
+// Limits tunes the sweep. A zero field takes its default.
+type Limits struct {
+	// CursorSafetyWindow keeps the cursor behind executions created this recently. kagent mints
+	// execution ids from the clock of whichever replica handled the call, so an id lower than the
+	// cursor can still commit after the cursor passed it; waiting out the window lets it show up
+	// first. Negative turns the window off.
+	CursorSafetyWindow time.Duration
+	// IntentGrace is how long a create intent is left to the request that wrote it before the sweep
+	// replays it.
+	IntentGrace time.Duration
+}
+
+const (
+	defaultCursorSafetyWindow = 5 * time.Minute
+	defaultIntentGrace        = 30 * time.Second
+)
+
+func (l Limits) cursorWindow() time.Duration {
+	switch {
+	case l.CursorSafetyWindow < 0:
+		return 0
+	case l.CursorSafetyWindow == 0:
+		return defaultCursorSafetyWindow
+	}
+	return l.CursorSafetyWindow
+}
+
+func (l Limits) intentGrace() time.Duration {
+	if l.IntentGrace <= 0 {
+		return defaultIntentGrace
+	}
+	return l.IntentGrace
 }
 
 func (s *Service) log() *slog.Logger {
@@ -169,4 +204,37 @@ func fromExecution(e *kagentapi.ScheduledRunExecution, sessionID *string) api.Sc
 		out.FailureReason = &r
 	}
 	return out
+}
+
+func agentKey(namespace, name string) string { return namespace + "/" + name }
+
+// configAgents is the Agents the current configuration names, read the way the workspace service
+// reads them (every Agent of every provider profile).
+func (s *Service) configAgents() map[string]bool {
+	out := map[string]bool{}
+	if s.Providers == nil {
+		return out
+	}
+	for _, p := range s.Providers.Profiles() {
+		for _, ref := range p.Agents {
+			out[agentKey(ref.Namespace, ref.Name)] = true
+		}
+	}
+	return out
+}
+
+// ownAgents is every Agent this deployment's schedules can be on: the configured Agents and every
+// Agent a create was ever sent to (kagent_agents). One kagent principal serves every Mainloop
+// instance, so only the Agents tell this instance's schedules from another's: instances sharing a
+// kagent must not share Agents.
+func (s *Service) ownAgents(ctx context.Context) (map[string]bool, error) {
+	out := s.configAgents()
+	known, err := dbq.New(s.Pool).ListScheduleOwnedAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range known {
+		out[agentKey(r.Namespace, r.Name)] = true
+	}
+	return out, nil
 }

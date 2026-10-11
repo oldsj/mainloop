@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/attention"
@@ -45,67 +46,99 @@ func (s *Service) Sweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "schedules", Every: every, Run: s.Adopt}
 }
 
-// Adopt runs one adoption pass. A schedule that fails is logged and left for the next pass; the
-// others still run.
+// Adopt runs one adoption pass: first it finishes the creates this instance sent and did not see
+// answered, then it walks the schedules in the registry. kagent's list is never read here: the
+// registry holds exactly the schedules this instance made, on Agents this deployment owns. A
+// schedule that fails is logged and left for the next pass; the others still run.
 func (s *Service) Adopt(ctx context.Context) error {
 	if s.Kagent == nil || s.Pool == nil {
 		return nil
 	}
 	q := dbq.New(s.Pool)
-	live, err := s.Kagent.ListScheduledRuns(ctx)
-	if err != nil {
-		return fmt.Errorf("list schedules: %w", err)
+	var errs []error
+	if err := s.recoverCreates(ctx); err != nil {
+		errs = append(errs, err)
 	}
-	names := map[string]string{}
-	for _, sc := range live {
-		names[sc.GetId()] = sc.GetConfig().GetName()
-		// A schedule whose create was cut off before the registry row was written is found here.
-		if _, err := q.UpsertScheduledRunSchedule(ctx, dbq.UpsertScheduledRunScheduleParams{
-			ScheduleID: sc.GetId(), OwnerID: s.OwnerID,
-			AgentNamespace: sc.GetAgent().GetNamespace(), AgentName: sc.GetAgent().GetName(),
-			AdoptFrom: sc.GetCreatedAt().AsTime(),
-		}); err != nil {
-			return err
-		}
+	owned, err := s.ownAgents(ctx)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
 	}
 	rows, err := q.ListScheduledRunSchedulesToAdopt(ctx, s.OwnerID)
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
-	var errs []error
 	for _, row := range rows {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		_, isLive := names[row.ScheduleID]
-		if err := s.adoptSchedule(ctx, row, names[row.ScheduleID], isLive); err != nil {
-			s.log().WarnContext(ctx, "schedule adoption failed", "schedule_id", row.ScheduleID, "error", err)
+		if !owned[agentKey(row.AgentNamespace, row.AgentName)] {
+			continue // the Agent left this deployment; its schedule is not ours to read any more
+		}
+		if err := s.adoptSchedule(ctx, row); err != nil {
+			s.log().WarnContext(ctx, "schedule adoption failed", "schedule_id", *row.ScheduleID, "error", err)
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedule, name string, live bool) error {
+// recoverCreates replays the creates that were sent and never confirmed (the reply was lost, or the
+// process ended between the intent and the answer). kagent dedupes on the request id, so a replay
+// returns the schedule the first send made, or makes it now; a create kagent refuses made nothing,
+// so its intent is dropped.
+func (s *Service) recoverCreates(ctx context.Context) error {
 	q := dbq.New(s.Pool)
-	deleted := row.DeletedAt != nil
-	if !live && !deleted {
-		// Not in the list: deleted, or not ours any more. A tombstone says which; its executions stay
-		// readable, so they are read one last time.
-		sc, err := s.Kagent.GetScheduledRun(ctx, row.ScheduleID)
-		var se *kagent.SessionError
-		switch {
-		case errors.As(err, &se) && se.Code == connect.CodeNotFound:
-			return s.settle(ctx, row.ScheduleID, true)
-		case err != nil:
-			return err
-		case sc.GetDeletedAt() == nil:
-			return nil // listed on the next pass
+	rows, err := q.ListScheduledRunIntents(ctx, dbq.ListScheduledRunIntentsParams{
+		OwnerID: s.OwnerID, Before: time.Now().Add(-s.Limits.intentGrace()),
+	})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, row := range rows {
+		var cfg kagentapi.ScheduledRunConfig
+		if err := protojson.Unmarshal(row.CreateConfig, &cfg); err != nil {
+			errs = append(errs, err)
+			continue
 		}
+		sc, err := s.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{
+			Agent:     &kagentapi.ResourceReference{Namespace: row.AgentNamespace, Name: row.AgentName},
+			RequestId: row.RequestID, Config: &cfg,
+		})
+		switch {
+		case definite(err):
+			err = q.DeleteScheduledRunIntent(ctx, row.RequestID)
+		case err == nil:
+			err = s.confirm(ctx, row.RequestID, sc)
+		}
+		if err != nil {
+			s.log().WarnContext(ctx, "schedule create recovery failed", "request_id", row.RequestID, "error", err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedule) error {
+	q := dbq.New(s.Pool)
+	id := *row.ScheduleID
+	deleted := row.DeletedAt != nil
+	// The schedule is read every pass: it says whether it is deleted and what it is called. A
+	// tombstone keeps its executions readable, so a deleted schedule is read one last time.
+	sc, err := s.Kagent.GetScheduledRun(ctx, id)
+	var se *kagent.SessionError
+	switch {
+	case errors.As(err, &se) && se.Code == connect.CodeNotFound:
+		return s.settle(ctx, id, true)
+	case err != nil:
+		return err
+	}
+	name := sc.GetConfig().GetName()
+	if sc.GetDeletedAt() != nil && !deleted {
 		if err := q.MarkScheduledRunScheduleDeleted(ctx, row.ScheduleID); err != nil {
 			return err
 		}
-		name, deleted = sc.GetConfig().GetName(), true
+		deleted = true
 	}
 	fresh, err := s.freshExecutions(ctx, row)
 	if err != nil {
@@ -117,7 +150,7 @@ func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedul
 	for i, e := range fresh {
 		ids[i] = e.GetId()
 	}
-	links, err := q.ListScheduledRunLinks(ctx, dbq.ListScheduledRunLinksParams{ScheduleID: row.ScheduleID, ExecutionIds: ids})
+	links, err := q.ListScheduledRunLinks(ctx, dbq.ListScheduledRunLinksParams{ScheduleID: id, ExecutionIds: ids})
 	if err != nil {
 		return err
 	}
@@ -125,16 +158,20 @@ func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedul
 	for _, l := range links {
 		byID[l.ExecutionID] = l
 	}
+	quietBefore := time.Now().Add(-s.Limits.cursorWindow())
 	cursor, contiguous := "", true
 	var errs []error
 	for _, e := range fresh {
-		done := true
-		if e.GetCreatedAt().AsTime().After(row.AdoptFrom) || e.GetCreatedAt().AsTime().Equal(row.AdoptFrom) {
-			var err error
-			if done, err = s.adoptExecution(ctx, row, name, e, byID[e.GetId()]); err != nil {
-				errs = append(errs, err)
-				done = false
-			}
+		done, err := s.adoptExecution(ctx, row, name, e, byID[e.GetId()])
+		if err != nil {
+			errs = append(errs, err)
+			done = false
+		}
+		// An execution created within the safety window may still have a lower-id sibling that has
+		// not committed, so the cursor stays behind it; it is read again next pass, which finds its
+		// link and changes nothing.
+		if e.GetCreatedAt().AsTime().After(quietBefore) {
+			done = false
 		}
 		if contiguous && done {
 			cursor = e.GetId()
@@ -148,7 +185,7 @@ func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedul
 		}
 	}
 	if len(errs) == 0 && deleted && contiguous {
-		return s.settle(ctx, row.ScheduleID, false)
+		return s.settle(ctx, id, false)
 	}
 	return errors.Join(errs...)
 }
@@ -158,19 +195,20 @@ func (s *Service) adoptSchedule(ctx context.Context, row dbq.ScheduledRunSchedul
 func (s *Service) settle(ctx context.Context, id string, gone bool) error {
 	q := dbq.New(s.Pool)
 	if gone {
-		if err := q.MarkScheduledRunScheduleDeleted(ctx, id); err != nil {
+		if err := q.MarkScheduledRunScheduleDeleted(ctx, &id); err != nil {
 			return err
 		}
 	}
-	return q.SettleScheduledRunSchedule(ctx, id)
+	return q.SettleScheduledRunSchedule(ctx, &id)
 }
 
 // freshExecutions reads the executions newer than the schedule's cursor, newest first.
 func (s *Service) freshExecutions(ctx context.Context, row dbq.ScheduledRunSchedule) ([]*kagentapi.ScheduledRunExecution, error) {
 	var out []*kagentapi.ScheduledRunExecution
 	token := ""
+	seen := map[string]bool{}
 	for {
-		page, next, err := s.Kagent.ListScheduledRunExecutionsPage(ctx, row.ScheduleID, token, pageLimit)
+		page, next, err := s.Kagent.ListScheduledRunExecutionsPage(ctx, *row.ScheduleID, token, pageLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -183,6 +221,11 @@ func (s *Service) freshExecutions(ctx context.Context, row dbq.ScheduledRunSched
 		if next == "" {
 			return out, nil
 		}
+		// A kagent that repeats a token would hold the sweep, and its lock, for good.
+		if seen[next] {
+			return nil, fmt.Errorf("kagent repeated execution page token for schedule %s", *row.ScheduleID)
+		}
+		seen[next] = true
 		token = next
 	}
 }
@@ -206,7 +249,7 @@ func (s *Service) adoptExecution(
 		// The link is the claim. Take it, then act on what the row says, so a replay that lost the
 		// race finds the work done.
 		claimed, err := q.InsertScheduledRunLink(ctx, dbq.InsertScheduledRunLinkParams{
-			ExecutionID: e.GetId(), ScheduleID: row.ScheduleID, State: state,
+			ExecutionID: e.GetId(), ScheduleID: *row.ScheduleID, State: state,
 		})
 		if err != nil {
 			return nil, err
@@ -252,7 +295,7 @@ func (s *Service) adoptExecution(
 			drafts, changed = append(drafts, ds...), true
 		}
 		if changed {
-			drafts = append(drafts, updated(s.OwnerID, row.ScheduleID))
+			drafts = append(drafts, updated(s.OwnerID, *row.ScheduleID))
 		}
 		return drafts, nil
 	})
@@ -346,7 +389,7 @@ func (s *Service) openAttention(
 	if why != "" {
 		content += " " + why
 	}
-	ctxMap := map[string]any{"schedule_id": row.ScheduleID, "execution_id": e.GetId(), "state": state}
+	ctxMap := map[string]any{"schedule_id": *row.ScheduleID, "execution_id": e.GetId(), "state": state}
 	if sessionID != nil {
 		ctxMap["session_id"] = *sessionID
 	}

@@ -7,10 +7,41 @@ package dbq
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
+
+const confirmScheduledRunCreate = `-- name: ConfirmScheduledRunCreate :execrows
+UPDATE scheduled_run_schedules
+SET state = 'created', schedule_id = $2, updated_at = now()
+WHERE request_id = $1 AND state = 'intent'
+`
+
+type ConfirmScheduledRunCreateParams struct {
+	RequestID  string
+	ScheduleID *string
+}
+
+// kagent answered the create: the schedule is ours.
+func (q *Queries) ConfirmScheduledRunCreate(ctx context.Context, arg ConfirmScheduledRunCreateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmScheduledRunCreate, arg.RequestID, arg.ScheduleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteScheduledRunIntent = `-- name: DeleteScheduledRunIntent :exec
+DELETE FROM scheduled_run_schedules WHERE request_id = $1 AND state = 'intent'
+`
+
+// kagent refused the create for good: nothing exists, so the intent goes.
+func (q *Queries) DeleteScheduledRunIntent(ctx context.Context, requestID string) error {
+	_, err := q.db.Exec(ctx, deleteScheduledRunIntent, requestID)
+	return err
+}
 
 const endScheduledRunSession = `-- name: EndScheduledRunSession :exec
 UPDATE sessions
@@ -28,6 +59,35 @@ type EndScheduledRunSessionParams struct {
 func (q *Queries) EndScheduledRunSession(ctx context.Context, arg EndScheduledRunSessionParams) error {
 	_, err := q.db.Exec(ctx, endScheduledRunSession, arg.ID, arg.Status, arg.Error)
 	return err
+}
+
+const getScheduledRunByRequest = `-- name: GetScheduledRunByRequest :one
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE request_id = $1 AND owner_id = $2
+`
+
+type GetScheduledRunByRequestParams struct {
+	RequestID string
+	OwnerID   string
+}
+
+func (q *Queries) GetScheduledRunByRequest(ctx context.Context, arg GetScheduledRunByRequestParams) (ScheduledRunSchedule, error) {
+	row := q.db.QueryRow(ctx, getScheduledRunByRequest, arg.RequestID, arg.OwnerID)
+	var i ScheduledRunSchedule
+	err := row.Scan(
+		&i.RequestID,
+		&i.OwnerID,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.CreateConfig,
+		&i.State,
+		&i.ScheduleID,
+		&i.CursorExecutionID,
+		&i.DeletedAt,
+		&i.SettledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getScheduledRunLink = `-- name: GetScheduledRunLink :one
@@ -51,11 +111,11 @@ func (q *Queries) GetScheduledRunLink(ctx context.Context, executionID string) (
 }
 
 const getScheduledRunSchedule = `-- name: GetScheduledRunSchedule :one
-SELECT schedule_id, owner_id, agent_namespace, agent_name, request_id, adopt_from, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE schedule_id = $1 AND owner_id = $2
 `
 
 type GetScheduledRunScheduleParams struct {
-	ScheduleID string
+	ScheduleID *string
 	OwnerID    string
 }
 
@@ -63,12 +123,13 @@ func (q *Queries) GetScheduledRunSchedule(ctx context.Context, arg GetScheduledR
 	row := q.db.QueryRow(ctx, getScheduledRunSchedule, arg.ScheduleID, arg.OwnerID)
 	var i ScheduledRunSchedule
 	err := row.Scan(
-		&i.ScheduleID,
+		&i.RequestID,
 		&i.OwnerID,
 		&i.AgentNamespace,
 		&i.AgentName,
-		&i.RequestID,
-		&i.AdoptFrom,
+		&i.CreateConfig,
+		&i.State,
+		&i.ScheduleID,
 		&i.CursorExecutionID,
 		&i.DeletedAt,
 		&i.SettledAt,
@@ -76,6 +137,37 @@ func (q *Queries) GetScheduledRunSchedule(ctx context.Context, arg GetScheduledR
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const insertScheduledRunIntent = `-- name: InsertScheduledRunIntent :execrows
+
+INSERT INTO scheduled_run_schedules (request_id, owner_id, agent_namespace, agent_name, create_config)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (request_id) DO NOTHING
+`
+
+type InsertScheduledRunIntentParams struct {
+	RequestID      string
+	OwnerID        string
+	AgentNamespace string
+	AgentName      string
+	CreateConfig   json.RawMessage
+}
+
+// Scheduled runs: the create intent / schedule registry and the per-execution links (internal/schedules).
+// The intent is written before the create is sent; a replay of the same request id finds the row.
+func (q *Queries) InsertScheduledRunIntent(ctx context.Context, arg InsertScheduledRunIntentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertScheduledRunIntent,
+		arg.RequestID,
+		arg.OwnerID,
+		arg.AgentNamespace,
+		arg.AgentName,
+		arg.CreateConfig,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertScheduledRunLink = `-- name: InsertScheduledRunLink :execrows
@@ -105,6 +197,76 @@ func (q *Queries) InsertScheduledRunLink(ctx context.Context, arg InsertSchedule
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listScheduleOwnedAgents = `-- name: ListScheduleOwnedAgents :many
+SELECT namespace, name FROM kagent_agents
+`
+
+// Every Agent a create was ever sent to: with the configured Agents, the set this deployment owns.
+func (q *Queries) ListScheduleOwnedAgents(ctx context.Context) ([]KagentAgent, error) {
+	rows, err := q.db.Query(ctx, listScheduleOwnedAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []KagentAgent{}
+	for rows.Next() {
+		var i KagentAgent
+		if err := rows.Scan(&i.Namespace, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listScheduledRunIntents = `-- name: ListScheduledRunIntents :many
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
+WHERE owner_id = $1 AND state = 'intent' AND created_at <= $2::timestamptz
+ORDER BY created_at
+`
+
+type ListScheduledRunIntentsParams struct {
+	OwnerID string
+	Before  time.Time
+}
+
+// Creates that may have been sent and not confirmed, old enough that the request that sent them has ended.
+func (q *Queries) ListScheduledRunIntents(ctx context.Context, arg ListScheduledRunIntentsParams) ([]ScheduledRunSchedule, error) {
+	rows, err := q.db.Query(ctx, listScheduledRunIntents, arg.OwnerID, arg.Before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ScheduledRunSchedule{}
+	for rows.Next() {
+		var i ScheduledRunSchedule
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.OwnerID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.CreateConfig,
+			&i.State,
+			&i.ScheduleID,
+			&i.CursorExecutionID,
+			&i.DeletedAt,
+			&i.SettledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listScheduledRunLinks = `-- name: ListScheduledRunLinks :many
@@ -145,9 +307,51 @@ func (q *Queries) ListScheduledRunLinks(ctx context.Context, arg ListScheduledRu
 	return items, nil
 }
 
+const listScheduledRunSchedulesByID = `-- name: ListScheduledRunSchedulesByID :many
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules WHERE owner_id = $1 AND schedule_id = ANY($2::text[])
+`
+
+type ListScheduledRunSchedulesByIDParams struct {
+	OwnerID     string
+	ScheduleIds []string
+}
+
+func (q *Queries) ListScheduledRunSchedulesByID(ctx context.Context, arg ListScheduledRunSchedulesByIDParams) ([]ScheduledRunSchedule, error) {
+	rows, err := q.db.Query(ctx, listScheduledRunSchedulesByID, arg.OwnerID, arg.ScheduleIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ScheduledRunSchedule{}
+	for rows.Next() {
+		var i ScheduledRunSchedule
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.OwnerID,
+			&i.AgentNamespace,
+			&i.AgentName,
+			&i.CreateConfig,
+			&i.State,
+			&i.ScheduleID,
+			&i.CursorExecutionID,
+			&i.DeletedAt,
+			&i.SettledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScheduledRunSchedulesToAdopt = `-- name: ListScheduledRunSchedulesToAdopt :many
-SELECT schedule_id, owner_id, agent_namespace, agent_name, request_id, adopt_from, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
-WHERE owner_id = $1 AND settled_at IS NULL
+SELECT request_id, owner_id, agent_namespace, agent_name, create_config, state, schedule_id, cursor_execution_id, deleted_at, settled_at, created_at, updated_at FROM scheduled_run_schedules
+WHERE owner_id = $1 AND state = 'created' AND settled_at IS NULL
 ORDER BY schedule_id
 `
 
@@ -161,12 +365,13 @@ func (q *Queries) ListScheduledRunSchedulesToAdopt(ctx context.Context, ownerID 
 	for rows.Next() {
 		var i ScheduledRunSchedule
 		if err := rows.Scan(
-			&i.ScheduleID,
+			&i.RequestID,
 			&i.OwnerID,
 			&i.AgentNamespace,
 			&i.AgentName,
-			&i.RequestID,
-			&i.AdoptFrom,
+			&i.CreateConfig,
+			&i.State,
+			&i.ScheduleID,
 			&i.CursorExecutionID,
 			&i.DeletedAt,
 			&i.SettledAt,
@@ -200,7 +405,7 @@ SET deleted_at = coalesce(deleted_at, now()), updated_at = now()
 WHERE schedule_id = $1
 `
 
-func (q *Queries) MarkScheduledRunScheduleDeleted(ctx context.Context, scheduleID string) error {
+func (q *Queries) MarkScheduledRunScheduleDeleted(ctx context.Context, scheduleID *string) error {
 	_, err := q.db.Exec(ctx, markScheduledRunScheduleDeleted, scheduleID)
 	return err
 }
@@ -212,7 +417,7 @@ WHERE schedule_id = $1 AND cursor_execution_id < $2
 `
 
 type SetScheduledRunCursorParams struct {
-	ScheduleID        string
+	ScheduleID        *string
 	CursorExecutionID string
 }
 
@@ -262,7 +467,7 @@ WHERE schedule_id = $1 AND deleted_at IS NOT NULL
 `
 
 // The sweep read a deleted schedule's executions to the end.
-func (q *Queries) SettleScheduledRunSchedule(ctx context.Context, scheduleID string) error {
+func (q *Queries) SettleScheduledRunSchedule(ctx context.Context, scheduleID *string) error {
 	_, err := q.db.Exec(ctx, settleScheduledRunSchedule, scheduleID)
 	return err
 }
@@ -276,42 +481,4 @@ WHERE id = $1 AND status = 'pending'
 func (q *Queries) StartScheduledRunSession(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, startScheduledRunSession, id)
 	return err
-}
-
-const upsertScheduledRunSchedule = `-- name: UpsertScheduledRunSchedule :execrows
-
-INSERT INTO scheduled_run_schedules (
-    schedule_id, owner_id, agent_namespace, agent_name, request_id, adopt_from
-) VALUES ($1, $2, $3, $4, $6, $5)
-ON CONFLICT (schedule_id) DO UPDATE
-SET request_id = coalesce(scheduled_run_schedules.request_id, EXCLUDED.request_id),
-    updated_at = now()
-WHERE scheduled_run_schedules.request_id IS NULL AND EXCLUDED.request_id IS NOT NULL
-`
-
-type UpsertScheduledRunScheduleParams struct {
-	ScheduleID     string
-	OwnerID        string
-	AgentNamespace string
-	AgentName      string
-	AdoptFrom      time.Time
-	RequestID      *string
-}
-
-// Scheduled runs: the schedule registry and the per-execution links (internal/schedules).
-// Records a schedule Mainloop created or found. A replay of the create (same request id) finds the
-// row; one the sweep found first is given the request id.
-func (q *Queries) UpsertScheduledRunSchedule(ctx context.Context, arg UpsertScheduledRunScheduleParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertScheduledRunSchedule,
-		arg.ScheduleID,
-		arg.OwnerID,
-		arg.AgentNamespace,
-		arg.AgentName,
-		arg.AdoptFrom,
-		arg.RequestID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

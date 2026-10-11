@@ -9,6 +9,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -54,8 +56,6 @@ func (s *Service) refusal(err error, creating bool) error {
 			return httpx.NewError(http.StatusConflict, "The schedule was deleted")
 		case connect.CodeInvalidArgument:
 			return invalid(se.Detail)
-		case connect.CodePermissionDenied:
-			return httpx.NewError(http.StatusForbidden, "kagent refused this request")
 		}
 	case errors.As(err, &cfg) && !cfg.Credentials:
 		return httpx.NewError(http.StatusForbidden, "kagent refused this request")
@@ -117,33 +117,111 @@ func updated(owner, id string) events.Draft {
 	return events.Draft{UserID: owner, Type: events.TypeScheduleUpdated, Payload: api.EventScheduleUpdated{ScheduleId: id}}
 }
 
-// record notes a schedule kagent answered for and publishes schedule:updated, in one transaction.
-// The registry row is what the adoption sweep walks, so a schedule made here is never missed.
-// quiet publishes only when the row changed (a replay of a create changes nothing).
-func (s *Service) record(ctx context.Context, sc *kagentapi.ScheduledRun, requestID *string, deleted, quiet bool) error {
+func ptr[T any](v T) *T { return &v }
+
+var errNotFound = httpx.NewError(http.StatusNotFound, "Schedule not found")
+
+// registered returns the registry row of a schedule this instance made on one of its own Agents.
+// Anything else (another instance's schedule, one this instance never made, an Agent that left this
+// deployment) does not exist as far as the routes are concerned.
+func (s *Service) registered(ctx context.Context, id string) (dbq.ScheduledRunSchedule, error) {
+	row, err := dbq.New(s.Pool).GetScheduledRunSchedule(ctx, dbq.GetScheduledRunScheduleParams{ScheduleID: &id, OwnerID: s.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return row, errNotFound
+	}
+	if err != nil {
+		return row, err
+	}
+	owned, err := s.ownAgents(ctx)
+	if err != nil {
+		return row, err
+	}
+	if !owned[agentKey(row.AgentNamespace, row.AgentName)] {
+		return row, errNotFound
+	}
+	return row, nil
+}
+
+// touch publishes schedule:updated for a schedule that changed, marking it deleted in the same
+// transaction when it was.
+func (s *Service) touch(ctx context.Context, id string, deleted bool) error {
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
-		q := dbq.New(tx)
-		n, err := q.UpsertScheduledRunSchedule(ctx, dbq.UpsertScheduledRunScheduleParams{
-			ScheduleID: sc.GetId(), OwnerID: s.OwnerID,
-			AgentNamespace: sc.GetAgent().GetNamespace(), AgentName: sc.GetAgent().GetName(),
-			RequestID: requestID, AdoptFrom: sc.GetCreatedAt().AsTime(),
-		})
-		if err != nil {
-			return nil, err
-		}
 		if deleted {
-			if err := q.MarkScheduledRunScheduleDeleted(ctx, sc.GetId()); err != nil {
+			if err := dbq.New(tx).MarkScheduledRunScheduleDeleted(ctx, &id); err != nil {
 				return nil, err
 			}
 		}
-		if quiet && n == 0 {
+		return []events.Draft{updated(s.OwnerID, id)}, nil
+	})
+}
+
+// confirm records kagent's answer to a create: the intent becomes the registry entry for the
+// schedule, with schedule:updated in the same transaction. A replay of a confirmed create changes
+// nothing and publishes nothing.
+func (s *Service) confirm(ctx context.Context, requestID string, sc *kagentapi.ScheduledRun) error {
+	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		q := dbq.New(tx)
+		n, err := q.ConfirmScheduledRunCreate(ctx, dbq.ConfirmScheduledRunCreateParams{RequestID: requestID, ScheduleID: ptr(sc.GetId())})
+		if err != nil {
+			return nil, err
+		}
+		if sc.GetDeletedAt() != nil {
+			if err := q.MarkScheduledRunScheduleDeleted(ctx, ptr(sc.GetId())); err != nil {
+				return nil, err
+			}
+		}
+		if n == 0 {
 			return nil, nil
 		}
 		return []events.Draft{updated(s.OwnerID, sc.GetId())}, nil
 	})
 }
 
-// ListSchedules implements api.StrictServerInterface.
+// definite says kagent answered and refused, so a create it refused made nothing.
+func definite(err error) bool {
+	var se *kagent.SessionError
+	return errors.As(err, &se)
+}
+
+var errRequestIDReused = httpx.NewError(http.StatusConflict, "request_id was already used with a different request")
+
+// beginCreate writes the create intent before anything is sent. A row that already holds the
+// request id must hold the same Agent and config, or the request is a different one under a used key.
+func (s *Service) beginCreate(
+	ctx context.Context, requestID string, agent *kagentapi.ResourceReference, cfg *kagentapi.ScheduledRunConfig,
+) error {
+	raw, err := protojson.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	q := dbq.New(s.Pool)
+	if _, err := q.InsertScheduledRunIntent(ctx, dbq.InsertScheduledRunIntentParams{
+		RequestID: requestID, OwnerID: s.OwnerID, AgentNamespace: agent.GetNamespace(), AgentName: agent.GetName(), CreateConfig: raw,
+	}); err != nil {
+		return err
+	}
+	row, err := q.GetScheduledRunByRequest(ctx, dbq.GetScheduledRunByRequestParams{RequestID: requestID, OwnerID: s.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errRequestIDReused // the key belongs to another owner
+	}
+	if err != nil {
+		return err
+	}
+	var had kagentapi.ScheduledRunConfig
+	if err := protojson.Unmarshal(row.CreateConfig, &had); err != nil {
+		return err
+	}
+	if row.AgentNamespace != agent.GetNamespace() || row.AgentName != agent.GetName() || !proto.Equal(&had, cfg) {
+		return errRequestIDReused
+	}
+	return nil
+}
+
+// maxListPages bounds how many kagent pages one list call reads looking for this instance's schedules.
+const maxListPages = 20
+
+// ListSchedules implements api.StrictServerInterface. kagent lists every schedule of its principal,
+// so each page is cut down to this instance's registry; a page can hold fewer items than the limit.
 func (a *SchedulesAPI) ListSchedules(ctx context.Context, r api.ListSchedulesRequestObject) (api.ListSchedulesResponseObject, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
@@ -152,19 +230,53 @@ func (a *SchedulesAPI) ListSchedules(ctx context.Context, r api.ListSchedulesReq
 	if r.Params.PageToken != nil {
 		token = *r.Params.PageToken
 	}
-	list, next, err := a.Svc.Kagent.ListScheduledRunsPage(ctx, token, pageSize(r.Params.Limit))
+	owned, err := a.Svc.ownAgents(ctx)
 	if err != nil {
-		return nil, a.Svc.refusal(err, false)
+		return nil, err
 	}
-	page := api.ScheduledRunPage{Items: []api.ScheduledRunOutput{}, NextPageToken: nextToken(next)}
-	for _, sc := range list {
-		page.Items = append(page.Items, fromSchedule(sc))
+	page := api.ScheduledRunPage{Items: []api.ScheduledRunOutput{}}
+	seen := map[string]bool{}
+	// Keep reading while a whole page was foreign, so a client is not handed empty pages for as
+	// long as another instance's schedules sort first.
+	for range maxListPages {
+		list, next, err := a.Svc.Kagent.ListScheduledRunsPage(ctx, token, pageSize(r.Params.Limit))
+		if err != nil {
+			return nil, a.Svc.refusal(err, false)
+		}
+		ids := make([]string, len(list))
+		for i, sc := range list {
+			ids[i] = sc.GetId()
+		}
+		rows, err := dbq.New(a.Svc.Pool).ListScheduledRunSchedulesByID(ctx, dbq.ListScheduledRunSchedulesByIDParams{
+			OwnerID: a.Svc.OwnerID, ScheduleIds: ids,
+		})
+		if err != nil {
+			return nil, err
+		}
+		mine := map[string]bool{}
+		for _, row := range rows {
+			if row.ScheduleID != nil && owned[agentKey(row.AgentNamespace, row.AgentName)] {
+				mine[*row.ScheduleID] = true
+			}
+		}
+		for _, sc := range list {
+			if mine[sc.GetId()] {
+				page.Items = append(page.Items, fromSchedule(sc))
+			}
+		}
+		page.NextPageToken = nextToken(next)
+		if len(page.Items) > 0 || next == "" || seen[next] {
+			break
+		}
+		seen[next] = true
+		token = next
 	}
 	return api.ListSchedules200JSONResponse(page), nil
 }
 
-// CreateSchedule implements api.StrictServerInterface. The request id goes to kagent as it is, so a
-// retry finds the schedule the first call made.
+// CreateSchedule implements api.StrictServerInterface. The intent row is written first and the
+// request id goes to kagent as it is, so a retry (or the sweep) replays the same create and finds
+// the schedule the first call made.
 func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleRequestObject) (api.CreateScheduleResponseObject, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
@@ -172,19 +284,41 @@ func (a *SchedulesAPI) CreateSchedule(ctx context.Context, r api.CreateScheduleR
 	if r.Body == nil {
 		return nil, invalid("the body is required")
 	}
+	if strings.TrimSpace(r.Body.RequestId) == "" {
+		return nil, invalid("request_id is required")
+	}
 	cfg, err := toConfig(r.Body.Config)
 	if err != nil {
 		return nil, invalid(err.Error())
 	}
+	owned, err := a.Svc.ownAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !owned[agentKey(r.Body.Agent.Namespace, r.Body.Agent.Name)] {
+		return nil, httpx.NewError(http.StatusForbidden, "That Agent does not belong to this deployment")
+	}
+	agent := &kagentapi.ResourceReference{Namespace: r.Body.Agent.Namespace, Name: r.Body.Agent.Name}
+	if err := a.Svc.beginCreate(ctx, r.Body.RequestId, agent, cfg); err != nil {
+		return nil, err
+	}
 	sc, err := a.Svc.Kagent.CreateScheduledRun(ctx, &kagentapi.CreateScheduledRunRequest{
-		Agent:     &kagentapi.ResourceReference{Namespace: r.Body.Agent.Namespace, Name: r.Body.Agent.Name},
-		RequestId: r.Body.RequestId, Config: cfg,
+		Agent: agent, RequestId: r.Body.RequestId, Config: cfg,
 	})
 	if err != nil {
+		if definite(err) {
+			if derr := dbq.New(a.Svc.Pool).DeleteScheduledRunIntent(ctx, r.Body.RequestId); derr != nil {
+				a.Svc.log().WarnContext(ctx, "dropping a refused schedule intent failed", "error", derr)
+			}
+		}
 		return nil, a.Svc.refusal(err, true)
 	}
-	if err := a.Svc.record(ctx, sc, &r.Body.RequestId, false, true); err != nil {
+	if err := a.Svc.confirm(ctx, r.Body.RequestId, sc); err != nil {
 		return nil, err
+	}
+	if sc.GetDeletedAt() != nil {
+		// A replay of a create whose schedule was deleted since: kagent still returns it.
+		return nil, httpx.NewError(http.StatusConflict, "The schedule made by this request_id was deleted")
 	}
 	return api.CreateSchedule201JSONResponse{
 		Body: fromSchedule(sc), Headers: api.CreateSchedule201ResponseHeaders{ETag: quote(sc.GetEtag())},
@@ -199,12 +333,15 @@ func (a *SchedulesAPI) GetSchedule(ctx context.Context, r api.GetScheduleRequest
 	if err := scheduleID(r.ScheduleId); err != nil {
 		return nil, err
 	}
+	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
+		return nil, err
+	}
 	sc, err := a.Svc.Kagent.GetScheduledRun(ctx, r.ScheduleId)
 	if err != nil {
 		return nil, a.Svc.refusal(err, false)
 	}
 	if sc.GetDeletedAt() != nil {
-		return nil, httpx.NewError(http.StatusNotFound, "Schedule not found")
+		return nil, errNotFound
 	}
 	return api.GetSchedule200JSONResponse{
 		Body: fromSchedule(sc), Headers: api.GetSchedule200ResponseHeaders{ETag: quote(sc.GetEtag())},
@@ -231,11 +368,14 @@ func (a *SchedulesAPI) UpdateSchedule(ctx context.Context, r api.UpdateScheduleR
 	if err != nil {
 		return nil, invalid(err.Error())
 	}
+	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
+		return nil, err
+	}
 	sc, err := a.Svc.Kagent.UpdateScheduledRun(ctx, r.ScheduleId, etag, cfg)
 	if err != nil {
 		return nil, a.Svc.refusal(err, false)
 	}
-	if err := a.Svc.record(ctx, sc, nil, false, false); err != nil {
+	if err := a.Svc.touch(ctx, sc.GetId(), false); err != nil {
 		return nil, err
 	}
 	return api.UpdateSchedule200JSONResponse{
@@ -251,11 +391,14 @@ func (a *SchedulesAPI) DeleteSchedule(ctx context.Context, r api.DeleteScheduleR
 	if err := scheduleID(r.ScheduleId); err != nil {
 		return nil, err
 	}
+	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
+		return nil, err
+	}
 	sc, err := a.Svc.Kagent.DeleteScheduledRun(ctx, r.ScheduleId)
 	if err != nil {
 		return nil, a.Svc.refusal(err, false)
 	}
-	if err := a.Svc.record(ctx, sc, nil, true, false); err != nil {
+	if err := a.Svc.touch(ctx, sc.GetId(), true); err != nil {
 		return nil, err
 	}
 	return api.DeleteSchedule204Response{}, nil
@@ -267,6 +410,9 @@ func (a *SchedulesAPI) ListScheduleExecutions(ctx context.Context, r api.ListSch
 		return nil, err
 	}
 	if err := scheduleID(r.ScheduleId); err != nil {
+		return nil, err
+	}
+	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
 		return nil, err
 	}
 	token := ""
@@ -309,17 +455,14 @@ func (a *SchedulesAPI) TriggerSchedule(ctx context.Context, r api.TriggerSchedul
 	if r.Body == nil {
 		return nil, invalid("the body is required")
 	}
+	if _, err := a.Svc.registered(ctx, r.ScheduleId); err != nil {
+		return nil, err
+	}
 	e, err := a.Svc.Kagent.TriggerScheduledRun(ctx, r.ScheduleId, r.Body.RequestId)
 	if err != nil {
 		return nil, a.Svc.refusal(err, false)
 	}
-	// The trigger needs the schedule in the registry, so the sweep adopts the execution; the Agent
-	// and creation time come from the schedule.
-	sc, err := a.Svc.Kagent.GetScheduledRun(ctx, r.ScheduleId)
-	if err != nil {
-		return nil, a.Svc.refusal(err, false)
-	}
-	if err := a.Svc.record(ctx, sc, nil, sc.GetDeletedAt() != nil, false); err != nil {
+	if err := a.Svc.touch(ctx, r.ScheduleId, false); err != nil {
 		return nil, err
 	}
 	var sessionID *string

@@ -1493,7 +1493,7 @@ paths:
       tags:
         - schedules
       summary: List Schedules
-      description: The owner's schedules, one page at a time. Ordered by schedule id, not by creation time.
+      description: The schedules this deployment made, one page at a time. Ordered by schedule id, not by creation time. A page can hold fewer items than the limit; follow next_page_token until it is null.
       operationId: listSchedules
       x-served-by: go
       parameters:
@@ -1520,6 +1520,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScheduledRunPage'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1534,11 +1540,17 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
     post:
       tags:
         - schedules
       summary: Create Schedule
-      description: Create a scheduled agent run. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body returns 409.
+      description: Create a scheduled agent run on one of this deployment's Agents; any other Agent returns 403. A retry with the same request_id and body returns the existing schedule; the same request_id with a different body, or with a schedule that has since been deleted, returns 409.
       operationId: createSchedule
       x-served-by: go
       requestBody:
@@ -1618,6 +1630,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScheduledRunOutput'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1632,6 +1650,12 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
     put:
       tags:
         - schedules
@@ -1797,6 +1821,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScheduledRunExecutionPage'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '404':
           description: Not Found
           content:
@@ -1811,6 +1841,12 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/HTTPValidationError'
                   - $ref: '#/components/schemas/HTTPError'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /schedules/{schedule_id}/trigger:
     post:
       tags:
@@ -4628,7 +4664,7 @@ components:
             - type: string
             - type: 'null'
           title: Session Id
-          description: Null until a session is reserved. Kept after that session is deleted, so it is history, not proof the session still exists.
+          description: The Mainloop session the execution became; null until it is adopted, which happens within one sweep period of kagent reserving a session for it. Kept after that session is deleted, so it is history, not proof the session still exists.
         state:
           type: string
           enum:

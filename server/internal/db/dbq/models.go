@@ -386,12 +386,13 @@ type ScheduledRunLink struct {
 }
 
 type ScheduledRunSchedule struct {
-	ScheduleID        string
+	RequestID         string
 	OwnerID           string
 	AgentNamespace    string
 	AgentName         string
-	RequestID         *string
-	AdoptFrom         time.Time
+	CreateConfig      json.RawMessage
+	State             string
+	ScheduleID        *string
 	CursorExecutionID string
 	DeletedAt         *time.Time
 	SettledAt         *time.Time
