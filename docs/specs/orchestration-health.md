@@ -96,7 +96,8 @@ success.
 - Retention runs as its own sweep every ten minutes.
 
 Coverage expects a receipt for every running or finished delivery that discovery tracks, so a
-running turn with no observations yet keeps its row and session partial. An open receipt does the
+running turn with no observations yet keeps its row and session partial when other turns have been
+observed; when no turn in the row or session has any observations, coverage is `unknown`. An open receipt does the
 same even when the observations read so far look complete. Import allows 2,048 health events per
 receipt and 8 KiB per event; overflow and integrity failures mark gaps. The queue-and-GET-recovery
 design described in earlier slices belonged to the frozen Python backend and is superseded.
