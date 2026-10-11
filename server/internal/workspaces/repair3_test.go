@@ -98,11 +98,14 @@ func TestAnArchivedWorkspaceWithAnUnresolvedCreateIsDeleted(t *testing.T) {
 	if n, err := h.dq.CountUnresolvedBindings(bg); err != nil || n != 1 {
 		t.Fatalf("unresolved before the sweep = %d, %v; want the one create that may have landed", n, err)
 	}
-	eventually(t, "the sweep settles the binding", func() bool {
+	// Recovering the Session id stops the binding counting as unresolved before the asynchronous
+	// delete finishes. Wait for the Session itself to be gone as well.
+	eventually(t, "the sweep deletes the Session and settles the binding", func() bool {
 		_ = h.svc.DeleteArchived(bg)
 		_ = ss.ResolveCreates(bg)
 		n, err := h.dq.CountUnresolvedBindings(bg)
-		return err == nil && n == 0
+		_, alive := h.fake.Session(landed.GetId())
+		return err == nil && n == 0 && !alive
 	})
 	if _, alive := h.fake.Session(landed.GetId()); alive {
 		t.Error("the Session the lost-reply create made is still alive")
