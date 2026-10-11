@@ -33,6 +33,9 @@ export interface SessionThreadState {
  */
 export type LostSend = 'recorded' | 'unrecorded';
 
+/** The routes a test can hold open: the request is recorded, then waits until released. */
+export type HeldRoute = 'chat' | 'stop-turn' | 'conversation';
+
 export interface ChatBackendState {
   mainThread: MainThreadInfo;
   messages: ChatMessage[];
@@ -134,6 +137,29 @@ export function createChatBackend(
   const state = freshState();
   let counter = state.messages.length;
   const pendingTurns = new Set<ReturnType<typeof setTimeout>>();
+  const holds = new Map<HeldRoute, { gate: Promise<void>; release: () => void }>();
+
+  /**
+   * Holds the next request on `route` after the handler records it, so a test can look at the page
+   * while that request is in flight. Returns the release, which lets the held request finish.
+   */
+  function hold(route: HeldRoute): () => void {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const held = { gate, release };
+    holds.set(route, held);
+    return () => {
+      if (holds.get(route) === held) holds.delete(route);
+      release();
+    };
+  }
+
+  /** Waits at a held route; a route that is not held passes straight through. */
+  async function waitHeld(route: HeldRoute) {
+    await holds.get(route)?.gate;
+  }
 
   /**
    * Puts the backend back to its starting state and drops any scheduled turn end. Tests that share
@@ -142,6 +168,8 @@ export function createChatBackend(
   function reset() {
     for (const timer of pendingTurns) clearTimeout(timer);
     pendingTurns.clear();
+    for (const held of holds.values()) held.release();
+    holds.clear();
     Object.assign(state, freshState());
     counter = state.messages.length;
   }
@@ -251,7 +279,8 @@ export function createChatBackend(
       if (lost === 'recorded') return HttpResponse.error();
       return HttpResponse.json(next);
     }),
-    http.get(url('/conversations/:conversationId'), ({ params }) => {
+    http.get(url('/conversations/:conversationId'), async ({ params }) => {
+      await waitHeld('conversation');
       if (params.conversationId !== state.mainThread.conversation_id)
         return HttpResponse.json({ detail: 'Conversation not found' }, { status: 404 });
       const now = state.messages.at(-1)?.created_at ?? '2026-01-01T10:00:00Z';
@@ -273,6 +302,7 @@ export function createChatBackend(
     http.post(url('/chat'), async ({ request }) => {
       const body = (await request.json()) as Schemas['ChatRequest'];
       state.chatPosts.push(body);
+      await waitHeld('chat');
       if (state.rejectNextChat) {
         const { status, detail } = state.rejectNextChat;
         state.rejectNextChat = null;
@@ -348,8 +378,9 @@ export function createChatBackend(
       };
       return HttpResponse.json(response);
     }),
-    http.post(url('/sessions/:sessionId/stop-turn'), ({ params }) => {
+    http.post(url('/sessions/:sessionId/stop-turn'), async ({ params }) => {
       state.stopped.push(params.sessionId as string);
+      await waitHeld('stop-turn');
       const body: Schemas['SessionStopTurnResponse'] = { status: 'stopped' };
       return HttpResponse.json(body);
     }),
@@ -358,5 +389,5 @@ export function createChatBackend(
     )
   ];
 
-  return { state, handlers, endTurn, endSessionTurn, reset };
+  return { state, handlers, endTurn, endSessionTurn, hold, reset };
 }

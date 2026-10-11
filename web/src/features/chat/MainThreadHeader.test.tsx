@@ -200,7 +200,7 @@ describe('MainThreadHeader main provider row', () => {
 
   it('shows the notice of a selection as an alert', () => {
     view(withProvider(providerFixture()), {
-      provider: control({ notice: 'Provider change blocked (409): busy. State will be refreshed; no automatic retry.' })
+      provider: control({ notice: 'Provider change blocked (409): busy. State is refreshed; no automatic retry.' })
     });
     expect(screen.getByRole('alert')).toHaveTextContent('Provider change blocked (409)');
   });

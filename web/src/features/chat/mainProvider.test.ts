@@ -9,6 +9,7 @@ import {
   providerReady,
   providerStateWords,
   providerSwitchBlocked,
+  refusalCode,
   retryOffered,
   selectionIsNoop,
   selectionNotice
@@ -201,28 +202,87 @@ describe('retryOffered', () => {
 
 describe('selectionNotice', () => {
   it('says a 409 was blocked, and that nothing is retried on its own', () => {
-    const text = selectionNotice(new ApiError('Main provider is busy.', 409));
+    const text = selectionNotice(new ApiError('Main provider is busy.', 409), 'codex');
     expect(text).toBe(
-      'Provider change blocked (409): Main provider is busy. State will be refreshed; no automatic retry.'
+      'Provider change blocked (409): Main provider is busy. State is refreshed; no automatic retry.'
     );
   });
 
   it('says other failures were not confirmed', () => {
-    const text = selectionNotice(new ApiError('Forbidden.', 403));
+    const text = selectionNotice(new ApiError('Forbidden.', 403), 'codex');
     expect(text).toBe(
-      'Provider selection was not confirmed: Forbidden. State will be refreshed; no automatic retry.'
+      'Provider selection was not confirmed: Forbidden. State is refreshed; no automatic retry.'
     );
   });
 
   it('treats a network failure as not confirmed, with a fallback when it has no message', () => {
-    expect(selectionNotice(new TypeError('Failed to fetch'))).toContain('Failed to fetch');
-    expect(selectionNotice('oops')).toContain('request failed');
+    expect(selectionNotice(new TypeError('Failed to fetch'), 'codex')).toContain('Failed to fetch');
+    expect(selectionNotice('oops', 'codex')).toContain('request failed');
   });
 
   it('bounds a long message', () => {
-    const text = selectionNotice(new ApiError('x'.repeat(1000), 500));
+    const text = selectionNotice(new ApiError('x'.repeat(1000), 500), 'codex');
     expect(text).toContain('x'.repeat(NOTICE_MAX));
     expect(text).not.toContain('x'.repeat(NOTICE_MAX + 1));
+  });
+});
+
+/** A 409 as the client holds it once the contract's `code` is carried on the error. */
+const coded = (code: unknown, detail = 'Raw server prose.') =>
+  Object.assign(new ApiError(detail, 409), { code });
+
+describe('refusalCode', () => {
+  it.each(['busy', 'pending', 'unconfirmed', 'unresolved', 'agent_unavailable'])(
+    'reads the %s code',
+    (code) => {
+      expect(refusalCode(coded(code))).toBe(code);
+    }
+  );
+
+  it.each([
+    ['an unknown code', coded('mystery')],
+    ['no code', new ApiError('Raw server prose.', 409)],
+    ['a code that is not a string', coded(7)],
+    ['a plain string', 'busy'],
+    ['nothing', undefined]
+  ])('gives no code for %s', (_label, error) => {
+    expect(refusalCode(error)).toBeNull();
+  });
+});
+
+describe('selectionNotice refusal codes', () => {
+  it.each([
+    ['busy', 'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'],
+    ['pending', 'Provider change refused: a switch is already pending and must settle or be recoverable first. State is refreshed; no automatic retry.'],
+    ['unconfirmed', 'Provider change refused: kagent could not confirm the main is idle. State is refreshed; no automatic retry.'],
+    ['unresolved', 'Provider change refused: a native create for the main is still unresolved. State is refreshed; no automatic retry.']
+  ])('%s shows its own notice, not the server prose', (code, expected) => {
+    expect(selectionNotice(coded(code), 'codex')).toBe(expected);
+  });
+
+  it('agent_unavailable names the provider asked for, and says nothing changed', () => {
+    expect(selectionNotice(coded('agent_unavailable'), 'codex')).toBe(
+      "Codex isn't installed here. Nothing changed. State is refreshed; no automatic retry."
+    );
+    expect(selectionNotice(coded('agent_unavailable'), 'claude')).toBe(
+      "Claude isn't installed here. Nothing changed. State is refreshed; no automatic retry."
+    );
+  });
+
+  it.each([
+    ['an unknown code', coded('mystery')],
+    ['no code', new ApiError('Raw server prose.', 409)]
+  ])('falls back to the detail for %s', (_label, error) => {
+    expect(selectionNotice(error, 'codex')).toBe(
+      'Provider change blocked (409): Raw server prose. State is refreshed; no automatic retry.'
+    );
+  });
+
+  it('a code wins over the status it arrived with', () => {
+    const error = Object.assign(new ApiError('Forbidden.', 403), { code: 'busy' });
+    expect(selectionNotice(error, 'codex')).toBe(
+      'Provider change refused: the main has open work or changed while the request ran. State is refreshed; no automatic retry.'
+    );
   });
 });
 

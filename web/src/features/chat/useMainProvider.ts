@@ -76,7 +76,7 @@ export function useMainProvider(info: MainThreadInfo | undefined, busy: boolean)
       try {
         await fetchClient.PUT('/main-thread/provider', { body: selection });
       } catch (error) {
-        setWriteNotice(selectionNotice(error));
+        setWriteNotice(selectionNotice(error, selection.provider));
         // A 409 is a block the backend decided on: retrying the same write would be refused too.
         if (!(error instanceof ApiError && error.status === 409)) setFailedWrite(selection);
       }

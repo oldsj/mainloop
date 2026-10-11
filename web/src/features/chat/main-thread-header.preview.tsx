@@ -90,7 +90,7 @@ export function ProviderFailedPreview() {
         ...idleControl,
         retryOffered: true,
         restartOffered: true,
-        notice: 'Provider selection was not confirmed: request failed. State will be refreshed; no automatic retry.'
+        notice: 'Provider selection was not confirmed: request failed. State is refreshed; no automatic retry.'
       }}
     />
   );

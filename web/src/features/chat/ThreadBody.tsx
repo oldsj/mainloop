@@ -81,7 +81,7 @@ export function ThreadBody({
       <Composer
         draftKey={thread.draftKey}
         busy={thread.busy || thread.sendPending}
-        loading={!thread.threadKnown && !thread.loadFailed}
+        loading={!thread.loaded && !thread.conversationFailed && !thread.loadFailed}
         unavailable={thread.loadFailed}
         offline={offline}
         closed={closedReason !== null}

@@ -1,5 +1,11 @@
 import { ApiError } from '@/api/errors';
-import type { MainProvider, MainProviderInfo, MainProviderSelection, MainThreadInfo } from './types';
+import type {
+  MainProvider,
+  MainProviderInfo,
+  MainProviderRefusalCode,
+  MainProviderSelection,
+  MainThreadInfo
+} from './types';
 
 /** The provider select's options, in the order it lists them. */
 export const MAIN_PROVIDERS: { value: MainProvider; label: string }[] = [
@@ -142,13 +148,45 @@ export function retryOffered(
   return !(providerReady(provider) && provider?.desired_provider === failed.provider);
 }
 
-/** The words for a selection the backend did not confirm. A 409 is a block, not a lost write. */
-export function selectionNotice(error: unknown): string {
+/** The sentence every refusal notice ends with: the state is re-read and nothing is retried. */
+const REFRESHED = 'State is refreshed; no automatic retry.';
+
+/**
+ * The notice for each refusal code. Written here, not taken from the server's prose, so the owner
+ * reads the same words whatever the backend wording. `agent_unavailable` names the provider asked for.
+ */
+const REFUSAL_NOTICE: Record<MainProviderRefusalCode, (requested: MainProvider) => string> = {
+  busy: () => 'Provider change refused: the main has open work or changed while the request ran.',
+  pending: () =>
+    'Provider change refused: a switch is already pending and must settle or be recoverable first.',
+  unconfirmed: () => 'Provider change refused: kagent could not confirm the main is idle.',
+  unresolved: () => 'Provider change refused: a native create for the main is still unresolved.',
+  agent_unavailable: (requested) => `${providerLabel(requested)} isn't installed here. Nothing changed.`
+};
+
+const REFUSAL_CODES = Object.keys(REFUSAL_NOTICE) as MainProviderRefusalCode[];
+
+/**
+ * The refusal code a failed request carries, or null. Only a code the contract names counts; any
+ * other value, or none, leaves the notice to the server's detail text.
+ */
+export function refusalCode(error: unknown): MainProviderRefusalCode | null {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
+  return REFUSAL_CODES.find((known) => known === code) ?? null;
+}
+
+/**
+ * The words for a selection the backend did not confirm. A known refusal code picks the notice;
+ * otherwise the detail is shown. A 409 is a block, not a lost write.
+ */
+export function selectionNotice(error: unknown, requested: MainProvider): string {
+  const code = refusalCode(error);
+  if (code) return `${REFUSAL_NOTICE[code](requested)} ${REFRESHED}`;
   // The detail may end in a full stop of its own; the sentence after it adds one.
   const detail = boundedText(error instanceof Error && error.message ? error.message : 'request failed').replace(/\.+$/, '');
   if (error instanceof ApiError && error.status === 409)
-    return `Provider change blocked (409): ${detail}. State will be refreshed; no automatic retry.`;
-  return `Provider selection was not confirmed: ${detail}. State will be refreshed; no automatic retry.`;
+    return `Provider change blocked (409): ${detail}. ${REFRESHED}`;
+  return `Provider selection was not confirmed: ${detail}. ${REFRESHED}`;
 }
 
 /**

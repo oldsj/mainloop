@@ -7,8 +7,9 @@ import { API_URL } from '@/api/config';
 import { createSseApplier } from '@/api/invalidation';
 import { keys } from '@/api';
 import { server } from '@/test/msw/server';
+import { SessionChatSlot } from '@/features/sessions/SessionChatSlot';
 import { ChatPage } from './ChatPage';
-import { loadDraft, saveDraft } from './drafts';
+import { loadDraft, saveDraft, sessionDraftKey } from './drafts';
 import {
   CONVERSATION_ID,
   deliveryFixture,
@@ -934,5 +935,109 @@ describe('the main provider', () => {
     await pause(400);
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
     expect(screen.getByTestId('mt-provider-select')).toHaveValue('codex');
+  });
+});
+
+describe('the main lock while a send, a stop or a load is in flight', () => {
+  it('locks the selection and the main input while a send is in flight', async () => {
+    const { state, endTurn, hold } = setup(idleThread());
+    await screen.findByText('build it');
+    const release = hold('chat');
+    await userEvent.type(input(), 'next step{Enter}');
+    await waitFor(() => expect(state.chatPosts).toHaveLength(1));
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+
+    release();
+    // The send was recorded, so the turn runs and the lock holds until it ends.
+    await waitFor(() => expect(input()).toHaveAttribute('placeholder', 'Working…'));
+    expect(providerSelect()).toBeDisabled();
+    endTurn('done');
+    await waitFor(() => expect(input()).toBeEnabled(), { timeout: 5000 });
+    expect(providerSelect()).toBeEnabled();
+  });
+
+  it('locks the selection and the main input while a stop is in flight', async () => {
+    // The turn is in flight, so the lock also comes from the turn rule. The held stop is what
+    // shows the lock holding while the stop itself is pending.
+    const { state, endTurn, hold } = setup(
+      existing({
+        mainThread: mainThreadFixture({
+          conversation_id: CONVERSATION_ID,
+          native: nativeFixture({ turn_in_flight: true })
+        })
+      })
+    );
+    await screen.findByText('build it');
+    const release = hold('stop-turn');
+    await userEvent.click(await screen.findByTestId('mt-stop-turn'));
+    await waitFor(() => expect(state.stopped).toEqual([MAIN_SESSION_ID]));
+    expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('stopping…');
+    expect(providerSelect()).toBeDisabled();
+    expect(input()).toBeDisabled();
+
+    release();
+    await waitFor(() =>
+      expect(screen.getByTestId('mt-stop-turn')).not.toHaveTextContent('stopping…')
+    );
+    expect(providerSelect()).toBeDisabled();
+    endTurn();
+    // Polling notices the turn has ended within one poll interval.
+    await waitFor(() => expect(providerSelect()).toBeEnabled(), { timeout: 5000 });
+    expect(input()).toBeEnabled();
+  });
+
+  it('locks the selection and the main input until the conversation is read', async () => {
+    const { hold } = setup(idleThread());
+    const release = hold('conversation');
+    expect(await screen.findByTestId('mt-provider-select')).toBeDisabled();
+    expect(input()).toBeDisabled();
+
+    release();
+    await screen.findByText('build it');
+    await waitFor(() => expect(providerSelect()).toBeEnabled());
+    expect(input()).toBeEnabled();
+  });
+});
+
+describe('the main lock does not reach drafts or a child session', () => {
+  const CHILD_SESSION_ID = 'child-session';
+
+  it('keeps the main draft, and lets a child session take input and send, while the main is locked', async () => {
+    const backend = createChatBackend(
+      idleThread(
+        providerFixture({ desired_provider: 'codex', effective_provider: 'claude', status: 'pending' })
+      )
+    );
+    server.use(...backend.handlers);
+    saveDraft(CONVERSATION_ID, 'main draft');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChatPage />
+        <SessionChatSlot sessionId={CHILD_SESSION_ID} />
+      </QueryClientProvider>
+    );
+    await screen.findByText('build it');
+    const main = within(screen.getByTestId('main-thread'));
+    const child = within(await screen.findByTestId('session-chat-slot'));
+
+    expect(main.getByTestId('mt-provider-select')).toBeDisabled();
+    expect(main.getByTestId('command-input')).toBeDisabled();
+    expect(main.getByTestId('command-input')).toHaveValue('main draft');
+    expect(loadDraft(CONVERSATION_ID)).toBe('main draft');
+
+    await waitFor(() => expect(child.getByTestId('command-input')).toBeEnabled());
+    await userEvent.type(child.getByTestId('command-input'), 'child note');
+    await waitFor(() => expect(loadDraft(sessionDraftKey(CHILD_SESSION_ID))).toBe('child note'));
+    await userEvent.type(child.getByTestId('command-input'), '{Enter}');
+    await waitFor(() =>
+      expect(backend.state.sessionPosts[CHILD_SESSION_ID]?.map((post) => post.message)).toEqual([
+        'child note'
+      ])
+    );
+    // Sending to the child changes neither the main lock nor the main draft.
+    expect(main.getByTestId('command-input')).toBeDisabled();
+    expect(loadDraft(CONVERSATION_ID)).toBe('main draft');
   });
 });
