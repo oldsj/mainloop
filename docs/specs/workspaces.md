@@ -134,14 +134,21 @@ Implemented in the React client:
 - The repository is a link only for `http` and `https` URLs. The image digest shows its first 19
   characters, or "unknown" when it does not parse.
 - Preview links are offered only for `http` and `https` URLs. A bad row is dropped and counted; the
-  rest still show. Opening a suspended workspace's preview wakes it.
+  rest still show. Opening a suspended workspace's preview wakes it on the Go side (G12, the
+  preview proxy, described below); the React page only links to the preview.
 - A failed refresh keeps the cached data on screen, with an inline error and a retry.
+- A later read that cannot be parsed keeps the last good workspace on screen, with a notice that it
+  could not be read. A failed action's notice and its failed detail both show.
+- Delete names what is removed: the branch, or the read-only publication. A delete whose reply is
+  lost is checked by a re-read; if that finds the workspace gone, the page says so and drops the
+  cached copy.
 
 Not proven:
 
 - Live kagent behaviour. Nothing here has run against a real workspace.
 - The shell mount for `/workspaces/$id`. Route tests attach the real route; the shell is unchanged.
-- Live event refresh of the workspace page. No test covers it.
+- Live event refresh of the workspace page. The SSE applier is tested with the page mounted, not a
+  real event stream.
 
 Differences from the frozen page: a suspended workspace uses the muted tone, not purple. The token
 set has no purple tone.

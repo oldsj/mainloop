@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { delay, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connection, keys } from '@/api';
+import { createSseApplier } from '@/api/invalidation';
 import { workspaceFixture } from '@/test/fixtures';
 import { attempt, view } from '@/test/fixtures/tasks';
 import { server } from '@/test/msw/server';
-import { UNCONFIRMED } from './model';
+import { UNCONFIRMED, UNREADABLE } from './model';
 import {
   portsRead,
   problem,
@@ -154,12 +155,28 @@ describe('workspace page', () => {
     const dialog = await screen.findByRole('alertdialog');
     expect(
       within(dialog).getByText(
-        'Delete this branch workspace? Its checkout and any uncommitted work are removed.'
+        'Delete this workspace? Its checkout and any uncommitted work are removed.'
       )
     ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(deletes).toBe(0);
+  });
+
+  it('names a branch workspace as one in the delete prompt', async () => {
+    server.use(
+      ...serveWorkspace(workspaceFixture({ publication_mode: 'branch', publication_reason: null }))
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await user.click(button('Delete workspace'));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(
+      within(dialog).getByText(
+        'Delete this branch workspace? Its checkout and any uncommitted work are removed.'
+      )
+    ).toBeInTheDocument();
   });
 
   it('navigates to the sessions list once the delete succeeds', async () => {
@@ -400,4 +417,214 @@ describe('workspace page', () => {
     await user.click(within(alert).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('No preview ports are declared.')).toBeInTheDocument();
   });
+
+  it('keeps the page up and shows the reason when delete is refused with a 409', async () => {
+    let reads = 0;
+    server.use(
+      workspaceRead(() => {
+        reads += 1;
+        return HttpResponse.json(workspaceFixture());
+      }),
+      portsRead(() => HttpResponse.json({ ports: [] })),
+      tasksRead([]),
+      workspaceDelete(problem(409, 'Workspace has an open delivery. Wait for it to finish.'))
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await confirmDelete(user);
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
+      'Workspace has an open delivery. Wait for it to finish.'
+    );
+    await waitFor(() => expect(button('Delete workspace')).toBeEnabled());
+    expect(reads).toBe(2);
+    expect(button('Suspend workspace')).toBeEnabled();
+  });
+
+  it('shows the server message for a 500 on delete, then re-reads the workspace', async () => {
+    let reads = 0;
+    server.use(
+      workspaceRead(() => {
+        reads += 1;
+        return HttpResponse.json(workspaceFixture());
+      }),
+      portsRead(() => HttpResponse.json({ ports: [] })),
+      tasksRead([]),
+      workspaceDelete(problem(500, 'Could not remove the checkout.'))
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await confirmDelete(user);
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
+      'Could not remove the checkout.'
+    );
+    await waitFor(() => expect(button('Delete workspace')).toBeEnabled());
+    expect(reads).toBe(2);
+  });
+
+  it('says the backend could not be reached when a delete request fails on the network', async () => {
+    server.use(
+      ...serveWorkspace(),
+      workspaceDelete(() => HttpResponse.error())
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await confirmDelete(user);
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
+      "Couldn't reach Mainloop. Try again when it's back."
+    );
+    await waitFor(() => expect(button('Delete workspace')).toBeEnabled());
+  });
+
+  it('says the workspace is gone when a lost delete reply is followed by a 404 re-read', async () => {
+    let deleted = false;
+    server.use(
+      workspaceRead(() =>
+        deleted
+          ? HttpResponse.json({ detail: 'Workspace not found' }, { status: 404 })
+          : HttpResponse.json(workspaceFixture())
+      ),
+      portsRead(() => HttpResponse.json({ ports: [] })),
+      tasksRead([]),
+      workspaceDelete(() => {
+        // The server removed the workspace, but its reply never reached the page.
+        deleted = true;
+        return HttpResponse.error();
+      })
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await confirmDelete(user);
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Workspace not found' })
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('workspace-action-notice')).toHaveTextContent(
+      "Couldn't reach Mainloop. Try again when it's back."
+    );
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('drops the cached workspace and its ports once a delete succeeds', async () => {
+    let deleted = false;
+    const gone = () => HttpResponse.json({ detail: 'Workspace not found' }, { status: 404 });
+    server.use(
+      workspaceRead(() => (deleted ? gone() : HttpResponse.json(workspaceFixture()))),
+      portsRead(() => (deleted ? gone() : HttpResponse.json({ ports: [] }))),
+      tasksRead([]),
+      workspaceDelete(() => {
+        deleted = true;
+        return new HttpResponse(null, { status: 204 });
+      })
+    );
+    const user = userEvent.setup();
+    const { queryClient } = renderWorkspace('/workspaces/w1');
+    await heading();
+    await confirmDelete(user);
+    expect(await screen.findByText('Sessions list')).toBeInTheDocument();
+    expect(queryClient.getQueryData(keys.workspace('w1'))).toBeUndefined();
+    expect(queryClient.getQueryData(keys.workspacePorts('w1'))).toBeUndefined();
+  });
+
+  it('settles a suspending workspace when a live update says it is suspended', async () => {
+    server.use(...serveWorkspace(workspaceFixture({ observed_state: 'suspending' })));
+    const { queryClient } = renderWorkspace('/workspaces/w1');
+    await heading();
+    expect(button('Resume workspace')).toBeDisabled();
+    expect(button('Suspend workspace')).toBeDisabled();
+
+    // The same path the app's event stream takes: the applier writes the upsert into the cache.
+    createSseApplier(queryClient)({
+      event: 'workspace:updated',
+      data: JSON.stringify({ workspace: workspaceFixture({ observed_state: 'suspended' }) })
+    });
+
+    await waitFor(() => expect(button('Resume workspace')).toBeEnabled());
+    expect(button('Suspend workspace')).toBeDisabled();
+    expect(screen.getByText('suspended', { selector: 'span' })).toBeInTheDocument();
+  });
+
+  it('settles a resuming workspace when a live update says it is running', async () => {
+    server.use(...serveWorkspace(workspaceFixture({ observed_state: 'resuming' })));
+    const { queryClient } = renderWorkspace('/workspaces/w1');
+    await heading();
+    expect(button('Resume workspace')).toBeDisabled();
+    expect(button('Suspend workspace')).toBeDisabled();
+
+    createSseApplier(queryClient)({
+      event: 'workspace:updated',
+      data: JSON.stringify({ workspace: workspaceFixture({ observed_state: 'running' }) })
+    });
+
+    await waitFor(() => expect(button('Suspend workspace')).toBeEnabled());
+    expect(button('Resume workspace')).toBeDisabled();
+  });
+
+  it('keeps the last good workspace on screen when a live update cannot be read', async () => {
+    server.use(...serveWorkspace(workspaceFixture({ observed_state: 'running' })));
+    const user = userEvent.setup();
+    const { queryClient } = renderWorkspace('/workspaces/w1');
+    await heading();
+
+    createSseApplier(queryClient)({
+      event: 'workspace:updated',
+      data: JSON.stringify({
+        workspace: { ...workspaceFixture(), observed_state: 'exploded' }
+      })
+    });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't refresh this workspace");
+    expect(alert).toHaveTextContent(UNREADABLE);
+    expect(screen.getByTestId('workspace-lifecycle-badge')).toHaveTextContent(/WS RUNNING/i);
+    expect(button('Suspend workspace')).toBeEnabled();
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Workspace could not be loaded' })
+    ).not.toBeInTheDocument();
+
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('does not write an unreadable action result, and keeps the page up', async () => {
+    server.use(
+      ...serveWorkspace(workspaceFixture({ observed_state: 'running' })),
+      workspaceAction('suspend', () =>
+        HttpResponse.json({ ...workspaceFixture(), observed_state: 'exploded' })
+      )
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await user.click(button('Suspend workspace'));
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(UNREADABLE);
+    expect(screen.getByTestId('workspace-lifecycle-badge')).toHaveTextContent(/WS RUNNING/i);
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Workspace could not be loaded' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the workspace reason alongside an action warning', async () => {
+    server.use(
+      ...serveWorkspace(workspaceFixture({ observed_state: 'failed', detail: 'Runtime exited.' })),
+      workspaceAction('refresh', problem(409, 'Refresh is not available yet.'))
+    );
+    const user = userEvent.setup();
+    renderWorkspace('/workspaces/w1');
+    await heading();
+    await user.click(button('Refresh status'));
+    expect(await screen.findByTestId('workspace-action-notice')).toHaveTextContent(
+      'Refresh is not available yet.'
+    );
+    expect(screen.getByText('Runtime exited.')).toBeInTheDocument();
+  });
 });
+
+/** Opens the delete dialog and confirms it. */
+async function confirmDelete(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(button('Delete workspace'));
+  const dialog = await screen.findByRole('alertdialog');
+  await user.click(within(dialog).getByRole('button', { name: 'Delete workspace' }));
+}

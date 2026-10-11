@@ -18,6 +18,7 @@ import {
   isWorkspace,
   loadMessage,
   stateHint,
+  UNREADABLE,
   type WorkspaceLifecycle
 } from './model';
 import { useTasks, useWorkspace, useWorkspaceActions } from './queries';
@@ -47,11 +48,24 @@ export function WorkspacePage({ id }: { id: string }) {
   const actions = useWorkspaceActions(id, setNotice, () => void navigate({ to: '/' }));
 
   const raw = query.data;
-  const workspace = isWorkspace(raw) ? raw : null;
+  const readable = isWorkspace(raw) ? raw : null;
+  // A malformed write (a live event or an action's result) must not blank a page that held good
+  // data, so the last readable copy is kept and shown beside the error. This adjusts state during
+  // render rather than in an effect, so the held copy is never one render behind.
+  const [lastGood, setLastGood] = useState<WorkspaceLifecycle | null>(null);
+  if (readable && readable !== lastGood) setLastGood(readable);
+  const unreadable = raw !== undefined && readable === null;
+  // A re-read that 404s means the workspace is gone, even though the last copy is still cached.
+  const gone = query.isError && loadFailure(query.error) === 'not-found';
+  const workspace = gone ? null : (readable ?? (unreadable ? lastGood : null));
 
   // The notice is shown in every state. An action's result must still be visible if the lifecycle
   // section that started it has unmounted, for example while the workspace is reloading.
   if (!workspace) {
+    if (gone) {
+      const { title, message } = loadMessage('not-found');
+      return <WorkspaceUnavailable notice={notice} title={title} message={message} />;
+    }
     if (raw === undefined && !query.isError) {
       return (
         <WorkspaceUnavailable notice={notice}>
@@ -84,6 +98,11 @@ export function WorkspacePage({ id }: { id: string }) {
   }
 
   const task = owningTask(tasks.data, id);
+  // Names the publication this workspace has. A read-only workspace has no branch to name.
+  const deleteCopy =
+    workspace.publication_mode === 'branch'
+      ? 'Delete this branch workspace? Its checkout and any uncommitted work are removed.'
+      : 'Delete this workspace? Its checkout and any uncommitted work are removed.';
 
   return (
     <article className="p-md gap-md mx-auto flex max-w-4xl flex-col">
@@ -122,7 +141,14 @@ export function WorkspacePage({ id }: { id: string }) {
         ) : null}
       </header>
 
-      {query.isError ? (
+      {unreadable ? (
+        <ErrorRecovery
+          title="Couldn't refresh this workspace"
+          message={UNREADABLE}
+          onRetry={() => void query.refetch()}
+          pending={query.isFetching}
+        />
+      ) : query.isError ? (
         <ErrorRecovery
           title="Couldn't refresh this workspace"
           message={loadMessage(loadFailure(query.error)).message}
@@ -154,7 +180,7 @@ export function WorkspacePage({ id }: { id: string }) {
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete workspace?"
-        description="Delete this branch workspace? Its checkout and any uncommitted work are removed."
+        description={deleteCopy}
         confirmLabel="Delete workspace"
         destructive
         onConfirm={() => {
@@ -243,9 +269,8 @@ function LifecycleSection({
         </div>
       </div>
 
-      {notice ? (
-        <ActionNotice notice={notice} />
-      ) : workspace.detail ? (
+      {notice ? <ActionNotice notice={notice} /> : null}
+      {workspace.detail ? (
         <p
           role={failed ? 'alert' : 'status'}
           className={cn(

@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { $api, keys } from '@/api';
 import { actionFailure, type Notice } from '@/features/sessions/model';
-import { lifecycleNotice, type WorkspaceAction, type WorkspaceLifecycle } from './model';
+import { isWorkspace, lifecycleNotice, UNREADABLE, type WorkspaceAction } from './model';
 
 export function useWorkspace(workspaceId: string) {
   return $api.useQuery('get', '/workspaces/{workspace_id}', {
@@ -46,7 +46,12 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
 
   const lifecycle = {
     onMutate: () => notify(null),
-    onSuccess: (result: WorkspaceLifecycle) => {
+    onSuccess: (result: unknown) => {
+      // An unreadable result is not written. The held copy stays, and the re-read in onSettled repairs it.
+      if (!isWorkspace(result)) {
+        notify({ tone: 'warn', text: UNREADABLE });
+        return;
+      }
       queryClient.setQueryData(keys.workspace(workspaceId), result);
       notify(lifecycleNotice(result));
     },
@@ -60,6 +65,9 @@ export function useWorkspaceActions(workspaceId: string, notify: Notify, onDelet
   const remove = $api.useMutation('delete', '/workspaces/{workspace_id}', {
     onMutate: () => notify(null),
     onSuccess: () => {
+      // The by-id copies go with the workspace. Left in the cache, a revisit shows live controls for it.
+      queryClient.removeQueries({ queryKey: keys.workspace(workspaceId) });
+      queryClient.removeQueries({ queryKey: keys.workspacePorts(workspaceId) });
       void queryClient.invalidateQueries({ queryKey: keys.workspaces() });
     },
     onError: (error: unknown) => {

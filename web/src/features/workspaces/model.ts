@@ -15,6 +15,10 @@ export type WorkspaceAction = 'suspend' | 'resume' | 'refresh' | 'delete';
 export const UNCONFIRMED =
   'kagent has not confirmed this lifecycle state. Refresh status before retrying.';
 
+/** Shown when a write (a live event or an action's result) cannot be read. The last good copy stays up. */
+export const UNREADABLE =
+  'Mainloop sent a workspace this page cannot read. The last good state is still shown.';
+
 const PublicationReason = z.enum([
   'default_branch',
   'protected_branch',
