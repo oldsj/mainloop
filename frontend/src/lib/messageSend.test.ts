@@ -160,6 +160,8 @@ test('Chat Retry handler calls only main send when a child context is selected',
     '$currentSession',
     '$isMainContext',
     'handleSendMessage',
+    'refreshMainThread',
+    'mainComposerBlocked',
     `let mainThread; let sendError; ${handler}; return handleRetry;`
   )(
     guardSend,
@@ -169,7 +171,9 @@ test('Chat Retry handler calls only main send when a child context is selected',
     false,
     { id: 'child' },
     false,
-    () => api.sendSessionMessage()
+    () => api.sendSessionMessage(),
+    () => api.getMainThread(),
+    false
   );
   await handleRetry(message);
   assert.deepEqual(calls, ['main']);

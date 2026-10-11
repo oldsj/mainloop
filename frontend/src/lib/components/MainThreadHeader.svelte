@@ -1,6 +1,6 @@
 <script lang="ts">
   import { agentLabel } from '$lib/agentLabel';
-  import type { MainThreadInfo } from '$lib/api';
+  import type { MainThreadInfo, MainProvider } from '$lib/api';
   import { connection } from '$lib/stores/connection';
   import { threadStatus } from '$lib/delivery';
   import NativeIdentityStrip from './NativeIdentityStrip.svelte';
@@ -8,8 +8,22 @@
   let {
     info,
     onStop,
+    onProviderChange,
+    providerBlocked = true,
+    selectingProvider = false,
+    providerUnconfirmed = false,
+    providerError = null,
     stopping = false
-  }: { info: MainThreadInfo; onStop?: () => void; stopping?: boolean } = $props();
+  }: {
+    info: MainThreadInfo;
+    onStop?: () => void;
+    stopping?: boolean;
+    onProviderChange?: (provider: MainProvider, restartFailed?: boolean) => void;
+    providerBlocked?: boolean;
+    selectingProvider?: boolean;
+    providerUnconfirmed?: boolean;
+    providerError?: string | null;
+  } = $props();
 
   let open = $state(false);
 
@@ -49,7 +63,7 @@
   class="border-term-border bg-term-bg-secondary/40 text-term-fg-muted shrink-0 border-b text-xs"
   data-testid="main-thread-header"
 >
-  <div class="flex items-center gap-2 px-4 py-1.5">
+  <div class="flex flex-wrap items-center gap-2 px-4 py-1.5">
     <span class="h-2 w-2 shrink-0 rounded-full {dot}" aria-hidden="true"></span>
     <span class="text-term-fg" data-testid="mt-state">{label}</span>
     <span>·</span>
@@ -80,6 +94,58 @@
       details {open ? '▴' : '▾'}
     </button>
   </div>
+
+  {#if info.provider && onProviderChange}
+    <div class="flex flex-wrap items-center gap-2 px-4 py-2">
+      <label for="main-provider" class="text-term-fg">Main provider</label>
+      <select
+        id="main-provider"
+        class="border-term-border bg-term-bg text-term-fg focus-visible:outline-term-accent min-h-11 rounded border px-3 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+        value={info.provider.desired_provider}
+        disabled={providerBlocked}
+        aria-describedby="main-provider-state main-provider-help"
+        onchange={(event) => {
+          const provider = event.currentTarget.value as MainProvider;
+          event.currentTarget.value = info.provider!.desired_provider;
+          onProviderChange?.(provider);
+        }}
+      >
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+      </select>
+      <span id="main-provider-state" role="status" class="min-w-0 break-words">
+        {#if selectingProvider}Selecting provider…
+        {:else if $connection.status === 'offline'}Offline — selection unavailable
+        {:else if providerUnconfirmed}Provider state unconfirmed
+        {:else if info.provider.status === 'ready' && info.provider.effective_provider === info.provider.desired_provider}
+          Effective: {info.provider.effective_provider === 'claude' ? 'Claude' : 'Codex'} · ready
+        {:else if info.provider.status === 'not_started'}Not started — starts with your next message
+        {:else}Desired: {info.provider.desired_provider} · {info.provider.status} · no confirmed effective
+          provider
+        {/if}
+      </span>
+      {#if info.provider.status === 'failed'}
+        <button
+          type="button"
+          class="border-term-border text-term-fg focus-visible:outline-term-accent min-h-11 rounded border px-3 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+          disabled={providerBlocked}
+          onclick={() =>
+            onProviderChange?.(info.provider!.desired_provider, info.provider!.recoverable)}
+        >
+          {info.provider.recoverable ? 'Restart failed selection' : 'Retry failed selection'}
+        </button>
+      {/if}
+      <p id="main-provider-help" class="w-full">
+        Conversation and tasks stay. Switching starts a fresh native session; prior native history
+        is retained.
+      </p>
+      {#if providerError || info.provider.error}
+        <p role="alert" class="text-term-red w-full min-w-0 break-words whitespace-pre-wrap">
+          {providerError ?? info.provider.error}
+        </p>
+      {/if}
+    </div>
+  {/if}
 
   {#if open}
     <div id="main-thread-details" class="border-term-border border-t">

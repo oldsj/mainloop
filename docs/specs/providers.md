@@ -59,3 +59,5 @@ into fixture evidence. Snapshot/import capabilities are not a committed-handoff 
 Evidence states remain `proved`, `partial`, `unsupported`, `unknown`; proved/partial require
 scope and evidence reference. Existing owner-session APIs retain their configured selection
 behavior until S1; S0 task mutators remain unavailable and cannot create native sessions.
+
+The owner can select Claude or Codex for main in the chat header; see [main provider selection](chat.md#selecting-the-main-provider). This uses the persisted main provider contract, independently of task profile preferences.

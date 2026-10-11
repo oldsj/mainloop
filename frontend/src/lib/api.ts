@@ -365,7 +365,21 @@ export interface TopicLine {
   pending: number;
 }
 
+export type MainProvider = 'claude' | 'codex';
+
+export interface MainProviderInfo {
+  session_id: string;
+  desired_provider: MainProvider;
+  effective_provider: MainProvider | null;
+  status: 'ready' | 'not_started' | 'pending' | 'failed';
+  kagent_session_id: string | null;
+  error: string | null;
+  recoverable: boolean;
+  history: { provider: string; kagent_session_id: string | null }[];
+}
+
 export interface MainThreadInfo {
+  provider?: MainProviderInfo | null;
   mode: 'native';
   session_id: string | null;
   conversation_id: string | null;
@@ -1120,6 +1134,20 @@ export const api = {
   async getMainThread(): Promise<MainThreadInfo> {
     const response = await apiFetch(`${API_URL}/main-thread`);
     if (!response.ok) throw new Error('Failed to get main thread');
+    return response.json();
+  },
+
+  async setMainProvider(provider: MainProvider, restartFailed = false): Promise<MainProviderInfo> {
+    const response = await apiFetch(`${API_URL}/main-thread/provider`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, restart_failed: restartFailed })
+    });
+    if (!response.ok)
+      throw new ApiError(
+        await errorDetail(response, 'Could not select main provider'),
+        response.status
+      );
     return response.json();
   },
 

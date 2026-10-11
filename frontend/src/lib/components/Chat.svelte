@@ -8,7 +8,13 @@
   import { sessions } from '$lib/stores/sessions';
   import { navigationContext, currentSession, isMainContext } from '$lib/stores/navigationContext';
   import { allSessionMessages } from '$lib/stores/sessionMessages';
-  import { api, SendError, type Message, type MainThreadInfo } from '$lib/api';
+  import { api, SendError, type Message, type MainThreadInfo, type MainProvider } from '$lib/api';
+  import {
+    providerSwitchBlocked,
+    providerReady,
+    selectMainProvider,
+    createMainThreadReads
+  } from '$lib/mainProvider';
   import { draftMessage } from '$lib/stores/draftMessage';
   import { deliveryNotices } from '$lib/delivery';
   import { createSendGuard, retryMessage } from '$lib/messageSend';
@@ -19,6 +25,49 @@
 
   // Mainloop mirrors the kagent A2A task into the conversation, so we poll for the reply.
   let mainThread = $state<MainThreadInfo | null>(null);
+  const mainReads = createMainThreadReads();
+  let selectingProvider = $state(false);
+  let providerUnconfirmed = $state(false);
+  let providerError = $state<string | null>(null);
+  async function refreshMainThread() {
+    return mainReads.read(
+      () => api.getMainThread(),
+      (info) => {
+        if (selectingProvider) return;
+        mainThread = info;
+        if (providerUnconfirmed) providerError = null;
+        providerUnconfirmed = false;
+      }
+    );
+  }
+
+  async function changeMainProvider(provider: MainProvider, restartFailed = false) {
+    if (
+      providerBlocked ||
+      (providerReady(mainThread?.provider) && mainThread?.provider?.desired_provider === provider)
+    )
+      return;
+    selectingProvider = true;
+    providerError = null;
+    mainReads.invalidate();
+    providerUnconfirmed = true;
+    await selectMainProvider(
+      provider,
+      restartFailed,
+      api.setMainProvider,
+      async () => {
+        const info = await api.getMainThread();
+        mainReads.invalidate();
+        mainThread = info;
+        providerUnconfirmed = false;
+      },
+      (message) => {
+        providerError = message;
+      }
+    );
+    selectingProvider = false;
+  }
+
   let sendPending = $state(false);
   const guardSend = createSendGuard((pending) => {
     sendPending = pending;
@@ -49,8 +98,7 @@
     const tick = async () => {
       if (stopped || $conversationStore.isLoading) return;
       try {
-        const info = await api.getMainThread();
-        mainThread = info;
+        const info = await refreshMainThread();
         if (info.conversation_id) {
           const { messages: fresh } = await api.getConversation(info.conversation_id);
           if (!stopped) conversationStore.setMessages(fresh);
@@ -83,6 +131,27 @@
   // Whether the initial load finished. Until it has, an empty thread means "not loaded", not
   // "nothing here", so the load is retried when the backend becomes reachable.
   let loaded = $state(false);
+  let stopping = $state(false);
+  const providerBlocked = $derived(
+    providerSwitchBlocked(
+      mainThread,
+      offline ||
+        selectingProvider ||
+        providerUnconfirmed ||
+        stopping ||
+        sendPending ||
+        isLoading ||
+        !loaded
+    )
+  );
+  const mainComposerBlocked = $derived(
+    selectingProvider ||
+      providerUnconfirmed ||
+      !mainThread?.provider ||
+      !['ready', 'not_started'].includes(mainThread.provider.status) ||
+      (mainThread.provider.status === 'ready' && !providerReady(mainThread.provider))
+  );
+
   let loadInFlight = false;
 
   async function loadInitial() {
@@ -90,8 +159,8 @@
     loadInFlight = true;
     try {
       try {
-        mainThread = await api.getMainThread();
-        if (mainThread.mode === 'native' && mainThread.conversation_id) {
+        await refreshMainThread();
+        if (mainThread?.mode === 'native' && mainThread.conversation_id) {
           const { conversation, messages } = await api.getConversation(mainThread.conversation_id);
           conversationStore.setConversation(conversation, messages);
           loaded = true;
@@ -143,12 +212,11 @@
         await retryMessage(
           message,
           async () => {
-            const info = await api.getMainThread();
-            mainThread = info;
+            const info = await refreshMainThread();
             return {
               conversationId: info.conversation_id,
               deliveries: info.native?.deliveries ?? [],
-              blocked: offline || !!info.native?.turn_in_flight
+              blocked: offline || mainComposerBlocked || !!info.native?.turn_in_flight
             };
           },
           sendMainThreadMessage
@@ -160,6 +228,7 @@
   }
 
   async function sendMainThreadMessage(userMessage: string, conversationId?: string) {
+    if (mainComposerBlocked || offline || busy) return;
     const currentConversationId = conversationId ?? $conversationStore.currentConversation?.id;
 
     // Optimistic: Add user message immediately
@@ -200,7 +269,7 @@
         // Native main thread: the send is ledgered; poll until the turn completes.
         await pollNativeReply(response.conversation_id);
         sessions.fetchSessions();
-        mainThread = await api.getMainThread();
+        await refreshMainThread();
         return;
       }
 
@@ -237,8 +306,6 @@
     }
   }
 
-  let stopping = $state(false);
-
   // Stop the open turn (a parked or runaway one) without ending the session; the next message
   // starts a fresh turn. A failure leaves the turn running, so say so.
   async function stopMainThreadTurn() {
@@ -252,8 +319,8 @@
       sendError = error instanceof Error ? error.message : 'Could not stop the turn.';
     }
     try {
-      mainThread = await api.getMainThread();
-      if (mainThread.conversation_id) {
+      await refreshMainThread();
+      if (mainThread?.conversation_id) {
         const { messages: fresh } = await api.getConversation(mainThread.conversation_id);
         conversationStore.setMessages(fresh);
       }
@@ -270,8 +337,7 @@
       await new Promise((r) => setTimeout(r, 2000));
       const { messages: fresh } = await api.getConversation(conversationId);
       conversationStore.setMessages(fresh);
-      const info = await api.getMainThread();
-      mainThread = info;
+      const info = await refreshMainThread();
       if (info.native && !info.native.turn_in_flight) return;
     }
   }
@@ -304,7 +370,16 @@
 
 <div class="flex h-full min-h-0 flex-col">
   {#if native && mainThread}
-    <MainThreadHeader info={mainThread} onStop={stopMainThreadTurn} {stopping} />
+    <MainThreadHeader
+      info={mainThread}
+      onStop={stopMainThreadTurn}
+      {stopping}
+      onProviderChange={changeMainProvider}
+      {providerBlocked}
+      {selectingProvider}
+      {providerUnconfirmed}
+      {providerError}
+    />
   {/if}
 
   {#if $page.url.searchParams.get('hitl')}
@@ -323,7 +398,7 @@
       showInlineSessions={!native}
       agentKind={mainThread?.native?.kind}
       error={sendError}
-      inputDisabled={busy || offline}
+      inputDisabled={offline || ($isMainContext && (busy || mainComposerBlocked))}
       onDismissError={() => (sendError = null)}
       deliveryNotices={native ? notices : undefined}
       onRetry={handleRetry}

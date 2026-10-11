@@ -9,7 +9,18 @@ their persisted selection across restarts and configuration changes. The owner c
 `GET /main-thread/provider` and explicitly select a provider with
 `PUT /main-thread/provider` and `{"provider":"codex"}` (or `"claude"`). These routes use
 the existing owner API boundary and cross-origin write guard; MCP agents cannot select
-the main provider. There is no quota-driven fallback or new frontend control.
+the main provider. The main-thread header exposes an owner-only Main provider dropdown. There is no quota-driven fallback.
+
+The dropdown separates desired selection, confirmed effective provider and preparation status.
+It is disabled offline, during selection, loading, sending or stopping, while a turn or
+recorded/sending/delivered/uncertain delivery is open, and while selection is pending.
+Selecting the same ready provider does nothing. A failed selection offers explicit retry;
+a recoverable failure offers explicit restart with `restart_failed=true`. Neither runs automatically.
+A conflict is displayed and state refreshed. Network failures reconcile through GET without
+repeating PUT; an unsuccessful read keeps main input and selection locked until polling
+confirms state. Older poll results cannot overwrite selection results. Main input is disabled
+while provider preparation is pending/failed or unknown, while drafts and child input remain
+independent. A not-started binding can accept its first message.
 
 The response exposes `desired_provider`, `effective_provider`, `status`, the current
 `kagent_session_id`, a bounded `error`, and retained native identity `history`.
