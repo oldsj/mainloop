@@ -5,6 +5,7 @@ Prepared for an explicitly granted heavy lane. These are not live provider proof
 
 import asyncio
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -14,7 +15,7 @@ from mainloop.db import tasks as store
 from mainloop.providers import registry
 from mainloop.runtime.agent_credentials import revoke
 from mainloop.runtime.delegation import PgStore
-from mainloop.runtime.kagent_client import TaskStatus
+from mainloop.runtime.kagent_client import AgentRef, TaskStatus
 from mainloop.runtime.policy import PolicyError
 from mainloop.services import merge
 from mainloop.tasks import attention, lifecycle, publication
@@ -98,6 +99,13 @@ class TaskAttentionTests(MergeFixture):
                         "state": "active",
                     }
                 ),
+            )
+        runtime_id = f"runtime-{sid}"
+        agent = AgentRef(attempt.agent_ref.namespace, attempt.agent_ref.name)
+        self.gateway.session_agents[runtime_id] = agent
+        if runtime_id in self.gateway.sessions:
+            self.gateway.sessions[runtime_id] = replace(
+                self.gateway.sessions[runtime_id], agent=agent
             )
         return task, attempt
 

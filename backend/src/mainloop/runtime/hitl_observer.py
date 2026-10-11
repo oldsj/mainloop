@@ -37,6 +37,7 @@ from models.hitl import (
     VerifiedAssociation,
     normalized_hash,
 )
+from models.provider import ProviderAgentRef
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,9 @@ class HITLObserver:
             owner,
             creator,
         )
-        # (namespace, name) of the kagent Agents this instance owns. Production and the live
-        # dev instance share one kagent principal, so the creator alone can't tell their
-        # Sessions apart; their Agents are disjoint.
+        # Current Agents admit unbound inventory. Existing local bindings retain their
+        # pinned identities even after configuration changes. Production and live dev
+        # share one kagent principal, so creator alone cannot separate their Sessions.
         if agents is None:
             from mainloop.runtime.orphan_sessions import instance_agents
 
@@ -88,8 +89,6 @@ class HITLObserver:
             re.fullmatch(label, v) for v in (agent.namespace, agent.name)
         ):
             raise Unavailable("Gateway agent identity is missing or invalid")
-        if (agent.namespace, agent.name) not in self.agents:
-            raise Unavailable("Gateway agent belongs to another instance")
         if not live.prepared_revision or not live.context_id:
             raise Unavailable("Gateway revision/context is missing")
         # This is a logical private actor identity, NEVER a URL to fetch. kagent names
@@ -101,8 +100,10 @@ class HITLObserver:
         ):
             raise Unavailable("Unexpected gateway runtime authority")
         rows = await conn.fetch(
-            """SELECT b.session_id,s.user_id,s.archived_at,b.kagent_deleted_at
+            """SELECT b.session_id,s.user_id,s.archived_at,b.kagent_deleted_at,
+            a.agent_ref AS pinned_agent_ref
             FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+            LEFT JOIN task_attempts a ON a.binding_id=b.session_id
             WHERE b.kagent_session_id=$1""",
             live.id,
         )
@@ -113,6 +114,16 @@ class HITLObserver:
         binding = rows[0]["session_id"] if rows else None
         if previous and previous.binding_id and binding != previous.binding_id:
             raise Unavailable("Original binding was replaced")
+        if rows and rows[0]["pinned_agent_ref"] is not None:
+            pinned = ProviderAgentRef.model_validate(
+                store._decode(rows[0]["pinned_agent_ref"])
+            )
+            if (agent.namespace, agent.name) != (pinned.namespace, pinned.name):
+                raise Unavailable(
+                    "Gateway agent does not match pinned binding identity"
+                )
+        if not binding and (agent.namespace, agent.name) not in self.agents:
+            raise Unavailable("Gateway agent belongs to another instance")
         result = ObservedSession(
             gateway=self.gateway,
             runtime_session_id=live.id,

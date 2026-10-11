@@ -2,17 +2,20 @@
 
 import asyncio
 import unittest
+import uuid
 from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import httpx
 from mainloop import api
 from mainloop.config import settings
 from mainloop.db import hitl as store
+from mainloop.db import tasks as task_store
 from mainloop.runtime import hitl_continuation as continuation
 from mainloop.runtime import native_sessions
 from mainloop.runtime.hitl_correlation import task_identity
-from mainloop.runtime.hitl_observer import HITLObserver
+from mainloop.runtime.hitl_observer import HITLObserver, Unavailable
 from mainloop.runtime.kagent_client import (
     AgentRef,
     KagentAgent,
@@ -28,6 +31,7 @@ from mainloop.runtime.kagent_client import (
     TaskStatus,
     Unreachable,
 )
+from mainloop.tasks import lifecycle
 from tests.runtime.test_postgres_ledger import PostgresTestCase
 
 from models.hitl import (
@@ -37,6 +41,8 @@ from models.hitl import (
     ToolApprovalResponse,
     VerifiedAssociation,
 )
+from models.provider import ProviderProfile
+from models.task import Task as CodingTask
 
 
 def approval(request_id="call"):
@@ -80,6 +86,7 @@ FIXTURE_AGENTS = frozenset({("team", "agent")})
 class Gateway:
     def __init__(self):
         self.sessions = {}
+        self.session_agents = {}
         self.tasks = {}
         self.sent = []
         self.reads = []
@@ -96,7 +103,7 @@ class Gateway:
             state=RuntimeState.SUSPENDED,
             operation=RuntimeOperation.NONE,
             creator="gateway-owner",
-            agent=AgentRef("team", "agent"),
+            agent=self.session_agents.get(sid, AgentRef("team", "agent")),
             prepared_revision="unknown-but-pinned",
             a2a_authority=f"session-{sid}-8e76f4241985b4a7.team.actors.resources.substrate.ate.dev",
         )
@@ -585,6 +592,219 @@ class HITLObserverTests(PostgresTestCase):
         self.assertEqual(self.gateway.sent[0][1]["task_id"], task.id)
         self.assertEqual(await self.state_of(waiting), "delivered")
         self.assertEqual(await self.state_of(queued), "queued")
+
+    async def pinned_custom_session(self):
+        agent = AgentRef("team", "custom-worker")
+        profile = ProviderProfile(
+            id="custom",
+            display_name="Custom worker",
+            native_provider="claude",
+            configuration_revision="custom-v1",
+            agents={"supervisor": {"namespace": agent.namespace, "name": agent.name}},
+        )
+        sid, _ = await self.bound_session(role="supervisor")
+        now = datetime.now(UTC)
+        tid = uuid.uuid4().hex
+        task = CodingTask(
+            id=tid,
+            owner_id=self.user,
+            root_task_id=tid,
+            title="Pinned custom session",
+            brief="Continue on the admitted Agent",
+            mode="coordination",
+            assigned_profile_id=profile.id,
+            selection_source="explicit",
+            created_at=now,
+            updated_at=now,
+        )
+        async with self.pool.acquire() as conn, conn.transaction():
+            await task_store.insert_task(conn, task)
+            _, attempt = await task_store.admit_attempt(
+                conn, task, profile, role="supervisor", depth=1
+            )
+            await lifecycle.save_attempt(
+                conn,
+                attempt.model_copy(
+                    update={"session_id": sid, "binding_id": sid, "state": "active"}
+                ),
+            )
+        session, native_task = self.gateway.add(f"custom-bound-{sid}")
+        session = replace(session, agent=agent)
+        self.gateway.sessions[session.id] = session
+        await native_sessions.ledger.update_binding(sid, kagent_session_id=session.id)
+        return sid, session, native_task
+
+    async def test_bound_custom_agent_survives_configuration_change(self):
+        sid, session, task = await self.pinned_custom_session()
+        self.service = HITLObserver(
+            self.gateway,
+            gateway=self.service.gateway,
+            owner=self.user,
+            creator="gateway-owner",
+            agents={*FIXTURE_AGENTS, (session.agent.namespace, session.agent.name)},
+        )
+        await self.cycle()
+        projection = (await self.projections())[0]
+        self.assertEqual(projection.leaves[0].binding_id, sid)
+        # The custom profile was removed or now points to another Agent. Nothing
+        # in the current allowlist retains this attempt's immutable AgentRef.
+        self.service = HITLObserver(
+            self.gateway,
+            gateway=self.service.gateway,
+            owner=self.user,
+            creator="gateway-owner",
+            agents=FIXTURE_AGENTS,
+        )
+        async with self.pool.acquire() as conn:
+            observed = await self.service.fresh_session(conn, session.id)
+        self.assertEqual(observed.binding_id, sid)
+        self.assertEqual(observed.endpoint, session.agent.path)
+        await self.cycle()
+        self.assertEqual((await self.projections())[0].availability, "pending")
+        result = await continuation.submit(
+            self.user,
+            projection.id,
+            "reject-after-profile-change",
+            self.response(False),
+            service=self.service,
+        )
+        self.assertEqual(result["transport_state"], "accepted")
+        self.assertEqual(len(self.gateway.sent), 1)
+        agent, sent = self.gateway.sent[0]
+        self.assertEqual(
+            (agent, sent["task_id"], sent["context_id"]),
+            (session.agent, task.id, session.context_id),
+        )
+        self.assertFalse(sent["response"].approvals[0].approved)
+
+    async def test_first_observation_uses_pinned_binding_not_current_allowlist(self):
+        sid, session, _ = await self.pinned_custom_session()
+        # No earlier observation can supply an endpoint; admission's AgentRef
+        # remains authoritative after the configured profile disappears.
+        self.assertNotIn(
+            (session.agent.namespace, session.agent.name), self.service.agents
+        )
+        foreign, foreign_task = self.gateway.add("custom-unbound")
+        self.gateway.sessions[foreign.id] = replace(foreign, agent=session.agent)
+        await self.cycle(2)
+        projections = await self.projections()
+        self.assertEqual(len(projections), 1)
+        self.assertEqual(projections[0].leaves[0].binding_id, sid)
+        self.assertNotIn(foreign_task.id, self.gateway.reads)
+        async with self.pool.acquire() as conn:
+            with self.assertRaisesRegex(Unavailable, "another instance"):
+                await self.service.owned(conn, self.gateway.sessions[foreign.id])
+
+    async def test_bound_agent_must_match_admitted_identity_before_first_observation(
+        self,
+    ):
+        _, session, _ = await self.pinned_custom_session()
+        self.gateway.sessions[session.id] = replace(
+            session, agent=AgentRef("team", "agent")
+        )
+        async with self.pool.acquire() as conn:
+            with self.assertRaisesRegex(Unavailable, "pinned binding identity"):
+                await self.service.owned(conn, self.gateway.sessions[session.id])
+        await self.cycle()
+        self.assertEqual(self.gateway.reads, [])
+        self.assertEqual(self.gateway.sent, [])
+        self.assertEqual(await self.projections(), [])
+
+    async def test_retired_agent_binding_preserves_identity_and_lifecycle_checks(self):
+        sid, session, _ = await self.pinned_custom_session()
+        await self.cycle()
+        projection = (await self.projections())[0]
+        for changes in (
+            {"creator": "stranger"},
+            {"agent": AgentRef("other", session.agent.name)},
+            {"agent": AgentRef(session.agent.namespace, "replacement")},
+            {"context_id": "replacement-context"},
+            {"prepared_revision": "replacement-revision"},
+            {"a2a_authority": "https://attacker.example"},
+            {"state": RuntimeState.DELETED},
+            {"state": RuntimeState.DELETING},
+            {"state": RuntimeState.FAILED},
+        ):
+            with self.subTest(changes=changes):
+                self.gateway.sessions[session.id] = replace(session, **changes)
+                self.gateway.reads.clear()
+                with self.assertRaises(ValueError):
+                    await continuation.submit(
+                        self.user,
+                        projection.id,
+                        "reject-retired-agent",
+                        self.response(False),
+                        service=self.service,
+                    )
+                self.assertEqual(self.gateway.reads, [])
+                self.assertEqual(self.gateway.sent, [])
+        self.gateway.sessions[session.id] = session
+        for change in ("archived", "deleted", "owner", "replaced"):
+            with self.subTest(change=change):
+                await self.pool.execute(
+                    "UPDATE sessions SET archived_at=NULL,user_id=$2 WHERE id=$1",
+                    sid,
+                    self.user,
+                )
+                await self.pool.execute(
+                    "UPDATE native_bindings SET kagent_deleted_at=NULL WHERE session_id=$1",
+                    sid,
+                )
+                if change == "archived":
+                    await self.pool.execute(
+                        "UPDATE sessions SET archived_at=now() WHERE id=$1", sid
+                    )
+                elif change == "deleted":
+                    await self.pool.execute(
+                        "UPDATE native_bindings SET kagent_deleted_at=now() WHERE session_id=$1",
+                        sid,
+                    )
+                elif change == "owner":
+                    await self.pool.execute(
+                        "UPDATE sessions SET user_id='stranger' WHERE id=$1", sid
+                    )
+                else:
+                    await native_sessions.ledger.update_binding(
+                        sid, kagent_session_id="replacement"
+                    )
+                self.gateway.reads.clear()
+                with self.assertRaises(ValueError):
+                    await continuation.submit(
+                        self.user,
+                        projection.id,
+                        "reject-retired-agent",
+                        self.response(False),
+                        service=self.service,
+                    )
+                self.assertEqual(self.gateway.reads, [])
+                self.assertEqual(self.gateway.sent, [])
+
+    async def test_bound_endpoint_cannot_change_to_another_configured_agent(self):
+        sid, _ = await self.bound_session()
+        session, _ = self.gateway.add(f"endpoint-bound-{sid}")
+        await native_sessions.ledger.update_binding(sid, kagent_session_id=session.id)
+        await self.cycle()
+        projection = (await self.projections())[0]
+        replacement = AgentRef("team", "replacement")
+        self.gateway.sessions[session.id] = replace(session, agent=replacement)
+        self.service = HITLObserver(
+            self.gateway,
+            gateway=self.service.gateway,
+            owner=self.user,
+            creator="gateway-owner",
+            agents={*FIXTURE_AGENTS, (replacement.namespace, replacement.name)},
+        )
+        self.gateway.reads.clear()
+        with self.assertRaisesRegex(Unavailable, "Stored session identity changed"):
+            await continuation.submit(
+                self.user,
+                projection.id,
+                "reject-changed-endpoint",
+                self.response(False),
+                service=self.service,
+            )
+        self.assertEqual(self.gateway.reads, [])
+        self.assertEqual(self.gateway.sent, [])
 
     async def test_bound_replacement_archive_and_wrong_owner_fail_before_task_read(
         self,

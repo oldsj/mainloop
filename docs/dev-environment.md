@@ -352,9 +352,11 @@ Git through the dev proxies also needs a kagent change. kagent's service policy
 invalid and stop the shared kagent controller, so mainloop-dev keeps Git transport off.
 
 Production and mainloop-dev share one kagent principal, so each can list the other's
-Sessions. `mainloop-sweep-kagent-sessions` and the HITL observer only consider Sessions on
-the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the two
-instances' Agents disjoint, as the `*-dev` names do.
+Sessions. `mainloop-sweep-kagent-sessions` and unbound HITL discovery only consider Sessions
+on the Agents their own settings name (`KAGENT_*_AGENT` and provider profiles), so keep the
+two instances' Agents disjoint, as the `*-dev` names do. HITL for an existing local binding
+retains its pinned Agent identity after configuration changes; creator, ownership,
+lifecycle and stored identity checks still apply.
 
 Teardown: `make dev-live-purge` deletes everything DevSpace deployed, including
 the namespace, the database and the dev agents.
