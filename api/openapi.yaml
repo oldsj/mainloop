@@ -2987,6 +2987,16 @@ components:
           type: string
           format: date-time
           title: Created At
+        queue_item_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Queue Item Id
+          description: The queue item behind this row, if any. Pass it to `dismissQueueDiagnostic`.
+        dismissible:
+          type: boolean
+          title: Dismissible
+          description: True when the owner may dismiss this row (an input notice with no structured request). The server decides; clients do not copy the rule.
       type: object
       required:
         - id
@@ -2994,6 +3004,8 @@ components:
         - content
         - created_at
         - href
+        - queue_item_id
+        - dismissible
       title: ActivityItem
     AskUserAnswer:
       properties:

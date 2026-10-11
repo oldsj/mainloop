@@ -1084,6 +1084,16 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /**
+       * Queue Item Id
+       * @description The queue item behind this row, if any. Pass it to `dismissQueueDiagnostic`.
+       */
+      queue_item_id: string | null;
+      /**
+       * Dismissible
+       * @description True when the owner may dismiss this row (an input notice with no structured request). The server decides; clients do not copy the rule.
+       */
+      dismissible: boolean;
     };
     /** AskUserAnswer */
     AskUserAnswer: {
