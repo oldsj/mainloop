@@ -263,6 +263,12 @@ server gate used by PUT. The project page displays the current value and protect
 when editing is disabled. Saving carries the displayed policy version; a conflict or uncertain
 save re-reads the current policy before another explicit save.
 
+React status (migration F7): the project page's merge policy section
+(`web/src/features/projects/MergePolicySection.tsx`) follows this contract. A refused save, such as
+the 503 while owner writes are off, shows the server's reason as text and locks the section until
+the owner refreshes. A refresh rebuilds the form from the re-read policy only after that read
+finishes. Proven by offline component tests against MSW handlers; not proven against a live server.
+
 HITL GET/POST responses include display context from owner-scoped observed/bound session rows,
 a verified leaf provider when available, and `writes_enabled`. `GET /sessions/{id}/hitl` lists
 up to 100 non-superseded request IDs for that owned session, including read-only receipts and

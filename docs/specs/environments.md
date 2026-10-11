@@ -182,6 +182,11 @@ automatically. Saving uses the observed selection revision; conflicts refresh sa
 state while preserving the draft for review. An unconfirmed registration reply blocks
 repeat registration in that form until the owner reconciles the environment list.
 
+React status (migration F7): the React environment section (`web/src/features/environments`)
+implements this UI, including the saved and draft lines, eligibility labels, accept-default and
+save with the observed revision, and the uncertain-registration lock. Proven by offline component
+and model tests against MSW handlers; not proven against a live registry or server.
+
 ## Go server status (migration slice G4)
 
 Implemented in `server/` and covered by offline tests that use a fake registry and a fake HTTP

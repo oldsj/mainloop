@@ -21,6 +21,7 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/composer.md`
 - `guidelines/confirm-dialog.md`
 - `guidelines/delivery-receipt.md`
+- `guidelines/environment-selection.md`
 - `guidelines/error-recovery.md`
 - `guidelines/evidence-link.md`
 - `guidelines/health-filters.md`
@@ -28,6 +29,7 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/hitl-card.md`
 - `guidelines/main-thread-header.md`
 - `guidelines/markdown.md`
+- `guidelines/merge-policy.md`
 - `guidelines/merge-review.md`
 - `guidelines/message.md`
 - `guidelines/session-summary.md`

@@ -12,3 +12,11 @@ saving again. Loading/read failures disable edits; Refresh reads current state w
 
 This selector changes policy only. It does not merge a pull request or approve a pending call.
 See [merge policy](merge-policy.md) for server gates and unproved production prerequisites.
+
+## React status (migration F7)
+
+The React projects list, project page, merge policy section and new workspace from a repository
+live in `web/src/features/projects`. The list drops a row that breaks the contract and renders the
+rest. The page keeps its last loaded project when a refresh fails. The page's task tree is a
+marked slot until F6 exports it, and the Projects slot in the app shell is not mounted yet.
+Proven by offline component tests against MSW handlers; not proven against a live server.

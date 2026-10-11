@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutePlaceholder } from '@/shell/RoutePlaceholder';
+import { ProjectPage } from '@/features/projects';
 
 export const Route = createFileRoute('/projects/$id')({
   component: Project
@@ -7,5 +7,6 @@ export const Route = createFileRoute('/projects/$id')({
 
 function Project() {
   const { id } = Route.useParams();
-  return <RoutePlaceholder title="Project" slice="F7" detail={`${id}: not built yet (F7).`} />;
+  // Keyed so that moving to another project remounts the page, and its drafts and notices do not carry over.
+  return <ProjectPage key={id} id={id} />;
 }
