@@ -22,6 +22,13 @@ FROM workspaces w
 JOIN agent_bindings b ON b.session_id = w.id
 WHERE w.id = $1;
 
+-- name: GetWorkspaceByRequestID :one
+-- An owned workspace by the request id its create was made with, archived or not.
+SELECT w.*, b.kagent_session_id, b.kagent_deleted_at
+FROM workspaces w
+JOIN agent_bindings b ON b.session_id = w.id
+WHERE w.request_id = $1 AND w.user_id = $2;
+
 -- name: BumpWorkspace :one
 UPDATE workspaces SET updated_at = now() WHERE id = $1 RETURNING *;
 

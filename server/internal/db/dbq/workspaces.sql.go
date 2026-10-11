@@ -218,6 +218,70 @@ func (q *Queries) GetWorkspaceActivity(ctx context.Context, id string) (time.Tim
 	return activity, err
 }
 
+const getWorkspaceByRequestID = `-- name: GetWorkspaceByRequestID :one
+SELECT w.id, w.user_id, w.project_id, w.repo_url, w.ref, w.branch, w.depth, w.agent_kind, w.agent_namespace, w.agent_name, w.ports, w.idle_timeout_minutes, w.environment, w.request_id, w.last_active_at, w.idle_suspended_at, w.created_at, w.updated_at, b.kagent_session_id, b.kagent_deleted_at
+FROM workspaces w
+JOIN agent_bindings b ON b.session_id = w.id
+WHERE w.request_id = $1 AND w.user_id = $2
+`
+
+type GetWorkspaceByRequestIDParams struct {
+	RequestID string
+	UserID    string
+}
+
+type GetWorkspaceByRequestIDRow struct {
+	ID                 string
+	UserID             string
+	ProjectID          string
+	RepoURL            string
+	Ref                string
+	Branch             string
+	Depth              int32
+	AgentKind          string
+	AgentNamespace     string
+	AgentName          string
+	Ports              json.RawMessage
+	IdleTimeoutMinutes int32
+	Environment        json.RawMessage
+	RequestID          string
+	LastActiveAt       *time.Time
+	IdleSuspendedAt    *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	KagentSessionID    *string
+	KagentDeletedAt    *time.Time
+}
+
+// An owned workspace by the request id its create was made with, archived or not.
+func (q *Queries) GetWorkspaceByRequestID(ctx context.Context, arg GetWorkspaceByRequestIDParams) (GetWorkspaceByRequestIDRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceByRequestID, arg.RequestID, arg.UserID)
+	var i GetWorkspaceByRequestIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.RepoURL,
+		&i.Ref,
+		&i.Branch,
+		&i.Depth,
+		&i.AgentKind,
+		&i.AgentNamespace,
+		&i.AgentName,
+		&i.Ports,
+		&i.IdleTimeoutMinutes,
+		&i.Environment,
+		&i.RequestID,
+		&i.LastActiveAt,
+		&i.IdleSuspendedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.KagentSessionID,
+		&i.KagentDeletedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceEnvironmentVersion = `-- name: GetWorkspaceEnvironmentVersion :one
 SELECT sel.environment_id, v.id AS version_id, v.registry, v.repository,
        v.platform_manifest_digest, v.architecture, v.validator_version

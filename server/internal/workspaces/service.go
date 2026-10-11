@@ -428,10 +428,84 @@ func (s *Service) Touch(ctx context.Context, workspaceID string) error {
 // *RejectedError; one that is still in flight or failing transiently returns the workspace, and the
 // operation keeps retrying.
 func (s *Service) Create(ctx context.Context, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
+	return s.create(ctx, body, uuid.NewString())
+}
+
+// CreateWithRequestID is [Service.Create] made idempotent on the caller's request id, a UUID. A
+// repeat call, concurrent or later, returns the workspace the first call made (waiting for its
+// create as the first call did) instead of making another: the id is also the request id kagent
+// sees, so no second Session can exist either. The body of a repeat is not compared. A workspace
+// that has since been deleted is gone; the same id then makes a new one, which kagent refuses as it
+// does any replay of a deleted Session.
+func (s *Service) CreateWithRequestID(ctx context.Context, requestID string, body api.CreateWorkspaceRequest) (api.WorkspaceLifecycle, error) {
+	id, err := uuid.Parse(requestID)
+	if err != nil {
+		return api.WorkspaceLifecycle{}, &InvalidError{"request id must be a UUID"}
+	}
+	requestID = id.String()
+	if w, err := s.repeat(ctx, requestID); !errors.Is(err, ErrNotFound) {
+		return w, err
+	}
+	w, err := s.create(ctx, body, requestID)
+	if isRequestIDTaken(err) {
+		return s.repeat(ctx, requestID)
+	}
+	return w, err
+}
+
+// LookupByRequestID returns the workspace made with a caller request id, or ErrNotFound.
+func (s *Service) LookupByRequestID(ctx context.Context, requestID string) (api.WorkspaceLifecycle, error) {
+	w, err := s.byRequestID(ctx, requestID)
+	if err != nil {
+		return api.WorkspaceLifecycle{}, err
+	}
+	return s.lifecycle(ctx, w), nil
+}
+
+func (s *Service) byRequestID(ctx context.Context, requestID string) (wsRow, error) {
+	id, err := uuid.Parse(requestID)
+	if err != nil {
+		return wsRow{}, ErrNotFound
+	}
+	row, err := dbq.New(s.Pool).GetWorkspaceByRequestID(ctx, dbq.GetWorkspaceByRequestIDParams{RequestID: id.String(), UserID: s.OwnerID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return wsRow{}, ErrNotFound
+	}
+	if err != nil {
+		return wsRow{}, err
+	}
+	return wsRow(dbq.GetWorkspaceForOpRow(row)), nil
+}
+
+// repeat answers a repeated create with the workspace the first one made, waiting for that
+// create the way the first call did.
+func (s *Service) repeat(ctx context.Context, requestID string) (api.WorkspaceLifecycle, error) {
+	w, err := s.byRequestID(ctx, requestID)
+	if err != nil {
+		return api.WorkspaceLifecycle{}, err
+	}
+	if op, err := dbq.New(s.Pool).GetLatestCreateOp(ctx, w.ID); err == nil && isOpen(op.State) {
+		if _, err := s.await(ctx, op); err != nil {
+			return api.WorkspaceLifecycle{}, err
+		}
+		if w, err = s.lookup(ctx, w.ID); err != nil {
+			return api.WorkspaceLifecycle{}, err
+		}
+	}
+	return s.lifecycle(ctx, w), nil
+}
+
+func isRequestIDTaken(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "workspaces_request_id_key"
+}
+
+func (s *Service) create(ctx context.Context, body api.CreateWorkspaceRequest, requestID string) (api.WorkspaceLifecycle, error) {
 	p, err := s.plan(ctx, body)
 	if err != nil {
 		return api.WorkspaceLifecycle{}, err
 	}
+	p.insert.RequestID = requestID
 	var op dbq.WorkspaceOp
 	err = events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
