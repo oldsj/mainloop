@@ -7,6 +7,7 @@ import uuid
 from dataclasses import replace
 from unittest.mock import AsyncMock, Mock, patch
 
+import asyncpg
 import httpx
 from mainloop import api
 from mainloop.config import Settings, settings
@@ -1052,6 +1053,248 @@ class MainProviderTests(PostgresTestCase):
                 "SELECT EXISTS(SELECT 1 FROM messages WHERE content='rolled back reply')"
             )
         )
+
+    async def test_inactive_main_replacement_retains_contract_history_and_child_owner(
+        self,
+    ):
+        await self.select()
+        child, _ = await self.bound_session(role="child", parent_session_id=self.sid)
+        child_before = await ns.get_binding(child)
+        history = await self.pool.fetch("SELECT * FROM main_native_history ORDER BY id")
+        service = AgentService(PgStore())
+        for query in (
+            "UPDATE sessions SET archived_at=NOW() WHERE id=$1",
+            "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1",
+            "UPDATE sessions SET status='completed' WHERE id=$1",
+            "UPDATE sessions SET status='failed' WHERE id=$1",
+            "UPDATE sessions SET status='cancelled' WHERE id=$1",
+            "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+            "UPDATE native_bindings SET mcp_grant_kind='none' WHERE session_id=$1",
+            "UPDATE native_bindings SET role='agent' WHERE session_id=$1",
+        ):
+            with self.subTest(query=query):
+                old = await ensure_main_session(self.user)
+                ctx = await service.authenticate(
+                    token_for(old["credential_identity"] or old["session_id"])
+                )
+                await self.pool.execute(query, old["session_id"])
+                inactive = await ns.get_binding(old["session_id"])
+                replacements = await asyncio.gather(
+                    *(ensure_main_session(self.user) for _ in range(4))
+                )
+                fresh = replacements[0]
+                self.assertTrue(all(binding == fresh for binding in replacements))
+                self.assertNotEqual(fresh["session_id"], old["session_id"])
+                self.assertEqual(fresh["main_owner_id"], self.user)
+                self.assertIsNone(fresh["kagent_session_id"])
+                retired = await ns.get_binding(old["session_id"])
+                self.assertIsNone(retired["main_owner_id"])
+                self.assertIsNone(retired["token_hash"])
+                for field in inactive.keys() - {
+                    "main_owner_id",
+                    "token_hash",
+                    "credential_cleanup_pending",
+                }:
+                    self.assertEqual(retired[field], inactive[field], field)
+                self.assertTrue(
+                    (
+                        await invoke(
+                            service, ctx, "pending_add", {"text": "retired intent"}
+                        )
+                    ).isError
+                )
+                await service.authenticate(token_for(fresh["session_id"]))
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT count(*) FROM native_bindings WHERE main_owner_id=$1",
+                        self.user,
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    await self.pool.fetchval(
+                        "SELECT conversation_id FROM sessions WHERE id=$1",
+                        fresh["session_id"],
+                    ),
+                    self.cid,
+                )
+                self.assertEqual(await ns.get_binding(child), child_before)
+                self.assertEqual(
+                    await self.pool.fetch(
+                        "SELECT * FROM main_native_history ORDER BY id"
+                    ),
+                    history,
+                )
+                await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+                self.assertEqual(await ns.get_binding(fresh["session_id"]), fresh)
+                self.assertIsNone(
+                    (await ns.get_binding(old["session_id"]))["main_owner_id"]
+                )
+        self.assertEqual(len(self.runtime.creates), 1)
+
+    async def test_bootstrap_rechecks_revocation_after_waiting_for_authority(self):
+        from mainloop.tasks import lifecycle
+
+        async with db.connection() as guard, lifecycle.authority_locked(
+            guard, self.sid
+        ):
+            replacing = asyncio.create_task(ensure_main_session(self.user))
+            try:
+                async with self.pool.acquire() as conn:
+                    self.assertTrue(
+                        await wait_for_lock(
+                            conn, query="%pg_advisory_lock%", locktype="advisory"
+                        )
+                    )
+                await self.pool.execute(
+                    "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1",
+                    self.sid,
+                )
+            except BaseException:
+                replacing.cancel()
+                await asyncio.gather(replacing, return_exceptions=True)
+                raise
+        fresh = await replacing
+        self.assertNotEqual(fresh["session_id"], self.sid)
+        self.assertIsNone((await ns.get_binding(self.sid))["main_owner_id"])
+        self.assertEqual(await ensure_main_session(self.user), fresh)
+
+    async def test_replacement_rollback_preserves_old_slot_and_durable_receipts(self):
+        await self.delivery(self.sid, self.cid, "uncertain", text="never replay")
+        await self.pool.execute(
+            "UPDATE sessions SET archived_at=NOW() WHERE id=$1", self.sid
+        )
+        bindings = await self.pool.fetch(
+            "SELECT * FROM native_bindings ORDER BY session_id"
+        )
+        sessions = await self.pool.fetch("SELECT * FROM sessions ORDER BY id")
+        deliveries = await self.pool.fetch(
+            "SELECT * FROM native_deliveries ORDER BY message_id"
+        )
+        cleanup = await self.pool.fetch(
+            "SELECT * FROM agent_credential_cleanup ORDER BY session_id"
+        )
+        with patch.object(
+            ns,
+            "create_binding",
+            AsyncMock(side_effect=RuntimeError("binding insert failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "binding insert failed"):
+                await ensure_main_session(self.user)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM native_bindings ORDER BY session_id"),
+            bindings,
+        )
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM sessions ORDER BY id"), sessions
+        )
+        self.assertEqual(
+            await self.pool.fetch(
+                "SELECT * FROM agent_credential_cleanup ORDER BY session_id"
+            ),
+            cleanup,
+        )
+        fresh = await ensure_main_session(self.user)
+        self.assertNotEqual(fresh["session_id"], self.sid)
+        self.assertEqual(
+            await self.pool.fetch(
+                "SELECT * FROM native_deliveries ORDER BY message_id"
+            ),
+            deliveries,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT count(*) FROM agent_credential_cleanup WHERE session_id=$1",
+                self.sid,
+            ),
+            1,
+        )
+        self.assertIsNone(fresh["kagent_session_id"])
+        self.assertFalse(self.runtime.creates)
+
+    async def test_migration_releases_invalid_slot_and_adopts_only_valid_legacy_main(
+        self,
+    ):
+        await self.pool.execute(
+            "UPDATE sessions SET archived_at=NOW() WHERE id=$1", self.sid
+        )
+        legacy, _ = await self.bound_session(role="main")
+        legacy_before = await ns.get_binding(legacy)
+        for query in (
+            "UPDATE native_bindings SET token_hash=NULL WHERE session_id=$1",
+            "UPDATE native_bindings SET mcp_grant_kind='none' WHERE session_id=$1",
+            "UPDATE native_bindings SET kagent_deleted_at=NOW() WHERE session_id=$1",
+            "UPDATE sessions SET status='completed' WHERE id=$1",
+        ):
+            sid, _ = await self.bound_session(role="main")
+            await self.pool.execute(query, sid)
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        once = await self.pool.fetch(
+            "SELECT * FROM native_bindings ORDER BY session_id"
+        )
+        await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM native_bindings ORDER BY session_id"),
+            once,
+        )
+        self.assertEqual(
+            await self.pool.fetchval(
+                "SELECT session_id FROM native_bindings WHERE main_owner_id=$1",
+                self.user,
+            ),
+            legacy,
+        )
+        current = await ensure_main_session(self.user)
+        self.assertEqual(current["session_id"], legacy)
+        for field in legacy_before.keys() - {"main_owner_id"}:
+            self.assertEqual(current[field], legacy_before[field], field)
+        self.assertIsNone((await ns.get_binding(self.sid))["main_owner_id"])
+
+    async def test_competing_valid_mains_fail_closed_in_migration_and_bootstrap(self):
+        other, _ = await self.bound_session(role="main")
+        before = await self.pool.fetch(
+            "SELECT * FROM native_bindings ORDER BY session_id"
+        )
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await self.pool.execute(MAIN_PROVIDER_MIGRATION_SQL)
+        with self.assertRaisesRegex(ValueError, "competing current main owners"):
+            await ensure_main_session(self.user)
+        self.assertEqual(
+            await self.pool.fetch("SELECT * FROM native_bindings ORDER BY session_id"),
+            before,
+        )
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await self.pool.execute(
+                "UPDATE native_bindings SET main_owner_id=$2 WHERE session_id=$1",
+                other,
+                self.user,
+            )
+
+    async def test_provider_selection_does_not_bootstrap_over_retired_slot(
+        self,
+    ):
+        await self.pool.execute(
+            "UPDATE sessions SET archived_at=NOW() WHERE id=$1", self.sid
+        )
+        before = await ns.get_binding(self.sid)
+        disabled = (
+            registry().resolve("codex", "main").model_copy(update={"enabled": False})
+        )
+        with patch.object(settings, "provider_profiles", [disabled]):
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                await self.select()
+        self.assertEqual(await ns.get_binding(self.sid), before)
+        self.assertEqual(
+            await self.pool.fetchval("SELECT count(*) FROM native_bindings"), 1
+        )
+        with self.assertRaises(LifecycleDenied):
+            await self.select()
+        self.assertEqual(await ns.get_binding(self.sid), before)
+        self.assertFalse(self.runtime.creates)
+        fresh = await ensure_main_session(self.user)
+        selected = await self.select()
+        self.assertEqual(selected.session_id, fresh["session_id"])
+        self.assertEqual(selected.status, "ready")
 
     async def test_repair_schema_replays_without_changing_selection_or_history(self):
         await self.select()

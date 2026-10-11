@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from mainloop.config import settings
 from mainloop.db import db
@@ -26,21 +26,96 @@ from models import Session, SessionStatus
 INBOX = "inbox"
 
 
-async def ensure_main_session(user_id: str) -> dict:
+async def _claim_main_owner(
+    conn, user_id: str, locks: AsyncExitStack, *, replace_inactive: bool
+) -> dict | None:
+    """Reconcile the current-owner slot without deleting historical bindings.
+
+    The caller holds the bootstrap lock and transaction. Keep authority and
+    credential locks through commit, ordering replacement against admitted work.
+    """
+    from mainloop.push_gate import lifecycle as push_lifecycle
+    from mainloop.runtime.agent_credentials import _binding_lock, revoke_deferred
+    from mainloop.tasks import lifecycle
+
+    candidates = await conn.fetch(
+        """SELECT b.session_id FROM native_bindings b JOIN sessions s ON s.id=b.session_id
+           WHERE s.user_id=$1 AND (b.role='main' OR b.main_owner_id=$1)
+           ORDER BY b.session_id""",
+        user_id,
+    )
+    current = None
+    for candidate in candidates:
+        sid = candidate["session_id"]
+        await locks.enter_async_context(push_lifecycle.locked(conn, sid))
+        await locks.enter_async_context(lifecycle.locked(conn, sid))
+        await locks.enter_async_context(_binding_lock(conn, sid))
+        row = await conn.fetchrow(
+            """SELECT b.*,s.user_id,s.status,s.archived_at FROM native_bindings b
+               JOIN sessions s ON s.id=b.session_id WHERE b.session_id=$1 FOR UPDATE OF b,s""",
+            sid,
+        )
+        if row is None:
+            continue
+        if row["user_id"] != user_id:
+            raise ValueError("main owner changed during bootstrap")
+        valid = (
+            row["role"] == "main"
+            and row["mcp_grant_kind"] == "coordination"
+            and row["token_hash"] is not None
+            and row["kagent_deleted_at"] is None
+            and row["archived_at"] is None
+            and row["status"] not in ("completed", "failed", "cancelled")
+        )
+        if valid:
+            if current is not None or row["main_owner_id"] not in (None, user_id):
+                raise ValueError("competing current main owners")
+            # Keep the same public binding shape as get_binding.
+            current = await native_sessions.get_binding(sid, conn=conn)
+        else:
+            if row["main_owner_id"] is not None and not replace_inactive:
+                reason = (
+                    "session_terminal"
+                    if row["archived_at"] is not None
+                    or row["status"] in ("completed", "failed", "cancelled")
+                    else "binding_revoked"
+                )
+                raise lifecycle.LifecycleDenied(reason)
+            # Commit revocation and cleanup intent with releasing ownership. The
+            # old native ID, pinned Agent, history and delivery receipts stay put.
+            if row["main_owner_id"] is not None or row["token_hash"] is not None:
+                await revoke_deferred(conn, sid)
+                await conn.execute(
+                    "UPDATE native_bindings SET main_owner_id=NULL WHERE session_id=$1",
+                    sid,
+                )
+    if current is not None:
+        if current["main_owner_id"] is None:
+            await conn.execute(
+                "UPDATE native_bindings SET main_owner_id=$2 WHERE session_id=$1",
+                current["session_id"],
+                user_id,
+            )
+        current["main_owner_id"] = user_id
+    return current
+
+
+async def ensure_main_session(user_id: str, *, replace_inactive: bool = True) -> dict:
     """Return the user's single native main-thread binding, creating it on first use.
 
     Its conversation is the user's most recent main-thread conversation, so existing history
     carries over. The session row and its binding are written in one transaction, under a
     per-user lock, so a failure leaves neither and concurrent first requests share one.
+    Provider operations refuse an inactive current owner; bootstrap replaces it.
     """
-    query = """SELECT b.* FROM native_bindings b JOIN sessions s ON s.id=b.session_id
-               WHERE b.role='main' AND s.user_id=$1 AND s.archived_at IS NULL ORDER BY b.created_at LIMIT 1"""
-    async with db.connection() as conn:
+    async with db.connection() as conn, AsyncExitStack() as locks:
         async with conn.transaction():
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtext($1))", f"main-thread:{user_id}"
             )
-            row = await conn.fetchrow(query, user_id)
+            row = await _claim_main_owner(
+                conn, user_id, locks, replace_inactive=replace_inactive
+            )
             if row:
                 return dict(row)
             # Reused on the next attempt if the transaction below rolls back.
@@ -62,7 +137,8 @@ async def ensure_main_session(user_id: str) -> dict:
                    AND NOT EXISTS (
                      SELECT 1 FROM sessions s WHERE s.conversation_id=c.id
                      AND NOT EXISTS (SELECT 1 FROM native_bindings b
-                                     WHERE b.session_id=s.id AND b.role='main')
+                                     WHERE b.session_id=s.id
+                                     AND (b.role='main' OR b.main_agent_ref IS NOT NULL))
                    ) ORDER BY c.updated_at DESC LIMIT 1""",
                 user_id,
             )

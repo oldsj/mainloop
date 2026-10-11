@@ -201,6 +201,9 @@ Recovery uses the pinned contract independently of current catalog admission. A 
 absent or settled failed preparation target can be explicitly abandoned for a fresh identity;
 uncertain creation retains its original request. MCP intent commits share the retirement
 authority lock, and delivery completion, reply and turn accounting commit atomically.
+The current main-owner slot belongs to a valid coordination binding. Bootstrap releases
+an inactive binding's slot and revokes its remaining bearer in the same transaction that
+claims its replacement, retaining old native contracts, history and delivery receipts.
 See [main-provider selection](specs/chat.md#selecting-the-main-provider).
 
 A **NetworkPolicy-enforcing CNI is required**. The REST API has no application authorization;

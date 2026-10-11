@@ -32,6 +32,16 @@ capacity remain unchanged. Provider-native history stays with its original provi
 only stored standing context and recent completed conversation messages carry over.
 Failed and cancelled instructions are excluded from that carry-over.
 
+Bootstrap reuses a main only while its product binding has active coordination authority.
+An archived, revoked, deleted or terminal binding relinquishes current ownership in the
+same transaction that creates its replacement. Concurrent requests share one replacement,
+using the first-use provider default; existing native contracts and history remain on their
+original bindings, and no prior delivery is replayed. Unsent managed reports can route to the
+valid replacement; claimed or uncertain reports retain their original recipient receipts.
+Migration backfills ownership only for valid mains and refuses competing valid owners.
+Provider operations cannot restart a revoked current owner: bootstrap must first establish
+a valid replacement before a new provider selection.
+
 Repeating the current selection is idempotent. Repeating a pending selection recovers
 its same native create contract; it does not send a prompt. Chat returns `409` while
 preparation remains pending, and arriving child reports are queued until readiness is
