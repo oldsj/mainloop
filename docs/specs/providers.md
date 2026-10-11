@@ -59,3 +59,17 @@ into fixture evidence. Snapshot/import capabilities are not a committed-handoff 
 Evidence states remain `proved`, `partial`, `unsupported`, `unknown`; proved/partial require
 scope and evidence reference. Existing owner-session APIs retain their configured selection
 behavior until S1; S0 task mutators remain unavailable and cannot create native sessions.
+
+## Go server status (migration slice G4)
+
+Implemented in `server/` and covered by offline tests with a fake registry: `GET /providers`, the
+`PROVIDER_PROFILES` parser, and `GET/PUT /projects/{id}/default-provider`. Startup fails with the
+validation error when `PROVIDER_PROFILES` or a `KAGENT_*` agent name used by the built-in profiles
+is malformed. The default-provider write is a compare-and-swap on the preference version:
+`expected_version: 0` creates the row, a lost race returns 409 `stale_provider_preference`, and a
+missing or other owner's project returns 404 `project_not_found`. A profile must be enabled and
+have a `supervisor` Agent, otherwise the write returns 422.
+
+Not yet in the Go server (proposed, later slices): task selection precedence, attempt pinning,
+qualification and `TASK_DEFAULT_PROVIDER_PROFILE_ID`. The rest of this page describes the frozen
+Python backend until those slices land.

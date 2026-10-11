@@ -181,3 +181,33 @@ sessions and do not migrate running sessions. Reads never select or accept defau
 automatically. Saving uses the observed selection revision; conflicts refresh saved
 state while preserving the draft for review. An unconfirmed registration reply blocks
 repeat registration in that form until the owner reconciles the environment list.
+
+## Go server status (migration slice G4)
+
+Implemented in `server/` and covered by offline tests that use a fake registry and a fake HTTP
+transport: all eleven environment routes, the `oci-static-v2` validator and the anonymous GHCR
+client with its single CDN hop, immutable versions, grants and project selection. The behaviour
+above holds for these routes, with these details:
+
+- Failures use the `{"detail": "..."}` body. Status codes: 404 for a missing environment, version
+  or project, and for an environment the caller does not own; 403 `Environment use grant required`
+  when selecting another owner's environment without a grant; 409 `Stale expected version`; 422
+  for registry, validation and target errors.
+- `GET /projects/{id}/environment` returns 204 when nothing is selected.
+- Selecting needs exactly one of `version_id` and `follow_default`. Order of checks: project
+  (404), environment (404), access (403), revision (409), target (422), version (404), validation
+  status (422).
+- Registry reads happen before any transaction opens. A refresh then locks the environment row and
+  inserts the version in a second transaction. A failed registration or refresh stores nothing.
+  Refresh always appends a version, as it does in the Python backend.
+- Selection locks the project row, then the environment row. Grant and revoke lock the environment
+  row first and then check the project. A concurrent grant, revoke and selection cannot deadlock;
+  two concurrent selections at the same revision give one 200 and one 409.
+- `follow_default` selections report `resolved_version_id` from the current default and keep
+  revision unchanged when the default moves.
+- Registry and validation limits (4 MiB, 30 s read, 90 s validation and refresh) are measured by
+  unit tests with short budgets, not against a live registry.
+
+Not yet in the Go server: workspace environment resolution, the package build-input compiler and
+the project UI. The sections for those describe the frozen Python backend and `frontend/`. No live
+GHCR run has been made, so the CDN hop is proven against the fake transport only.

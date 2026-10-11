@@ -22,9 +22,6 @@ func newMigrator(t *testing.T, url string) *db.Migrator {
 	return m
 }
 
-// mainloopTables is how many tables the migrations create in the mainloop schema; a new table raises it.
-const mainloopTables = 7
-
 func countTables(t *testing.T, d *testdb.DB) int {
 	t.Helper()
 	var n int
@@ -35,6 +32,13 @@ func countTables(t *testing.T, d *testdb.DB) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// wantTables is the table count of a freshly migrated database. It comes from the template the
+// other tests clone, so adding a migration does not need a number bumped here.
+func wantTables(t *testing.T) int {
+	t.Helper()
+	return countTables(t, testdb.New(t))
 }
 
 func TestMigrateUpFromEmpty(t *testing.T) {
@@ -54,8 +58,8 @@ func TestMigrateUpFromEmpty(t *testing.T) {
 	if err != nil || n != len(before) {
 		t.Fatalf("Up = %d, %v; want %d", n, err, len(before))
 	}
-	if got := countTables(t, d); got != mainloopTables {
-		t.Errorf("tables after up = %d, want %d", got, mainloopTables)
+	if got := countTables(t, d); got != wantTables(t) {
+		t.Errorf("tables after up = %d, want %d", got, wantTables(t))
 	}
 	after, err := m.Status(ctx)
 	if err != nil {
@@ -92,8 +96,8 @@ func TestMigrateResetRebuildsSchema(t *testing.T) {
 	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM topics`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("topics after reset = %d, err = %v", n, err)
 	}
-	if got := countTables(t, d); got != mainloopTables {
-		t.Errorf("tables after reset = %d, want %d", got, mainloopTables)
+	if got := countTables(t, d); got != wantTables(t) {
+		t.Errorf("tables after reset = %d, want %d", got, wantTables(t))
 	}
 }
 
@@ -127,8 +131,8 @@ func TestMigrateConcurrentUp(t *testing.T) {
 					t.Fatalf("round %d: %v", round, err)
 				}
 			}
-			if got := countTables(t, d); got != mainloopTables {
-				t.Fatalf("round %d: tables = %d, want %d", round, got, mainloopTables)
+			if got := countTables(t, d); got != wantTables(t) {
+				t.Fatalf("round %d: tables = %d, want %d", round, got, wantTables(t))
 			}
 		})
 	}
@@ -149,8 +153,8 @@ func TestMigrateResetWithUnknownAppliedVersion(t *testing.T) {
 	if err := m.Reset(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := countTables(t, d); got != mainloopTables {
-		t.Errorf("tables after reset = %d, want %d (stray table should be gone)", got, mainloopTables)
+	if got := countTables(t, d); got != wantTables(t) {
+		t.Errorf("tables after reset = %d, want %d (stray table should be gone)", got, wantTables(t))
 	}
 	var stray int
 	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id = 99999`).Scan(&stray); err != nil || stray != 0 {

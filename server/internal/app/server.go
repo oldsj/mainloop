@@ -10,8 +10,10 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/config"
+	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/projects"
+	"github.com/oldsj/mainloop/server/internal/providers"
 )
 
 // fallback is nested one struct deeper than the domain APIs, so a method a domain defines is
@@ -29,10 +31,14 @@ type fallback struct {
 type Server struct {
 	*HealthAPI
 	*projects.ProjectsAPI
+	*providers.ProvidersAPI
+	*environments.EnvironmentsAPI
 
 	fallback
 
 	deps Deps
+	// initErr is a domain that failed to build from configuration; Handler reports it.
+	initErr error
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -42,8 +48,10 @@ type Deps struct {
 	Config *config.Config
 	Log    *slog.Logger
 	DB     Pinger
-	// Pool is the database the domains read and write.
+	// Pool is the database pool the domains query. Nil only in tests that exercise no stored state.
 	Pool *pgxpool.Pool
+	// Registry reads image metadata for environments. Nil means the anonymous OCI client.
+	Registry environments.RegistryClient
 	// GitHub reads GitHub for projects. Nil means no GitHub App is configured.
 	GitHub projects.Remote
 }
@@ -54,19 +62,26 @@ const maxBodyBytes = 4 << 20
 
 // New builds the Server.
 func New(d Deps) *Server {
+	prov, err := providers.NewAPI(d.Config, d.Pool)
 	return &Server{
 		HealthAPI: &HealthAPI{DB: d.DB, Log: d.Log},
 		ProjectsAPI: &projects.ProjectsAPI{Svc: &projects.Service{
 			Pool: d.Pool, Remote: d.GitHub, OwnerID: d.Config.Identity.OwnerID,
 			PolicyWrites: d.Config.OwnerPolicyWritesEnabled, Log: d.Log,
 		}},
-		deps: d,
+		ProvidersAPI:    prov,
+		EnvironmentsAPI: environments.NewAPI(d.Config, d.Pool, d.Registry),
+		deps:            d,
+		initErr:         err,
 	}
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap, then the
 // Host guard, Origin guard, CORS, panic recovery, request id and access log.
 func (s *Server) Handler() (http.Handler, error) {
+	if s.initErr != nil {
+		return nil, s.initErr
+	}
 	d := s.deps
 	spec, err := api.GetSpec()
 	if err != nil {

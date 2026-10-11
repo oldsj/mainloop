@@ -44,6 +44,47 @@ type Credential struct {
 	RevokedAt  *time.Time
 }
 
+type DevEnvironment struct {
+	ID               string
+	OwnerID          string
+	Name             string
+	SourceKind       string
+	WatchedTag       *string
+	Definition       json.RawMessage
+	DefaultVersionID *string
+	CreatedAt        time.Time
+}
+
+type EnvironmentGrant struct {
+	EnvironmentID string
+	ProjectID     string
+	Permission    string
+}
+
+type EnvironmentVersion struct {
+	ID                     string
+	EnvironmentID          string
+	Seq                    *int64
+	Registry               *string
+	Repository             *string
+	IndexDigest            *string
+	PlatformManifestDigest *string
+	ConfigDigest           *string
+	DeclaredUser           *string
+	Architecture           *string
+	CapabilityProfile      json.RawMessage
+	ValidationStatus       string
+	ValidationResult       json.RawMessage
+	ValidatorVersion       string
+	ProvenanceKind         string
+	BaseProvenance         string
+	ParentVersionID        *string
+	PackageDeclaration     json.RawMessage
+	ApprovalReference      *string
+	Definition             json.RawMessage
+	CreatedAt              time.Time
+}
+
 type Project struct {
 	ID                 string
 	UserID             string
@@ -63,6 +104,14 @@ type Project struct {
 	LastUsedAt         time.Time
 }
 
+type ProjectEnvironmentSelection struct {
+	ProjectID     string
+	EnvironmentID string
+	VersionID     *string
+	FollowDefault bool
+	Revision      int64
+}
+
 type ProjectMergePolicyAudit struct {
 	ID        int64
 	ProjectID string
@@ -71,6 +120,12 @@ type ProjectMergePolicyAudit struct {
 	NewPolicy string
 	Version   int64
 	CreatedAt time.Time
+}
+
+type ProjectProviderPreference struct {
+	ProjectID string
+	ProfileID *string
+	Version   int64
 }
 
 type Session struct {

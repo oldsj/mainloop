@@ -149,6 +149,10 @@ func (p *ProviderProfile) UnmarshalJSON(data []byte) error {
 
 func validProviderID(id string) bool { return len(id) <= 80 && providerIDPattern.MatchString(id) }
 
+// Validate checks the profile against the PROVIDER_PROFILES rules. The registry uses it on the
+// built-in Claude and Codex profiles, which are made from other settings.
+func (p ProviderProfile) Validate() error { return p.validate() }
+
 func (p ProviderProfile) validate() error {
 	if !validProviderID(p.ID) {
 		return errors.New("profile id must match ^[a-z][a-z0-9_-]*$ and be at most 80 characters")
