@@ -110,6 +110,35 @@ built; nothing here has been measured against a live kagent.
 - The git gate (SHA resolution, credentials, publication) and the
   per-workspace MCP grant. `publication_mode` is `read_only` with reason `disabled` until they land.
 
+## React status (migration slice F8)
+
+The React workspace page (`web/src/features/workspaces`, route `/workspaces/$id`) is tested with
+MSW against the OpenAPI contract. Labels follow the Go section's: **implemented** is in the code
+and covered by those tests.
+
+Implemented in the React client:
+
+- Lifecycle and publication badges. Suspend shows only when the workspace is running, and Resume
+  only when it is suspended. Refresh is always available. Delete asks for confirmation first.
+- A control cannot be submitted twice. After a `409` the page re-reads the workspace before it
+  offers a retry, and it shows the backend's message.
+- A failed action keeps its message when its row or section unmounts. Moving to another workspace
+  clears it.
+- The repository is a link only for `http` and `https` URLs. The image digest shows its first 19
+  characters, or "unknown" when it does not parse.
+- Preview links are offered only for `http` and `https` URLs. A bad row is dropped and counted; the
+  rest still show. Opening a suspended workspace's preview wakes it.
+- A failed refresh keeps the cached data on screen, with an inline error and a retry.
+
+Not proven:
+
+- Live kagent behaviour. Nothing here has run against a real workspace.
+- The shell mount for `/workspaces/$id`. Route tests attach the real route; the shell is unchanged.
+- Live event refresh of the workspace page. No test covers it.
+
+Differences from the frozen page: a suspended workspace uses the muted tone, not purple. The token
+set has no purple tone.
+
 ## Lifecycle
 
 | Observed state | User label | Meaning                                                                                              |

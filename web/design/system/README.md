@@ -23,16 +23,21 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 - `guidelines/delivery-receipt.md`
 - `guidelines/error-recovery.md`
 - `guidelines/evidence-link.md`
+- `guidelines/health-filters.md`
+- `guidelines/health-row.md`
 - `guidelines/hitl-card.md`
 - `guidelines/main-thread-header.md`
 - `guidelines/markdown.md`
 - `guidelines/merge-review.md`
 - `guidelines/message.md`
 - `guidelines/session-summary.md`
+- `guidelines/source-observations.md`
 - `guidelines/status-badge.md`
 - `guidelines/task-actions.md`
 - `guidelines/task-tree-row.md`
 - `guidelines/workspace-action.md`
+- `guidelines/workspace-manifest.md`
+- `guidelines/workspace-previews.md`
 
 ## Using it in Claude Design
 

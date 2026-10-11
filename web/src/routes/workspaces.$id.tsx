@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutePlaceholder } from '@/shell/RoutePlaceholder';
+import { WorkspacePage } from '@/features/workspaces';
 
 export const Route = createFileRoute('/workspaces/$id')({
   component: Workspace
@@ -7,5 +7,6 @@ export const Route = createFileRoute('/workspaces/$id')({
 
 function Workspace() {
   const { id } = Route.useParams();
-  return <RoutePlaceholder title="Workspace" slice="F8" detail={`${id}: not built yet (F8).`} />;
+  // Keyed so that moving to another workspace remounts the page, and its notice and pending actions do not carry over.
+  return <WorkspacePage key={id} id={id} />;
 }

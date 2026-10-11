@@ -115,6 +115,36 @@ The same sanitized A2A data fixture is round-tripped by kagent's gateway Postgre
 Claude driver/A2A and parked-resume fixtures check the producer boundary. No live provider,
 production rollout or subscription proof is claimed.
 
+## React status (migration slice F8)
+
+The React health page (`web/src/features/health`, route `/health`) is tested with MSW against the
+owner API contract. The Go handlers for `/orchestration-health` are still unimplemented, so the
+page has not been run against live data. Labels follow the Go section's: **implemented** is in the
+code and covered by those tests.
+
+Implemented in the React client:
+
+- The filters are the page's URL: window, project, task, session, attempt and provider. An
+  unreadable value is dropped to its default and the page still loads. Apply writes the URL; Clear
+  filters returns to the default 24-hour view.
+- The filter panel opens by default at 640 px and wider, and starts closed below that. Task,
+  session and attempt choices come from the wider project, provider and window scope, so narrowing
+  one filter does not remove the others.
+- Rows sort by failures, most first, with unknown counts last. An unknown count shows
+  "Unavailable". A row with no task or title shows "Unassigned".
+- Each row is checked on its own. A malformed row is dropped and counted; the others render.
+- A session's source observations load only when asked for. A refresh clears them.
+- Each approval shows its HITL card.
+- A failed refresh keeps the rows already shown, with an inline error and a retry.
+
+Not proven:
+
+- The live health path. The Go handlers are stubs, so the page has contract tests only.
+- Live event refresh. The page does not yet react to health events.
+
+Differences from the frozen page: native session identity polls only while a turn is in flight. The
+frozen page polled every three seconds on each mount.
+
 ## Proposed views
 
 One owner-scoped **Orchestration health** page, reachable from the project and session views,
