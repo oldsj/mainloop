@@ -545,6 +545,12 @@ type SessionMessage struct {
 	CreatedAt time.Time
 }
 
+type SweepLease struct {
+	Name   string
+	Holder string
+	Until  time.Time
+}
+
 type Task struct {
 	ID                  string
 	OwnerID             string

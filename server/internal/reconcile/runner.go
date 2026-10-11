@@ -10,11 +10,13 @@ import (
 	mrand "math/rand/v2"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/oldsj/mainloop/server/internal/db"
+	"github.com/oldsj/mainloop/server/internal/db/dbq"
 )
 
 // Outcome is what a handler wants done with the row it handled.
@@ -70,13 +72,28 @@ type Loop struct {
 	Backoff Backoff
 }
 
-// Sweep is periodic housekeeping that one process at a time runs.
+// Sweep is periodic housekeeping that one process at a time runs. Exclusivity is a lease row
+// (sweep_leases) that the run takes, extends while it works and deletes when it ends; no database
+// connection is held while the sweep calls out.
 type Sweep struct {
 	Name string
 	// Every is the period (the next run is jittered by +-10%).
 	Every time.Duration
 	Run   func(ctx context.Context) error
+	// Timeout bounds one run (default [DefaultSweepTimeout]). Run's ctx expires then, so a sweep
+	// stuck on a dependency or on the pool ends instead of waiting forever.
+	Timeout time.Duration
 }
+
+// DefaultSweepTimeout is how long one sweep run may take unless the sweep says otherwise.
+const DefaultSweepTimeout = 5 * time.Minute
+
+// SweepLease is how long a sweep lease holds before another process may take the sweep over. The
+// run extends it every third of that while it works, so it only has to cover a crash.
+const SweepLease = 30 * time.Second
+
+// sweepTakeTimeout bounds taking or releasing a sweep lease: both are one short statement.
+const sweepTakeTimeout = 10 * time.Second
 
 // Runner runs loops and sweeps until its context ends. A failure in one loop or sweep never
 // stops the others.
@@ -91,6 +108,11 @@ type Runner struct {
 
 	// extend pushes a claim's lease; a field so tests can stall it.
 	extend func(ctx context.Context, c Claim, d time.Duration) (time.Time, error)
+	// sweepLease is how long a sweep lease holds (a field so tests can shorten it).
+	sweepLease time.Duration
+	// extendSweep pushes a sweep lease; a field so tests can stall it.
+	extendSweep func(ctx context.Context, name, holder string, d time.Duration) error
+	runs        atomic.Uint64
 	// afterClaim runs after each claim returns; a test hook.
 	afterClaim func()
 }
@@ -98,7 +120,14 @@ type Runner struct {
 // NewRunner builds a Runner. notifier may be nil, which leaves only the poll. Add loops before
 // Run; Notifier subscriptions are taken by Add, so the Notifier must not be running yet.
 func NewRunner(pool *pgxpool.Pool, log *slog.Logger, notifier *Notifier) *Runner {
-	r := &Runner{pool: pool, log: log, notifier: notifier, owner: newOwner()}
+	r := &Runner{pool: pool, log: log, notifier: notifier, owner: newOwner(), sweepLease: SweepLease}
+	r.extendSweep = func(ctx context.Context, name, holder string, d time.Duration) error {
+		_, err := dbq.New(r.pool).ExtendSweepLease(ctx, dbq.ExtendSweepLeaseParams{Name: name, Holder: holder, LeaseSeconds: d.Seconds()})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: sweep %s held by another run", ErrLeaseLost, name)
+		}
+		return err
+	}
 	r.extend = func(ctx context.Context, c Claim, d time.Duration) (time.Time, error) {
 		return c.Extend(ctx, r.pool, d)
 	}
@@ -247,7 +276,10 @@ func (r *Runner) handle(ctx context.Context, l Loop, log *slog.Logger, c Claim, 
 	log = log.With("id", c.ID, "attempt", c.Attempts)
 	hctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stopKeepalive := r.keepalive(hctx, cancel, l.Lease, log, c, claimSent)
+	stopKeepalive := r.keepalive(hctx, cancel, l.Lease, log, func(ctx context.Context) error {
+		_, err := r.extend(ctx, c, l.Lease)
+		return err
+	}, claimSent)
 	out, err := runHandler(hctx, l.Handle, c)
 	stopKeepalive()
 	if err != nil {
@@ -304,14 +336,15 @@ func (r *Runner) release(ctx context.Context, log *slog.Logger, claims []Claim) 
 	}
 }
 
-// keepalive extends the lease every third of a lease until the returned stop function is called.
+// keepalive extends a lease (a claim's or a sweep's) every third of a lease until the returned stop
+// function is called.
 //
 // It fences the handler on local time: a lease confirmed by an Extend sent at T holds until
 // T+lease, so when that passes with no newer confirmation (the database is unreachable, or an
 // Extend hangs) the handler is cancelled before the lease can have expired for another claimer;
 // the fence is a tenth of a lease early to cover the cancellation itself. Each Extend is bounded
 // by the time left until the fence. If the lease is lost outright the handler is cancelled too.
-func (r *Runner) keepalive(ctx context.Context, cancel context.CancelFunc, lease time.Duration, log *slog.Logger, c Claim, claimSent time.Time) (stop func()) {
+func (r *Runner) keepalive(ctx context.Context, cancel context.CancelFunc, lease time.Duration, log *slog.Logger, extend func(context.Context) error, claimSent time.Time) (stop func()) {
 	kctx, kcancel := context.WithCancel(ctx)
 	finished := make(chan struct{})
 	go func() {
@@ -335,7 +368,7 @@ func (r *Runner) keepalive(ctx context.Context, cancel context.CancelFunc, lease
 			}
 			sent := time.Now()
 			ectx, ecancel := context.WithDeadline(kctx, fence)
-			_, err := r.extend(ectx, c, lease)
+			err := extend(ectx)
 			ecancel()
 			switch {
 			case err == nil:
@@ -374,17 +407,10 @@ func (r *Runner) runSweep(ctx context.Context, s Sweep) {
 	}
 }
 
-// sweepOnce runs the sweep if no other session is running it. A failure or panic is logged and
+// sweepOnce runs the sweep if no other process is running it. A failure or panic is logged and
 // the next period tries again.
 func (r *Runner) sweepOnce(ctx context.Context, log *slog.Logger, s Sweep) {
-	ran, err := db.WithTryLock(ctx, r.pool, "sweep:"+s.Name, func(ctx context.Context) (err error) {
-		defer func() {
-			if p := recover(); p != nil {
-				err = fmt.Errorf("sweep panic: %v\n%s", p, debug.Stack())
-			}
-		}()
-		return s.Run(ctx)
-	})
+	ran, err := r.RunSweep(ctx, s)
 	switch {
 	case ctx.Err() != nil:
 	case err != nil:
@@ -394,8 +420,57 @@ func (r *Runner) sweepOnce(ctx context.Context, log *slog.Logger, s Sweep) {
 	}
 }
 
-// RunSweep runs one sweep once under its lock and reports whether it ran. It exists for tests
-// and for one-shot commands such as sweep-orphans.
-func (r *Runner) RunSweep(ctx context.Context, s Sweep) (bool, error) {
-	return db.WithTryLock(ctx, r.pool, "sweep:"+s.Name, s.Run)
+// RunSweep runs one sweep once under its lease and reports whether it ran: false with no error
+// means another run holds the lease. It exists for tests and one-shot commands as well as the
+// runner's own schedule.
+//
+// The lease is taken, extended and released in short statements, so no connection is pinned while
+// s.Run works. The lease is extended every third of [SweepLease]; if that cannot be confirmed in
+// time, or another process took the sweep over, s.Run's context is cancelled. A holder that dies
+// stops extending and the lease lapses on its own. s.Run's context also ends at the sweep's
+// timeout.
+func (r *Runner) RunSweep(ctx context.Context, s Sweep) (ran bool, err error) {
+	log := r.log.With("sweep", s.Name)
+	holder := fmt.Sprintf("%s/%d", r.owner, r.runs.Add(1))
+	sent := time.Now() // before the take is sent: the lease runs from no earlier than this
+	tctx, tcancel := context.WithTimeout(ctx, sweepTakeTimeout)
+	_, err = dbq.New(r.pool).TakeSweepLease(tctx, dbq.TakeSweepLeaseParams{Name: s.Name, Holder: holder, LeaseSeconds: r.sweepLease.Seconds()})
+	tcancel()
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("reconcile: take sweep lease %q: %w", s.Name, err)
+	}
+	// Release even when shutting down, so the next process does not wait out the lease. If this
+	// fails the lease lapses by itself.
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sweepTakeTimeout)
+		defer cancel()
+		if rerr := dbq.New(r.pool).ReleaseSweepLease(rctx, dbq.ReleaseSweepLeaseParams{Name: s.Name, Holder: holder}); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("reconcile: release sweep lease %q: %w", s.Name, rerr))
+		}
+	}()
+
+	timeout := s.Timeout
+	if timeout <= 0 {
+		timeout = DefaultSweepTimeout
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stop := r.keepalive(rctx, cancel, r.sweepLease, log, func(ctx context.Context) error {
+		return r.extendSweep(ctx, s.Name, holder, r.sweepLease)
+	}, sent)
+	defer stop()
+	return true, runSweepBody(rctx, s.Run)
+}
+
+// runSweepBody turns a panic into an error.
+func runSweepBody(ctx context.Context, run func(context.Context) error) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("sweep panic: %v\n%s", p, debug.Stack())
+		}
+	}()
+	return run(ctx)
 }

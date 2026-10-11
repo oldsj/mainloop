@@ -439,7 +439,7 @@ func TestShutdownRecordsInFlightOutcomes(t *testing.T) {
 	}
 }
 
-// Sweeps run under an advisory lock, so only one process runs a given sweep at a time; a panic is
+// Sweeps run under a lease row, so only one process runs a given sweep at a time; a panic is
 // contained.
 func TestSweepIsSingletonAndPanicSafe(t *testing.T) {
 	d := testdb.New(t)

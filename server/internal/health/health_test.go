@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
-	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/health"
@@ -395,23 +394,22 @@ func TestRecoveryAbandonsDeletedSession(t *testing.T) {
 }
 
 // Python: test_reconcile_sweep_runs_health_retention_recovery_and_cleanup, and the acceptance
-// "sweeps are single-runner under the advisory lock".
+// "sweeps are single-runner under a lease".
 func TestSweepsAreSingleRunner(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	runner := reconcile.NewRunner(e.pool, e.svc.Log, nil)
 	for _, sweep := range []reconcile.Sweep{e.svc.RecoverSweep(), e.svc.RetainSweep()} {
-		held, ok, err := db.TryLock(ctx, e.pool, "sweep:"+sweep.Name)
-		if err != nil || !ok {
-			t.Fatalf("%s: lock %v %v", sweep.Name, ok, err)
+		if _, err := e.pool.Exec(ctx, `INSERT INTO sweep_leases (name, holder, until) VALUES ($1, 'other-process', now() + interval '60 seconds')`, sweep.Name); err != nil {
+			t.Fatalf("%s: take the lease: %v", sweep.Name, err)
 		}
 		reads := e.kc.callCount()
 		ran, err := runner.RunSweep(ctx, sweep)
-		if uerr := held.Unlock(ctx); uerr != nil {
-			t.Fatal(uerr)
+		if _, derr := e.pool.Exec(ctx, `DELETE FROM sweep_leases WHERE name = $1`, sweep.Name); derr != nil {
+			t.Fatal(derr)
 		}
 		if err != nil || ran {
-			t.Fatalf("%s ran while another process held its lock: %v %v", sweep.Name, ran, err)
+			t.Fatalf("%s ran while another process held its lease: %v %v", sweep.Name, ran, err)
 		}
 		if e.kc.callCount() != reads {
 			t.Fatal("the held sweep read kagent")

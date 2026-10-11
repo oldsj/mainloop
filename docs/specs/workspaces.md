@@ -403,7 +403,7 @@ request id, access log and panic recovery still wrap it. Any other host is the A
 - **Keep-awake.** A WebSocket takes a lease row (`preview_leases`) when it opens; an HTTP request
   takes one if it is still running after 10 seconds. The holder renews every 20 seconds (lease TTL
   60 seconds) and deletes the row on close. A reconcile sweep every 20 seconds, under the runner's
-  advisory lock, calls `Touch` for every workspace with an unexpired lease and prunes rows expired
+  sweep lease, calls `Touch` for every workspace with an unexpired lease and prunes rows expired
   for over a minute. A holder that crashes stops renewing, so its lease lapses without cleanup; the
   workspace idles out after the usual timeout.
 

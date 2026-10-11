@@ -56,6 +56,9 @@
 //
 // A [Notifier] holds one LISTEN connection for the process and wakes loops by channel; a
 // periodic poll is the backstop, so a lost notification only delays work. A [Sweep] is periodic
-// housekeeping that must run in one place at a time: it runs under a non-blocking advisory lock,
-// and a loss means skip this round.
+// housekeeping that must run in one place at a time: it runs under a lease row (sweep_leases) that it takes, extends
+// while it works and deletes when it ends, and failing to take it means skip this round. No
+// database connection is held while a sweep runs, so a slow dependency cannot exhaust the pool; each
+// run also has a deadline. A holder that dies stops extending and another process takes over once
+// the lease expires.
 package reconcile

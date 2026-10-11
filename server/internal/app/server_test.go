@@ -183,7 +183,7 @@ func assertPool(t *testing.T, pool *pgxpool.Pool) {
 	if path != db.Schema {
 		t.Errorf("search_path = %q, want %q", path, db.Schema)
 	}
-	if got := pool.Config().MaxConns; got != 10 {
+	if got := pool.Config().MaxConns; got != 30 {
 		t.Errorf("max conns = %d", got)
 	}
 }

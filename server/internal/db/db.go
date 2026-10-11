@@ -13,8 +13,14 @@ import (
 // Schema is the PostgreSQL schema that holds Mainloop's tables.
 const Schema = "mainloop"
 
-// maxConns bounds the pool. The API is a single owner's control plane.
-const maxConns = 10
+// maxConns bounds the pool. Nothing holds a connection across network I/O: reconcile sweeps keep
+// their exclusivity in a lease row, not a pinned session lock. So demand is the number of queries
+// in flight at once, not the number of sweeps and handlers running: 21 sweeps and about 10 lease
+// loops (each with up to 4 handlers), plus HTTP and SSE, rarely have more than a dozen or so
+// running a short statement together. 30 covers a burst with room to spare, and stays under a third of
+// Postgres' default max_connections of 100 so two pods in a rolling update still fit. A query that
+// cannot get a connection waits only until its own context ends, and sweep runs carry a deadline.
+const maxConns = 30
 
 // NewPool builds a pool from config. It does not connect: the first query does, so the server
 // can start and report the database as down on /health instead of crash-looping.

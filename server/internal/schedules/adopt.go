@@ -28,7 +28,7 @@ import (
 //   - an execution that failed or timed out opens one inbox item.
 //
 // It follows the reconciler rule. The sweep is the only writer and runs under the reconcile
-// runner's advisory lock. scheduled_run_links.execution_id is the idempotency key: the link, the
+// runner's sweep lease. scheduled_run_links.execution_id is the idempotency key: the link, the
 // session, the binding, the inbox item and schedule:updated are written in one transaction, and the
 // ids of the session and item are derived from the execution id. kagent is read before every
 // write, never inside a transaction, so a crash or a second replica repeats the read and finds the

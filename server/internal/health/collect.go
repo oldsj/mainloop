@@ -19,7 +19,7 @@ import (
 // running or finished, becomes a receipt row (state pending), and each pending receipt is read from
 // kagent and stored; a running turn is read again until it ends. The receipt rows are the durable queue: a restart, a crash or a lost read leaves the row
 // pending, and the next pass picks it up. Only one process runs a pass at a time (the runner holds
-// the sweep's advisory lock).
+// the sweep's lease).
 func (s *Service) RecoverSweep() reconcile.Sweep {
 	return reconcile.Sweep{Name: "health-recovery", Every: orDefault(s.RecoverEvery, defaultRecoverEvery), Run: s.Recover}
 }
