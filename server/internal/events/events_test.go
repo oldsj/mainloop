@@ -136,6 +136,7 @@ func TestPublishIdsFollowCommitOrder(t *testing.T) {
 
 func TestHubFiltersByUser(t *testing.T) {
 	h := events.NewHub(quiet(), 4)
+	h.MarkReady()
 	a, _ := h.Subscribe("a")
 	b, _ := h.Subscribe("b")
 	h.Dispatch(events.Event{ID: 1, UserID: "a", Type: events.TypeInboxUpdated})
@@ -158,6 +159,7 @@ func TestHubFiltersByUser(t *testing.T) {
 // the others are unaffected.
 func TestHubDropsSlowConsumerWithoutBlocking(t *testing.T) {
 	h := events.NewHub(quiet(), 3)
+	h.MarkReady()
 	slow, _ := h.Subscribe("u")
 	fast, _ := h.Subscribe("u")
 
@@ -194,6 +196,7 @@ func TestHubDropsSlowConsumerWithoutBlocking(t *testing.T) {
 
 func TestHubCloseEndsEverythingAndRefusesNew(t *testing.T) {
 	h := events.NewHub(quiet(), 2)
+	h.MarkReady()
 	s, _ := h.Subscribe("u")
 	h.Close()
 	select {
@@ -206,6 +209,16 @@ func TestHubCloseEndsEverythingAndRefusesNew(t *testing.T) {
 	}
 	if _, err := h.Subscribe("u"); !errors.Is(err, events.ErrHubClosed) {
 		t.Errorf("Subscribe after Close = %v", err)
+	}
+}
+
+// waitReady blocks until the source has its starting cursor and opened the hub.
+func waitReady(t *testing.T, h *events.Hub) {
+	t.Helper()
+	select {
+	case <-h.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("source never became ready")
 	}
 }
 
@@ -234,11 +247,11 @@ func recv(t *testing.T, s *events.Subscription, within time.Duration) events.Eve
 func TestSourceDispatchesOnWakeAndCatchesUpAfterAGap(t *testing.T) {
 	d := testdb.New(t)
 	h := events.NewHub(quiet(), 16)
-	sub, _ := h.Subscribe("u")
 	wake := make(chan struct{}, 1)
 	stop := runSource(t, d, h, wake, time.Hour)
 	defer stop()
-	time.Sleep(200 * time.Millisecond) // let the source read its starting cursor
+	waitReady(t, h)
+	sub, _ := h.Subscribe("u")
 
 	id1 := publish(t, d, "u", events.TypeInboxUpdated, map[string]string{})
 	wake <- struct{}{}
@@ -267,10 +280,10 @@ func TestSourceDispatchesOnWakeAndCatchesUpAfterAGap(t *testing.T) {
 func TestSourcePollIsTheBackstop(t *testing.T) {
 	d := testdb.New(t)
 	h := events.NewHub(quiet(), 16)
-	sub, _ := h.Subscribe("u")
 	stop := runSource(t, d, h, nil, 50*time.Millisecond)
 	defer stop()
-	time.Sleep(200 * time.Millisecond)
+	waitReady(t, h)
+	sub, _ := h.Subscribe("u")
 	id := publish(t, d, "u", events.TypeInboxUpdated, map[string]string{})
 	if ev := recv(t, sub, 5*time.Second); ev.ID != id {
 		t.Errorf("event = %+v", ev)
@@ -281,7 +294,6 @@ func TestSourcePollIsTheBackstop(t *testing.T) {
 func TestPublishWakesSourceThroughTheNotifier(t *testing.T) {
 	d := testdb.New(t)
 	h := events.NewHub(quiet(), 16)
-	sub, _ := h.Subscribe("u")
 	n := reconcile.NewNotifier(d.Pool, quiet())
 	wake := n.Subscribe(events.Channel)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -289,7 +301,9 @@ func TestPublishWakesSourceThroughTheNotifier(t *testing.T) {
 	wg.Go(func() { _ = n.Run(ctx) })
 	stop := runSource(t, d, h, wake, time.Hour)
 	defer func() { stop(); cancel(); wg.Wait() }()
-	time.Sleep(500 * time.Millisecond)
+	waitReady(t, h)
+	sub, _ := h.Subscribe("u")
+	// The notifier may still be connecting; LISTEN's own catch-up wake covers anything before it.
 
 	id := publish(t, d, "u", events.TypeSessionMessage, map[string]string{"session_id": "s"})
 	if ev := recv(t, sub, 5*time.Second); ev.ID != id || ev.Type != events.TypeSessionMessage {
@@ -320,5 +334,43 @@ func TestPruneDeletesOldEventsAndRaisesTheFloor(t *testing.T) {
 	// Nothing left to prune is a no-op that keeps the floor.
 	if n, err := events.Prune(ctx, d.Pool, time.Now().Add(-24*time.Hour)); err != nil || n != 0 {
 		t.Errorf("second Prune = %d, %v", n, err)
+	}
+}
+
+func TestHubRefusesSubscribersUntilReady(t *testing.T) {
+	h := events.NewHub(quiet(), 4)
+	if _, err := h.Subscribe("u"); !errors.Is(err, events.ErrHubNotReady) {
+		t.Fatalf("Subscribe before ready = %v, want ErrHubNotReady", err)
+	}
+	h.MarkReady()
+	h.MarkReady() // idempotent
+	if _, err := h.Subscribe("u"); err != nil {
+		t.Fatalf("Subscribe after ready: %v", err)
+	}
+}
+
+// A write that fails after publishing rolls the event back with it, and InTxPublish publishes
+// what the domain function returns, after it.
+func TestInTxPublishPublishesAfterTheDomainWork(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	var order []string
+	err := events.InTxPublish(ctx, d.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
+		order = append(order, "domain")
+		return []events.Draft{{UserID: "u", Type: events.TypeInboxUpdated, Payload: map[string]string{}}}, nil
+	})
+	if err != nil || len(order) != 1 {
+		t.Fatalf("InTxPublish = %v", err)
+	}
+	boom := errors.New("boom")
+	err = events.InTxPublish(ctx, d.Pool, func(pgx.Tx) ([]events.Draft, error) {
+		return []events.Draft{{UserID: "u", Type: events.TypeInboxUpdated, Payload: map[string]string{}}}, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	var n int
+	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM events`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("events stored = %d (%v), want 1: the failed change must leave none", n, err)
 	}
 }

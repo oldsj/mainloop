@@ -41,7 +41,9 @@ CREATE TABLE test_intents (
     attempts integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     lease_owner text,
-    lease_until timestamptz)`)
+    lease_until timestamptz);
+-- The claim index (see the package comment): only rows that can still be claimed.
+CREATE INDEX test_intents_claim ON test_intents (next_attempt_at, id) WHERE state IN ('pending')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,4 +585,77 @@ func waitFor(t *testing.T, timeout time.Duration, what string, ok func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// An Extend that stalls (the database is unreachable) must not leave the handler running past the
+// lease: the runner cancels it first, because a rival may claim the row the moment the lease ends.
+func TestKeepaliveSelfFencesWhenExtendStalls(t *testing.T) {
+	for name, extend := range map[string]func(context.Context, reconcile.Claim, time.Duration) (time.Time, error){
+		"stalled": func(ctx context.Context, _ reconcile.Claim, _ time.Duration) (time.Time, error) {
+			<-ctx.Done()
+			return time.Time{}, ctx.Err()
+		},
+		"failing": func(context.Context, reconcile.Claim, time.Duration) (time.Time, error) {
+			return time.Time{}, errors.New("connection refused")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newIntents(t, 1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			const lease = 600 * time.Millisecond
+			started := time.Now()
+			cancelledAfter := make(chan time.Duration, 1)
+			r := reconcile.NewRunner(d.Pool, quiet(), nil)
+			r.SetExtend(extend)
+			r.Add(reconcile.Loop{
+				Name: "stalled", Table: intents, Lease: lease, Interval: 20 * time.Millisecond,
+				Handle: func(hctx context.Context, _ reconcile.Claim) (reconcile.Outcome, error) {
+					select {
+					case <-hctx.Done():
+						cancelledAfter <- time.Since(started)
+						return reconcile.Retry(), hctx.Err()
+					case <-time.After(10 * time.Second):
+						cancelledAfter <- -1
+						return reconcile.Done(stateDone), nil
+					}
+				},
+			})
+			done := make(chan struct{})
+			go func() { defer close(done); _ = r.Run(ctx) }()
+			select {
+			case after := <-cancelledAfter:
+				if after < 0 || after >= lease {
+					t.Errorf("handler cancelled after %v, want before the %v lease ended", after, lease)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the handler was never cancelled")
+			}
+			cancel()
+			<-done
+		})
+	}
+}
+
+// Rows claimed just as the runner shuts down are handed back at once instead of waiting out their
+// lease.
+func TestShutdownReleasesClaimsItNeverStarted(t *testing.T) {
+	d := newIntents(t, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := reconcile.NewRunner(d.Pool, quiet(), nil)
+	r.Add(reconcile.Loop{
+		Name: "x", Table: intents, Lease: time.Hour, Interval: time.Hour,
+		Handle: func(context.Context, reconcile.Claim) (reconcile.Outcome, error) {
+			return reconcile.Done(stateDone), nil
+		},
+	})
+	reconcile.ClaimThenCancel(r, cancel)
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.Run(ctx) }()
+	<-done
+	var leased int
+	if err := d.Pool.QueryRow(context.Background(), `SELECT count(*) FROM test_intents WHERE lease_until > now()`).Scan(&leased); err != nil || leased != 0 {
+		t.Errorf("%d rows still leased after shutdown (%v)", leased, err)
+	}
 }

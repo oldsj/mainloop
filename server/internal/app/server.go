@@ -93,7 +93,7 @@ func (s *Server) Handler() (http.Handler, error) {
 		return nil, err
 	}
 	cfg := d.Config
-	strict := api.NewStrictHandlerWithOptions(s, []api.StrictMiddlewareFunc{events.CaptureLastEventID}, api.StrictHTTPServerOptions{
+	strict := api.NewStrictHandlerWithOptions(s, nil, api.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
 			// Request bodies are validated before this runs, so this is a decode failure.
 			httpx.WriteError(w, http.StatusBadRequest, "Invalid request body")

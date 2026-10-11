@@ -13,6 +13,8 @@ var (
 	ErrSlowConsumer = errors.New("events: subscriber too slow")
 	// ErrHubClosed: the process is shutting down.
 	ErrHubClosed = errors.New("events: hub closed")
+	// ErrHubNotReady: the outbox reader has not started, so a stream could miss events.
+	ErrHubNotReady = errors.New("events: hub not ready")
 	// ErrUnsubscribed: the subscriber left.
 	ErrUnsubscribed = errors.New("events: unsubscribed")
 )
@@ -22,15 +24,33 @@ type Hub struct {
 	log    *slog.Logger
 	buffer int
 
-	mu     sync.Mutex
-	subs   map[*Subscription]struct{}
-	closed bool
+	ready chan struct{}
+
+	mu      sync.Mutex
+	subs    map[*Subscription]struct{}
+	closed  bool
+	isReady bool
 }
 
 // NewHub builds a Hub whose subscribers each buffer up to buffer events.
 func NewHub(log *slog.Logger, buffer int) *Hub {
-	return &Hub{log: log, buffer: max(buffer, 1), subs: map[*Subscription]struct{}{}}
+	return &Hub{log: log, buffer: max(buffer, 1), subs: map[*Subscription]struct{}{}, ready: make(chan struct{})}
 }
+
+// MarkReady lets subscribers in. The [Source] calls it once it has its cursor: an event committed
+// before that is neither dispatched nor replayed to a stream that connected earlier, so streams
+// are refused (503, and the browser retries) until then.
+func (h *Hub) MarkReady() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.isReady {
+		h.isReady = true
+		close(h.ready)
+	}
+}
+
+// Ready is closed once [Hub.MarkReady] has been called.
+func (h *Hub) Ready() <-chan struct{} { return h.ready }
 
 // Subscription receives the events of one user. Read C until Done is closed; Err then says why.
 type Subscription struct {
@@ -63,12 +83,16 @@ func (s *Subscription) Close() {
 	s.hub.endLocked(s, ErrUnsubscribed)
 }
 
-// Subscribe registers a subscriber for userID. It fails with [ErrHubClosed] during shutdown.
+// Subscribe registers a subscriber for userID. It fails with [ErrHubClosed] during shutdown and
+// [ErrHubNotReady] before the source has started.
 func (h *Hub) Subscribe(userID string) (*Subscription, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
 		return nil, ErrHubClosed
+	}
+	if !h.isReady {
+		return nil, ErrHubNotReady
 	}
 	ch := make(chan Event, h.buffer)
 	s := &Subscription{UserID: userID, C: ch, ch: ch, hub: h, done: make(chan struct{})}

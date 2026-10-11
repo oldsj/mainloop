@@ -522,10 +522,22 @@ paths:
 
         The client should reconnect automatically on disconnect.
         EventSource handles this natively.
+
+        Stored events (everything except `connected` and `heartbeat`) carry an `id`. `connected` carries
+        the id the stream starts from; `heartbeat` has no `id`, so it never moves the client's resume point.
+        A reconnect with `Last-Event-ID` replays that user's missed events within the retention window;
+        a resume point outside it is treated as a fresh connection.
       operationId: getEvents
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: The `id` of the last event the client received; EventSource sends it on reconnect.
+          schema:
+            type: string
       responses:
         '200':
-          description: Server-sent event stream; each frame has `id`, `event` and a JSON `data` line.
+          description: Server-sent event stream; each frame has an `event` and a JSON `data` line, and stored events an `id`.
           content:
             text/event-stream:
               schema:
@@ -540,6 +552,12 @@ paths:
                   - $ref: '#/components/schemas/EventWorkspaceUpdated'
         '404':
           description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '503':
+          description: The server is starting or shutting down; EventSource retries.
           content:
             application/json:
               schema:

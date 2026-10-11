@@ -29,11 +29,22 @@ type sseEnv struct {
 	d      *testdb.DB
 	hub    *events.Hub
 	server *httptest.Server
+	srv    *app.Server
+	log    *slog.Logger
 }
 
 // newSSE serves the real owner API on a real listener over a migrated database, with the outbox
-// source running (poll only; the notifier is covered in the events package).
+// source running (poll only; the notifier is covered in the events package). It returns once the
+// source has opened the hub.
 func newSSE(t *testing.T, buffer int, heartbeat time.Duration) *sseEnv {
+	t.Helper()
+	e := newSSEWithoutSource(t, buffer, heartbeat)
+	e.startSource(t)
+	return e
+}
+
+// newSSEWithoutSource is newSSE with the source not started: the hub is not ready.
+func newSSEWithoutSource(t *testing.T, buffer int, heartbeat time.Duration) *sseEnv {
 	t.Helper()
 	d := testdb.New(t)
 	cfg, err := config.Parse(map[string]string{"AGENT_TOKEN_KEY": "k", "FRONTEND_DOMAIN": "mainloop.test", "MAINLOOP_API_HOSTS": "api.test"})
@@ -49,18 +60,27 @@ func newSSE(t *testing.T, buffer int, heartbeat time.Duration) *sseEnv {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(h)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	src := &events.Source{Pool: d.Pool, Hub: hub, Log: log, Poll: 20 * time.Millisecond}
-	go func() { defer close(done); _ = src.Run(ctx) }()
+	e := &sseEnv{d: d, hub: hub, server: ts, srv: srv, log: log}
 	t.Cleanup(func() {
 		hub.Close()
 		ts.Close()
-		cancel()
-		<-done
 	})
-	time.Sleep(100 * time.Millisecond) // the source reads its starting cursor
-	return &sseEnv{d: d, hub: hub, server: ts}
+	return e
+}
+
+// startSource runs the outbox source and waits until it has opened the hub.
+func (e *sseEnv) startSource(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	src := &events.Source{Pool: e.d.Pool, Hub: e.hub, Log: e.log, Poll: 20 * time.Millisecond}
+	go func() { defer close(done); _ = src.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-e.hub.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("source never became ready")
+	}
 }
 
 func (e *sseEnv) publish(t *testing.T, user string, typ events.Type, payload any) int64 {
@@ -376,5 +396,81 @@ func TestEventsWithoutAHubAnswer503(t *testing.T) {
 	r := send(h, "GET", "/events", "", nil)
 	if r.status != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d %s", r.status, r.body)
+	}
+}
+
+// Streams are refused until the source has its cursor. Before, a stream that connected and then
+// saw the source start would miss every event committed in between: not dispatched (the source
+// starts after them) and not replayed (the stream began before them).
+func TestSSERefusesStreamsUntilTheSourceIsReady(t *testing.T) {
+	e := newSSEWithoutSource(t, 16, time.Hour)
+	get := func() int {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, e.server.URL+"/events", nil)
+		req.Host = "api.test"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := get(); got != http.StatusServiceUnavailable {
+		t.Fatalf("before the source is ready: status = %d, want 503", got)
+	}
+	missed := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+	e.startSource(t)
+
+	// A client that retried with the id it last saw gets what it missed, then live events.
+	c := e.connect(t, itoa(missed-1))
+	if f := c.mustNext(); f.event != "connected" {
+		t.Fatalf("first frame = %+v", f)
+	}
+	if f := c.mustNext(); f.id != itoa(missed) {
+		t.Fatalf("replay = %+v, want the event published before the source started (%d)", f, missed)
+	}
+	later := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+	if f := c.mustNext(); f.id != itoa(later) {
+		t.Fatalf("live = %+v, want %d", f, later)
+	}
+}
+
+// Retention can overtake a replay in progress. The stream ends instead of going live with a hole,
+// and the client's next attempt (its resume point is now below the floor) starts fresh.
+func TestSSEEndsWhenPruningOvertakesTheReplay(t *testing.T) {
+	e := newSSE(t, 16, time.Hour)
+	first := e.publish(t, owner, events.TypeInboxUpdated, map[string]string{})
+	var ids []int64
+	for range 5 {
+		ids = append(ids, e.publish(t, owner, events.TypeInboxUpdated, map[string]string{}))
+	}
+	var once sync.Once
+	e.srv.SetReplay(2, func() {
+		once.Do(func() {
+			ctx := context.Background()
+			if _, err := e.d.Pool.Exec(ctx, `UPDATE events SET created_at = now() - interval '3 days'`); err != nil {
+				t.Error(err)
+			}
+			if _, err := events.Prune(ctx, e.d.Pool, time.Now().Add(-24*time.Hour)); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+
+	c := e.connect(t, itoa(first))
+	if f := c.mustNext(); f.event != "connected" || f.id != itoa(first) {
+		t.Fatalf("connected = %+v", f)
+	}
+	for _, id := range ids[:2] {
+		if f := c.mustNext(); f.id != itoa(id) {
+			t.Fatalf("replay = %+v, want %d", f, id)
+		}
+	}
+	if f, ok := c.next(5 * time.Second); ok {
+		t.Fatalf("got %+v; the stream should have ended when the floor passed the replay", f)
+	}
+
+	again := e.connect(t, itoa(first))
+	if f := again.mustNext(); f.event != "connected" || f.id != itoa(ids[len(ids)-1]) {
+		t.Fatalf("reconnect = %+v, want a fresh start at %d", f, ids[len(ids)-1])
 	}
 }

@@ -11,28 +11,32 @@ import (
 	"time"
 )
 
-const deleteEventsBefore = `-- name: DeleteEventsBefore :many
-DELETE FROM events WHERE created_at < $1 RETURNING id
+const deleteEventsBefore = `-- name: DeleteEventsBefore :one
+WITH doomed AS (
+    SELECT e.id FROM events e WHERE e.created_at < $1::timestamptz ORDER BY e.id LIMIT $2::int
+), deleted AS (
+    DELETE FROM events WHERE id IN (SELECT id FROM doomed) RETURNING id
+)
+SELECT count(*)::int AS deleted, coalesce(max(id), 0)::bigint AS max_id FROM deleted
 `
 
-func (q *Queries) DeleteEventsBefore(ctx context.Context, createdAt time.Time) ([]int64, error) {
-	rows, err := q.db.Query(ctx, deleteEventsBefore, createdAt)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []int64{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type DeleteEventsBeforeParams struct {
+	Cutoff time.Time
+	Batch  int32
+}
+
+type DeleteEventsBeforeRow struct {
+	Deleted int32
+	MaxID   int64
+}
+
+// Deletes at most @batch of the oldest events created before @cutoff and reports how many and the
+// newest id deleted.
+func (q *Queries) DeleteEventsBefore(ctx context.Context, arg DeleteEventsBeforeParams) (DeleteEventsBeforeRow, error) {
+	row := q.db.QueryRow(ctx, deleteEventsBefore, arg.Cutoff, arg.Batch)
+	var i DeleteEventsBeforeRow
+	err := row.Scan(&i.Deleted, &i.MaxID)
+	return i, err
 }
 
 const eventFloor = `-- name: EventFloor :one
@@ -47,13 +51,19 @@ func (q *Queries) EventFloor(ctx context.Context) (int64, error) {
 }
 
 const insertEvent = `-- name: InsertEvent :one
-INSERT INTO events (user_id, type, payload) VALUES ($1, $2, $3) RETURNING id, created_at
+WITH lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended($4::text, 0)) AS locked
+)
+INSERT INTO events (user_id, type, payload)
+SELECT $1::text, $2::text, $3::jsonb FROM lock
+RETURNING id, created_at
 `
 
 type InsertEventParams struct {
-	UserID  string
-	Type    string
-	Payload json.RawMessage
+	UserID   string
+	Type     string
+	Payload  json.RawMessage
+	LockName string
 }
 
 type InsertEventRow struct {
@@ -61,8 +71,15 @@ type InsertEventRow struct {
 	CreatedAt time.Time
 }
 
+// The outbox lock is taken inside the statement, before the identity value is drawn, so no caller
+// can insert out of commit order. Same key as db.XactLock(lock_name).
 func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (InsertEventRow, error) {
-	row := q.db.QueryRow(ctx, insertEvent, arg.UserID, arg.Type, arg.Payload)
+	row := q.db.QueryRow(ctx, insertEvent,
+		arg.UserID,
+		arg.Type,
+		arg.Payload,
+		arg.LockName,
+	)
 	var i InsertEventRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err

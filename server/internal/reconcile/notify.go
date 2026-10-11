@@ -21,6 +21,8 @@ type Notifier struct {
 	log  *slog.Logger
 	// Backoff paces reconnects.
 	Backoff Backoff
+	// PingInterval is how long the connection may be quiet before it is pinged.
+	PingInterval time.Duration
 
 	mu      sync.Mutex
 	started bool
@@ -31,7 +33,8 @@ type Notifier struct {
 func NewNotifier(pool *pgxpool.Pool, log *slog.Logger) *Notifier {
 	return &Notifier{
 		pool: pool, log: log, subs: map[string][]chan struct{}{},
-		Backoff: Backoff{Base: 250 * time.Millisecond, Max: 10 * time.Second, Jitter: 0.2},
+		Backoff:      Backoff{Base: 250 * time.Millisecond, Max: 10 * time.Second, Jitter: 0.2},
+		PingInterval: 30 * time.Second,
 	}
 }
 
@@ -124,13 +127,25 @@ func (n *Notifier) listen(ctx context.Context, channels []string) (listening boo
 	// Anything notified before LISTEN took effect is only in the tables.
 	n.wakeAll()
 	for {
-		note, err := conn.WaitForNotification(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return true, errors.Join(ctx.Err(), err)
+		wctx, cancel := context.WithTimeout(ctx, n.PingInterval)
+		note, err := conn.WaitForNotification(wctx)
+		cancel()
+		switch {
+		case err == nil:
+			n.wake(note.Channel)
+		case ctx.Err() != nil:
+			return true, errors.Join(ctx.Err(), err)
+		case errors.Is(err, context.DeadlineExceeded):
+			// Quiet for a while. A half-open connection would otherwise sit unnoticed until TCP
+			// gives up; a round trip finds out now (and a failure reconnects and catches up).
+			pctx, pcancel := context.WithTimeout(ctx, n.PingInterval)
+			err := conn.Ping(pctx)
+			pcancel()
+			if err != nil {
+				return true, fmt.Errorf("ping: %w", err)
 			}
+		default:
 			return true, err
 		}
-		n.wake(note.Channel)
 	}
 }

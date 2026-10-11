@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/db"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -54,7 +55,7 @@ func fromRow(id int64, userID, typ string, payload json.RawMessage, at time.Time
 // Publish writes an event for userID in tx and signals listeners when tx commits. payload is
 // marshalled to a JSON object matching the event's schema in the contract. It returns the id.
 //
-// Call it last in the transaction (see the package comment).
+// Call it last in the transaction, or use [InTxPublish], which does (see the package comment).
 func Publish(ctx context.Context, tx pgx.Tx, userID string, typ Type, payload any) (int64, error) {
 	if userID == "" {
 		return 0, errors.New("events: publish: empty user id")
@@ -69,11 +70,9 @@ func Publish(ctx context.Context, tx pgx.Tx, userID string, typ Type, payload an
 	if len(body) == 0 || body[0] != '{' {
 		return 0, fmt.Errorf("events: publish %s: payload must be a JSON object", typ)
 	}
-	if err := db.XactLock(ctx, tx, lockName); err != nil {
-		return 0, err
-	}
 	q := dbq.New(tx)
-	row, err := q.InsertEvent(ctx, dbq.InsertEventParams{UserID: userID, Type: string(typ), Payload: body})
+	// The insert takes the outbox lock itself, before the id is drawn.
+	row, err := q.InsertEvent(ctx, dbq.InsertEventParams{UserID: userID, Type: string(typ), Payload: body, LockName: lockName})
 	if err != nil {
 		return 0, fmt.Errorf("events: publish %s: %w", typ, err)
 	}
@@ -81,4 +80,30 @@ func Publish(ctx context.Context, tx pgx.Tx, userID string, typ Type, payload an
 		return 0, fmt.Errorf("events: notify: %w", err)
 	}
 	return row.ID, nil
+}
+
+// Draft is an event a domain function wants published with its change.
+type Draft struct {
+	UserID  string
+	Type    Type
+	Payload any
+}
+
+// InTxPublish runs a domain change and publishes its events in one transaction. fn does the
+// domain writes and returns the events they imply; they are published after fn returns, as the
+// last statements before commit, which is where the outbox lock must be taken. Domain slices use
+// this instead of calling [Publish] themselves.
+func InTxPublish(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) ([]Draft, error)) error {
+	return db.InTx(ctx, pool, func(tx pgx.Tx) error {
+		drafts, err := fn(tx)
+		if err != nil {
+			return err
+		}
+		for _, d := range drafts {
+			if _, err := Publish(ctx, tx, d.UserID, d.Type, d.Payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

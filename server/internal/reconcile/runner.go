@@ -88,12 +88,21 @@ type Runner struct {
 	loops    []Loop
 	sweeps   []Sweep
 	wakes    [][]<-chan struct{}
+
+	// extend pushes a claim's lease; a field so tests can stall it.
+	extend func(ctx context.Context, c Claim, d time.Duration) (time.Time, error)
+	// afterClaim runs after each claim returns; a test hook.
+	afterClaim func()
 }
 
 // NewRunner builds a Runner. notifier may be nil, which leaves only the poll. Add loops before
 // Run; Notifier subscriptions are taken by Add, so the Notifier must not be running yet.
 func NewRunner(pool *pgxpool.Pool, log *slog.Logger, notifier *Notifier) *Runner {
-	return &Runner{pool: pool, log: log, notifier: notifier, owner: newOwner()}
+	r := &Runner{pool: pool, log: log, notifier: notifier, owner: newOwner()}
+	r.extend = func(ctx context.Context, c Claim, d time.Duration) (time.Time, error) {
+		return c.Extend(ctx, r.pool, d)
+	}
+	return r
 }
 
 // Owner is the lease owner name this runner claims under.
@@ -175,9 +184,16 @@ func (r *Runner) runLoop(ctx context.Context, l Loop, wakes []<-chan struct{}) {
 		free := l.Concurrency - len(slots)
 		wait := l.Interval
 		if free > 0 {
+			sent := time.Now() // before the claim is sent: the lease runs from no earlier than this
 			claims, err := l.Table.Claim(ctx, r.pool, r.owner, l.Lease, free)
+			if r.afterClaim != nil {
+				r.afterClaim()
+			}
 			switch {
 			case ctx.Err() != nil:
+				// Shutting down with rows already leased: hand them back instead of making the
+				// next process wait out the lease.
+				r.release(ctx, log, claims)
 				return
 			case err != nil:
 				failures++
@@ -195,7 +211,7 @@ func (r *Runner) runLoop(ctx context.Context, l Loop, wakes []<-chan struct{}) {
 							default:
 							}
 						}()
-						r.handle(ctx, l, log, c)
+						r.handle(ctx, l, log, c, sent)
 					})
 				}
 				if len(claims) == free {
@@ -227,11 +243,11 @@ func (l Loop) withDefaults() Loop {
 }
 
 // handle runs the handler for one claim with a lease keepalive, then records the outcome.
-func (r *Runner) handle(ctx context.Context, l Loop, log *slog.Logger, c Claim) {
+func (r *Runner) handle(ctx context.Context, l Loop, log *slog.Logger, c Claim, claimSent time.Time) {
 	log = log.With("id", c.ID, "attempt", c.Attempts)
 	hctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stopKeepalive := r.keepalive(hctx, cancel, l.Lease, log, c)
+	stopKeepalive := r.keepalive(hctx, cancel, l.Lease, log, c, claimSent)
 	out, err := runHandler(hctx, l.Handle, c)
 	stopKeepalive()
 	if err != nil {
@@ -274,35 +290,73 @@ func runHandler(ctx context.Context, h Handler, c Claim) (out Outcome, err error
 	return h(ctx, c)
 }
 
+// release makes claimed rows due again at once.
+func (r *Runner) release(ctx context.Context, log *slog.Logger, claims []Claim) {
+	if len(claims) == 0 {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	for _, c := range claims {
+		if err := c.RetryAfter(rctx, r.pool, 0); err != nil && !errors.Is(err, ErrLeaseLost) {
+			log.WarnContext(ctx, "could not release a claim on shutdown", "id", c.ID, "error", err)
+		}
+	}
+}
+
 // keepalive extends the lease every third of a lease until the returned stop function is called.
-// If the lease is lost it cancels the handler.
-func (r *Runner) keepalive(ctx context.Context, cancel context.CancelFunc, lease time.Duration, log *slog.Logger, c Claim) (stop func()) {
-	done := make(chan struct{})
+//
+// It fences the handler on local time: a lease confirmed by an Extend sent at T holds until
+// T+lease, so when that passes with no newer confirmation (the database is unreachable, or an
+// Extend hangs) the handler is cancelled before the lease can have expired for another claimer;
+// the fence is a tenth of a lease early to cover the cancellation itself. Each Extend is bounded
+// by the time left until the fence. If the lease is lost outright the handler is cancelled too.
+func (r *Runner) keepalive(ctx context.Context, cancel context.CancelFunc, lease time.Duration, log *slog.Logger, c Claim, claimSent time.Time) (stop func()) {
+	kctx, kcancel := context.WithCancel(ctx)
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
+		margin := lease / 10
+		fence := claimSent.Add(lease - margin) // monotonic clock
 		t := time.NewTicker(lease / 3)
 		defer t.Stop()
 		for {
+			expired := time.NewTimer(time.Until(fence))
 			select {
-			case <-done:
+			case <-kctx.Done():
+				expired.Stop()
 				return
-			case <-ctx.Done():
+			case <-expired.C:
+				log.ErrorContext(kctx, "lease could not be confirmed in time; cancelling the handler")
+				cancel()
 				return
 			case <-t.C:
-				_, err := c.Extend(ctx, r.pool, lease)
-				if errors.Is(err, ErrLeaseLost) {
-					log.WarnContext(ctx, "lease lost while handling", "error", err)
-					cancel()
-					return
-				}
-				if err != nil && ctx.Err() == nil {
-					log.WarnContext(ctx, "lease extension failed", "error", err)
-				}
+				expired.Stop()
+			}
+			sent := time.Now()
+			ectx, ecancel := context.WithDeadline(kctx, fence)
+			_, err := r.extend(ectx, c, lease)
+			ecancel()
+			switch {
+			case err == nil:
+				fence = sent.Add(lease - margin)
+			case kctx.Err() != nil:
+				return
+			case errors.Is(err, ErrLeaseLost):
+				log.WarnContext(kctx, "lease lost while handling", "error", err)
+				cancel()
+				return
+			default:
+				log.WarnContext(kctx, "lease extension failed", "error", err)
+			}
+			if !time.Now().Before(fence) {
+				log.ErrorContext(kctx, "lease could not be confirmed in time; cancelling the handler")
+				cancel()
+				return
 			}
 		}
 	}()
-	return func() { close(done); <-finished }
+	return func() { kcancel(); <-finished }
 }
 
 func (r *Runner) runSweep(ctx context.Context, s Sweep) {

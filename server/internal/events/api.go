@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/oldsj/mainloop/server/internal/api"
@@ -37,30 +38,48 @@ type EventsAPI struct {
 	// heartbeat is HeartbeatInterval, shortened by tests.
 	heartbeat time.Duration
 	now       func() time.Time
+
+	replayBatchSize int
+	afterBatch      func() // test hook, runs between replay batches
 }
 
 // NewAPI builds the handler. pool and hub may be nil (a process that does not serve events), in
 // which case GET /events answers 503.
 func NewAPI(pool *pgxpool.Pool, hub *Hub, log *slog.Logger, ownerID string) *EventsAPI {
-	return &EventsAPI{pool: pool, hub: hub, log: log, userID: ownerID, heartbeat: HeartbeatInterval, now: time.Now}
+	return &EventsAPI{pool: pool, hub: hub, log: log, userID: ownerID, heartbeat: HeartbeatInterval, now: time.Now, replayBatchSize: replayBatch}
 }
 
 // SetHeartbeat overrides the heartbeat interval. For tests.
 func (a *EventsAPI) SetHeartbeat(d time.Duration) { a.heartbeat = d }
 
-type lastEventIDKey struct{}
+// SetReplay overrides the replay batch size and sets a hook that runs between batches. For tests.
+func (a *EventsAPI) SetReplay(batch int, afterBatch func()) {
+	a.replayBatchSize, a.afterBatch = batch, afterBatch
+}
 
-// CaptureLastEventID is a strict-server middleware that hands the Last-Event-ID header to
-// GetEvents. The contract does not declare the header (EventSource sends it on its own), so the
-// generated request object does not carry it.
-func CaptureLastEventID(next api.StrictHandlerFunc, operationID string) api.StrictHandlerFunc {
-	if operationID != "GetEvents" {
-		return next
+// errWindowMoved: retention pruned events the replay still needed.
+var errWindowMoved = errors.New("events: retention window moved past the resume point")
+
+// replayBatch reads the next batch of the user's events after `after`. The retention floor is read
+// in the same snapshot: events are only ever pruned from the bottom, so floor <= after means every
+// stored event above `after` is present in this batch's view. A floor above `after` means pruning
+// overtook the replay; the stream then ends, and since the client's resume point is below the
+// floor it starts fresh on reconnect rather than skipping the pruned events.
+func (a *EventsAPI) replayBatch(ctx context.Context, userID string, after int64) ([]dbq.Event, error) {
+	tx, err := a.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
 	}
-	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
-		ctx = context.WithValue(ctx, lastEventIDKey{}, r.Header.Get("Last-Event-ID"))
-		return next(ctx, w, r, request)
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	q := dbq.New(tx)
+	floor, err := q.EventFloor(ctx)
+	if err != nil {
+		return nil, err
 	}
+	if floor > after {
+		return nil, errWindowMoved
+	}
+	return q.ListUserEventsAfter(ctx, dbq.ListUserEventsAfterParams{UserID: userID, ID: after, Limit: int32(a.replayBatchSize)}) //nolint:gosec // small constant
 }
 
 // stream is the response of GetEvents: it writes frames until the stream ends.
@@ -74,7 +93,7 @@ func (s stream) VisitGetEventsResponse(w http.ResponseWriter) error {
 }
 
 // GetEvents implements the contract operation. See the package comment for the rules.
-func (a *EventsAPI) GetEvents(ctx context.Context, _ api.GetEventsRequestObject) (api.GetEventsResponseObject, error) {
+func (a *EventsAPI) GetEvents(ctx context.Context, req api.GetEventsRequestObject) (api.GetEventsResponseObject, error) {
 	if a.pool == nil || a.hub == nil {
 		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
 	}
@@ -82,9 +101,14 @@ func (a *EventsAPI) GetEvents(ctx context.Context, _ api.GetEventsRequestObject)
 	// subscription, and one dispatched before it is committed and so visible to the reads below.
 	sub, err := a.hub.Subscribe(a.userID)
 	if err != nil {
-		return nil, httpx.NewError(http.StatusServiceUnavailable, "Shutting down")
+		// Not ready (the outbox reader is starting) or closed (shutting down): EventSource retries.
+		return nil, httpx.NewError(http.StatusServiceUnavailable, "Events unavailable")
 	}
-	start, err := a.start(ctx)
+	lastEventID := ""
+	if req.Params.LastEventID != nil {
+		lastEventID = *req.Params.LastEventID
+	}
+	start, err := a.start(ctx, lastEventID)
 	if err != nil {
 		sub.Close()
 		a.log.ErrorContext(ctx, "events: start stream", "request_id", httpx.RequestID(ctx), "error", err)
@@ -108,14 +132,13 @@ type streamStart struct {
 }
 
 // start decides, from Last-Event-ID and the outbox, whether to resume or begin fresh.
-func (a *EventsAPI) start(ctx context.Context) (streamStart, error) {
+func (a *EventsAPI) start(ctx context.Context, raw string) (streamStart, error) {
 	q := dbq.New(a.pool)
 	latest, err := q.LatestEventID(ctx)
 	if err != nil {
 		return streamStart{}, err
 	}
 	fresh := streamStart{connectedID: latest, after: latest}
-	raw, _ := ctx.Value(lastEventIDKey{}).(string)
 	if raw == "" {
 		return fresh, nil
 	}
@@ -178,9 +201,8 @@ func (a *EventsAPI) serve(ctx context.Context, w http.ResponseWriter, sub *Subsc
 	}
 
 	if st.replay {
-		q := dbq.New(a.pool)
 		for {
-			rows, err := q.ListUserEventsAfter(ctx, dbq.ListUserEventsAfterParams{UserID: sub.UserID, ID: lastSent, Limit: replayBatch})
+			rows, err := a.replayBatch(ctx, sub.UserID, lastSent)
 			if err != nil {
 				if ctx.Err() == nil {
 					a.log.WarnContext(ctx, "events: replay failed; the client will reconnect", "error", err)
@@ -193,8 +215,11 @@ func (a *EventsAPI) serve(ctx context.Context, w http.ResponseWriter, sub *Subsc
 				}
 				lastSent = r.ID
 			}
-			if len(rows) < replayBatch {
+			if len(rows) < a.replayBatchSize {
 				break
+			}
+			if a.afterBatch != nil {
+				a.afterBatch()
 			}
 			select {
 			case <-ctx.Done():

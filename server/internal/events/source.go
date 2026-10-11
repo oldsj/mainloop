@@ -31,7 +31,9 @@ type Source struct {
 }
 
 // Run dispatches until ctx is cancelled. Events committed before it started are not dispatched;
-// they are replay material only.
+// they are replay material only. It marks the hub ready once it has read its starting cursor: the
+// hub refuses streams until then, so no stream can connect in a window where events go neither to
+// it (not dispatched yet) nor to its replay (it started after them).
 func (s *Source) Run(ctx context.Context) error {
 	poll := s.Poll
 	if poll <= 0 {
@@ -44,6 +46,7 @@ func (s *Source) Run(ctx context.Context) error {
 			id, err := dbq.New(s.Pool).LatestEventID(ctx)
 			if err == nil {
 				s.cursor, s.ready = id, true
+				s.Hub.MarkReady()
 				break
 			}
 			if !s.wait(ctx, &failures, err, backoff) {
@@ -77,6 +80,8 @@ func (s *Source) wait(ctx context.Context, failures *int, err error, b reconcile
 	select {
 	case <-ctx.Done():
 		return false
+	case <-s.Wake: // a wake (the listener reconnected) is a reason to try again now
+		return true
 	case <-time.After(b.Delay(*failures)):
 		return true
 	}

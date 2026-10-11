@@ -27,6 +27,22 @@
 // expires and the next claim picks the row up again with attempts one higher. Outcomes are
 // fenced on (lease_owner, attempts): a claimer that lost its lease cannot record anything
 // ([ErrLeaseLost]). A handler that runs longer than the lease has it extended by a keepalive.
+// The keepalive also fences the handler on local time: if it cannot confirm the lease (the database
+// is unreachable, an extension stalls) before the last confirmed lease runs out, the handler's
+// context is cancelled, so it stops before another claimer can take the row. Rows claimed as the
+// process shuts down are released at once.
+//
+// # The claim index
+//
+// A claim scans for due rows in a non-final state. Give each intent table a partial index that
+// holds only the claimable states, ordered the way claims read them, so finished rows (the vast
+// majority over time) cost nothing:
+//
+//	CREATE INDEX <table>_claim ON <table> (next_attempt_at, id)
+//	    WHERE state IN ('pending', 'retrying');   -- the non-final states
+//
+// The predicate must list the same states as the [Table]'s claimable states. The test table in
+// reconcile_test.go carries a worked example.
 //
 // # Uncertain outcomes
 //

@@ -37,7 +37,8 @@ Stored events are kept for 24 hours by default (`MAINLOOP_EVENTS_RETENTION_HOURS
 records the newest pruned id. A resume point older than that, or newer than the newest event
 (the database was reset), or not a number, is treated like a fresh connection: nothing is
 replayed and the new `connected` frame tells the client to re-read its state. The web client
-already refetches everything on every reconnect.
+already refetches everything on every reconnect. If retention prunes past a replay that is still
+running, the stream ends and the next attempt starts fresh.
 
 ## Delivery and back-pressure
 
@@ -52,7 +53,8 @@ already refetches everything on every reconnect.
   and the browser reconnects with `Last-Event-ID` and is replayed from the outbox. A client that
   stops reading entirely is cut off by a 15-second write deadline.
 - On server shutdown every stream ends at once and new streams get `503`, so graceful shutdown
-  does not wait out open connections.
+  does not wait out open connections. New streams also get `503` while the server is starting,
+  until the outbox reader has its starting position; the browser retries.
 
 ## Background work
 
