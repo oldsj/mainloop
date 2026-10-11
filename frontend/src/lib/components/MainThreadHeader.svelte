@@ -113,7 +113,7 @@
         <option value="claude">Claude</option>
         <option value="codex">Codex</option>
       </select>
-      <span id="main-provider-state" role="status" class="min-w-0 break-words">
+      <span id="main-provider-state" role="status" class="text-term-fg min-w-0 break-words">
         {#if selectingProvider}Selecting provider…
         {:else if $connection.status === 'offline'}Offline — selection unavailable
         {:else if providerUnconfirmed}Provider state unconfirmed
@@ -135,7 +135,7 @@
           {info.provider.recoverable ? 'Restart failed selection' : 'Retry failed selection'}
         </button>
       {/if}
-      <p id="main-provider-help" class="w-full">
+      <p id="main-provider-help" class="text-term-fg w-full">
         Conversation and tasks stay. Switching starts a fresh native session; prior native history
         is retained.
       </p>
