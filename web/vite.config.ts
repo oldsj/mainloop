@@ -9,7 +9,17 @@ import { defineConfig } from 'vite';
 const apiProxy = process.env.MAINLOOP_API_PROXY ?? 'http://127.0.0.1:8000';
 
 export default defineConfig({
-  plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
+  plugins: [
+    // semicolons and quoteStyle match what the file already holds, so the plugin's output is stable
+    tanstackRouter({
+      target: 'react',
+      autoCodeSplitting: true,
+      semicolons: true,
+      quoteStyle: 'single'
+    }),
+    react(),
+    tailwindcss()
+  ],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
   },
@@ -30,6 +40,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'eslint-rules/*.test.js'],
-    css: false
+    css: false,
+    // Absolute, so requests resolve to a real URL under jsdom and MSW can match them.
+    env: { VITE_API_URL: 'http://localhost:3000/api' }
   }
 });

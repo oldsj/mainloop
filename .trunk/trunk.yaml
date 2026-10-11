@@ -42,6 +42,10 @@ lint:
     - linters: [hadolint, terrascan]
       paths:
         - '**/*Dockerfile*'
+    # Written by the TanStack Router plugin on every vite run; its output is committed as written
+    - linters: [ALL]
+      paths:
+        - web/src/routeTree.gen.ts
   enabled:
     - bandit@1.9.2
     - black@25.12.0

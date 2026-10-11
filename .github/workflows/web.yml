@@ -54,9 +54,17 @@ jobs:
       - name: Build
         working-directory: web
         run: node_modules/.bin/vite build
-      - name: Route tree is up to date
-        # The router plugin rewrites routeTree.gen.ts during the build.
-        run: git diff --exit-code -- web/src/routeTree.gen.ts
+      - name: Build and tests left the tree clean
+        # The router plugin rewrites routeTree.gen.ts on every vite run and writes it in the style
+        # committed here; a diff means the committed file is stale. `git diff` alone would miss
+        # new untracked files.
+        run: |
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "$status"
+            git diff
+            exit 1
+          fi
 
   drift:
     name: Generated files are current
@@ -78,7 +86,13 @@ jobs:
       - name: Regenerate theme and design system
         run: node web/design/build.ts
       - name: No generated file changed
-        run: git diff --exit-code
+        run: |
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "$status"
+            git diff
+            exit 1
+          fi
 
   serve:
     name: Static server
