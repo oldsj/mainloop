@@ -42,6 +42,7 @@ from mainloop.runtime.kagent_client import (
     KagentError,
     KagentSession,
     OutcomeUnknown,
+    PreparationTimestamp,
     RuntimeOperation,
     RuntimeState,
     SendNotAccepted,
@@ -57,8 +58,16 @@ from mainloop.runtime.kagent_client import (
 from mainloop.runtime.standing import content_hash
 from mainloop.sse import notify_session_message
 from mainloop.tasks import lifecycle
+from pydantic import ValidationError
 
 from models import NativeDeliveryInfo, NativeSessionInfo, SessionStatus
+from models.session import (
+    NativePreparationActionInfo,
+    NativePreparationObservation,
+    NativePreparationReceiptInfo,
+    NativePreparationTimestamp,
+    NativeRuntimeAssociationInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2499,6 +2508,78 @@ async def reconcile_loop(interval: float = 3.0) -> None:
         await asyncio.sleep(interval)
 
 
+def _preparation_time(
+    value: PreparationTimestamp | None,
+) -> NativePreparationTimestamp | None:
+    return (
+        NativePreparationTimestamp(seconds=value.seconds, nanos=value.nanos)
+        if value is not None
+        else None
+    )
+
+
+def _preparation_observation(runtime: KagentSession) -> NativePreparationObservation:
+    """Project explicit safe fields only; never serialize the runtime or original request."""
+    association = runtime.runtime_association
+    saved = runtime.workspace_preparation
+    receipt = None
+    receipt_status = "missing" if saved is None else "unavailable"
+    # A foreign nested receipt is neither this Session's evidence nor owner-visible data.
+    if (
+        saved is not None
+        and saved.original.session_id == runtime.id
+        and saved.context_id == runtime.context_id
+    ):
+        original = saved.original
+        try:
+            receipt = NativePreparationReceiptInfo(
+                original=NativePreparationActionInfo(
+                    session_id=original.session_id,
+                    action_id=original.action_id or None,
+                    create_request_id=original.create_request_id or None,
+                    generation_id=original.generation_id or None,
+                    actor_uid=original.actor_uid or None,
+                    prepared_revision=original.prepared_revision or None,
+                    setup_profile=original.setup_profile or None,
+                    setup_digest=original.setup_digest or None,
+                ),
+                context_id=saved.context_id,
+                classification=saved.classification or None,
+                historical=saved.historical,
+                challenge_id=saved.challenge_id or None,
+                observation_sequence=saved.observation_sequence,
+                effect_observed_at=_preparation_time(saved.effect_observed_at),
+                observed_at=_preparation_time(saved.observed_at),
+            )
+            receipt_status = "observed"
+        except ValidationError:
+            # Retain the valid runtime observation without leaking invalid values/errors.
+            pass
+    try:
+        return NativePreparationObservation(
+            session_id=runtime.id,
+            context_id=runtime.context_id,
+            context_confirmed=runtime.context_confirmed,
+            state=runtime.state.name.lower(),
+            operation=runtime.operation.name.lower(),
+            prepared_revision=runtime.prepared_revision or None,
+            runtime_association=(
+                NativeRuntimeAssociationInfo(
+                    generation_id=association.generation_id,
+                    actor_uid=association.actor_uid,
+                    phase=association.phase,
+                    current_active=association.current_active,
+                )
+                if association is not None
+                else None
+            ),
+            receipt_status=receipt_status,
+            receipt=receipt,
+        )
+    except ValidationError as exc:
+        raise OutcomeUnknown("Malformed kagent preparation observation") from exc
+
+
 async def identity(session_id: str) -> NativeSessionInfo | None:
     binding = await get_binding(session_id)
     if binding is None:
@@ -2519,11 +2600,12 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         for r in rows
     ]
     state, note = None, None
+    preparation_observation = None
     if binding["kagent_session_id"]:
         try:
-            state = (
-                await get_client().get_session(binding["kagent_session_id"])
-            ).state.name.lower()
+            runtime = await get_client().get_session(binding["kagent_session_id"])
+            state = runtime.state.name.lower()
+            preparation_observation = _preparation_observation(runtime)
         except Unreachable as exc:
             note = f"kagent unreachable: {exc}"
         except KagentError as exc:
@@ -2539,6 +2621,7 @@ async def identity(session_id: str) -> NativeSessionInfo | None:
         agent_name=(await binding_agent_ref(binding)).name,
         kagent_session_id=binding["kagent_session_id"],
         session_state=state,
+        preparation_observation=preparation_observation,
         model=binding["model"],
         turns=binding["turns"],
         turn_in_flight=any(d.state in OPEN_STATES for d in deliveries),
