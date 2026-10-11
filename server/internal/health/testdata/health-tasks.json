@@ -1,0 +1,404 @@
+[
+  {
+    "id": "health-turn-1",
+    "contextId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "status": {
+      "state": "completed"
+    },
+    "artifacts": [
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:1",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:1",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 1,
+              "kind": "turn",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "turn": {
+                "state": "started",
+                "coverage": "partial"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:2",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:2",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 2,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "1111111111111111111111111111111111111111111111111111111111111111",
+                "phase": "started",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "unknown",
+                "category": "none"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:3",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:3",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 3,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "1111111111111111111111111111111111111111111111111111111111111111",
+                "phase": "finished",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "error",
+                "category": "mcp_error"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:4",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:4",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 4,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "2222222222222222222222222222222222222222222222222222222222222222",
+                "phase": "started",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "unknown",
+                "category": "none"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:5",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:5",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 5,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "2222222222222222222222222222222222222222222222222222222222222222",
+                "phase": "finished",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "error",
+                "category": "mcp_error"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:6",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:6",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 6,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "3333333333333333333333333333333333333333333333333333333333333333",
+                "phase": "started",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "unknown",
+                "category": "none"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:7",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:7",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 7,
+              "kind": "tool",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "tool": {
+                "call_key": "3333333333333333333333333333333333333333333333333333333333333333",
+                "phase": "finished",
+                "tool_class": "mcp",
+                "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "action": "other",
+                "path": null,
+                "outcome": "error",
+                "category": "mcp_error"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:8",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:8",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 8,
+              "kind": "usage",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "usage": {
+                "scope": "turn",
+                "basis": "turn_total",
+                "inclusion": "tree_inclusive",
+                "sample_key": "22222222-2222-4222-8222-222222222222",
+                "revision": 1,
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "coverage": "complete"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "22222222-2222-4222-8222-222222222222:9",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "22222222-2222-4222-8222-222222222222:9",
+              "producer_epoch": "22222222-2222-4222-8222-222222222222",
+              "sequence": 9,
+              "kind": "turn",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "22222222-2222-4222-8222-222222222222",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-1",
+              "turn": {
+                "state": "finished",
+                "coverage": "complete"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "health-turn-2",
+    "contextId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "status": {
+      "state": "completed"
+    },
+    "artifacts": [
+      {
+        "artifactId": "33333333-3333-4333-8333-333333333333:1",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "33333333-3333-4333-8333-333333333333:1",
+              "producer_epoch": "33333333-3333-4333-8333-333333333333",
+              "sequence": 1,
+              "kind": "turn",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "33333333-3333-4333-8333-333333333333",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-2",
+              "turn": {
+                "state": "started",
+                "coverage": "partial"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "33333333-3333-4333-8333-333333333333:2",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "33333333-3333-4333-8333-333333333333:2",
+              "producer_epoch": "33333333-3333-4333-8333-333333333333",
+              "sequence": 2,
+              "kind": "usage",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "33333333-3333-4333-8333-333333333333",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-2",
+              "usage": {
+                "scope": "turn",
+                "basis": "turn_total",
+                "inclusion": "tree_inclusive",
+                "sample_key": "33333333-3333-4333-8333-333333333333",
+                "revision": 1,
+                "input_tokens": 4,
+                "output_tokens": 1,
+                "coverage": "complete"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "artifactId": "33333333-3333-4333-8333-333333333333:3",
+        "name": "kagent.dev/orchestration-health/v1",
+        "parts": [
+          {
+            "data": {
+              "schema_version": "kagent.dev/orchestration-health/v1",
+              "event_id": "33333333-3333-4333-8333-333333333333:3",
+              "producer_epoch": "33333333-3333-4333-8333-333333333333",
+              "sequence": 3,
+              "kind": "turn",
+              "occurred_at": "2026-10-10T12:00:00Z",
+              "time_source": "adapter_observed",
+              "time_precision": "nanosecond",
+              "provider": "claude",
+              "runtime_version": "2.1.260",
+              "source": "claude_result_stream",
+              "turn_key": "33333333-3333-4333-8333-333333333333",
+              "runtime_session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "a2a_task_id": "health-turn-2",
+              "turn": {
+                "state": "finished",
+                "coverage": "complete"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

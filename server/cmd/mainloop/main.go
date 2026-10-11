@@ -21,6 +21,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/events"
 	"github.com/oldsj/mainloop/server/internal/github"
 	"github.com/oldsj/mainloop/server/internal/gittransport"
+	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/kagent"
@@ -151,6 +152,10 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	deps.HITL = hitlSvc
 	attn := &attention.Service{Pool: pool, OwnerID: cfg.Identity.OwnerID, Log: log}
 	deps.Attention = attn
+	healthSvc := health.NewService(cfg, pool, log)
+	healthSvc.Kagent = kc
+	healthSvc.Agents = svc
+	deps.Health = healthSvc
 	previews, err := preview.New(cfg, pool, wsSvc, log)
 	if err != nil {
 		return err
@@ -189,6 +194,8 @@ func serveAPI(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	runner.Add(hitlSvc.ResponseLoop())
 	runner.AddSweep(hitlSvc.ObserverSweep())
 	runner.AddSweep(attn.Sweep())
+	runner.AddSweep(healthSvc.RecoverSweep())
+	runner.AddSweep(healthSvc.RetainSweep())
 	previews.Register(runner)
 
 	g.Go(func() error { return notifier.Run(gctx) })

@@ -198,6 +198,60 @@ type GitPushGrant struct {
 	RevokedAt     *time.Time
 }
 
+type HealthCollection struct {
+	OwnerID       string
+	Gateway       string
+	SessionID     string
+	A2aTaskID     string
+	DeliveryID    string
+	ReceiptAt     time.Time
+	ProjectID     *string
+	State         string
+	Reasons       []string
+	Attempts      int32
+	NextAttemptAt time.Time
+	CollectedAt   *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type HealthEvent struct {
+	OwnerID          string
+	Gateway          string
+	EventID          string
+	ProducerEpoch    string
+	Sequence         int64
+	SessionID        string
+	RuntimeSessionID string
+	A2aTaskID        string
+	ProjectID        *string
+	TaskID           *string
+	AttemptID        *string
+	ProfileRevision  *string
+	TurnKey          string
+	OccurredAt       time.Time
+	ReceivedAt       time.Time
+	Payload          json.RawMessage
+}
+
+type HealthTurn struct {
+	OwnerID            string
+	Gateway            string
+	SessionID          string
+	A2aTaskID          string
+	TurnKey            string
+	RuntimeSessionID   string
+	ProjectID          *string
+	TaskID             *string
+	AttemptID          *string
+	ProfileRevision    *string
+	Provider           string
+	OccurredAt         time.Time
+	Summary            json.RawMessage
+	AggregationVersion int32
+	Frozen             bool
+}
+
 type HitlDiagnostic struct {
 	ID               int64
 	OwnerID          string

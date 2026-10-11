@@ -14,6 +14,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/config"
 	"github.com/oldsj/mainloop/server/internal/environments"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/health"
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/preview"
@@ -47,6 +48,7 @@ type Server struct {
 	*tasks.TasksAPI
 	*hitl.API
 	*attention.AttentionAPI
+	*health.DataAPI
 
 	fallback
 
@@ -87,6 +89,9 @@ type Deps struct {
 	// Attention is the owner's inbox. Nil builds one over Pool; the task-decision sweep runs only
 	// where the caller registers it.
 	Attention *attention.Service
+	// Health serves orchestration health and the smoke ledger. Nil builds one over Pool with no
+	// kagent client: it serves what is stored and collects nothing.
+	Health *health.Service
 }
 
 // maxBodyBytes caps request bodies. The validator buffers the whole body before any handler runs,
@@ -118,6 +123,7 @@ func New(d Deps) *Server {
 		TasksAPI:        &tasks.TasksAPI{Svc: taskSvc, OwnerID: d.Config.Identity.OwnerID},
 		API:             hitl.NewAPI(hitlService(d)),
 		AttentionAPI:    attention.NewAPI(att),
+		DataAPI:         health.NewAPI(healthService(d)),
 		deps:            d,
 		initErr:         err,
 	}
@@ -187,4 +193,11 @@ func attentionService(d Deps) *attention.Service {
 		return d.Attention
 	}
 	return &attention.Service{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID, Log: d.Log}
+}
+
+func healthService(d Deps) *health.Service {
+	if d.Health != nil {
+		return d.Health
+	}
+	return health.NewService(d.Config, d.Pool, d.Log)
 }
