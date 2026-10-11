@@ -90,14 +90,14 @@ function ProviderRow({
       <span data-testid="mt-provider-effective">
         effective: {current?.effective_provider ? providerLabel(current.effective_provider) : 'none confirmed'}
       </span>
-      <span className="text-foreground" data-testid="mt-provider-status">
+      <span className="text-foreground" role="status" data-testid="mt-provider-status">
         {words}
       </span>
       {provider.retryOffered ? (
         <button
           type="button"
           className={buttonClass}
-          disabled={provider.switchBlocked}
+          disabled={provider.retryBlocked}
           onClick={provider.retry}
           data-testid="mt-provider-retry"
         >

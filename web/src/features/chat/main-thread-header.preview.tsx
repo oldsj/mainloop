@@ -13,6 +13,7 @@ const idleControl: MainProviderControl = {
   selecting: false,
   unconfirmed: false,
   switchBlocked: false,
+  retryBlocked: false,
   notice: null,
   retryOffered: false,
   restartOffered: false,

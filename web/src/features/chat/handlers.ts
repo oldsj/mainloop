@@ -59,6 +59,8 @@ export interface ChatBackendState {
   stopped: string[];
   /** How many times `GET /main-thread` was read. */
   mainThreadReads: number;
+  /** How many times `GET /main-thread/provider` was read, failed reads included. */
+  providerReads: number;
   /** The next `POST /chat` is refused this way, then the field clears. */
   rejectNextChat: Refusal | null;
   /** The next send, to either route, loses its reply. The flag clears after one send. */
@@ -135,6 +137,7 @@ export function createChatBackend(
     sessionPosts: {},
     stopped: [],
     mainThreadReads: 0,
+    providerReads: 0,
     rejectNextChat: null,
     lostSend: null,
     sessionThreads: {},
@@ -268,6 +271,7 @@ export function createChatBackend(
       return HttpResponse.json(state.mainThread);
     }),
     http.get(url('/main-thread/provider'), () => {
+      state.providerReads += 1;
       if (state.failProviderReads > 0) {
         state.failProviderReads -= 1;
         return HttpResponse.error();

@@ -950,6 +950,60 @@ describe('the main provider', () => {
     expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
     expect(screen.getByTestId('mt-provider-select')).toHaveValue('codex');
   });
+
+  it('offers Retry for a pending switch with no write from this page, and one click repeats the same write', async () => {
+    const { state } = setup(
+      idleThread(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }))
+    );
+    await screen.findByText('build it');
+    expect(providerSelect()).toBeDisabled();
+    expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
+    await userEvent.click(screen.getByTestId('mt-provider-retry'));
+    await waitFor(() => expect(input()).toBeEnabled());
+    expect(screen.getByTestId('mt-provider-effective')).toHaveTextContent('effective: Codex');
+    expect(state.providerPosts).toEqual([{ provider: 'codex', restart_failed: false }]);
+  });
+
+  it('holds Retry for a pending switch while a turn is open', async () => {
+    setup({
+      mainThread: mainThreadFixture({
+        conversation_id: CONVERSATION_ID,
+        provider: providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }),
+        native: nativeFixture({
+          turn_in_flight: true,
+          deliveries: [deliveryFixture({ message_id: 'm1', state: 'sending' })]
+        })
+      }),
+      messages: [messageFixture({ id: 'm1', content: 'build it' })]
+    });
+    await screen.findByText('build it');
+    expect(screen.getByTestId('mt-provider-retry')).toBeDisabled();
+    expect(providerSelect()).toBeDisabled();
+  });
+
+  it('re-reads a pending switch without a reload, unlocks when it turns ready, then stops reading', async () => {
+    const { state } = setup(
+      idleThread(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' }))
+    );
+    await screen.findByText('build it');
+    // The read at mount, then a poll on the interval, both still find the switch pending.
+    await waitFor(() => expect(state.providerReads).toBeGreaterThanOrEqual(2), { timeout: POLL_MS * 3 });
+    expect(input()).toBeDisabled();
+
+    const threadReads = state.mainThreadReads;
+    state.mainThread = {
+      ...state.mainThread,
+      provider: providerFixture({ desired_provider: 'codex', effective_provider: 'codex', status: 'ready' })
+    };
+    await waitFor(() => expect(input()).toBeEnabled(), { timeout: POLL_MS * 3 });
+    expect(screen.getByTestId('mt-provider-status')).toHaveTextContent('ready');
+    expect(state.mainThreadReads).toBe(threadReads);
+
+    const settled = state.providerReads;
+    await pause(POLL_MS * 2);
+    expect(state.providerReads).toBe(settled);
+    // Two poll intervals of waiting, plus the wait for the unlock: longer than the default 5s.
+  }, 15000);
 });
 
 describe('the main lock while a send, a stop or a load is in flight', () => {

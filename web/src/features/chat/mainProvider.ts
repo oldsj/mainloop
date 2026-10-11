@@ -29,11 +29,13 @@ export interface MainProviderControl {
   selecting: boolean;
   /** The last read of the provider state failed, so it is not known to be current. */
   unconfirmed: boolean;
-  /** The select, retry and restart are held: see `providerSwitchBlocked`. */
+  /** The select and Restart are held: see `providerSwitchBlocked`. */
   switchBlocked: boolean;
+  /** Retry is held: see `providerRetryBlocked`. It is held by the same rules, minus a pending switch. */
+  retryBlocked: boolean;
   /** What the last selection said, bounded; null when there is nothing to say. */
   notice: string | null;
-  /** Retry repeats the last failed write, or the desired provider when the start failed. */
+  /** Retry repeats the last failed write, or the desired provider when the start failed or is pending. */
   retryOffered: boolean;
   /** Restart sends `restart_failed: true`; offered only for a recoverable failed start. */
   restartOffered: boolean;
@@ -52,22 +54,37 @@ export function boundedText(text: string): string {
 }
 
 /**
- * Whether the owner may pick a provider, retry or restart now. `busy` is what the thread does not
- * know itself: offline, a selection in flight, a send or stop running, or the thread not yet read.
+ * What holds every provider change. `busy` is what the thread does not know itself: offline, a
+ * selection in flight, a send or stop running, or the thread not yet read.
  */
-export function providerSwitchBlocked(
-  info: MainThreadInfo | null | undefined,
-  busy: boolean
-): boolean {
+function providerHeld(info: MainThreadInfo | null | undefined, busy: boolean): boolean {
   return (
     busy ||
     !info?.provider ||
-    info.provider.status === 'pending' ||
     info.native?.turn_in_flight === true ||
     (info.native?.deliveries ?? []).some((delivery) =>
       BUSY_DELIVERY_STATES.includes(delivery.state)
     )
   );
+}
+
+/** Whether the owner may pick a provider or restart now. A pending switch holds both. */
+export function providerSwitchBlocked(
+  info: MainThreadInfo | null | undefined,
+  busy: boolean
+): boolean {
+  return providerHeld(info, busy) || info?.provider?.status === 'pending';
+}
+
+/**
+ * Whether the owner may retry now. Retry repeats the write a pending switch already holds, so a
+ * pending switch does not hold it; every other hold does.
+ */
+export function providerRetryBlocked(
+  info: MainThreadInfo | null | undefined,
+  busy: boolean
+): boolean {
+  return providerHeld(info, busy);
 }
 
 /** Ready means the confirmed provider is the one the owner selected. */
@@ -136,14 +153,15 @@ export function providerStateWords(
 }
 
 /**
- * Whether Retry is offered. A failed start always offers it. A failed write offers it until a read
- * shows that write took effect.
+ * Whether Retry is offered. A failed start always offers it. A pending switch does too: repeating
+ * its write is how a request that died is recovered. A failed write offers it until a read shows
+ * that write took effect.
  */
 export function retryOffered(
   provider: MainProviderInfo | null | undefined,
   failed: MainProviderSelection | null
 ): boolean {
-  if (provider?.status === 'failed') return true;
+  if (provider?.status === 'failed' || provider?.status === 'pending') return true;
   if (!failed) return false;
   return !(providerReady(provider) && provider?.desired_provider === failed.provider);
 }

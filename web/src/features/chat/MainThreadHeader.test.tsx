@@ -105,6 +105,7 @@ const control = (overrides: Partial<MainProviderControl> = {}): MainProviderCont
   selecting: false,
   unconfirmed: false,
   switchBlocked: false,
+  retryBlocked: false,
   notice: null,
   retryOffered: false,
   restartOffered: false,
@@ -146,6 +147,25 @@ describe('MainThreadHeader main provider row', () => {
   it('holds the select while the control says the switch is blocked', () => {
     view(withProvider(providerFixture()), { provider: control({ switchBlocked: true }) });
     expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
+  });
+
+  it('holds Retry by its own rule, so a pending switch can offer it with the select held', () => {
+    view(
+      withProvider(providerFixture({ desired_provider: 'codex', effective_provider: null, status: 'pending' })),
+      { provider: control({ switchBlocked: true, retryOffered: true, retryBlocked: false }) }
+    );
+    expect(screen.getByTestId('mt-provider-select')).toBeDisabled();
+    expect(screen.getByTestId('mt-provider-retry')).toBeEnabled();
+  });
+
+  it('holds Retry while its own rule says so', () => {
+    view(withProvider(providerFixture()), { provider: control({ retryOffered: true, retryBlocked: true }) });
+    expect(screen.getByTestId('mt-provider-retry')).toBeDisabled();
+  });
+
+  it('announces the provider status as a polite status region', () => {
+    view(withProvider(providerFixture({ status: 'pending', effective_provider: null })), { provider: control() });
+    expect(screen.getByTestId('mt-provider-status')).toHaveAttribute('role', 'status');
   });
 
   it('offers the other provider and reports the choice', async () => {

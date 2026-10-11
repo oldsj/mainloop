@@ -25,9 +25,9 @@ Status words, most urgent first: **unreachable** (the backend cannot be reached,
 Shown under the summary once the main has a provider state: the owner's select (Claude or Codex), the effective provider, state words, and Retry or Restart after a failed start or write.
 
 - **Select:** labelled "Main provider". Held while the header is held: offline, a send or stop in flight, the thread or conversation still loading, a switch pending, or a turn or delivery open. Choosing the ready provider again sends nothing.
-- **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text beside the select.
+- **State words:** offline (selection unavailable), selecting, provider state unconfirmed, state unknown, not started (starts with your next message), preparing, failed, ready, waiting to switch. Plain text beside the select, in a polite `role="status"` region so a change is announced without moving focus.
 - **Notice:** a refused switch shows one line, a `role="alert"` in `text-destructive`, bounded to 300 characters. Its wording follows the refusal code; with no known code it shows the server's detail. Each notice ends "State is refreshed; no automatic retry."
-- **Retry and Restart:** Retry is offered for a failed start, or a failed write until a read confirms it. Restart is offered only for a recoverable failed start. Both are held by the same rule as the select.
+- **Retry and Restart:** Retry is offered for a failed start, a failed write until a read confirms it, or a pending switch. Retry is held by the select's rule except a pending switch, so it stays available while the select is held. Restart is offered only for a recoverable failed start and is held by the select's rule.
 
 ## Keyboard and screen reader
 

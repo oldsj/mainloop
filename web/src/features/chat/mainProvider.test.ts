@@ -8,6 +8,7 @@ import {
   NOTICE_MAX,
   providerReady,
   providerStateWords,
+  providerRetryBlocked,
   providerSwitchBlocked,
   refusalCode,
   retryOffered,
@@ -87,6 +88,51 @@ describe('providerSwitchBlocked', () => {
       ).toBe(false);
     }
   );
+});
+
+describe('providerRetryBlocked', () => {
+  const pending = mainThreadFixture({ provider: providerFixture({ status: 'pending' }) });
+
+  it('is open for a ready provider with nothing in flight', () => {
+    expect(providerRetryBlocked(mainThreadFixture(), false)).toBe(false);
+  });
+
+  it('is open while a switch is pending, so Retry can repeat it', () => {
+    expect(providerRetryBlocked(pending, false)).toBe(false);
+  });
+
+  it('is held while the page is busy, even when a switch is pending', () => {
+    expect(providerRetryBlocked(pending, true)).toBe(true);
+  });
+
+  it('is held while a turn is open, even when a switch is pending', () => {
+    expect(
+      providerRetryBlocked(
+        mainThreadFixture({
+          provider: providerFixture({ status: 'pending' }),
+          native: nativeFixture({ turn_in_flight: true })
+        }),
+        false
+      )
+    ).toBe(true);
+  });
+
+  it.each(['recorded', 'sending', 'delivered', 'uncertain'])(
+    'is held while a delivery is %s',
+    (state) => {
+      expect(
+        providerRetryBlocked(
+          mainThreadFixture({ native: nativeFixture({ deliveries: [deliveryFixture({ state })] }) }),
+          false
+        )
+      ).toBe(true);
+    }
+  );
+
+  it('is held before the thread or its provider is known', () => {
+    expect(providerRetryBlocked(null, false)).toBe(true);
+    expect(providerRetryBlocked(mainThreadFixture({ provider: null }), false)).toBe(true);
+  });
 });
 
 describe('providerReady', () => {
@@ -184,6 +230,10 @@ describe('retryOffered', () => {
 
   it('is offered for a failed start, with no write failing', () => {
     expect(retryOffered(providerFixture({ status: 'failed' }), null)).toBe(true);
+  });
+
+  it('is offered for a pending switch with no write from this page', () => {
+    expect(retryOffered(providerFixture({ status: 'pending' }), null)).toBe(true);
   });
 
   it('is offered after a failed write until a read shows it took effect', () => {
