@@ -18,11 +18,14 @@ Each file in `guidelines/` covers one product component: purpose, states, keyboa
 
 - `guidelines/attention-card.md`
 - `guidelines/composer.md`
+- `guidelines/confirm-dialog.md`
 - `guidelines/delivery-receipt.md`
+- `guidelines/error-recovery.md`
 - `guidelines/evidence-link.md`
 - `guidelines/hitl-card.md`
 - `guidelines/message.md`
 - `guidelines/session-summary.md`
+- `guidelines/status-badge.md`
 - `guidelines/workspace-action.md`
 
 ## Using it in Claude Design
