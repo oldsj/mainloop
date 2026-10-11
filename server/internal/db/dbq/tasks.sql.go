@@ -2876,19 +2876,20 @@ func (q *Queries) SetTaskOperationTask(ctx context.Context, arg SetTaskOperation
 const setTaskProjection = `-- name: SetTaskProjection :one
 UPDATE tasks
 SET pr_number = $2, pr_url = $3, pr_head_sha = $4, pr_state = $5, ci_state = $6, ci_head_sha = $7,
-    projected_at = now(), version = version + 1, updated_at = now()
+    projected_at = $8, version = version + 1, updated_at = now()
 WHERE id = $1
 RETURNING id, owner_id, project_id, topic_id, parent_task_id, root_task_id, creator_binding_id, title, brief, mode, assigned_profile_id, selection_source, provider_constraint, accepted_environment, status, reason, decision_attempt_id, decision_report_id, decision_action, current_attempt_id, version, checkout_branch, checkout_ref, checkout_depth, pr_number, pr_url, pr_head_sha, pr_state, ci_state, ci_head_sha, projected_at, created_at, updated_at
 `
 
 type SetTaskProjectionParams struct {
-	ID        string
-	PrNumber  *int32
-	PrUrl     *string
-	PrHeadSha *string
-	PrState   string
-	CiState   string
-	CiHeadSha *string
+	ID         string
+	PrNumber   *int32
+	PrUrl      *string
+	PrHeadSha  *string
+	PrState    string
+	CiState    string
+	CiHeadSha  *string
+	ObservedAt *time.Time
 }
 
 func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionParams) (Task, error) {
@@ -2900,6 +2901,7 @@ func (q *Queries) SetTaskProjection(ctx context.Context, arg SetTaskProjectionPa
 		arg.PrState,
 		arg.CiState,
 		arg.CiHeadSha,
+		arg.ObservedAt,
 	)
 	var i Task
 	err := row.Scan(
@@ -2992,12 +2994,17 @@ func (q *Queries) TouchTask(ctx context.Context, arg TouchTaskParams) (Task, err
 }
 
 const touchTaskProjection = `-- name: TouchTaskProjection :exec
-UPDATE tasks SET projected_at = now() WHERE id = $1
+UPDATE tasks SET projected_at = $2 WHERE id = $1
 `
 
+type TouchTaskProjectionParams struct {
+	ID         string
+	ObservedAt *time.Time
+}
+
 // Refreshes the observation time without a new version or event.
-func (q *Queries) TouchTaskProjection(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, touchTaskProjection, id)
+func (q *Queries) TouchTaskProjection(ctx context.Context, arg TouchTaskProjectionParams) error {
+	_, err := q.db.Exec(ctx, touchTaskProjection, arg.ID, arg.ObservedAt)
 	return err
 }
 

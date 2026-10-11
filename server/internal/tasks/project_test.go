@@ -3,6 +3,7 @@ package tasks_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/tasks"
@@ -35,7 +36,8 @@ func TestProjectionStoresAndPublishes(t *testing.T) {
 	id := r.projected()
 	base := r.updates(id)
 	r.obs.set(tasks.Observation{
-		PRNumber: 7, PRURL: "https://example.test/o/p1/pull/7", PRHeadRef: "feature", PRRepo: "O/P1",
+		ObservedAt: time.Now(),
+		PRNumber:   7, PRURL: "https://example.test/o/p1/pull/7", PRHeadRef: "feature", PRRepo: "O/P1",
 		PRHeadSHA: "abc", PRState: "open", CIState: "success", CIHeadSHA: "abc",
 	}, nil)
 	r.project()
@@ -66,7 +68,8 @@ func TestProjectionCIMustMatchTheHead(t *testing.T) {
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{
-		PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: "success", CIHeadSHA: "old",
+		ObservedAt: time.Now(),
+		PRNumber:   7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: "success", CIHeadSHA: "old",
 	}, nil)
 	r.project()
 	if got := r.view(r.own, id).Projection; string(got.CiState) != "unknown" {
@@ -74,7 +77,8 @@ func TestProjectionCIMustMatchTheHead(t *testing.T) {
 	}
 	for _, state := range []string{"pending", "failure"} {
 		r.obs.set(tasks.Observation{
-			PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: state, CIHeadSHA: "old",
+			ObservedAt: time.Now(),
+			PRNumber:   7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: state, CIHeadSHA: "old",
 		}, nil)
 		r.project()
 		if got := r.view(r.own, id).Projection; string(got.CiState) != "unknown" {
@@ -82,7 +86,8 @@ func TestProjectionCIMustMatchTheHead(t *testing.T) {
 		}
 	}
 	r.obs.set(tasks.Observation{
-		PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: "failure", CIHeadSHA: "new",
+		ObservedAt: time.Now(),
+		PRNumber:   7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "new", PRState: "open", CIState: "failure", CIHeadSHA: "new",
 	}, nil)
 	r.project()
 	if got := r.view(r.own, id).Projection; string(got.CiState) != "failure" {
@@ -121,6 +126,9 @@ func TestProjectionErrorsDegradeToUnknownAndNeverComplete(t *testing.T) {
 	}
 	if got.Task.Status != "running" {
 		t.Fatalf("status = %s", got.Task.Status)
+	}
+	if got.Projection.ObservedAt == nil {
+		t.Fatal("a failed read has no sweep time")
 	}
 }
 

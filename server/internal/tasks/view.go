@@ -209,7 +209,7 @@ func projection(t dbq.Task) api.TaskProjection {
 	}
 	out.PrNumber = intp(t.PrNumber)
 	// Reads stay DB-only. Every CI state needs an exact head and a fresh observation; a
-	// successful sweep timestamps projected_at, including when the facts did not change.
+	// sweep preserves the collection-finish time in projected_at, including unchanged facts.
 	if t.ProjectedAt == nil || t.PrHeadSha == nil || *t.PrHeadSha == "" || t.CiHeadSha == nil ||
 		*t.CiHeadSha != *t.PrHeadSha {
 		out.CiState = api.TaskProjectionCiStateUnknown

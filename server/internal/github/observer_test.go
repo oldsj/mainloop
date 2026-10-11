@@ -156,7 +156,7 @@ func TestTaskObserverRejectsMismatchedHeadsAndIdentity(t *testing.T) {
 				})
 			}
 			got, err := o.Observe(context.Background(), "o/n", "feature")
-			if got != (github.TaskObservation{}) || (scenario != "check_head" && err != nil) {
+			if got != (github.TaskObservation{ObservedAt: got.ObservedAt}) || (scenario != "check_head" && err != nil) {
 				t.Fatalf("untrusted head was observed: %+v, %v", got, err)
 			}
 			if scenario == "check_head" && !errors.Is(err, github.ErrObservationRetry) {
@@ -221,7 +221,7 @@ func TestTaskObserverStaleObservationAndNoCache(t *testing.T) {
 			}
 			got, err := o.Observe(context.Background(), "o/n", "feature")
 			if elapsed == 5*time.Minute {
-				if err != nil || got.CIState != "success" {
+				if err != nil || got.CIState != "success" || !got.ObservedAt.Equal(at.Add(elapsed)) {
 					t.Fatalf("boundary = %+v, %v", got, err)
 				}
 			} else if got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationStale) || !errors.Is(err, github.ErrObservationRetry) {
@@ -262,8 +262,8 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 						if got.PRNumber != 1 || got.CIState != "unknown" {
 							t.Fatalf("absent CI lost the PR: %+v", got)
 						}
-					} else if got != (github.TaskObservation{}) {
-						t.Fatalf("absent PR = %+v", got)
+					} else {
+						requireAbsentTaskObservation(t, got, err)
 					}
 					return
 				}
@@ -289,9 +289,8 @@ func TestTaskObserverErrorClasses(t *testing.T) {
 
 func TestTaskObserverMissingPRAndInvalidInputs(t *testing.T) {
 	o, f := greenObservation(t)
-	if got, err := o.Observe(context.Background(), "o/n", "missing"); err != nil || got != (github.TaskObservation{}) {
-		t.Fatalf("absent branch PR = %+v, %v", got, err)
-	}
+	got, err := o.Observe(context.Background(), "o/n", "missing")
+	requireAbsentTaskObservation(t, got, err)
 	before := len(f.Requests())
 	for _, input := range [][2]string{{"invalid", "feature"}, {"o/n", ""}, {"o/n", "x/../feature"}} {
 		if got, err := o.Observe(context.Background(), input[0], input[1]); got != (github.TaskObservation{}) || !errors.Is(err, github.ErrObservationRefused) {
@@ -333,9 +332,7 @@ func TestTaskObserverTokenMintErrorClasses(t *testing.T) {
 			o.App = a
 			got, err := o.Observe(context.Background(), "o/n", "feature")
 			if status == 404 {
-				if got != (github.TaskObservation{}) || err != nil {
-					t.Fatalf("missing installation = %+v, %v", got, err)
-				}
+				requireAbsentTaskObservation(t, got, err)
 				return
 			}
 			want := github.ErrObservationRefused
@@ -359,8 +356,32 @@ func TestTaskObserverLostReadReplyAndDisappearingPR(t *testing.T) {
 	f.Before("GET", "/repos/o/n/commits/"+tipSHA+"/check-runs", func() {
 		f.Fail("GET", "/repos/o/n/pulls/1", http.StatusNotFound)
 	})
-	if got, err := o.Observe(context.Background(), "o/n", "feature"); got != (github.TaskObservation{}) || err != nil {
-		t.Fatalf("disappeared PR = %+v, %v", got, err)
+	got, err := o.Observe(context.Background(), "o/n", "feature")
+	requireAbsentTaskObservation(t, got, err)
+}
+
+func requireAbsentTaskObservation(t *testing.T, got github.TaskObservation, err error) {
+	t.Helper()
+	if err != nil || got.ObservedAt.IsZero() || got != (github.TaskObservation{ObservedAt: got.ObservedAt}) {
+		t.Fatalf("absent observation = %+v, %v", got, err)
+	}
+}
+
+func TestTaskObserverAbsentObservationTime(t *testing.T) {
+	o, _ := greenObservation(t)
+	finished := time.Now().Add(-4 * time.Minute)
+	clockCalls := 0
+	o.Now = func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return finished.Add(-time.Minute)
+		}
+		return finished
+	}
+	got, err := o.Observe(context.Background(), "o/n", "missing")
+	requireAbsentTaskObservation(t, got, err)
+	if clockCalls != 2 || !got.ObservedAt.Equal(finished) {
+		t.Fatalf("absent observation time = %v, want %v; clock calls %d", got.ObservedAt, finished, clockCalls)
 	}
 }
 

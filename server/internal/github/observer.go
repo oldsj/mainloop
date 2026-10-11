@@ -32,6 +32,8 @@ type TaskObservation struct {
 	PRState   string
 	CIState   string
 	CIHeadSHA string
+	// ObservedAt is captured when collection finishes, before persistence can wait on the DB.
+	ObservedAt time.Time
 }
 
 // TaskObserver reads a task branch's most recent open PR, or its most recent closed/merged PR
@@ -47,7 +49,7 @@ type TaskObserver struct {
 // head or identity is not observed. Freshness is the age of this read, not the age of the CI job:
 // an old job freshly read for this exact head is valid. Persisted observations also need the
 // consumer's five-minute age guard after this method returns.
-func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (TaskObservation, error) {
+func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (observation TaskObservation, err error) {
 	if o == nil || o.App == nil {
 		return TaskObservation{}, observationError(ErrUnavailable)
 	}
@@ -65,6 +67,23 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 	started := now()
 	ctx, cancel := context.WithTimeout(ctx, observationMaxAge)
 	defer cancel()
+	// Timestamp successful reads, including an absent PR, at collection finish. An absence
+	// still needs a sweep time so it does not stay ahead of every other projection candidate.
+	defer func() {
+		if err != nil {
+			return
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			observation, err = TaskObservation{}, observationError(ctxErr)
+			return
+		}
+		observedAt := now()
+		if age := observedAt.Sub(started); age < 0 || age > observationMaxAge {
+			observation, err = TaskObservation{}, observationError(ErrObservationStale)
+			return
+		}
+		observation.ObservedAt = observedAt
+	}()
 	// No base filter: a task's PR may target a branch other than the default branch.
 	pulls, err := o.App.PullRequestsForHead(ctx, repo, branch, "")
 	if err != nil {
@@ -102,12 +121,6 @@ func (o *TaskObserver) Observe(ctx context.Context, repository, branch string) (
 	if !taskPR(fresh, repo, branch) || fresh.Head != pr.Head || fresh.Base != pr.Base ||
 		fresh.State != pr.State || fresh.Merged != pr.Merged {
 		return TaskObservation{}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return TaskObservation{}, observationError(err)
-	}
-	if age := now().Sub(started); age < 0 || age > observationMaxAge {
-		return TaskObservation{}, observationError(ErrObservationStale)
 	}
 	state := pr.State
 	if pr.Merged {

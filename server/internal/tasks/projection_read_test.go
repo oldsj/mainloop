@@ -3,6 +3,7 @@ package tasks_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
@@ -25,7 +26,8 @@ func TestProjectionReadMasksUnfreshCI(t *testing.T) {
 		} {
 			t.Run(state+"/"+tc.name, func(t *testing.T) {
 				r.obs.set(tasks.Observation{
-					PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open", CIState: state, CIHeadSHA: "a",
+					ObservedAt: time.Now(),
+					PRNumber:   7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open", CIState: state, CIHeadSHA: "a",
 				}, nil)
 				r.project()
 				// Only test fixtures change the stored observation; the read must neither write
@@ -49,7 +51,8 @@ func TestProjectionUnchangedObservationRefreshesFreshness(t *testing.T) {
 	r := newRig(t)
 	id := r.projected()
 	r.obs.set(tasks.Observation{
-		PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open", CIState: "success", CIHeadSHA: "a",
+		ObservedAt: time.Now(),
+		PRNumber:   7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open", CIState: "success", CIHeadSHA: "a",
 	}, nil)
 	r.project()
 	version, events := r.view(r.own, id).Task.Version, r.updates(id)
@@ -61,5 +64,49 @@ func TestProjectionUnchangedObservationRefreshesFreshness(t *testing.T) {
 	got := r.view(r.own, id)
 	if string(got.Projection.CiState) != "success" || got.Task.Version != version || r.updates(id) != events {
 		t.Fatalf("unchanged refresh = %+v, version %d, events %d", got.Projection, got.Task.Version, r.updates(id))
+	}
+}
+
+func TestProjectionPersistsObservationTime(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantCI string
+		age          time.Duration
+	}{
+		{"fresh", "success", 4 * time.Minute},
+		{"stale", "unknown", 6 * time.Minute},
+		{"future", "unknown", -time.Minute},
+		{"missing", "unknown", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			id := r.projected()
+			var observedAt time.Time
+			if tc.name != "missing" {
+				observedAt = time.Now().Add(-tc.age).UTC().Truncate(time.Microsecond)
+			}
+			r.obs.set(tasks.Observation{
+				PRNumber: 7, PRHeadRef: "feature", PRRepo: "o/p1", PRHeadSHA: "a", PRState: "open",
+				CIState: "success", CIHeadSHA: "a", ObservedAt: observedAt,
+			}, nil)
+			for _, path := range []string{"changed", "unchanged"} {
+				before := r.view(r.own, id)
+				events := r.updates(id)
+				r.project()
+				got := r.view(r.own, id)
+				if string(got.Projection.CiState) != tc.wantCI {
+					t.Fatalf("%s projection = %+v; want CI %s", path, got.Projection, tc.wantCI)
+				}
+				if observedAt.IsZero() {
+					if got.Projection.ObservedAt != nil {
+						t.Fatalf("%s invented observation time: %v", path, got.Projection.ObservedAt)
+					}
+				} else if got.Projection.ObservedAt == nil || !got.Projection.ObservedAt.Equal(observedAt) {
+					t.Fatalf("%s observation time = %v, want %v", path, got.Projection.ObservedAt, observedAt)
+				}
+				if path == "unchanged" && (got.Task.Version != before.Task.Version || r.updates(id) != events) {
+					t.Fatal("unchanged observation changed the task version or published an event")
+				}
+			}
+		})
 	}
 }

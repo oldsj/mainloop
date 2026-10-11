@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/oldsj/mainloop/server/internal/api"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
@@ -40,6 +41,9 @@ type Observation struct {
 	// answer.
 	CIState   string
 	CIHeadSHA string
+	// ObservedAt is the collection-finish time, preserved through persistence. A zero value
+	// means no observation time is known and cannot establish fresh CI.
+	ObservedAt time.Time
 }
 
 // Observer reads the pull request and CI of a branch from GitHub. It makes no changes.
@@ -126,9 +130,14 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 	if err != nil {
 		// Degrade to unknown rather than keep showing a state nobody can vouch for.
 		s.log().WarnContext(ctx, "task projection", "task", id, "error", err)
-		obs = Observation{}
+		// Capture the failed read before DB work too; unknown facts still need a sweep time.
+		obs = Observation{ObservedAt: time.Now()}
 	}
 	pr, url, head, prState, ciState, ciHead := normalize(obs, repo, branch)
+	var observedAt *time.Time
+	if !obs.ObservedAt.IsZero() {
+		observedAt = &obs.ObservedAt
+	}
 	return s.tx(ctx, func(q *dbq.Queries) ([]events.Draft, error) {
 		cur, err := q.GetTaskByIDForUpdate(ctx, id)
 		if err != nil {
@@ -139,10 +148,13 @@ func (s *Service) project(ctx context.Context, id, branch, repo string) error {
 		}
 		if eqPtr(cur.PrNumber, pr) && eqPtr(cur.PrUrl, url) && eqPtr(cur.PrHeadSha, head) &&
 			cur.PrState == prState && cur.CiState == ciState && eqPtr(cur.CiHeadSha, ciHead) {
-			return nil, q.TouchTaskProjection(ctx, cur.ID)
+			return nil, q.TouchTaskProjection(ctx, dbq.TouchTaskProjectionParams{
+				ID: cur.ID, ObservedAt: observedAt,
+			})
 		}
 		after, err := q.SetTaskProjection(ctx, dbq.SetTaskProjectionParams{
 			ID: cur.ID, PrNumber: pr, PrUrl: url, PrHeadSha: head, PrState: prState, CiState: ciState, CiHeadSha: ciHead,
+			ObservedAt: observedAt,
 		})
 		if err != nil {
 			return nil, err
