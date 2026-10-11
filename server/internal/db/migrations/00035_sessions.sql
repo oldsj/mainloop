@@ -98,6 +98,9 @@ CREATE TABLE deliveries (
     task_id text,
     evidence_ref text,
     detail text,
+    -- Incremented with every delivery outcome write. Stop confirmation compares the session's
+    -- total before and after native observation; updated_at is not a commit-ordered version.
+    outcome_version bigint NOT NULL DEFAULT 0,
     -- The kagent Session (A2A contextId) the message was sent to, stored when the row moves to
     -- sending so a later lookup asks the Session the message went to, not whatever the binding
     -- names by then.

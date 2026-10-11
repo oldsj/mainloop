@@ -90,6 +90,7 @@ type Delivery struct {
 	TaskID          *string
 	EvidenceRef     *string
 	Detail          *string
+	OutcomeVersion  int64
 	KagentSessionID *string
 	HealthTracked   bool
 	Attempts        int32

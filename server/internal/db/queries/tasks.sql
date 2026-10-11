@@ -457,19 +457,32 @@ WHERE a.state = 'active' AND t.status NOT IN ('completed', 'failed', 'cancelled'
 ORDER BY a.updated_at, a.id
 LIMIT $1;
 
+-- name: GetAttemptDeliveryOutcomeVersion :one
+-- Read before native observation, outside a transaction. Once stop is requested, admission is
+-- closed and the retained delivery outcomes only advance this total.
+SELECT coalesce(sum(d.outcome_version), 0)::bigint AS outcome_version
+FROM deliveries d
+JOIN task_attempts a ON a.session_id = d.session_id
+WHERE a.id = $1;
+
 -- name: ConfirmAttemptStop :one
 -- The observer saw nothing running for the attempt's session. This is the only way an attempt's
 -- stop_state becomes confirmed; fence checks it. A send admitted before stop may still be in its
 -- native call or have an unknown outcome. Those deliveries must reconcile before confirmation.
--- No row means either the attempt is not waiting or a delivery has not resolved yet.
+-- Any outcome committed after the observation began invalidates it, including delivered: an
+-- accepted task may still be working. The next observation must see all native tasks final.
+-- The version comparison and unresolved-delivery gate use the same UPDATE snapshot. No row means
+-- the attempt is not waiting, a delivery has not resolved, or the observation is stale.
 UPDATE task_attempts
 SET stop_state = 'confirmed', updated_at = now()
-WHERE task_attempts.id = $1 AND task_attempts.state = 'draining'
+WHERE task_attempts.id = sqlc.arg(id) AND task_attempts.state = 'draining'
   AND task_attempts.stop_state IN ('requested', 'unresolved')
   AND NOT EXISTS (
       SELECT 1 FROM deliveries d WHERE d.session_id = task_attempts.session_id
       AND d.state IN ('sending', 'uncertain')
   )
+  AND (SELECT coalesce(sum(d.outcome_version), 0)::bigint FROM deliveries d
+       WHERE d.session_id = task_attempts.session_id) = sqlc.arg(outcome_version)::bigint
 RETURNING *;
 
 -- name: MarkAttemptStopUnresolved :one

@@ -52,11 +52,11 @@ func (s *Service) blockReconciliation(ctx context.Context, q *dbq.Queries, t dbq
 
 // resolveStop is the resolver of a requested stop. For a draining attempt whose stop the observer has
 // not confirmed, it asks the StopObserver whether anything still runs for the session. When nothing
-// does and admitted sends have resolved, it confirms the stop and returns 0: the attempt can be
-// fenced. Otherwise it counts the look, schedules the next one with backoff and returns how long to
-// wait. After the bound it marks the stop
-// unresolved and blocks the task for reconciliation, once; it keeps looking, and a later confirmation
-// still ends the attempt.
+// does and admitted sends have resolved without an outcome changing since observation began, it
+// confirms the stop and returns 0: the attempt can be fenced. Otherwise it counts the look,
+// schedules the next one with backoff and returns how long to wait. After the bound it marks the
+// stop unresolved and blocks the task for reconciliation, once; it keeps looking, and a later
+// confirmation still ends the attempt.
 //
 // Without an observer the service has no kagent client, so no agent can be running. An attempt with
 // no session never started an agent.
@@ -65,6 +65,12 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		return 0, nil
 	}
 	q := dbq.New(s.Pool)
+	// Capture the durable delivery version before any native reads. Native I/O holds no
+	// transaction; confirmation atomically checks that this observation is still current.
+	version, err := q.GetAttemptDeliveryOutcomeVersion(ctx, a.ID)
+	if err != nil {
+		return 0, err
+	}
 	stopped := s.StopObserver == nil || a.SessionID == nil
 	if !stopped {
 		var oerr error
@@ -75,13 +81,14 @@ func (s *Service) resolveStop(ctx context.Context, a dbq.TaskAttempt) (wait time
 		}
 	}
 	if stopped {
-		if _, err := q.ConfirmAttemptStop(ctx, a.ID); err == nil {
+		if _, err := q.ConfirmAttemptStop(ctx, dbq.ConfirmAttemptStopParams{ID: a.ID, OutcomeVersion: version}); err == nil {
 			return 0, q.AppendAttemptEvidence(ctx, dbq.AppendAttemptEvidenceParams{ID: a.ID, Column2: evidenceStopConfirmed})
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return 0, err
 		}
 		// A concurrent resolver may have confirmed already. Otherwise an admitted delivery is
-		// still sending or uncertain: retain the reservation and take the normal backoff path.
+		// still sending/uncertain or changed outcome during observation: retain the reservation and
+		// take the normal backoff path. A delivered task must be observed again, even if its send ended.
 		current, err := q.GetTaskAttempt(ctx, a.ID)
 		if err != nil {
 			return 0, err

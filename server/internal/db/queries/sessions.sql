@@ -206,13 +206,16 @@ WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attemp
   );
 
 -- name: MarkDeliveryDelivered :execrows
+-- Outcome writes advance the durable version atomically with the state, including recovered
+-- delivered tasks. A task id proves acceptance, not that native execution has finished.
 UPDATE deliveries
-SET state = 'delivered', task_id = $4, evidence_ref = $5, detail = NULL, updated_at = now()
+SET state = 'delivered', task_id = $4, evidence_ref = $5, detail = NULL,
+    outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('sending', 'uncertain', 'delivered');
 
 -- name: MarkDeliveryUncertain :execrows
 UPDATE deliveries
-SET state = 'uncertain', detail = $4, updated_at = now()
+SET state = 'uncertain', detail = $4, outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'delivered', 'uncertain');
 
 -- name: NoteHoldPassed :execrows
@@ -227,7 +230,7 @@ WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state = 'uncertain'
 UPDATE deliveries
 SET state = $4, detail = $5, task_id = coalesce(sqlc.narg(task_id), task_id),
     evidence_ref = coalesce(sqlc.narg(evidence_ref), evidence_ref),
-    lease_owner = NULL, lease_until = NULL, updated_at = now()
+    lease_owner = NULL, lease_until = NULL, outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3;
 
 -- name: RefreshSessionStatus :exec
@@ -261,7 +264,7 @@ UPDATE deliveries d
 SET state = sqlc.arg(state), detail = sqlc.arg(detail),
     task_id = coalesce(sqlc.narg(task_id), d.task_id),
     evidence_ref = coalesce(sqlc.narg(evidence_ref), d.evidence_ref),
-    lease_owner = NULL, lease_until = NULL, updated_at = now()
+    lease_owner = NULL, lease_until = NULL, outcome_version = d.outcome_version + 1, updated_at = now()
 FROM old
 WHERE d.id = old.id
 RETURNING old.state::text AS previous_state;

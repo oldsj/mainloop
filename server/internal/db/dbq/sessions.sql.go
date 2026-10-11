@@ -74,7 +74,7 @@ UPDATE deliveries d
 SET state = $1, detail = $2,
     task_id = coalesce($3, d.task_id),
     evidence_ref = coalesce($4, d.evidence_ref),
-    lease_owner = NULL, lease_until = NULL, updated_at = now()
+    lease_owner = NULL, lease_until = NULL, outcome_version = d.outcome_version + 1, updated_at = now()
 FROM old
 WHERE d.id = old.id
 RETURNING old.state::text AS previous_state
@@ -111,7 +111,7 @@ const finishDelivery = `-- name: FinishDelivery :execrows
 UPDATE deliveries
 SET state = $4, detail = $5, task_id = coalesce($6, task_id),
     evidence_ref = coalesce($7, evidence_ref),
-    lease_owner = NULL, lease_until = NULL, updated_at = now()
+    lease_owner = NULL, lease_until = NULL, outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3
 `
 
@@ -205,7 +205,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -220,6 +220,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.TaskID,
 		&i.EvidenceRef,
 		&i.Detail,
+		&i.OutcomeVersion,
 		&i.KagentSessionID,
 		&i.HealthTracked,
 		&i.Attempts,
@@ -589,7 +590,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at
 `
 
 type InsertDeliveryParams struct {
@@ -610,6 +611,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.TaskID,
 		&i.EvidenceRef,
 		&i.Detail,
+		&i.OutcomeVersion,
 		&i.KagentSessionID,
 		&i.HealthTracked,
 		&i.Attempts,
@@ -650,7 +652,7 @@ func (q *Queries) InsertSessionMessage(ctx context.Context, arg InsertSessionMes
 }
 
 const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
   AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
 `
 
@@ -673,6 +675,7 @@ func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID strin
 			&i.TaskID,
 			&i.EvidenceRef,
 			&i.Detail,
+			&i.OutcomeVersion,
 			&i.KagentSessionID,
 			&i.HealthTracked,
 			&i.Attempts,
@@ -694,7 +697,7 @@ func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID strin
 }
 
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 ORDER BY created_at, id
 `
@@ -718,6 +721,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			&i.TaskID,
 			&i.EvidenceRef,
 			&i.Detail,
+			&i.OutcomeVersion,
 			&i.KagentSessionID,
 			&i.HealthTracked,
 			&i.Attempts,
@@ -772,7 +776,7 @@ func (q *Queries) ListScheduledSessionCancelsDue(ctx context.Context, arg ListSc
 }
 
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -798,6 +802,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.TaskID,
 			&i.EvidenceRef,
 			&i.Detail,
+			&i.OutcomeVersion,
 			&i.KagentSessionID,
 			&i.HealthTracked,
 			&i.Attempts,
@@ -1127,7 +1132,8 @@ func (q *Queries) MarkCreateRequested(ctx context.Context, arg MarkCreateRequest
 
 const markDeliveryDelivered = `-- name: MarkDeliveryDelivered :execrows
 UPDATE deliveries
-SET state = 'delivered', task_id = $4, evidence_ref = $5, detail = NULL, updated_at = now()
+SET state = 'delivered', task_id = $4, evidence_ref = $5, detail = NULL,
+    outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('sending', 'uncertain', 'delivered')
 `
 
@@ -1139,6 +1145,8 @@ type MarkDeliveryDeliveredParams struct {
 	EvidenceRef *string
 }
 
+// Outcome writes advance the durable version atomically with the state, including recovered
+// delivered tasks. A task id proves acceptance, not that native execution has finished.
 func (q *Queries) MarkDeliveryDelivered(ctx context.Context, arg MarkDeliveryDeliveredParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markDeliveryDelivered,
 		arg.ID,
@@ -1192,7 +1200,7 @@ func (q *Queries) MarkDeliverySending(ctx context.Context, arg MarkDeliverySendi
 
 const markDeliveryUncertain = `-- name: MarkDeliveryUncertain :execrows
 UPDATE deliveries
-SET state = 'uncertain', detail = $4, updated_at = now()
+SET state = 'uncertain', detail = $4, outcome_version = outcome_version + 1, updated_at = now()
 WHERE id = $1 AND lease_owner = $2 AND attempts = $3 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 `
 

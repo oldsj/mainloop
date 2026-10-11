@@ -269,7 +269,12 @@ func TestSendingDecisionLocksAttemptBeforeDelivery(t *testing.T) {
 	if got := r.str(`SELECT state FROM deliveries WHERE id=$1`, mid); got != "sending" {
 		t.Fatalf("delivery after decision = %s", got)
 	}
-	if _, err := dbq.New(r.pool).ConfirmAttemptStop(ctx, attempt); !errors.Is(err, pgx.ErrNoRows) {
+	q := dbq.New(r.pool)
+	version, err := q.GetAttemptDeliveryOutcomeVersion(ctx, attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.ConfirmAttemptStop(ctx, dbq.ConfirmAttemptStopParams{ID: attempt, OutcomeVersion: version}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("confirmation with sending delivery = %v, want no rows", err)
 	}
 	assertSendOrderStopPending(t, r, attempt)

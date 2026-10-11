@@ -217,15 +217,25 @@ WHERE task_attempts.id = $1 AND task_attempts.state = 'draining'
       SELECT 1 FROM deliveries d WHERE d.session_id = task_attempts.session_id
       AND d.state IN ('sending', 'uncertain')
   )
+  AND (SELECT coalesce(sum(d.outcome_version), 0)::bigint FROM deliveries d
+       WHERE d.session_id = task_attempts.session_id) = $2::bigint
 RETURNING id, task_id, number, profile_id, native_provider, configuration_revision, agent_namespace, agent_name, role, depth, state, capacity_held, session_id, binding_id, workspace_id, workspace_request_id, workspace_creates_inflight, workspace_cleanup_confirmed, workspace_cleanup_attempts, workspace_cleanup_after, writer_generation, brief_delivery_id, predecessor_id, successor_id, evidence_refs, result_ref, environment, initial_ref, checkpoint_ref, manifest_ref, superseded_at, archived_at, native_deleted_at, retention_hold, stop_state, resolve_attempts, resolve_after, created_at, updated_at
 `
+
+type ConfirmAttemptStopParams struct {
+	ID             string
+	OutcomeVersion int64
+}
 
 // The observer saw nothing running for the attempt's session. This is the only way an attempt's
 // stop_state becomes confirmed; fence checks it. A send admitted before stop may still be in its
 // native call or have an unknown outcome. Those deliveries must reconcile before confirmation.
-// No row means either the attempt is not waiting or a delivery has not resolved yet.
-func (q *Queries) ConfirmAttemptStop(ctx context.Context, id string) (TaskAttempt, error) {
-	row := q.db.QueryRow(ctx, confirmAttemptStop, id)
+// Any outcome committed after the observation began invalidates it, including delivered: an
+// accepted task may still be working. The next observation must see all native tasks final.
+// The version comparison and unresolved-delivery gate use the same UPDATE snapshot. No row means
+// the attempt is not waiting, a delivery has not resolved, or the observation is stale.
+func (q *Queries) ConfirmAttemptStop(ctx context.Context, arg ConfirmAttemptStopParams) (TaskAttempt, error) {
+	row := q.db.QueryRow(ctx, confirmAttemptStop, arg.ID, arg.OutcomeVersion)
 	var i TaskAttempt
 	err := row.Scan(
 		&i.ID,
@@ -380,6 +390,22 @@ WHERE id = $1 AND workspace_creates_inflight > 0
 func (q *Queries) FinishAttemptWorkspaceCreate(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, finishAttemptWorkspaceCreate, id)
 	return err
+}
+
+const getAttemptDeliveryOutcomeVersion = `-- name: GetAttemptDeliveryOutcomeVersion :one
+SELECT coalesce(sum(d.outcome_version), 0)::bigint AS outcome_version
+FROM deliveries d
+JOIN task_attempts a ON a.session_id = d.session_id
+WHERE a.id = $1
+`
+
+// Read before native observation, outside a transaction. Once stop is requested, admission is
+// closed and the retained delivery outcomes only advance this total.
+func (q *Queries) GetAttemptDeliveryOutcomeVersion(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, getAttemptDeliveryOutcomeVersion, id)
+	var outcome_version int64
+	err := row.Scan(&outcome_version)
+	return outcome_version, err
 }
 
 const getAttemptPrincipal = `-- name: GetAttemptPrincipal :one

@@ -281,9 +281,15 @@ A stop request permanently closes the attempt's session to new messages, even if
 activity status is `completed`. The retained attempt's `stop_state` is the send fence: it changes
 from `none` to `requested` with the move to `draining`, and stays non-`none` through unresolved
 stops, confirmation and settlement. Recording a message checks it in the recording transaction;
-dispatching an already-recorded message checks it before native preparation and dispatch. This
-does not change ordinary standalone or adopted scheduled sessions. Sends already in flight still
-require positive stop confirmation before the branch writer claim and capacity are released.
+dispatching an already-recorded message checks it before native preparation. The admission
+transaction serializes with stop: a committed decision before stop permits the native send, and
+a stop committed first refuses admission. Cancellation retains task-owned `sending` and
+`uncertain` deliveries and their claims until reconciliation resolves them, without replay.
+Stop confirmation requires no unresolved admitted delivery and a native observation showing all
+tasks final, with no delivery outcome change since that observation began. A `delivered` message
+has been accepted by a native task that may still be working, so a late delivery or recovery
+requires another observation before releasing the branch writer claim and capacity. This does
+not change ordinary standalone or adopted scheduled sessions.
 
 Verified merged coding tasks enter automatic runtime cleanup through the existing task
 reconciler. It waits for all outstanding native deliveries and held child attempts, drains and
